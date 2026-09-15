@@ -575,10 +575,18 @@ class Assembly:
         flow_of_cp = {t.cp_id: t.flow for t in scene.terminals}
         below_memo: dict[int, float] = {}
 
+        visiting: set[int] = set()
+
         def below(piece: Piece) -> float:
             key = id(piece)
+            if key in visiting:
+                # самопересечение замкнуло участки в цикл: расход по нему не определён
+                self.violation("участки новой сети образуют цикл")
+                return 0.0
             if key not in below_memo:
+                visiting.add(key)
                 below_memo[key] = flow_of_cp.get(self.cp_node.get(piece.b, ""), 0.0) + sum(below(c) for c in out_of[piece.b] if c is not piece)
+                visiting.discard(key)
             return below_memo[key]
 
         for piece in segments:

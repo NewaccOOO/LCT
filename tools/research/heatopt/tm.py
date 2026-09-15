@@ -394,7 +394,10 @@ class TreeBuilder:
         head = coords[:i + 1]
         while head and math.dist(head[-1], touch) < MIN_PIECE_M:
             head.pop()
-        if not head or self.segment(tree, touch, head[-1]) is None or not LineString(head + [touch]).is_simple:
+        branch = head + [touch]
+        # узлы графа ближе допуска point_id склеил бы в одну точку: путь через них даёт петлю
+        if not head or any(math.dist(p, q) <= TOUCH_M for p, q in zip(branch, branch[1:])) \
+                or self.segment(tree, touch, head[-1]) is None or not LineString(branch).is_simple:
             return bad
         if pid is None:
             seg = tree.segs[j]
