@@ -1,6 +1,6 @@
 """Строит fixtures/input.geojson и fixtures/output.geojson: геометрия задана в метрах EPSG:32637, числа считаются из неё и rules/rules.json.
 
-Запуск из корня репозитория: uv run --project tools python tools/validator/tests/build_fixture.py
+Запуск из корня репозитория: uv run --project tools python tests/validator/build_fixture.py
 """
 
 import json
@@ -9,7 +9,7 @@ from pathlib import Path
 from pyproj import Transformer
 from shapely.geometry import LineString
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 RULES = json.loads((ROOT / "rules" / "rules.json").read_text(encoding="utf-8"))
 ORIGIN_E, ORIGIN_N = 413000.0, 6180000.0

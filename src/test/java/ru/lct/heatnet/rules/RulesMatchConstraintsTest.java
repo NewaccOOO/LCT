@@ -25,7 +25,7 @@ class RulesMatchConstraintsTest {
 
     @BeforeAll
     static void readConstraints() throws IOException {
-        constraints = Files.readString(Path.of("CONSTRAINTS.md"));
+        constraints = Files.readString(Path.of("architecture/CONSTRAINTS.md"));
     }
 
     @Test

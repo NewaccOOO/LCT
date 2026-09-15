@@ -20,7 +20,7 @@
 - [x] **T-0** Библиотека сцен, прогон и скрипты гейтов работают на одном сценарии
   - Требования: AC-1.1, AC-0.2
   - Зависит от: —
-  - Файлы: `tools/pyproject.toml`, `tools/scenarios/heatscen/{__init__,scene,expect,runner,registry}.py`, `tools/scenarios/heatscen/families/__init__.py`, `tools/scenarios/heatscen/families/s00_smoke.py`, `tools/scenarios/tests/**`, `scripts/gates/scenarios.sh`, `scripts/gates/sweep.sh`, `scripts/gates/synth_types.sh`, `docs/testing/defects.md`
+  - Файлы: `tools/pyproject.toml`, `tools/scenarios/heatscen/{__init__,scene,expect,runner,registry}.py`, `tools/scenarios/heatscen/families/__init__.py`, `tools/scenarios/heatscen/families/s00_smoke.py`, `tests/scenarios/**`, `scripts/gates/scenarios.sh`, `scripts/gates/sweep.sh`, `scripts/gates/synth_types.sh`, `docs/testing/defects.md`
   - Волна: 0
   - Содержание: ветка `feature/scenario-tests`, первым коммитом в неё — сам пакет `docs/specs/scenario-tests/`, потому что гейт AC-3.2 и субагенты читают его из репозитория; D-1…D-4 целиком, включая все поля `Expect` и их сравнение; `sweep.sh` и `synth_types.sh` пока завершаются ошибкой «не реализовано» ненулевым кодом; сценарий `S00-01` на сцене фикстуры валидатора проходит через `scenarios.sh`; замер времени одного сценария записывается в журнал (A-1); `defects.md` с пустой таблицей; коммит и пуш ветки, чтобы субагенты стартовали от неё.
 

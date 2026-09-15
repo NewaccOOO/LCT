@@ -16,7 +16,7 @@
   - Уверенность: высокая
   - Влияет на: D-4, AC-3.3
 - **R-2** Единственное детерминированное ожидание «вход → выход», посчитанное руками, — фикстура валидатора. Сцена строится в метрах от локального начала `413000, 6180000` в EPSG:32637 и переводится в WGS 84 через `pyproj.Transformer`; числа берутся из `rules/rules.json`, а не зашиты.
-  - Источник: `tools/validator/tests/build_fixture.py:14-58`
+  - Источник: `tests/validator/build_fixture.py:14-58`
   - Уверенность: высокая
   - Влияет на: D-2, C-5
 - **R-3** Валидатор вызывается из Python без CLI: `heatcheck.validate.run_all(inp, out, rules) -> dict[str, RuleResult]` и `run_rule(rule, ...)`, вход и выход — уже разобранные словари GeoJSON; `RuleResult(violations, checked)`; список правил `heatcheck.RULES`; исключение внутри правила превращается в нарушение.
@@ -27,7 +27,7 @@
   - Источник: `tools/synth/heatsynth/__main__.py:87-120, 390-461, 487`
   - Уверенность: высокая
   - Влияет на: D-2 (своя DSL, а не генератор), D-6
-- **R-5** Тесты ищутся только по пути: в `tools/pyproject.toml` нет секции pytest, `conftest.py` нет; гейт AC-3.2 backend-core запускает `pytest -q tools/validator/tests`. Пакеты ставятся через `[tool.hatch.build.targets.wheel] packages = ["synth/heatsynth", "validator/heatcheck"]`.
+- **R-5** Тесты ищутся только по пути: в `tools/pyproject.toml` нет секции pytest, `conftest.py` нет; гейт AC-3.2 backend-core запускает `pytest -q tests/validator`. Пакеты ставятся через `[tool.hatch.build.targets.wheel] packages = ["synth/heatsynth", "validator/heatcheck"]`.
   - Источник: `tools/pyproject.toml:17`, `docs/specs/backend-core/GATES.md`
   - Уверенность: высокая
   - Влияет на: D-1

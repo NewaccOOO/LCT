@@ -14,7 +14,7 @@ from heatcheck.validate import (
     run_rule,
 )
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 RULES_DATA = json.loads((ROOT / "rules" / "rules.json").read_text(encoding="utf-8"))
 INPUT = json.loads((FIXTURES / "input.geojson").read_text(encoding="utf-8"))

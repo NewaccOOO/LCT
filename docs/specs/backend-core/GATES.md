@@ -48,7 +48,7 @@ Scope: REST-сервис на Java 11 строит варианты подклю
   EVIDENCE: automatic-evidence=v1; definition-sha256=d3ed3690101ff6219e58e6f98fc2cf7c4e1d733955d04219b5184c803b73ba3b; exit=0; EXPECT=matched; output-sha256=680d37457c109b55be8bfe99aaeddf02f66211ae154864a054316c5764abaa4e; output-bytes=12; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] AC-3.2: валидатор падает на испорченной фикстуре по каждому из 15 правил
-  CHECK: uv run --project tools pytest -q tools/validator/tests
+  CHECK: uv run --project tools pytest -q tests/validator
   EXPECT: /^(1[5-9]|[2-9]\d|\d{3,}) passed in [\d.]+s/m
   EVIDENCE: automatic-evidence=v1; definition-sha256=15f140dbcddd9569d167616073cc74be87b7dc9ebc5775eb81d8ece06286bfeb; exit=0; EXPECT=matched; output-sha256=6b07b5e878b6a15e9b8af1aaf75d4afa7c28a8c12dbb1f5282b285be5f8cdd59; output-bytes=99; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 

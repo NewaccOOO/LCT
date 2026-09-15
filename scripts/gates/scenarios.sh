@@ -9,7 +9,7 @@ mkdir -p data/scenarios
 rm -f data/scenarios/results.json
 
 status=0
-uv run --project tools pytest -q -p no:cacheprovider tools/scenarios/tests "$@" || status=$?
+uv run --project tools pytest -q -p no:cacheprovider tests/scenarios "$@" || status=$?
 
 uv run --project tools python - "$status" "$#" <<'PY'
 import json

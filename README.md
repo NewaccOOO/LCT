@@ -2,17 +2,20 @@
 
 Сервис для кейса ДИТ Москвы на конкурсе «Лидеры цифровой трансформации» 2026. На вход он получает один GeoJSON с существующей тепловой сетью, перспективными ОКС и пространственными ограничениями. Для всех ОКС за один запуск сервис строит от двух до трёх вариантов подключения и отдаёт их одним GeoJSON: трассы, точки врезки, камеры, диаметры, реконструкцию существующей сети, стоимость и ранжирование.
 
-Правила кейса лежат в [CONSTRAINTS.md](CONSTRAINTS.md), и при расхождении с этим README прав он. Как сервис читает спорные места формата выхода, описано в [docs/interpretation.md](docs/interpretation.md). Схемы компонентов, жизненного цикла задачи и шагов расчёта — в [ARCHITECTURE.md](ARCHITECTURE.md). Требования, решения и журнал разработки собраны в пакете спеки [docs/specs/backend-core/](docs/specs/backend-core/index.md).
+Правила кейса лежат в [CONSTRAINTS.md](architecture/CONSTRAINTS.md), и при расхождении с этим README прав он. Как сервис читает спорные места формата выхода, описано в [docs/interpretation.md](docs/interpretation.md). Схемы компонентов, жизненного цикла задачи и шагов расчёта — в [ARCHITECTURE.md](architecture/ARCHITECTURE.md). Требования, решения и журнал разработки собраны в пакете спеки [docs/specs/backend-core/](docs/specs/backend-core/index.md).
 
 ## Состав репозитория
 
 | Путь | Что там |
 |---|---|
 | `src/main/java/ru/lct/heatnet/` | сервис на Java 11 и Spring Boot 2.6.3 |
+| `architecture/` | актуальная архитектура сервиса и правила кейса из ТЗ; правила работы с репозиторием в [CONTRIBUTING.md](CONTRIBUTING.md) |
 | `rules/rules.json` | все таблицы и коэффициенты кейса; Java и Python читают только этот файл |
 | `tools/synth/heatsynth` | генератор синтетических входных наборов |
 | `tools/validator/heatcheck` | независимый валидатор выходного файла по 15 правилам |
+| `tests/` | pytest-тесты Python-инструментов: `validator/`, `scenarios/` |
 | `scripts/gates/` | скрипты проверки приёмки |
+| `docs/` | индекс в [docs/README.md](docs/README.md): исходные документы ТЗ, пакеты спек, отчёты |
 | `data/samples/small-1.geojson` | небольшой синтетический набор для пробы |
 | `docker-compose.yml`, `Dockerfile` | приложение и PostgreSQL 16 в одном compose |
 
@@ -130,7 +133,7 @@ uv run --project tools python -m heatcheck data/synth/medium-1.geojson data/out/
 Сверка `rules/rules.json` с таблицами CONSTRAINTS.md:
 
 ```bash
-uv run --project tools python -m heatcheck.rules_check CONSTRAINTS.md rules/rules.json
+uv run --project tools python -m heatcheck.rules_check architecture/CONSTRAINTS.md rules/rules.json
 ```
 
 ## Как считаются варианты

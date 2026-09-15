@@ -23,7 +23,7 @@
     sweep.py          python -m heatscen.sweep --seeds 300 --workers 3
     report.py         python -m heatscen.report [--check]
     rules_ext.py      python -m heatscen.rules_ext <research.md> <rules.json>
-  tools/scenarios/tests/
+  tests/scenarios/
     conftest.py       фиксация результатов в data/scenarios/results.json
     test_scenarios.py parametrize по load_all(), pytest id = "<id>-<slug>"
   scripts/gates/scenarios.sh, sweep.sh, synth_types.sh
@@ -95,7 +95,7 @@
   - `Rules.restriction(type)` возвращает правило типа, а для неизвестного — `_fallback`; добавляется `isKnown(type)`. Код, который перебирает типы ограничений как справочник (валидатор, генератор, `rules_check`), пропускает ключи, начинающиеся с `_`.
   - `GeoJsonStreamReader`: неизвестный `restriction_type` больше не диагностика; объект читается с любой допустимой геометрией; `InputData` получает `warnings: List<String>` с одной готовой строкой на тип по формату AC-3.3. `CliRunner` печатает предупреждения в stderr перед расчётом; `JobWorker` пишет их в лог, задача идёт дальше.
   - `ObstacleSet` и сборка: правило берётся через `Rules.restriction`, точечные объекты буферизуются как полигоны.
-  - `NetworkAssembler`: `tie_in.required_diameter` равен диаметру первого нового участка от врезки. `heatcheck/tree.py`: `chamber_required` и `pipe_required` заменяются на ту же величину. `docs/interpretation.md`: строка про `required_diameter` переписана, добавлен абзац про `_fallback` и новые типы. `tools/validator/tests/build_fixture.py` и фикстуры пересчитаны, тесты `test_rules.py` поправлены.
+  - `NetworkAssembler`: `tie_in.required_diameter` равен диаметру первого нового участка от врезки. `heatcheck/tree.py`: `chamber_required` и `pipe_required` заменяются на ту же величину. `docs/interpretation.md`: строка про `required_diameter` переписана, добавлен абзац про `_fallback` и новые типы. `tests/validator/build_fixture.py` и фикстуры пересчитаны, тесты `test_rules.py` поправлены.
   - `heatcheck/space.py`: правило типа берётся из `rules["restrictions"]` с `_fallback` для остальных; ограничение-точка буферизуется.
 
 - **D-9** Триаж красного сценария — закрывает G-3, AC-4.2. Красный сценарий сначала перепроверяется руками: ожидание пересчитывается по ТЗ и `interpretation.md`. Если ожидание неверно (A-5) — правится сценарий, запись в журнал «Отклонения и находки». Если сервис нарушает правило ТЗ — правится сервис, строка в `docs/testing/defects.md` (сценарий, симптом, причина, коммит), после правки гоняются `scenarios.sh`, `sweep.sh` и гейты backend-core. Если ТЗ допускает оба прочтения — выбирается более строгое, записывается в `interpretation.md` и в журнал; валидатор и сценарий приводятся к нему.
