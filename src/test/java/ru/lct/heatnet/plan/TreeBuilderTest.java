@@ -88,6 +88,27 @@ class TreeBuilderTest {
                 "второй ОКС присоединён новой камерой на стволе");
     }
 
+    @Test
+    void branchPassesAsideConnectionPointLyingOnItsRoute() {
+        // точки подключения на одном перпендикуляре к трубе: прямой маршрут к дальней идёт через ближнюю
+        PlanFixture fixture = PlanFixture.trunk().oks("o-near", 300, 30, 1).oks("o-far", 300, 60, 1);
+        InputData input = fixture.input();
+        TieInFinder finder = new TieInFinder(input, rules);
+        TieCandidate tie = finder.find(List.of(point(300, 30)), DN).stream()
+                .filter(c -> c.getExistingObjectId().equals("hn-2")).findFirst().orElseThrow();
+
+        Tree tree = builder(input, finder).build(new Router(input, rules, AREA, DN), DN, AREA, tie, fixture.connections);
+
+        assertTrue(tree.unconnected.isEmpty(), "не подключены: " + tree.unconnected);
+        double length = tree.edges.stream().mapToDouble(edge -> edge.line.getLength()).sum();
+        assertTrue(length < 91, "длина дерева " + length);
+        for (int i = 0; i < tree.edges.size(); i++) {
+            for (int j = i + 1; j < tree.edges.size(); j++) {
+                assertTouchOnlyAtSharedNode(tree.edges.get(i), tree.edges.get(j));
+            }
+        }
+    }
+
     private TreeBuilder builder(InputData input, TieInFinder finder) {
         Map<String, LineString> networkById = new HashMap<>();
         for (NetworkSegment segment : input.getSegments()) {
