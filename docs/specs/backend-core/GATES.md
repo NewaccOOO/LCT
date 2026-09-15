@@ -50,17 +50,17 @@ Scope: REST-сервис на Java 11 строит варианты подклю
 - [x] AC-3.2: валидатор падает на испорченной фикстуре по каждому из 15 правил
   CHECK: uv run --project tools pytest -q tools/validator/tests
   EXPECT: /^(1[5-9]|[2-9]\d|\d{3,}) passed in [\d.]+s/m
-  EVIDENCE: automatic-evidence=v1; definition-sha256=15f140dbcddd9569d167616073cc74be87b7dc9ebc5775eb81d8ece06286bfeb; exit=0; EXPECT=matched; output-sha256=04fae3f623048e6f858be0a5d8db9c1b94039b5a780b644ba7c16e73474c8565; output-bytes=99; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=15f140dbcddd9569d167616073cc74be87b7dc9ebc5775eb81d8ece06286bfeb; exit=0; EXPECT=matched; output-sha256=a6f0138d0fc1c491d7f5a7f61bb0ea7c4ed0952ad8258217e9312ea0a82a0f66; output-bytes=99; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] NFR-1: расчёт среднего пресета укладывается в 120 секунд на каждом из трёх сидов
   CHECK: bash scripts/gates/perf.sh
   EXPECT: /PERF medium OK max=\d+s/
-  EVIDENCE: automatic-evidence=v1; definition-sha256=eb1c2c8ee44251069ee55d3d2fee75024794db905055b0691aeca3f969c891e7; exit=0; EXPECT=matched; output-sha256=720ee528a8e276aca211e0c5b4ccb0744370191bb02a2343b729089d55b29ee5; output-bytes=107; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=eb1c2c8ee44251069ee55d3d2fee75024794db905055b0691aeca3f969c891e7; exit=0; EXPECT=matched; output-sha256=88ecec0a67c2591dd77b12d39e9cf3e1510842f365e50b008626488e93d7878d; output-bytes=105; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] AC-3.1: валидатор принимает выходы сервиса по правилу schema
   CHECK: bash scripts/gates/validate_rule.sh schema
   EXPECT: RULE schema: PASSED
-  EVIDENCE: automatic-evidence=v1; definition-sha256=a05505aa3369300c9c4ffcadd8821a10a8888da2350ada94d3f587d03801214a; exit=0; EXPECT=matched; output-sha256=a329c65e81a222df15a35da9af30db384f6c57285aff046449d0737105779217; output-bytes=2134; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=a05505aa3369300c9c4ffcadd8821a10a8888da2350ada94d3f587d03801214a; exit=0; EXPECT=matched; output-sha256=0244389bf53a4e2a4b5b186ed89681b8d6c12b26a45bb6384b028455130cba2f; output-bytes=2142; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] AC-2.1: каждый ОКС подключён, список неподключённых пуст
   CHECK: bash scripts/gates/validate_rule.sh coverage
@@ -130,29 +130,29 @@ Scope: REST-сервис на Java 11 строит варианты подклю
 - [x] AC-1.1: загрузка файла отвечает 202 с id, пустое тело отвечает 400
   CHECK: bash scripts/gates/api.sh AC-1.1
   EXPECT: API AC-1.1 OK
-  EVIDENCE: automatic-evidence=v1; definition-sha256=8075dda5940f3ba178601bd7872363aad4f2ed75943af727cf6f7b047faa5bd2; exit=0; EXPECT=matched; output-sha256=9006451d94b63734586eed01d45357af6b1a9d23e5ed5a561582983820537240; output-bytes=481; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=8075dda5940f3ba178601bd7872363aad4f2ed75943af727cf6f7b047faa5bd2; exit=0; EXPECT=matched; output-sha256=fb160cd98e1977d5dec8b624d3f2f37fca18ef84e2a8e0ef3284b24df251cf84; output-bytes=481; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] AC-1.2: статус задачи проходит QUEUED, RUNNING, DONE и содержит сводки
   CHECK: bash scripts/gates/api.sh AC-1.2
   EXPECT: API AC-1.2 OK
-  EVIDENCE: automatic-evidence=v1; definition-sha256=9db6dd0e7a4f1fdac0ee52b888aa23260f6921597ba6be7d93f645b8a9df4c93; exit=0; EXPECT=matched; output-sha256=93d793397349198bc085803b7c9d90c9fcf7c8d69446134ea471098c8d8e1e33; output-bytes=252; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=9db6dd0e7a4f1fdac0ee52b888aa23260f6921597ba6be7d93f645b8a9df4c93; exit=0; EXPECT=matched; output-sha256=292ccb641a6e9de3c887ccd8078b406a13dd9b169cd33ce0a95ac2dbe30481c5; output-bytes=252; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] AC-1.3: результат и вход скачиваются, до DONE результат отвечает 409
   CHECK: bash scripts/gates/api.sh AC-1.3
   EXPECT: API AC-1.3 OK
-  EVIDENCE: automatic-evidence=v1; definition-sha256=60819aa315212b8ba5a4e44e4a91696b7ae8103decffc6fd75082deda2702850; exit=0; EXPECT=matched; output-sha256=3c10540bce6f78c721e31f90320f331f0514b5b698ee4ddcaa42335e33c84456; output-bytes=284; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=60819aa315212b8ba5a4e44e4a91696b7ae8103decffc6fd75082deda2702850; exit=0; EXPECT=matched; output-sha256=67788193ab54acf8168db79bd195176e1fac6dd82fad1bd6fddec1ffaae3ab40; output-bytes=284; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] AC-1.4: битый вход даёт FAILED со списком диагностик
   CHECK: bash scripts/gates/api.sh AC-1.4
   EXPECT: API AC-1.4 OK
-  EVIDENCE: automatic-evidence=v1; definition-sha256=a9ab1c8a89ce6ab8c7b7351c2f97ff8828508efaee297f8a7a7790e3723ad697; exit=0; EXPECT=matched; output-sha256=4fc9eb4742174a391790d96d97cc3161ddb705e60f39781c846649d37bf6aa14; output-bytes=252; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=a9ab1c8a89ce6ab8c7b7351c2f97ff8828508efaee297f8a7a7790e3723ad697; exit=0; EXPECT=matched; output-sha256=6e8127fcae7fac78197d3d3c9715ac04cb8e89a13a488a32ed598ec2358b3c65; output-bytes=252; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] NFR-2: файл 300 МБ проходит через API при куче 1 ГБ
   CHECK: bash scripts/gates/api.sh NFR-2
   EXPECT: API NFR-2 OK
-  EVIDENCE: automatic-evidence=v1; definition-sha256=9f106c398f541a68bdbdff782e18064cd9fe05859a6a950f193c218f56f05834; exit=0; EXPECT=matched; output-sha256=63e39d38661e2363124278a7f8face384a74c5ae493187314f57d5c7b16d9851; output-bytes=251; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=9f106c398f541a68bdbdff782e18064cd9fe05859a6a950f193c218f56f05834; exit=0; EXPECT=matched; output-sha256=48ea6cc935371fa08af9a5e8b587e691b80ada2f4c1780fc71f690cad0d2e10d; output-bytes=251; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] NFR-3: пять одновременных задач завершаются за 180 секунд
   CHECK: bash scripts/gates/api.sh NFR-3
   EXPECT: API NFR-3 OK
-  EVIDENCE: automatic-evidence=v1; definition-sha256=0102831fab9ad229ee8a4a4dae8c6ef2acc4611e888fffdc66ad1becf2d5df22; exit=0; EXPECT=matched; output-sha256=b0af11b47361082124de4273bdbb120baab24726bbe82f88f8af64b8d7854f5d; output-bytes=251; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=0102831fab9ad229ee8a4a4dae8c6ef2acc4611e888fffdc66ad1becf2d5df22; exit=0; EXPECT=matched; output-sha256=f770e214d1acacfced427e67c30227f1e3c80995866b92b322bf01edc0e2a9fb; output-bytes=251; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
