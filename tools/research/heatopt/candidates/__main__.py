@@ -48,6 +48,8 @@ def check(name: str) -> None:
             failures.append(f"{label}: модель нашла нарушения {cost.violations[:3]}")
         if cls != "L" and violations:
             failures.append(f"{label}: валидатор нашёл нарушения {violations}")
+        if len(cost.unconnected) > len(base.unconnected):
+            failures.append(f"{label}: неподключённых ОКС {len(cost.unconnected)}, у базового леса {len(base.unconnected)}")
         if cost.score_value > base.score_value + SCORE_TOL:
             failures.append(f"{label}: S {cost.score_value:.4f} хуже базового леса {base.score_value:.4f}")
         if cls == "L" and elapsed > TIME_LIMIT_S:

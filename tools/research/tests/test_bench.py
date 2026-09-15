@@ -84,7 +84,8 @@ def scene_record(cls, scale):
         "graph": {"nodes": 100, "edges": 1000, "build_s": 2.0}, "bound_graph": {"nodes": 100, "edges": 1200, "build_s": 2.0},
         "service": run_record(10.5 * scale, 10.9 * scale, 3.0, 6, 3, 3),
         "candidates": candidates,
-        "exact": bound_record("optimal", 10.0 * scale, 9.995 * scale, 100.0, f"data/research/logs/{sid}-exact.log"),
+        "exact": bound_record("optimal", 9.9 * scale, 9.895 * scale, 100.0, f"data/research/logs/{sid}-exact.log"),
+        "exact_all": bound_record("optimal", 10.0 * scale, 9.995 * scale, 100.0, f"data/research/logs/{sid}-exact-all.log"),
         "lp": bound_record("optimal", 9.0 * scale, 9.0 * scale, 5.0, f"data/research/logs/{sid}-lp.log"),
     }
 
@@ -318,7 +319,7 @@ def fake_solve(ctx, name, mode, seed, budget):
     return run_record(10.0, 10.2, 1.0, 1, 0, 1, seed, budget)
 
 
-def fake_bound(scene, graph, method):
+def fake_bound(scene, graph, method, connect_all=False):
     return {"status": "optimal", "objective": 9.0, "bound": 9.0, "elapsed_s": 1.0, "log": None, "log_sha256": None}
 
 
@@ -334,6 +335,7 @@ def test_run_survives_failures_and_resumes(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(bench.Scene, "load", lambda path: types.SimpleNamespace(path=path, rules={}))
     monkeypatch.setattr(bench, "build_graph", lambda scene, **kwargs: (object(), {"nodes": 1, "edges": 1, "build_s": 0.1}))
     monkeypatch.setattr(bench, "smallest_dn", lambda scene, rules: 50)
+    monkeypatch.setattr(bench, "bound_tie_dns", lambda scene, rules: (50,))
     monkeypatch.setattr(bench, "solve_and_evaluate", fake_solve)
     monkeypatch.setattr(bench, "solve_bound", fake_bound)
     jar = tmp_path / "heatnet.jar"
@@ -346,7 +348,7 @@ def test_run_survives_failures_and_resumes(tmp_path, monkeypatch, capsys):
     assert s1["candidates"]["dp"]["on"]["status"] == "failed" and "dp упал" in s1["candidates"]["dp"]["on"]["error"]
     assert s1["candidates"]["bend"]["on"]["status"] == "timeout" and s1["candidates"]["bend"]["on"]["elapsed_s"] == 1.0
     assert s1["candidates"]["ls"]["on"]["status"] == "ok" and s1["exact"]["status"] == "optimal"
-    assert results["scenes"][1]["exact"]["status"] == "optimal"
+    assert results["scenes"][1]["exact"]["status"] == "optimal" and results["scenes"][1]["exact_all"]["status"] == "optimal"
     assert isinstance(results["elapsed_s"], int) and results["budgets"] == dict.fromkeys(bench.CANDIDATES, 7)
     entries = json.loads((out_dir / "scenes.json").read_text(encoding="utf-8"))
     assert {e["id"] for e in entries} == {"S-1", "M-1"} and all(len(e["sha256"]) == 64 for e in entries)
