@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Random;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.locationtech.jts.algorithm.Angle;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
@@ -64,6 +65,23 @@ class RouterTest {
             double clearance = rules.restriction(restriction.getType()).clearanceM(DN) + halfWidth;
             assertTrue(distance >= clearance, restriction.getId() + ": расстояние " + distance + ", нужно " + clearance);
         }
+    }
+
+    @Test
+    void detourAroundSmallObstacleHasNoFlatVertices() {
+        // обход опоры на прямой длиной 120 м по углам её зоны даёт изломы около 2,5°, а меньше 3° запрещено
+        Router router = router(List.of(new Restriction("pls-1", point(0, 0), "power_line_support")), List.of());
+
+        Route route = router.route(point(0, -60), point(0, 60), Set.of());
+
+        assertNotNull(route);
+        Coordinate[] coords = route.getGeometry().getCoordinates();
+        for (int i = 1; i + 1 < coords.length; i++) {
+            double deflection = 180 - Math.toDegrees(Angle.angleBetween(coords[i - 1], coords[i], coords[i + 1]));
+            assertTrue(deflection >= 3, "излом " + deflection + "° в вершине " + i);
+        }
+        double clearance = rules.restriction("power_line_support").clearanceM(DN) + halfWidth;
+        assertTrue(route.getGeometry().distance(point(0, 0)) >= clearance);
     }
 
     @Test
