@@ -133,6 +133,22 @@ class RouterTest {
     }
 
     @Test
+    void perpendicularTramCrossingStaysStraight() {
+        // Узлы вдоль путей лежат в полосе margin_m: переход между ними со сдвигом вбок не должен быть легче прямого.
+        double tramWidth = 8;
+        Router router = router(List.of(new Restriction("tram-1", rect(-500, 66, 500, 66 + tramWidth), "tram_tracks")),
+                List.of());
+        RestrictionRule rule = rules.restriction("tram_tracks");
+
+        Route route = router.route(point(0, 0), point(0, 150), Set.of());
+
+        assertNotNull(route);
+        assertEquals(2, route.getGeometry().getNumPoints(), "трасса " + route.getGeometry());
+        assertEquals(150, route.getLength(), EPS);
+        assertEquals(150 + (rule.getKSpecial() - 1) * (tramWidth + 2 * rule.getMarginM()), route.getWeight(), EPS);
+    }
+
+    @Test
     void gasPipelineCrossingGivesFourMetreSpan() {
         LineString gas = line(-100, 0, 100, 0);
         Router router = router(List.of(new Restriction("gas-1", gas, "gas_pipeline")), List.of());

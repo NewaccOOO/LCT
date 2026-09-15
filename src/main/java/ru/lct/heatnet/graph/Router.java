@@ -98,11 +98,13 @@ public final class Router {
         }
     }
 
-    // Соединяет вершину id со всеми вершинами [0, count), к которым ведёт допустимый отрезок.
+    // Соединяет вершину id со всеми вершинами [0, count), к которым ведёт допустимый отрезок. Первые
+    // obstacles.nodes().size() вершин — узлы графа, остальные — точки запроса, в которых путь начинается или кончается.
     private void connect(int id, int count, Set<String> ignored) {
         Coordinate c = vertices.get(id);
+        int nodeCount = obstacles.nodes().size();
         double[] weights = IntStream.range(0, count).parallel()
-                .mapToDouble(other -> obstacles.edgeWeight(c, vertices.get(other), ignored))
+                .mapToDouble(other -> obstacles.edgeWeight(c, vertices.get(other), ignored, id < nodeCount, other < nodeCount))
                 .toArray();
         for (int other = 0; other < count; other++) {
             if (!Double.isNaN(weights[other])) {
