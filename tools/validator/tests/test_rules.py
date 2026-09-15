@@ -1,0 +1,135 @@
+import copy
+import json
+from collections.abc import Callable
+from pathlib import Path
+
+import pytest
+
+from heatcheck import RULES
+from heatcheck.validate import (
+    CRASH_PREFIX,
+    render_all,
+    render_only,
+    run_all,
+    run_rule,
+)
+
+ROOT = Path(__file__).resolve().parents[3]
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+RULES_DATA = json.loads((ROOT / "rules" / "rules.json").read_text(encoding="utf-8"))
+INPUT = json.loads((FIXTURES / "input.geojson").read_text(encoding="utf-8"))
+OUTPUT = json.loads((FIXTURES / "output.geojson").read_text(encoding="utf-8"))
+
+
+def find(data: dict, feature_id: str) -> dict:
+    return next(f for f in data["features"] if f["properties"].get("id") == feature_id)
+
+
+def props(data: dict, feature_id: str) -> dict:
+    return find(data, feature_id)["properties"]
+
+
+def break_schema(inp: dict, out: dict) -> None:
+    del props(out, "v1_seg_1")["depth_start"]
+
+
+def break_topology(inp: dict, out: dict) -> None:
+    seg = find(out, "v2_seg_2")
+    seg["properties"]["start_node_id"], seg["properties"]["end_node_id"] = "v2_node_2", "v2_node_1"
+    seg["geometry"]["coordinates"].reverse()
+
+
+def break_tie_in(inp: dict, out: dict) -> None:
+    props(out, "v1_tie_1")["existing_object_type"] = "heat_network"
+
+
+def break_flow(inp: dict, out: dict) -> None:
+    props(out, "v1_seg_1")["flow_tph"] = 4.0
+
+
+def break_diameter(inp: dict, out: dict) -> None:
+    props(out, "v1_seg_1")["diameter"] = 100
+
+
+def break_length_limit(inp: dict, out: dict) -> None:
+    # По отдельности участки короче 181 м, вместе 199,44 м: цепочка считается суммой, а не самым длинным участком.
+    for seg_id in ("v2_seg_1", "v2_seg_2", "v2_seg_3"):
+        props(out, seg_id)["diameter"] = 50
+
+
+def break_forbid(inp: dict, out: dict) -> None:
+    ring = find(inp, "park_1")["geometry"]["coordinates"][0][:4]
+    center = [sum(c[0] for c in ring) / 4, sum(c[1] for c in ring) / 4]
+    find(out, "v1_seg_1")["geometry"]["coordinates"][1] = center
+
+
+def break_special(inp: dict, out: dict) -> None:
+    props(out, "v2_seg_2")["laying_method"] = "base"
+
+
+def break_reconstruction(inp: dict, out: dict) -> None:
+    out["features"].remove(find(out, "v2_recon_1"))
+
+
+def break_chamber_recon(inp: dict, out: dict) -> None:
+    out["features"].remove(find(out, "v2_chrecon_1"))
+
+
+def break_cost(inp: dict, out: dict) -> None:
+    props(out, "v1_tie_1")["cost"] = 4_000_000
+
+
+def break_score(inp: dict, out: dict) -> None:
+    props(out, "summary_1")["score"] += 0.5
+
+
+def break_coverage(inp: dict, out: dict) -> None:
+    props(out, "summary_1")["unconnected_oks_ids"] = ["oks_1"]
+
+
+def break_variants(inp: dict, out: dict) -> None:
+    out["features"] = [f for f in out["features"] if f["properties"]["variant_id"] != "2"]
+
+
+def break_geometry(inp: dict, out: dict) -> None:
+    coords = find(out, "v1_seg_1")["geometry"]["coordinates"]
+    coords.insert(1, [(coords[0][0] + coords[1][0]) / 2, (coords[0][1] + coords[1][1]) / 2])
+
+
+MUTATIONS: dict[str, Callable[[dict, dict], None]] = {
+    "schema": break_schema,
+    "topology": break_topology,
+    "tie_in": break_tie_in,
+    "flow": break_flow,
+    "diameter": break_diameter,
+    "length_limit": break_length_limit,
+    "forbid": break_forbid,
+    "special": break_special,
+    "reconstruction": break_reconstruction,
+    "chamber_recon": break_chamber_recon,
+    "cost": break_cost,
+    "score": break_score,
+    "coverage": break_coverage,
+    "variants": break_variants,
+    "geometry": break_geometry,
+}
+
+
+def test_fixture_passes_all_rules():
+    results = run_all(INPUT, OUTPUT, RULES_DATA)
+
+    assert list(results) == RULES
+    assert render_all(results).endswith("VALIDATION PASSED"), render_all(results)
+    assert all(result.checked > 0 for result in results.values())
+
+
+@pytest.mark.parametrize("rule", RULES)
+def test_mutation_fails_its_rule(rule):
+    inp, out = copy.deepcopy(INPUT), copy.deepcopy(OUTPUT)
+    MUTATIONS[rule](inp, out)
+
+    result = run_rule(rule, inp, out, RULES_DATA)
+    report = render_only(rule, result)
+
+    assert f"RULE {rule}: FAILED ({len(result.violations)})" in report, report
+    assert not any(v.message.startswith(CRASH_PREFIX) for v in result.violations), report
