@@ -103,7 +103,8 @@ public final class Router {
     private void connect(int id, int count, Set<String> ignored) {
         Coordinate c = vertices.get(id);
         int nodeCount = obstacles.nodes().size();
-        double[] weights = IntStream.range(0, count).parallel()
+        // последовательно: параллельный расчёт над общими геометриями JTS изредка давал разные трассы на одном входе
+        double[] weights = IntStream.range(0, count)
                 .mapToDouble(other -> obstacles.edgeWeight(c, vertices.get(other), ignored, id < nodeCount, other < nodeCount))
                 .toArray();
         for (int other = 0; other < count; other++) {
