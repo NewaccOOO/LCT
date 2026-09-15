@@ -158,12 +158,13 @@ final class TreeBuilder {
                 List<Coordinate> head = new ArrayList<>(Arrays.asList(coords).subList(0, i + 1));
                 List<Spot> spots = spots(pieces, touch);
                 Attach direct = attach(connection, head, spots, pieces, route.getWeight());
-                if (direct != null) {
+                double length = coords[i].distance(coords[i + 1]);
+                if (direct != null || length == 0) {
+                    // отрезок нулевой длины: точка подключения лежит на дереве, обойти касание не из чего
                     return direct;
                 }
-                // Маршрут подошёл к дереву вдоль ребра, например через точку подключения другого ОКС на той же
-                // прямой: прямая ветка к любому месту легла бы на ребро, поэтому она обходит точку касания сбоку.
-                double length = coords[i].distance(coords[i + 1]);
+                // маршрут подошёл к дереву вдоль ребра, например через точку подключения другого ОКС на той же прямой:
+                // прямая ветка к любому месту легла бы на ребро, поэтому ветка обходит точку касания сбоку
                 double nx = (coords[i].y - coords[i + 1].y) / length;
                 double ny = (coords[i + 1].x - coords[i].x) / length;
                 for (double shift : SHIFTS_M) {
