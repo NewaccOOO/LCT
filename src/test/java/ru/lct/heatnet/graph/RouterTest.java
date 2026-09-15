@@ -149,6 +149,21 @@ class RouterTest {
     }
 
     @Test
+    void graphNodeNearLineCrossingCarriesSpecialPartBeforeIt() {
+        // узел в 6 м от оси: отсчёт margin_m 10 м от пересечения продолжается за узел ещё на 4 м
+        Router router = router(List.of(new Restriction("rw-1", line(-100, 0, 100, 0), "railway")), List.of());
+        RestrictionRule rule = rules.restriction("railway");
+        Coordinate node = new Coordinate(0, -6);
+        Coordinate far = new Coordinate(0, 40);
+
+        double asPathEnd = router.obstacles().edgeWeight(node, far, Set.of());
+        double asNode = router.obstacles().edgeWeight(node, far, Set.of(), true, false);
+
+        assertEquals(46 + (rule.getKSpecial() - 1) * 16, asPathEnd, EPS);
+        assertEquals((rule.getKSpecial() - 1) * (rule.getMarginM() - 6), asNode - asPathEnd, EPS);
+    }
+
+    @Test
     void gasPipelineCrossingGivesFourMetreSpan() {
         LineString gas = line(-100, 0, 100, 0);
         Router router = router(List.of(new Restriction("gas-1", gas, "gas_pipeline")), List.of());
