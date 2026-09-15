@@ -35,6 +35,7 @@ from heatopt import (
 )
 from heatopt.graph import (
     VisGraph,
+    bound_tie_dns,
     smallest_dn,
 )
 from heatopt.model import QualityRule
@@ -190,19 +191,22 @@ def run_algorithm(ctx: Context, name: str, mode: str, seed: int | None, budget: 
     return record
 
 
-def solve_bound(scene: Scene, graph: VisGraph | None, method: str) -> dict[str, Any]:
+def solve_bound(scene: Scene, graph: VisGraph | None, method: str, connect_all: bool = False) -> dict[str, Any]:
     if graph is None:
         raise RuntimeError("граф нижней оценки не построен")
     exact = importlib.import_module("heatopt.exact")
-    bound = getattr(exact, method)(scene, graph, scene.rules, EXACT_TIME_LIMIT_S)
+    if method == "solve":
+        bound = exact.solve(scene, graph, scene.rules, EXACT_TIME_LIMIT_S, connect_all=connect_all)
+    else:
+        bound = exact.lp_bound(scene, graph, scene.rules, EXACT_TIME_LIMIT_S)
     log = str(bound.log) if bound.log else None
     return {"status": bound.status, "objective": number(bound.objective), "bound": number(bound.bound),
             "elapsed_s": number(bound.elapsed), "log": log,
             "log_sha256": file_hash(Path(log)) if log and Path(log).exists() else None}
 
 
-def run_bound(scene: Scene, graph: VisGraph | None, method: str, timeout_s: float) -> dict[str, Any]:
-    status, value = in_child(solve_bound, (scene, graph, method), timeout_s)
+def run_bound(scene: Scene, graph: VisGraph | None, method: str, timeout_s: float, connect_all: bool = False) -> dict[str, Any]:
+    status, value = in_child(solve_bound, (scene, graph, method, connect_all), timeout_s)
     if status == "ok":
         return value
     return {"status": "failed", "objective": None, "bound": None, "elapsed_s": timeout_s if status == "timeout" else None,
@@ -231,8 +235,11 @@ def run_scene(entry: dict[str, Any], options: Options) -> dict[str, Any]:
         name: {mode: run_algorithm(ctx, name, mode, SEED, options.budgets[name], options.candidate_timeout_s) for mode in MODES}
         for name in CANDIDATES
     }
-    bound_graph, record["bound_graph"] = build_graph(scene, dn_guess=smallest_dn(scene, scene.rules))
-    record["exact"] = run_bound(scene, bound_graph, "solve", options.exact_timeout_s) if entry["class"] in EXACT_CLASSES else None
+    bound_graph, record["bound_graph"] = build_graph(scene, dn_guess=smallest_dn(scene, scene.rules), tie_dns=bound_tie_dns(scene, scene.rules))
+    exact_class = entry["class"] in EXACT_CLASSES
+    record["exact"] = run_bound(scene, bound_graph, "solve", options.exact_timeout_s) if exact_class else None
+    # база разрыва AC-1.2: оптимум при подключении всех достижимых ОКС (C-6, журнал D-12)
+    record["exact_all"] = run_bound(scene, bound_graph, "solve", options.exact_timeout_s, connect_all=True) if exact_class else None
     record["lp"] = run_bound(scene, bound_graph, "lp_bound", options.exact_timeout_s)
     return record
 
@@ -331,9 +338,10 @@ def bound_of(scene: dict[str, Any], key: str) -> dict[str, Any]:
 
 
 def proven_optimum(scene: dict[str, Any]) -> float | None:
-    exact = bound_of(scene, "exact")
-    objective = number(exact.get("objective"))
-    if exact.get("status") != "optimal" or objective is None or objective <= 0:
+    """Доказанный оптимум для разрыва AC-1.2: exact_all (C-6), когда обе точные задачи сцены решены до optimal."""
+    exact, exact_all = bound_of(scene, "exact"), bound_of(scene, "exact_all")
+    objective = number(exact_all.get("objective"))
+    if exact.get("status") != "optimal" or exact_all.get("status") != "optimal" or objective is None or objective <= 0:
         return None
     return objective
 
@@ -343,7 +351,7 @@ def reference(scene: dict[str, Any]) -> tuple[float, bool] | None:
     optimum = proven_optimum(scene)
     if optimum is not None:
         return optimum, True
-    bounds = [b for b in (number(bound_of(scene, "exact").get("bound")), number(bound_of(scene, "lp").get("bound"))) if b is not None]
+    bounds = [b for b in (number(bound_of(scene, key).get("bound")) for key in ("exact_all", "exact", "lp")) if b is not None]
     if not bounds or max(bounds) <= 0:
         return None
     return max(bounds), False
@@ -619,27 +627,31 @@ def check_bench(results: dict[str, Any], entries: list[dict[str, Any]], digest: 
             service_ok += 1
         else:
             problems.append(f"{sid}: у сервиса нет решения со status ok")
-        exact, lp = bound_of(scene, "exact"), bound_of(scene, "lp")
+        exact, exact_all, lp = bound_of(scene, "exact"), bound_of(scene, "exact_all"), bound_of(scene, "lp")
         if scene["class"] in EXACT_CLASSES:
-            if exact.get("status") not in BOUND_STATUSES:
-                problems.append(f"{sid}: точная модель не запускалась")
-            elapsed = number(exact.get("elapsed_s"))
-            if exact.get("status") in ("optimal", "time_limit") and (elapsed is None or elapsed > EXACT_TIMEOUT_S):
-                problems.append(f"{sid}: точная модель шла {elapsed} с, больше лимита прогона {EXACT_TIMEOUT_S:.0f} с")
-            if exact.get("status") == "optimal":
-                objective, bound = number(exact.get("objective")), number(exact.get("bound"))
-                if objective is None or bound is None or objective <= 0:
-                    problems.append(f"{sid}: status optimal без objective и bound")
-                elif objective - bound > MIP_REL_GAP * objective + 1e-6:
-                    problems.append(f"{sid}: status optimal при разрыве границ {(objective - bound) / objective:.4%}")
-                else:
-                    exact_optimal += 1
+            proven = True
+            for label, record in (("exact", exact), ("exact_all", exact_all)):
+                if record.get("status") not in BOUND_STATUSES:
+                    problems.append(f"{sid}: точная модель {label} не запускалась")
+                elapsed = number(record.get("elapsed_s"))
+                if record.get("status") in ("optimal", "time_limit") and (elapsed is None or elapsed > EXACT_TIMEOUT_S):
+                    problems.append(f"{sid}: точная модель {label} шла {elapsed} с, больше лимита прогона {EXACT_TIMEOUT_S:.0f} с")
+                proven &= record.get("status") == "optimal"
+                if record.get("status") == "optimal":
+                    objective, bound = number(record.get("objective")), number(record.get("bound"))
+                    if objective is None or bound is None or objective <= 0:
+                        problems.append(f"{sid}: {label} со status optimal без objective и bound")
+                        proven = False
+                    elif objective - bound > MIP_REL_GAP * objective + 1e-6:
+                        problems.append(f"{sid}: {label} со status optimal при разрыве границ {(objective - bound) / objective:.4%}")
+                        proven = False
+            exact_optimal += proven
         # граница LP, прерванной по времени, не гарантирована
         if lp.get("status") == "optimal" and number(lp.get("bound")) is not None:
             lp_ok += 1
         else:
             problems.append(f"{sid}: нет LP-границы со status optimal")
-        for label, record in (("exact", exact), ("lp", lp)):
+        for label, record in (("exact", exact), ("exact_all", exact_all), ("lp", lp)):
             log = record.get("log")
             if log and (not Path(log).exists() or file_hash(Path(log)) != record.get("log_sha256")):
                 problems.append(f"{sid}: лог {label} {log} отсутствует или не совпадает с log_sha256")

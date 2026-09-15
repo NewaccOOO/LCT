@@ -471,13 +471,20 @@ class VisGraph:
     @classmethod
     def build(cls, scene: Scene, rules: dict[str, Any] | None = None, dn_guess: int | None = None,
               margin: float = DEFAULT_MARGIN_M, points: list[Point] | None = None,
-              extra_nodes: list[Node] = (), tangent: bool = False) -> "VisGraph":
+              extra_nodes: list[Node] = (), tangent: bool = False, tie_dns: tuple[int, ...] = ()) -> "VisGraph":
         """dn_guess по умолчанию — на ступень выше диаметра по суммарному расходу сцены (C-4). tangent оставляет
         у выпуклых вершин только касательные рёбра: кратчайшие пути сохраняются, рёбер в разы меньше."""
         started = time.perf_counter()
         rules = rules or scene.rules
         dn = dn_guess or default_dn(scene, rules)
-        ties = tie_candidates(scene, rules, dn, points if points is not None else tie_points(scene))
+        search = points if points is not None else tie_points(scene)
+        ties = tie_candidates(scene, rules, dn, search)
+        # положение врезки у концов трубы зависит от диаметра: граф нижней оценки берёт врезки всех диаметров
+        # кандидатов и сервиса, чтобы их решения были представимы в нём
+        for other in tie_dns:
+            for node in tie_candidates(scene, rules, other, search):
+                if not any(n.kind == node.kind and n.ref == node.ref and math.dist(n.xy, node.xy) <= SAME_TIE_M for n in ties):
+                    ties.append(node)
         anchors = [(t.point.x, t.point.y) for t in scene.terminals] + [n.xy for n in ties] + [n.xy for n in extra_nodes]
         xs, ys = [p[0] for p in anchors], [p[1] for p in anchors]
         area = box(min(xs) - margin, min(ys) - margin, max(xs) + margin, max(ys) + margin)
@@ -548,6 +555,12 @@ def default_dn(scene: Scene, rules: dict[str, Any]) -> int:
     by_flow = next((d["dn"] for d in rules["diameters"] if d["capacity_tph"] >= scene.total_flow()), dns[-1])
     index = dns.index(by_flow)
     return dns[min(index + 1, len(dns) - 1)]
+
+
+def bound_tie_dns(scene: Scene, rules: dict[str, Any]) -> tuple[int, ...]:
+    """Диаметры от наименьшего по ОКС до диаметра кандидатов: для них строятся врезки графа нижней оценки."""
+    low, high = smallest_dn(scene, rules), default_dn(scene, rules)
+    return tuple(d["dn"] for d in rules["diameters"] if low <= d["dn"] <= high)
 
 
 def smallest_dn(scene: Scene, rules: dict[str, Any]) -> int:

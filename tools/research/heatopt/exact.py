@@ -385,10 +385,11 @@ class SubsetTrees:
             self.arrive(rest, v, paths, junctions)
 
 
-def solve(scene: Scene, graph: VisGraph, rules: dict[str, Any], time_limit_s: float) -> Bound:
-    """Точный оптимум P (C-6): деревья подмножеств и мастер-MILP выбора деревьев с реконструкцией."""
+def solve(scene: Scene, graph: VisGraph, rules: dict[str, Any], time_limit_s: float, connect_all: bool = False) -> Bound:
+    """Точный оптимум P (C-6): деревья подмножеств и мастер-MILP выбора деревьев с реконструкцией. connect_all
+    запрещает оставлять неподключённым ОКС, до которого в графе есть дерево: база разрыва AC-1.2 (журнал D-12)."""
     started = time.perf_counter()
-    log = log_path(scene, "exact")
+    log = log_path(scene, "exact-all" if connect_all else "exact")
     try:
         trees = SubsetTrees(scene, graph, rules, started + time_limit_s)
     except TimeoutError:
@@ -399,10 +400,11 @@ def solve(scene: Scene, graph: VisGraph, rules: dict[str, Any], time_limit_s: fl
     penalty_rub = [rules["penalty"]["fixed"] + rules["penalty"]["per_tph"] * t.flow for t in scene.terminals]
     mask_penalty = np.array([tm.rub(rules, sum(penalty_rub[i] for i in m)) for m in trees.members])
     # дерево дороже штрафа своих ОКС не выбирается: реконструкция от лишней добавки не дешевеет
-    masks, js = np.nonzero(trees.cost < mask_penalty[:, None])
+    masks, js = np.nonzero(np.isfinite(trees.cost) if connect_all else trees.cost < mask_penalty[:, None])
+    reachable = [bool(np.isfinite(trees.cost[1 << i]).any()) for i in range(k)]
     milp = Milp()
     x = milp.add_cols(trees.cost[masks, js], 0.0, 1.0, integer=True)
-    u = milp.add_cols([tm.rub(rules, p) for p in penalty_rub], 0.0, 1.0, integer=True)
+    u = milp.add_cols([tm.rub(rules, p) for p in penalty_rub], 0.0, [0.0 if connect_all and r else 1.0 for r in reachable], integer=True)
     cover = milp.add_rows(k, 1.0, 1.0)
     milp.add(cover, u, 1.0)
     for i in range(k):
