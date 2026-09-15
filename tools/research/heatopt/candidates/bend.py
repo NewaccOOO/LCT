@@ -2,7 +2,6 @@
 с ценой поворота и излома (C-9), рёбра вдоль дорог и трамвая в поиске дешевле (коридоры). Деревья и лес строит
 tm, итог — лучший по целевой функции среди базового леса и своих лесов."""
 import heapq
-import importlib.util
 import math
 import random
 import time
@@ -23,7 +22,6 @@ from heatopt.graph import (
     sides_of,
 )
 from heatopt.model import (
-    CostBreakdown,
     QualityRule,
     Solution,
 )
@@ -45,7 +43,6 @@ MAX_LABELS = 4
 COS_TURN = math.cos(math.radians(model.MIN_TURN_DEG))
 COS_KINK = math.cos(math.radians(model.KINK_MAX_DEG))
 COS_CORRIDOR = math.cos(math.radians(CORRIDOR_ANGLE_DEG))
-HAS_METRICS = importlib.util.find_spec("heatopt.metrics") is not None
 INF = math.inf
 
 
@@ -241,18 +238,6 @@ class BendBuilder(tm.TreeBuilder):
         return super().attach(tree, cp, self.searches[cp].path(nodes[-1]))
 
 
-def objective(cost: CostBreakdown, scene: Scene, quality: list[QualityRule] | None) -> float:
-    if quality is None:
-        return cost.score_value
-    if HAS_METRICS:
-        return model.objective(cost, scene, quality)
-    # ponytail: до heatopt.metrics (T-5) штрафы только за повороты, изломы и камеры; дальше — model.objective
-    prices = model.unit_prices(quality)
-    shape = model.shape_metrics(scene, cost.variant)
-    rub = prices["turn"] * shape["turns"] + prices["kink"] * shape["kinks"] + prices["chamber"] * shape["chambers"]
-    return cost.score_value + model.rub_to_score(rub, scene.rules)
-
-
 def settings(names: list[str], first: str, budget: int, seed: int) -> list[tuple[str, float, float]]:
     """Разбиение, множитель коридора и масштаб цены поворота для каждого леса: сначала все разбиения с настройками
     по умолчанию (первым — разбиение базового леса), затем перебор в порядке, заданном seed."""
@@ -278,14 +263,15 @@ def solve(scene: Scene, graph: VisGraph, rules: dict[str, Any], quality: list[Qu
     recon = tm.Recon(scene, rules)
     partitions = tm.partitions(scene)
     base.meta["source"] = "baseline"
-    found = [(objective(base_cost, scene, quality), base, base_cost)]
+    found = [(model.objective(base_cost, scene, quality), base, base_cost)]
     for name, factor, scale in settings(list(partitions), base.meta["strategy"], budget, seed):
         builder = BendBuilder(scene, graph, lattice, 1.0 - (1.0 - factor) * share, prices, scale)
         trees = tm.forest(builder, recon, partitions[name])
         sol = tm.solution(trees, {"source": "bend", "strategy": name, "corridor": factor, "turn_scale": scale})
         cost = model.cost(sol, scene, rules)
-        found.append((objective(cost, scene, quality), sol, cost))
-    ranked = sorted(found, key=lambda item: item[0])
+        found.append((model.objective(cost, scene, quality), sol, cost))
+    # D-12: ОКС не отключаются ради S, поэтому сначала лес с меньшим числом неподключённых
+    ranked = sorted(found, key=lambda item: (len(item[2].unconnected), item[0]))
     # лес без нарушений модели; свой лес ещё проверяется валидатором, базовый — ответственность tm (T-0)
     chosen = next((item for item in ranked if not item[2].violations and (item[1] is base or not any(model.validate(scene, item[2]).values()))), ranked[0])
     value, sol, _ = chosen

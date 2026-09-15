@@ -104,4 +104,4 @@ def test_quality_mode(scene_graph):
     assert fingerprint(first) == fingerprint(second)
     cost = model.cost(first, scene)
     assert not cost.violations
-    assert bend.objective(cost, scene, quality) <= bend.objective(base, scene, quality) + 1e-9
+    assert model.objective(cost, scene, quality) <= model.objective(base, scene, quality) + 1e-9
