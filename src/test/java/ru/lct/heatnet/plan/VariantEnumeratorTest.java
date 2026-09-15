@@ -116,6 +116,30 @@ class VariantEnumeratorTest {
     }
 
     @Test
+    void outputIdsNeverRepeatInputIds() {
+        // ID входа устроены как выходные ID сервиса
+        PlanFixture fixture = new PlanFixture().pipe("v1_seg_1", 0, 0, 500, 0, 150, 40, "src")
+                .chamber("v2_ch_1", 500, 0, 150, "v1_seg_1").oks("v1_tie_1", 250, 90, 10)
+                .restriction("summary_1", PlanFixture.rect(900, 900, 910, 910), "park");
+        Set<String> inputIds = Set.of("src", "v1_seg_1", "v2_ch_1", "v1_tie_1", "cp-v1_tie_1", "summary_1");
+
+        List<String> outputIds = new ArrayList<>();
+        for (Variant variant : new VariantEnumerator(fixture.input(), rules).run().getVariants()) {
+            variant.getSegments().forEach(o -> outputIds.add(o.getId()));
+            variant.getTieIns().forEach(o -> outputIds.add(o.getId()));
+            variant.getChambers().forEach(o -> outputIds.add(o.getId()));
+            variant.getNodes().forEach(o -> outputIds.add(o.getId()));
+            variant.getReconstructions().forEach(o -> outputIds.add(o.getId()));
+            variant.getChamberReconstructions().forEach(o -> outputIds.add(o.getId()));
+            outputIds.add(variant.getSummary().getId());
+        }
+
+        assertFalse(outputIds.isEmpty());
+        assertEquals(outputIds.size(), new HashSet<>(outputIds).size(), "выходные ID повторяются: " + outputIds);
+        assertTrue(outputIds.stream().noneMatch(inputIds::contains), "выходной ID совпал с входным: " + outputIds);
+    }
+
+    @Test
     void kMeansSplitsTwoRemoteClusters() {
         List<ConnectionPoint> connections = List.of(
                 new ConnectionPoint("a", point(0, 0), "a"), new ConnectionPoint("b", point(10, 0), "b"),
