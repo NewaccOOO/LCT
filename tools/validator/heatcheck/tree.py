@@ -136,6 +136,9 @@ def check_topology(inp: Input, out: Output, rules: dict[str, Any]) -> RuleResult
             if total > chamber_rule["max_segments"] or total - 1 > chamber_rule["max_branches"]:
                 add(min(net.members[group]), f"к камере примыкает участков {total} ({existing} существующих)")
 
+        if not segments:
+            # вариант, где все ОКС неподключены, допустим; пустой список STRtree.query не принимает
+            continue
         tree = STRtree([s.geom for s in segments])
         for i, j in zip(*tree.query([s.geom for s in segments], predicate="dwithin", distance=TOUCH_TOL_M)):
             if i >= j:

@@ -135,6 +135,16 @@ def test_mutation_fails_its_rule(rule):
     assert not any(v.message.startswith(CRASH_PREFIX) for v in result.violations), report
 
 
+def test_variant_without_new_network_does_not_crash_topology():
+    # Вариант, где все ОКС неподключены, допустим: у него только сводка.
+    inp, out = copy.deepcopy(INPUT), copy.deepcopy(OUTPUT)
+    out["features"] = [f for f in out["features"] if f["properties"]["variant_id"] != "2" or f["properties"]["object_type"] == "variant_summary"]
+
+    result = run_rule("topology", inp, out, RULES_DATA)
+
+    assert not result.violations, render_only("topology", result)
+
+
 def test_tie_in_required_diameter_is_new_segment_diameter():
     # ТП §10.2, пример 10.8: у врезки диаметр новой сети (200), а не существующей после подключения (150 или 250).
     inp, out = copy.deepcopy(INPUT), copy.deepcopy(OUTPUT)
