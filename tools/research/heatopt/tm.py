@@ -47,6 +47,7 @@ FOREIGN_TIE_M = 0.6
 JUNCTION_CLIP_M = 0.15
 TURNS_PER_OBSTACLE = 3
 TURNS_BASE = 4
+BLOCKED_CACHE_SIZE = 4096
 JUNCTION_REACH_M = 4.0
 TOP_TIES = 3
 PREFILTER = 2
@@ -173,21 +174,35 @@ class Tree:
 def blocked_by(graph: VisGraph, others: list[Tree], root_node: int | None = None) -> tuple[set[int], set[int]]:
     """Рёбра графа, которые касаются чужих деревьев, и узлы чужих деревьев. У деревьев с той же камерой врезки
     окрестность общего корня не считается касанием."""
-    lines, nodes = [], set()
+    edges, nodes = set(), set()
     for tree in others:
-        clip = Point(tree.points[0]).buffer(SHARED_ROOT_CLIP_M) if tree.root_node == root_node else None
-        for line in tree.lines():
-            lines.append(line.difference(clip) if clip is not None else line)
-        if tree.root_node != root_node:
-            # валидатор не видит пересечения трубы у чужой врезки: к ней не подходим ближе 0,5 м
-            lines.append(Point(tree.points[0]).buffer(FOREIGN_TIE_M))
-        nodes |= {n for i, n in tree.graph_node.items() if i != 0 or tree.root_node != root_node}
+        shared = tree.root_node == root_node
+        edges |= tree_blocked_edges(graph, tree, shared)
+        nodes |= {n for i, n in tree.graph_node.items() if i != 0 or not shared}
+    return edges, nodes
+
+
+def tree_blocked_edges(graph: VisGraph, tree: Tree, shared: bool) -> set[int]:
+    """Рёбра графа у одного дерева; кэш по геометрии дерева: лес перестраивает одни и те же соседние деревья."""
+    key = (tree.points[0], tuple((tree.points[seg.a], tree.points[seg.b]) for seg in tree.segs), shared)
+    cache = graph.__dict__.setdefault("_blocked_cache", {})
+    if key in cache:
+        return cache[key]
+    clip = Point(tree.points[0]).buffer(SHARED_ROOT_CLIP_M) if shared else None
+    lines = [line.difference(clip) if clip is not None else line for line in tree.lines()]
+    if not shared:
+        # валидатор не видит пересечения трубы у чужой врезки: к ней не подходим ближе 0,5 м
+        lines.append(Point(tree.points[0]).buffer(FOREIGN_TIE_M))
     lines = [line for line in lines if not line.is_empty]
-    if not lines:
-        return set(), nodes
-    edge_lines(graph)
-    _, hit = graph.__dict__["_line_tree"].query(np.array(lines, dtype=object), predicate="dwithin", distance=2 * TOUCH_M)
-    return set(np.unique(hit).tolist()), nodes
+    hit = set()
+    if lines:
+        edge_lines(graph)
+        _, found = graph.__dict__["_line_tree"].query(np.array(lines, dtype=object), predicate="dwithin", distance=2 * TOUCH_M)
+        hit = set(np.unique(found).tolist())
+    if len(cache) > BLOCKED_CACHE_SIZE:
+        cache.clear()
+    cache[key] = hit
+    return hit
 
 
 def junction_allowed(graph: VisGraph, xy: XY) -> bool:
