@@ -48,10 +48,16 @@ CP_POLYGON_GAP_M = 12.0
 LINE_GAP_M = 10.0
 POLYGONS = {"Polygon", "MultiPolygon"}
 LINES = {"LineString", "MultiLineString"}
-FORBID_TYPES = {"park", "social_area", "prohibited_site", "water"}
-CROSSING_TYPES = {"road", "tram_tracks"}
-LINE_TYPES = {"gas_pipeline", "power_cable"}
-RESTRICTION_GEOMETRY = {kind: POLYGONS for kind in FORBID_TYPES | CROSSING_TYPES} | {kind: LINES for kind in LINE_TYPES}
+FORBID_TYPES = {"park", "social_area", "prohibited_site", "water", "metro"}
+POINT_TYPES = {"power_line_support"}
+CROSSING_TYPES = {"road", "tram_tracks", "railway"}
+LINE_TYPES = {"gas_pipeline", "power_cable", "water_supply", "sewer"}
+RESTRICTION_GEOMETRY = (
+    {kind: POLYGONS for kind in FORBID_TYPES | CROSSING_TYPES}
+    | {kind: LINES for kind in LINE_TYPES}
+    | {kind: {"Point"} for kind in POINT_TYPES}
+)
+DEFAULT_TYPES = ("park", "social_area", "prohibited_site", "water", "road", "tram_tracks", "gas_pipeline", "power_cable")
 SCHEMA = {
     "source": ({"Point"}, {"id", "object_type"}),
     "heat_network": ({"LineString"}, {"id", "object_type", "diameter", "flow_tph", "upstream_object_id"}),
@@ -122,7 +128,7 @@ def value_ok(field: str, value: Any) -> bool:
     return math.isfinite(value) and value >= 0
 
 
-def check_schema(path: Path, keep_restrictions: bool, dns: set[int]) -> Stored:
+def check_schema(path: Path, keep_restrictions: bool, dns: set[int], types: list[str], prefix: str) -> Stored:
     errors = []
     ids = set()
     kinds = {}
@@ -172,6 +178,9 @@ def check_schema(path: Path, keep_restrictions: bool, dns: set[int]) -> Stored:
         feature_id = props["id"]
         if feature_id in ids:
             errors.append(f"{where}: id повторяется")
+        # references must resolve to ids below, so a prefix on every id covers oks_id and upstream_object_id too
+        if not feature_id.startswith(prefix):
+            errors.append(f"{where}: id без префикса {prefix!r}")
         ids.add(feature_id)
         counts[object_type] += 1
         if object_type != "restriction":
@@ -195,9 +204,12 @@ def check_schema(path: Path, keep_restrictions: bool, dns: set[int]) -> Stored:
     absent = sorted(set(SCHEMA) - counts.keys())
     if absent:
         errors.append(f"нет объектов типов {absent}")
-    absent = sorted(set(RESTRICTION_GEOMETRY) - restriction_types)
+    absent = sorted(set(types) - restriction_types)
     if absent:
         errors.append(f"нет ограничений типов {absent}")
+    unexpected = sorted(restriction_types - set(types))
+    if unexpected:
+        errors.append(f"ограничения типов {unexpected} не заказаны, ожидались только {sorted(types)}")
     if errors:
         fail("SCHEMA", errors)
     return stored
@@ -288,6 +300,8 @@ def min_side(geom: BaseGeometry) -> float:
 
 
 def too_close(left: list[tuple[str, BaseGeometry]], right: list[tuple[str, BaseGeometry]], distance: float, what: str) -> list[str]:
+    if not left or not right:
+        return []
     tree = STRtree([geom for _, geom in right])
     found = tree.query([geom for _, geom in left], predicate="dwithin", distance=distance - GAP_TOLERANCE_M)
     return [
@@ -309,13 +323,13 @@ def check_medium(stored: Stored, capacities: dict[int, float]) -> None:
     if len(segments) < MEDIUM_MIN_SEGMENTS:
         errors.append(f"heat_network: {len(segments)}, нужно не меньше {MEDIUM_MIN_SEGMENTS}")
     for kind, feature_id, geom in restrictions:
-        if kind not in LINE_TYPES and min_side(geom) < MIN_POLYGON_SIDE_M - LENGTH_TOLERANCE_M:
+        if geom.geom_type in POLYGONS and min_side(geom) < MIN_POLYGON_SIDE_M - LENGTH_TOLERANCE_M:
             errors.append(f"restriction {feature_id!r}: сторона {min_side(geom):.3f} м короче {MIN_POLYGON_SIDE_M} м")
 
     network_tree = STRtree([line for _, line in segments])
     chamber_tree = STRtree([point for _, point in stored["heat_chamber"]])
     existing = [(f"oks_existing {props['id']!r}", geom) for props, geom in stored["oks_existing"]]
-    forbid = [(f"restriction {feature_id!r}", geom) for kind, feature_id, geom in restrictions if kind in FORBID_TYPES] + existing
+    forbid = [(f"restriction {feature_id!r}", geom) for kind, feature_id, geom in restrictions if kind in FORBID_TYPES | POINT_TYPES] + existing
     crossing = [(f"restriction {feature_id!r}", geom) for kind, feature_id, geom in restrictions if kind in CROSSING_TYPES]
     lines = [(f"restriction {feature_id!r}", geom) for kind, feature_id, geom in restrictions if kind in LINE_TYPES]
     forbid_tree = STRtree([geom for _, geom in forbid])
@@ -362,11 +376,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="heatsynth.check", description="Проверка синтетического входного GeoJSON")
     parser.add_argument("file", type=Path)
     parser.add_argument("--preset", choices=["medium"], help="дополнительно проверить пороги пресета")
+    parser.add_argument(
+        "--types", type=lambda value: value.split(","), default=list(DEFAULT_TYPES),
+        help="ровно эти restriction_type должны быть в файле, через запятую; по умолчанию восемь типов таблицы ТЗ",
+    )
+    parser.add_argument("--id-prefix", default="", help="с чего начинается каждый id")
     args = parser.parse_args()
+    unknown = [kind for kind in args.types if kind not in RESTRICTION_GEOMETRY]
+    if unknown:
+        parser.error(f"неизвестные типы ограничений {unknown}, известны: {', '.join(sorted(RESTRICTION_GEOMETRY))}")
     rules = json.loads(RULES_PATH.read_text(encoding="utf-8"))
     capacities = {row["dn"]: row["capacity_tph"] for row in rules["diameters"]}
 
-    stored = check_schema(args.file, args.preset == "medium", set(capacities))
+    stored = check_schema(args.file, args.preset == "medium", set(capacities), args.types, args.id_prefix)
     print("SYNTH SCHEMA OK")
     to_utm = Transformer.from_crs("EPSG:4326", "EPSG:32637", always_xy=True)
     utm = {
