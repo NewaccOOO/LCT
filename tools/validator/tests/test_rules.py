@@ -145,6 +145,16 @@ def test_variant_without_new_network_does_not_crash_topology():
     assert not result.violations, render_only("topology", result)
 
 
+def test_single_variant_allowed_only_without_tie_ins():
+    # Все ОКС неподключены: отличающегося второго варианта не существует, одна сводка без врезок допустима.
+    inp, out = copy.deepcopy(INPUT), copy.deepcopy(OUTPUT)
+    out["features"] = [f for f in out["features"] if f["properties"]["object_type"] == "variant_summary" and f["properties"]["variant_id"] == "1"]
+
+    result = run_rule("variants", inp, out, RULES_DATA)
+
+    assert not result.violations, render_only("variants", result)
+
+
 def test_tie_in_required_diameter_is_new_segment_diameter():
     # ТП §10.2, пример 10.8: у врезки диаметр новой сети (200), а не существующей после подключения (150 или 250).
     inp, out = copy.deepcopy(INPUT), copy.deepcopy(OUTPUT)

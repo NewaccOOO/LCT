@@ -312,7 +312,9 @@ def check_coverage(inp: Input, out: Output, rules: dict[str, Any]) -> RuleResult
 def check_variants(inp: Input, out: Output, rules: dict[str, Any]) -> RuleResult:
     violations = []
     variants = list(out.variants.values())
-    if not 2 <= len(variants) <= 3:
+    # Без единой врезки второму варианту нечем отличаться (ТП §9): один вариант допустим, только если он ничего не подключает.
+    nothing_connected = len(variants) == 1 and not variants[0].tie_ins
+    if not 2 <= len(variants) <= 3 and not nothing_connected:
         violations.append(Violation("-", "-", f"вариантов {len(variants)}, нужно от двух до трёх"))
     shapes = {}
     for variant in variants:
