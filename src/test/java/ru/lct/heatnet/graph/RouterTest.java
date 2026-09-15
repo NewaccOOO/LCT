@@ -150,17 +150,17 @@ class RouterTest {
 
     @Test
     void graphNodeNearLineCrossingCarriesSpecialPartBeforeIt() {
-        // узел в 6 м от оси: отсчёт margin_m 10 м от пересечения продолжается за узел ещё на 4 м
+        // узел в 2 м от оси: отсчёт margin_m 3 м от пересечения продолжается за узел ещё на 1 м
         Router router = router(List.of(new Restriction("rw-1", line(-100, 0, 100, 0), "railway")), List.of());
         RestrictionRule rule = rules.restriction("railway");
-        Coordinate node = new Coordinate(0, -6);
+        Coordinate node = new Coordinate(0, -2);
         Coordinate far = new Coordinate(0, 40);
 
         double asPathEnd = router.obstacles().edgeWeight(node, far, Set.of());
         double asNode = router.obstacles().edgeWeight(node, far, Set.of(), true, false);
 
-        assertEquals(46 + (rule.getKSpecial() - 1) * 16, asPathEnd, EPS);
-        assertEquals((rule.getKSpecial() - 1) * (rule.getMarginM() - 6), asNode - asPathEnd, EPS);
+        assertEquals(42 + (rule.getKSpecial() - 1) * 5, asPathEnd, EPS);
+        assertEquals((rule.getKSpecial() - 1) * (rule.getMarginM() - 2), asNode - asPathEnd, EPS);
     }
 
     @Test

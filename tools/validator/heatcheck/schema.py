@@ -142,8 +142,7 @@ def check_schema(inp: Input, out: Output, rules: dict[str, Any]) -> RuleResult:
                 add(f"existing_object_id={props['existing_object_id']!r} не ссылается на входной объект нужного типа")
         if feature.object_type == "variant_summary" and type_ok(STR_LIST, props.get("unconnected_oks_ids")):
             for oks_id in props["unconnected_oks_ids"]:
-                oks = inp.by_id.get(oks_id)
-                if oks is None or oks.object_type != "oks_future":
+                if oks_id not in inp.oks:
                     add(f"unconnected_oks_ids содержит {oks_id!r}, это не входной oks_future")
     for variant_id in out.variants:
         if summaries[variant_id] != 1:

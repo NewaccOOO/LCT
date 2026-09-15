@@ -28,6 +28,8 @@ TOUCH_TOL_M = 0.001
 MIN_TURN_DEG = 3.0
 MIN_SUBSEGMENT_M = 1.0
 VARIANT_TIE_DIST_M = 20.0
+JOINT_M = 0.5
+BUILDING = "oks"
 
 TO_UTM = Transformer.from_crs("EPSG:4326", "EPSG:32637", always_xy=True)
 
@@ -65,6 +67,7 @@ class Input:
     special: list[Obstacle]
     upstream_first: dict[str, bool]
     chamber_links: dict[str, list[Feature]]
+    oks: dict[str, Feature]
 
     def of_type(self, object_type: str) -> list[Feature]:
         return self.by_type.get(object_type, [])
@@ -122,12 +125,95 @@ def raw_features(data: Any) -> list[Any]:
     return features if isinstance(features, list) else []
 
 
+def default_existing_flow(rules: dict[str, Any], dn: Any) -> float | None:
+    """Текущий расход участка без flow_tph: cap(Ду-1) + share × (cap(Ду) − cap(Ду-1)), docs/interpretation.md."""
+    share = rules.get("existing_flow", {}).get("share", 0.0)
+    previous = 0.0
+    for row in rules["diameters"]:
+        if row["dn"] == dn:
+            return previous + share * (row["capacity_tph"] - previous)
+        previous = row["capacity_tph"]
+    return None
+
+
+def endpoint(network: Feature, k: int) -> Point:
+    return Point(network.geom.coords[0 if k == 0 else -1])
+
+
+def infer_network(features: list[Feature], rules: dict[str, Any]) -> None:
+    """Направление сети обходом от источника по стыкам, диаметры камер и текущий расход там, где их нет во входе."""
+    source = next((f for f in features if f.object_type == "source" and f.geom is not None), None)
+    pipes = [f for f in features if f.object_type == "heat_network" and f.geom is not None]
+    chambers = [f for f in features if f.object_type == "heat_chamber" and f.geom is not None]
+    ends = [(i, k, endpoint(pipe, k)) for i, pipe in enumerate(pipes) for k in (0, 1)]
+
+    def near(at: BaseGeometry) -> list[tuple[int, int]]:
+        return [(i, k) for i, k, end in ends if end.distance(at) <= JOINT_M]
+
+    if source is not None and any(f.props.get("upstream_object_id") is None for f in pipes + chambers):
+        # ponytail: перебор концов O(участков²), STRtree, если сеть во входе вырастет до тысяч участков
+        reached: set[int] = set()
+        queue: list[tuple[int, int]] = []
+
+        def reach(i: int, k: int, upstream: str) -> None:
+            if i in reached:
+                return
+            reached.add(i)
+            if pipes[i].props.get("upstream_object_id") is None:
+                pipes[i].props["upstream_object_id"] = upstream
+            queue.append((i, k))
+
+        for i, k in near(source.geom):
+            reach(i, k, source.id)
+        for i, k in queue:
+            far = endpoint(pipes[i], 1 - k)
+            chamber = next((c for c in chambers if c.geom.distance(far) <= JOINT_M), None)
+            if chamber is not None and chamber.props.get("upstream_object_id") is None:
+                chamber.props["upstream_object_id"] = pipes[i].id
+            for j, kk in near(far):
+                reach(j, kk, chamber.id if chamber is not None else pipes[i].id)
+    for pipe in pipes:
+        if pipe.props.get("flow_tph") is None:
+            pipe.props["flow_tph"] = default_existing_flow(rules, pipe.props.get("diameter"))
+    for chamber in chambers:
+        if chamber.props.get("diameter") is None:
+            dns = [pipes[i].props.get("diameter") for i, _ in near(chamber.geom)]
+            chamber.props["diameter"] = max((dn for dn in dns if isinstance(dn, int)), default=None)
+
+
+def infer_consumers(features: list[Feature]) -> list[Feature]:
+    """Точки подключения датасета становятся перспективными ОКС с тем же id, здание с точкой внутри — их геометрией."""
+    buildings = [f for f in features if f.object_type == "restriction" and f.props.get("restriction_type") == BUILDING and f.geom is not None]
+    points = [f for f in features if f.object_type == "oks_connection_point" and f.props.get("oks_id") is None
+              and f.props.get("flow_tph") is not None and f.geom is not None]
+    tree = STRtree([b.geom for b in buildings])
+    future: set[int] = set()
+    oks = []
+    for point in points:
+        building = min((int(i) for i in tree.query(point.geom, predicate="covered_by")), default=None)
+        geom = point.geom if building is None else buildings[building].geom
+        if building is not None:
+            future.add(building)
+        oks.append(Feature(point.id, "oks_future", {"id": point.props["id"], "object_type": "oks_future", "flow_tph": point.props["flow_tph"]}, geom))
+        point.props["oks_id"] = point.id
+    for building in buildings:
+        building.object_type = building.props["object_type"] = "oks_existing"
+    taken = {id(buildings[i]) for i in future}
+    return [f for f in features if id(f) not in taken] + oks
+
+
 def load_input(data: Any, rules: dict[str, Any]) -> Input:
+    features = [parse_feature(raw) for raw in raw_features(data)]
+    for feature in features:
+        feature.props = dict(feature.props)
+    infer_network(features, rules)
+    features = infer_consumers(features)
     by_id = {}
     by_type: dict[str, list[Feature]] = {}
-    for raw in raw_features(data):
-        feature = parse_feature(raw)
-        by_id[feature.id] = feature
+    for feature in features:
+        # перспективный ОКС датасета делит id со своей точкой подключения, в by_id остаётся точка
+        if feature.id not in by_id or feature.object_type != "oks_future":
+            by_id[feature.id] = feature
         by_type.setdefault(feature.object_type, []).append(feature)
 
     restriction_rules = rules["restrictions"]
@@ -163,7 +249,8 @@ def load_input(data: Any, rules: dict[str, Any]) -> Input:
             if min(end.distance(chamber.geom) for end in ends) <= EXISTING_TOL_M:
                 links.append(network)
         chamber_links[chamber.id] = links
-    return Input(by_id, by_type, forbid, special, upstream_first, chamber_links)
+    oks = {f.id: f for f in by_type.get("oks_future", [])}
+    return Input(by_id, by_type, forbid, special, upstream_first, chamber_links, oks)
 
 
 def load_output(data: Any) -> Output:

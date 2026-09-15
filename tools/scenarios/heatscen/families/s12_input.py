@@ -62,14 +62,21 @@ def pipe_without_diameter() -> tuple[Scene, Expect]:
     return without("hn-e", "diameter")
 
 
-@scenario("S12-02", tz=["TZ-4", "TZ-92"], title="у участка сети нет flow_tph: код 2 и диагностика hn-w flow_tph")
+def inferred(id: str, field: str) -> tuple[Scene, Expect]:
+    """Атрибут, который в датасете организаторов не приходит: сервис выводит его и считает варианты (docs/interpretation.md)."""
+    sc = valid_scene()
+    props(sc, id).pop(field)
+    return sc, Expect(exit_code=0, unconnected=[], costs_by_formula=True)
+
+
+@scenario("S12-02", tz=["TZ-4", "TZ-92"], title="у участка сети нет flow_tph, как в датасете: расход выводится по Ду, код 0")
 def pipe_without_flow() -> tuple[Scene, Expect]:
-    return without("hn-w", "flow_tph")
+    return inferred("hn-w", "flow_tph")
 
 
-@scenario("S12-03", tz=["TZ-4", "TZ-7"], title="у камеры нет upstream_object_id: код 2 и диагностика hc-e upstream_object_id")
+@scenario("S12-03", tz=["TZ-4", "TZ-7"], title="у камеры нет upstream_object_id, как в датасете: направление выводится обходом от источника, код 0")
 def chamber_without_upstream() -> tuple[Scene, Expect]:
-    return without("hc-e", "upstream_object_id")
+    return inferred("hc-e", "upstream_object_id")
 
 
 @scenario("S12-04", tz=["TZ-4"], title="у ОКС нет flow_tph: код 2 и диагностика oks-1 flow_tph")

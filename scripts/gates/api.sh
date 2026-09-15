@@ -222,7 +222,7 @@ features = data["features"]
 def first(object_type):
     return next(f for f in features if f["properties"]["object_type"] == object_type)
 
-del first("oks_future")["properties"]["flow_tph"]
+first("heat_network")["properties"]["flow_tph"] = -5
 first("heat_chamber")["properties"]["diameter"] = 12.5
 first("oks_connection_point")["properties"]["oks_id"] = "oks-missing"
 features.append(copy.deepcopy(first("restriction")))

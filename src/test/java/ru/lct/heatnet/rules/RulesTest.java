@@ -109,9 +109,9 @@ class RulesTest {
 
         RestrictionRule railway = rules.restriction("railway");
         assertFalse(railway.forbid());
-        assertEquals(60, railway.getMinAngleDeg(), EPS);
-        assertEquals(10, railway.getMarginM(), EPS);
-        assertEquals(2.0, railway.getKSpecial(), EPS);
+        assertEquals(45, railway.getMinAngleDeg(), EPS);
+        assertEquals(3, railway.getMarginM(), EPS);
+        assertEquals(1.75, railway.getKSpecial(), EPS);
         assertEquals(0.0, rules.restriction("sewer").getHalfWidthM(), EPS);
     }
 

@@ -30,7 +30,6 @@ CHUNK_CHARS = 1 << 20
 SEPARATORS = re.compile(r"[\s,]*")
 MAX_PRINTED_ERRORS = 30
 END_TOLERANCE_M = 0.5
-FLOW_TOLERANCE_TPH = 1e-6
 LENGTH_TOLERANCE_M = 0.001
 GAP_TOLERANCE_M = 0.01
 MEDIUM_OKS = 20
@@ -41,7 +40,7 @@ MEDIUM_MIN_CROSSED = 5
 MIN_POLYGON_SIDE_M = 20.0
 CHAMBER_RADIUS_M = 500.0
 MIN_CHAMBERS_NEAR_OKS = 2
-OVERLOAD_SHARE = 0.8
+BUILDING = "oks"
 POLYGON_GAP_M = 12.0
 NETWORK_GAP_M = 10.0
 CP_POLYGON_GAP_M = 12.0
@@ -58,20 +57,15 @@ RESTRICTION_GEOMETRY = (
     | {kind: {"Point"} for kind in POINT_TYPES}
 )
 DEFAULT_TYPES = ("park", "social_area", "prohibited_site", "water", "road", "tram_tracks", "gas_pipeline", "power_cable")
+# формат датасета организаторов: у сети только диаметр, здания — ограничения oks, расход ОКС на точке подключения
 SCHEMA = {
     "source": ({"Point"}, {"id", "object_type"}),
-    "heat_network": ({"LineString"}, {"id", "object_type", "diameter", "flow_tph", "upstream_object_id"}),
-    "heat_chamber": ({"Point"}, {"id", "object_type", "diameter", "upstream_object_id"}),
-    "oks_future": (POLYGONS, {"id", "object_type", "flow_tph", "heat_load"}),
-    "oks_connection_point": ({"Point"}, {"id", "object_type", "oks_id"}),
-    "oks_existing": (POLYGONS, {"id", "object_type"}),
+    "heat_network": ({"LineString"}, {"id", "object_type", "diameter"}),
+    "heat_chamber": ({"Point"}, {"id", "object_type"}),
+    "oks_connection_point": ({"Point"}, {"id", "object_type", "flow_tph"}),
     "restriction": (set(), {"id", "object_type", "restriction_type"}),
 }
-FIELD_TYPES = {
-    "id": str, "object_type": str, "oks_id": str, "restriction_type": str, "upstream_object_id": str,
-    "diameter": int, "flow_tph": float, "heat_load": float,
-}
-UPSTREAM_TYPES = {"heat_network", "heat_chamber", "source"}
+FIELD_TYPES = {"object_type": str, "restriction_type": str, "diameter": int, "flow_tph": float}
 
 Stored = dict[str, list[tuple[dict[str, Any], BaseGeometry]]]
 
@@ -117,6 +111,12 @@ def read_features(path: Path) -> Iterator[Any]:
         raise ValueError("корневой объект не FeatureCollection")
 
 
+def id_ok(value: Any, prefix: str) -> bool:
+    if prefix:
+        return isinstance(value, str) and value.startswith(prefix) and value != prefix
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
 def value_ok(field: str, value: Any) -> bool:
     kind = FIELD_TYPES[field]
     if kind is str:
@@ -131,10 +131,8 @@ def value_ok(field: str, value: Any) -> bool:
 def check_schema(path: Path, keep_restrictions: bool, dns: set[int], types: list[str], prefix: str) -> Stored:
     errors = []
     ids = set()
-    kinds = {}
     counts = Counter()
     restriction_types = set()
-    references = []
     stored = defaultdict(list)
     for number, feature in enumerate(read_features(path), 1):
         if not isinstance(feature, dict) or feature.get("type") != "Feature" or not isinstance(feature.get("properties"), dict):
@@ -149,14 +147,17 @@ def check_schema(path: Path, keep_restrictions: bool, dns: set[int], types: list
         allowed, required = SCHEMA[object_type]
         if object_type == "restriction":
             restriction_type = props.get("restriction_type")
-            if restriction_type not in RESTRICTION_GEOMETRY:
+            if restriction_type not in RESTRICTION_GEOMETRY and restriction_type != BUILDING:
                 errors.append(f"{where}: неизвестный restriction_type {restriction_type!r}")
                 continue
-            allowed = RESTRICTION_GEOMETRY[restriction_type]
-            restriction_types.add(restriction_type)
+            allowed = RESTRICTION_GEOMETRY.get(restriction_type, POLYGONS)
+            if restriction_type != BUILDING:
+                restriction_types.add(restriction_type)
         missing = sorted(required - props.keys())
         extra = sorted(props.keys() - required)
-        bad = sorted(field for field in required & props.keys() if not value_ok(field, props[field]))
+        bad = sorted(field for field in required & props.keys() if field != "id" and not value_ok(field, props[field]))
+        if "id" in props and not id_ok(props["id"], prefix):
+            bad.append("id" if not prefix else f"id без префикса {prefix!r}")
         if missing or extra or bad:
             errors.append(f"{where}: нет полей {missing}, чужие поля {extra}, неверный тип значения {bad}")
             continue
@@ -178,27 +179,12 @@ def check_schema(path: Path, keep_restrictions: bool, dns: set[int], types: list
         feature_id = props["id"]
         if feature_id in ids:
             errors.append(f"{where}: id повторяется")
-        # references must resolve to ids below, so a prefix on every id covers oks_id and upstream_object_id too
-        if not feature_id.startswith(prefix):
-            errors.append(f"{where}: id без префикса {prefix!r}")
         ids.add(feature_id)
         counts[object_type] += 1
-        if object_type != "restriction":
-            kinds[feature_id] = object_type
-        if "upstream_object_id" in props:
-            references.append((where, feature_id, props["upstream_object_id"], UPSTREAM_TYPES))
-        if "oks_id" in props:
-            references.append((where, feature_id, props["oks_id"], {"oks_future"}))
-        if object_type != "restriction" or keep_restrictions:
-            stored[object_type].append((props, geom))
+        key = "building" if props.get("restriction_type") == BUILDING else object_type
+        if key != "restriction" or keep_restrictions:
+            stored[key].append((props, geom))
 
-    for where, feature_id, target, wanted in references:
-        if target == feature_id or kinds.get(target) not in wanted:
-            errors.append(f"{where}: ссылка {target!r} не ведёт на объект {sorted(wanted)}")
-    points_per_oks = Counter(props["oks_id"] for props, _ in stored["oks_connection_point"])
-    for props, _ in stored["oks_future"]:
-        if points_per_oks[props["id"]] != 1:
-            errors.append(f"oks_future {props['id']!r}: точек подключения {points_per_oks[props['id']]}, нужна одна")
     if counts["source"] != 1:
         errors.append(f"source: {counts['source']} объектов, нужен один")
     absent = sorted(set(SCHEMA) - counts.keys())
@@ -216,78 +202,46 @@ def check_schema(path: Path, keep_restrictions: bool, dns: set[int], types: list
 
 
 def check_network(stored: Stored, capacities: dict[int, float]) -> None:
+    """Направление сети выводится обходом от источника по стыкам концов, как это делают сервис и валидатор."""
     errors = []
     source_props, source_point = stored["source"][0]
-    source_id = source_props["id"]
-    segments = {props["id"]: (props, line) for props, line in stored["heat_network"]}
-    chambers = {props["id"]: (props, point) for props, point in stored["heat_chamber"]}
-    network = segments | chambers
+    segments = stored["heat_network"]
+    ends = [(i, k, Point(line.coords[0 if k == 0 else -1])) for i, (_, line) in enumerate(segments) for k in (0, 1)]
+    tree = STRtree([point for _, _, point in ends])
 
-    reaches = {source_id: True}
-    for start in network:
-        path = []
-        seen = set()
-        current = start
-        while current not in reaches and current not in seen:
-            path.append(current)
-            seen.add(current)
-            current = network[current][0]["upstream_object_id"]
-        ok = reaches.get(current, False)
-        for item in path:
-            reaches[item] = ok
-        if not ok:
-            errors.append(f"{network[start][0]['object_type']} {start!r}: цепочка upstream_object_id не доходит до source")
+    def near(at: BaseGeometry) -> list[tuple[int, int]]:
+        return [ends[j][:2] for j in sorted(tree.query(at, predicate="dwithin", distance=END_TOLERANCE_M))]
 
-    def ends(line: LineString) -> list[Point]:
-        return [Point(line.coords[0]), Point(line.coords[-1])]
+    parent: dict[int, int | None] = {}
+    queue = []
+    for i, k in near(source_point):
+        if i not in parent:
+            parent[i] = None
+            queue.append((i, k))
+    for i, k in queue:
+        for j, kk in near(Point(segments[i][1].coords[-1 if k == 0 else 0])):
+            if j not in parent:
+                parent[j] = i
+                queue.append((j, kk))
+    for i, (props, _) in enumerate(segments):
+        if i not in parent:
+            errors.append(f"heat_network {props['id']!r}: обход от source по стыкам концов до участка не доходит")
+        elif parent[i] is not None and segments[parent[i]][0]["diameter"] < props["diameter"]:
+            errors.append(f"heat_network {props['id']!r}: диаметр больше, чем у участка {segments[parent[i]][0]['id']!r} ближе к источнику")
+    for props, point in stored["heat_chamber"]:
+        if not near(point):
+            errors.append(f"heat_chamber {props['id']!r}: не стоит на конце участка, диаметр камеры не вывести")
 
-    for feature_id, (props, geom) in network.items():
-        upstream = props["upstream_object_id"]
-        if upstream == source_id:
-            targets = [source_point]
-        elif upstream in chambers:
-            targets = [chambers[upstream][1]]
-        else:
-            targets = ends(segments[upstream][1])
-        mine = ends(geom) if feature_id in segments else [geom]
-        gap = min(a.distance(b) for a in mine for b in targets)
-        if gap > END_TOLERANCE_M:
-            errors.append(f"{props['object_type']} {feature_id!r}: до {upstream!r} {gap:.2f} м, конец должен совпадать до {END_TOLERANCE_M} м")
-
-    def diameter_for(flow: float) -> int | None:
-        return next((dn for dn, capacity in sorted(capacities.items()) if capacity >= flow), None)
-
-    children_flow = defaultdict(float)
-    for feature_id, (props, _) in segments.items():
-        if props["diameter"] != diameter_for(props["flow_tph"]):
-            errors.append(f"heat_network {feature_id!r}: diameter {props['diameter']} не минимальный по расходу {props['flow_tph']}")
-        if not reaches[feature_id]:
-            continue
-        parent = props["upstream_object_id"]
-        while parent in chambers:
-            parent = chambers[parent][0]["upstream_object_id"]
-        if parent == source_id:
-            continue
-        parent_props = segments[parent][0]
-        children_flow[parent] += props["flow_tph"]
-        if parent_props["diameter"] < props["diameter"] or parent_props["flow_tph"] < props["flow_tph"] - FLOW_TOLERANCE_TPH:
-            errors.append(f"heat_network {feature_id!r}: расход или диаметр больше, чем у {parent!r} ближе к источнику")
-    for parent, flow in children_flow.items():
-        if segments[parent][0]["flow_tph"] < flow - FLOW_TOLERANCE_TPH:
-            errors.append(f"heat_network {parent!r}: расход {segments[parent][0]['flow_tph']} меньше суммы нижних участков {flow:.3f}")
-
-    owners = []
-    endpoints = []
-    for feature_id, (_, line) in segments.items():
-        for point in ends(line):
-            owners.append(feature_id)
-            endpoints.append(point)
-    tree = STRtree(endpoints)
-    for feature_id, (props, point) in chambers.items():
-        adjacent = {owners[i] for i in tree.query(point, predicate="dwithin", distance=END_TOLERANCE_M)}
-        wanted = max((segments[s][0]["diameter"] for s in adjacent), default=None)
-        if props["diameter"] != wanted:
-            errors.append(f"heat_chamber {feature_id!r}: diameter {props['diameter']}, максимум примыкающих участков {wanted}")
+    buildings = STRtree([geom for _, geom in stored["building"]])
+    inside = Counter()
+    for props, point in stored["oks_connection_point"]:
+        found = buildings.query(point, predicate="within")
+        if found.size != 1:
+            errors.append(f"oks_connection_point {props['id']!r}: лежит внутри {found.size} зданий oks, нужно одно")
+        inside.update(int(j) for j in found)
+    for j, count in inside.items():
+        if count > 1:
+            errors.append(f"здание oks {stored['building'][j][0]['id']!r}: точек подключения {count}, генератор ставит одну")
     if errors:
         fail("NETWORK", errors)
 
@@ -311,13 +265,18 @@ def too_close(left: list[tuple[str, BaseGeometry]], right: list[tuple[str, BaseG
     ]
 
 
-def check_medium(stored: Stored, capacities: dict[int, float]) -> None:
+def existing_flow(capacities: dict[int, float], share: float, dn: int) -> float:
+    """Текущий расход участка, который выводят сервис и валидатор: cap(Ду-1) + share × (cap(Ду) − cap(Ду-1))."""
+    previous = max((capacity for other, capacity in capacities.items() if other < dn), default=0.0)
+    return previous + share * (capacities[dn] - previous)
+
+
+def check_medium(stored: Stored, capacities: dict[int, float], share: float) -> None:
     errors = []
-    oks = {props["id"]: props for props, _ in stored["oks_future"]}
     segments = stored["heat_network"]
     restrictions = [(props["restriction_type"], props["id"], geom) for props, geom in stored["restriction"]]
-    if len(oks) != MEDIUM_OKS:
-        errors.append(f"oks_future: {len(oks)}, нужно {MEDIUM_OKS}")
+    if len(stored["oks_connection_point"]) != MEDIUM_OKS:
+        errors.append(f"oks_connection_point: {len(stored['oks_connection_point'])}, нужно {MEDIUM_OKS}")
     if len(restrictions) < MEDIUM_MIN_RESTRICTIONS:
         errors.append(f"restriction: {len(restrictions)}, нужно не меньше {MEDIUM_MIN_RESTRICTIONS}")
     if len(segments) < MEDIUM_MIN_SEGMENTS:
@@ -328,7 +287,9 @@ def check_medium(stored: Stored, capacities: dict[int, float]) -> None:
 
     network_tree = STRtree([line for _, line in segments])
     chamber_tree = STRtree([point for _, point in stored["heat_chamber"]])
-    existing = [(f"oks_existing {props['id']!r}", geom) for props, geom in stored["oks_existing"]]
+    point_tree = STRtree([point for _, point in stored["oks_connection_point"]])
+    future = [(f"здание oks {props['id']!r}", geom) for props, geom in stored["building"] if point_tree.query(geom, predicate="contains").size]
+    existing = [(f"здание oks {props['id']!r}", geom) for props, geom in stored["building"] if not point_tree.query(geom, predicate="contains").size]
     forbid = [(f"restriction {feature_id!r}", geom) for kind, feature_id, geom in restrictions if kind in FORBID_TYPES | POINT_TYPES] + existing
     crossing = [(f"restriction {feature_id!r}", geom) for kind, feature_id, geom in restrictions if kind in CROSSING_TYPES]
     lines = [(f"restriction {feature_id!r}", geom) for kind, feature_id, geom in restrictions if kind in LINE_TYPES]
@@ -345,13 +306,11 @@ def check_medium(stored: Stored, capacities: dict[int, float]) -> None:
         chambers_near = chamber_tree.query(point, predicate="dwithin", distance=CHAMBER_RADIUS_M).size
         if chambers_near < MIN_CHAMBERS_NEAR_OKS:
             errors.append(f"{where}: камер в радиусе {CHAMBER_RADIUS_M} м {chambers_near}, нужно не меньше {MIN_CHAMBERS_NEAR_OKS}")
-        oks_flow = oks[props["oks_id"]]["flow_tph"]
+        oks_flow = props["flow_tph"]
         for index in nearest:
             segment = segments[index][0]
             capacity = capacities[segment["diameter"]]
-            if segment["flow_tph"] < OVERLOAD_SHARE * capacity - FLOW_TOLERANCE_TPH:
-                errors.append(f"{where}: ближайший участок {segment['id']!r} загружен {segment['flow_tph']} из {capacity} т/ч, нужно не меньше {OVERLOAD_SHARE:.0%}")
-            if segment["flow_tph"] + oks_flow <= capacity:
+            if existing_flow(capacities, share, segment["diameter"]) + oks_flow <= capacity:
                 errors.append(f"{where}: расход ОКС {oks_flow} не выводит участок {segment['id']!r} за пропускную способность {capacity} т/ч")
     if blocked < MEDIUM_MIN_BLOCKED:
         errors.append(f"запрещённый полигон на прямой к сети у {blocked} ОКС, нужно не меньше {MEDIUM_MIN_BLOCKED}")
@@ -359,8 +318,7 @@ def check_medium(stored: Stored, capacities: dict[int, float]) -> None:
         errors.append(f"дорога или трамвайные пути на прямой к сети у {crossed} ОКС, нужно не меньше {MEDIUM_MIN_CROSSED}")
 
     # the gaps below keep a corridor around every obstacle, so each OKS has a detour
-    buildings = [(f"oks_future {props['id']!r}", geom) for props, geom in stored["oks_future"]]
-    polygons = forbid + crossing + buildings
+    polygons = forbid + crossing + future
     network = [(f"heat_network {props['id']!r}", line) for props, line in segments]
     points = [(f"oks_connection_point {props['id']!r}", point) for props, point in stored["oks_connection_point"]]
     chambers = [(f"heat_chamber {props['id']!r}", point) for props, point in stored["heat_chamber"]]
@@ -398,7 +356,7 @@ def main() -> None:
     check_network(utm, capacities)
     print("SYNTH NETWORK OK")
     if args.preset == "medium":
-        check_medium(utm, capacities)
+        check_medium(utm, capacities, rules["existing_flow"]["share"])
         print("SYNTH MEDIUM OK")
 
 
