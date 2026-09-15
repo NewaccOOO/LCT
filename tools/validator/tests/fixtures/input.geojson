@@ -1,0 +1,218 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     37.613655463,
+     55.757853152
+    ]
+   },
+   "properties": {
+    "id": "src",
+    "object_type": "source"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      37.613655463,
+      55.757853152
+     ],
+     [
+      37.616841418,
+      55.757889052
+     ]
+    ]
+   },
+   "properties": {
+    "id": "net_1",
+    "object_type": "heat_network",
+    "diameter": 100,
+    "flow_tph": 15.0,
+    "upstream_object_id": "src"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      37.62002738,
+      55.75792487
+     ],
+     [
+      37.616841418,
+      55.757889052
+     ]
+    ]
+   },
+   "properties": {
+    "id": "net_2",
+    "object_type": "heat_network",
+    "diameter": 80,
+    "flow_tph": 12.0,
+    "upstream_object_id": "ch_1"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     37.616841418,
+     55.757889052
+    ]
+   },
+   "properties": {
+    "id": "ch_1",
+    "object_type": "heat_chamber",
+    "diameter": 100,
+    "upstream_object_id": "net_1"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     37.62002738,
+     55.75792487
+    ]
+   },
+   "properties": {
+    "id": "ch_2",
+    "object_type": "heat_chamber",
+    "diameter": 80,
+    "upstream_object_id": "net_2"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       37.618386757,
+       55.759254374
+      ],
+      [
+       37.619023971,
+       55.759261537
+      ],
+      [
+       37.619011272,
+       55.759620844
+      ],
+      [
+       37.618374052,
+       55.759613682
+      ],
+      [
+       37.618386757,
+       55.759254374
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "id": "oks_1",
+    "object_type": "oks_future",
+    "flow_tph": 5.0,
+    "heat_load": 3.1
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     37.618705364,
+     55.759257956
+    ]
+   },
+   "properties": {
+    "id": "cp_1",
+    "object_type": "oks_connection_point",
+    "oks_id": "oks_1"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       37.617543958,
+       55.758301339
+      ],
+      [
+       37.618181156,
+       55.758308506
+      ],
+      [
+       37.618165273,
+       55.75875764
+      ],
+      [
+       37.617528067,
+       55.758750473
+      ],
+      [
+       37.617543958,
+       55.758301339
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "id": "park_1",
+    "object_type": "restriction",
+    "restriction_type": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       37.618893243,
+       55.758451305
+      ],
+      [
+       37.621282751,
+       55.758478136
+      ],
+      [
+       37.621278947,
+       55.758585929
+      ],
+      [
+       37.618889433,
+       55.758559097
+      ],
+      [
+       37.618893243,
+       55.758451305
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "id": "road_1",
+    "object_type": "restriction",
+    "restriction_type": "road"
+   }
+  }
+ ]
+}
