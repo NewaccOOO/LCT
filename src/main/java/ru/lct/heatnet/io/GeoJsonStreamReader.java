@@ -19,6 +19,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.CoordinateXY;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
@@ -27,6 +28,7 @@ import org.locationtech.jts.geom.LinearRing;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.Polygon;
 import org.locationtech.jts.geom.impl.PackedCoordinateSequenceFactory;
+import org.locationtech.jts.index.strtree.STRtree;
 import org.locationtech.proj4j.ProjectionException;
 import ru.lct.heatnet.model.Chamber;
 import ru.lct.heatnet.model.ConnectionPoint;
@@ -41,8 +43,10 @@ import ru.lct.heatnet.rules.RestrictionRule;
 import ru.lct.heatnet.rules.Rules;
 
 /**
- * Потоковое чтение входного GeoJSON (раздел 12 CONSTRAINTS.md): в памяти одновременно только одна фича
- * в виде дерева, геометрия сразу переводится в EPSG:32637. Ошибки данных возвращаются диагностиками.
+ * Потоковое чтение входного GeoJSON (раздел 12 CONSTRAINTS.md и формат датасета организаторов,
+ * docs/interpretation.md): в памяти одновременно только одна фича в виде дерева, геометрия сразу переводится
+ * в EPSG:32637. Чего нет во входе датасета (направление сети, текущий расход, диаметр камеры, перспективные ОКС),
+ * выводится после чтения. Ошибки данных возвращаются диагностиками.
  */
 public class GeoJsonStreamReader {
     private static final String SOURCE = "source";
@@ -52,6 +56,10 @@ public class GeoJsonStreamReader {
     private static final String CONNECTION_POINT = "oks_connection_point";
     private static final String OKS_EXISTING = "oks_existing";
     private static final String RESTRICTION = "restriction";
+    // здание в датасете организаторов: перспективный ОКС, если в полигоне лежит точка подключения, иначе существующий
+    private static final String BUILDING = "oks";
+    // конец участка совпадает с источником, камерой или концом другого участка (A-9)
+    private static final double JOINT_M = 0.5;
     private static final String FILE_ID = "#0";
     private static final List<String> OBJECT_TYPES = List.of(
             SOURCE, HEAT_NETWORK, HEAT_CHAMBER, OKS_FUTURE, CONNECTION_POINT, OKS_EXISTING, RESTRICTION);
@@ -103,9 +111,54 @@ public class GeoJsonStreamReader {
         }
     }
 
+    private static final class RawSegment {
+        final String id;
+        final LineString geometry;
+        final int diameter;
+        final Double flow;
+        String upstream;
+
+        RawSegment(String id, LineString geometry, int diameter, Double flow, String upstream) {
+            this.id = id;
+            this.geometry = geometry;
+            this.diameter = diameter;
+            this.flow = flow;
+            this.upstream = upstream;
+        }
+    }
+
+    private static final class RawChamber {
+        final String id;
+        final Point geometry;
+        final Integer diameter;
+        String upstream;
+
+        RawChamber(String id, Point geometry, Integer diameter, String upstream) {
+            this.id = id;
+            this.geometry = geometry;
+            this.diameter = diameter;
+            this.upstream = upstream;
+        }
+    }
+
+    /** Точка подключения датасета: без oks_id, со своим расходом. */
+    private static final class Consumer {
+        final String id;
+        final Point geometry;
+        final double flow;
+
+        Consumer(String id, Point geometry, double flow) {
+            this.id = id;
+            this.geometry = geometry;
+            this.flow = flow;
+        }
+    }
+
     private static final class Scan {
-        final List<NetworkSegment> segments = new ArrayList<>();
-        final List<Chamber> chambers = new ArrayList<>();
+        final List<RawSegment> rawSegments = new ArrayList<>();
+        final List<RawChamber> rawChambers = new ArrayList<>();
+        final List<Consumer> consumers = new ArrayList<>();
+        final List<ExistingOks> buildings = new ArrayList<>();
         final List<FutureOks> futureOks = new ArrayList<>();
         final List<ConnectionPoint> connectionPoints = new ArrayList<>();
         final List<ExistingOks> existingOks = new ArrayList<>();
@@ -164,7 +217,7 @@ public class GeoJsonStreamReader {
                 return;
             }
             int before = diagnostics.size();
-            String id = string(props, ordinalId, "id");
+            String id = identifier(props, ordinalId, "id");
             String featureId = id == null ? ordinalId : id;
             if (!"Feature".equals(node.path("type").textValue())) {
                 add(featureId, "type", "ожидается type = Feature");
@@ -194,20 +247,20 @@ public class GeoJsonStreamReader {
                 }
                 case HEAT_NETWORK: {
                     Integer diameter = diameter(props, featureId);
-                    Double flow = flow(props, featureId);
-                    String upstream = upstream(props, id, featureId);
+                    Double flow = present(props, "flow_tph") ? flow(props, featureId) : null;
+                    String upstream = present(props, "upstream_object_id") ? upstream(props, id, featureId) : null;
                     Geometry geometry = geometry(node, featureId, LINE);
                     if (diagnostics.size() == before) {
-                        segments.add(new NetworkSegment(id, (LineString) geometry, diameter, flow, upstream));
+                        rawSegments.add(new RawSegment(id, (LineString) geometry, diameter, flow, upstream));
                     }
                     break;
                 }
                 case HEAT_CHAMBER: {
-                    Integer diameter = diameter(props, featureId);
-                    String upstream = upstream(props, id, featureId);
+                    Integer diameter = present(props, "diameter") ? diameter(props, featureId) : null;
+                    String upstream = present(props, "upstream_object_id") ? upstream(props, id, featureId) : null;
                     Geometry geometry = geometry(node, featureId, POINT);
                     if (diagnostics.size() == before) {
-                        chambers.add(new Chamber(id, (Point) geometry, diameter, upstream));
+                        rawChambers.add(new RawChamber(id, (Point) geometry, diameter, upstream));
                     }
                     break;
                 }
@@ -221,7 +274,15 @@ public class GeoJsonStreamReader {
                     break;
                 }
                 case CONNECTION_POINT: {
-                    String oksId = string(props, featureId, "oks_id");
+                    if (!present(props, "oks_id") && present(props, "flow_tph")) {
+                        Double flow = flow(props, featureId);
+                        Geometry geometry = geometry(node, featureId, POINT);
+                        if (diagnostics.size() == before) {
+                            consumers.add(new Consumer(id, (Point) geometry, flow));
+                        }
+                        break;
+                    }
+                    String oksId = identifier(props, featureId, "oks_id");
                     if (oksId != null) {
                         refs.add(new Ref(featureId, "oks_id", oksId, List.of(OKS_FUTURE)));
                     }
@@ -240,6 +301,13 @@ public class GeoJsonStreamReader {
                 }
                 case RESTRICTION: {
                     String restrictionType = string(props, featureId, "restriction_type");
+                    if (BUILDING.equals(restrictionType)) {
+                        Geometry geometry = geometry(node, featureId, POLYGONS);
+                        if (diagnostics.size() == before) {
+                            buildings.add(new ExistingOks(id, geometry));
+                        }
+                        break;
+                    }
                     List<String> allowed = ANY_RESTRICTION;
                     if (restrictionType != null) {
                         allowed = RESTRICTION_GEOMETRY.getOrDefault(restrictionType, ANY_RESTRICTION);
@@ -274,10 +342,154 @@ public class GeoJsonStreamReader {
                 }
             }
             checkUpstreamCycles();
+            List<NetworkSegment> segments = new ArrayList<>();
+            List<Chamber> chambers = new ArrayList<>();
+            network(segments, chambers);
+            consumers();
             List<String> warnings = new ArrayList<>();
             unknownRestrictionTypes.forEach((type, count) -> warnings.add(unknownTypeWarning(type, count)));
             return new InputData(source, segments, chambers, futureOks, connectionPoints, existingOks, restrictions,
                     diagnostics, warnings);
+        }
+
+        /** Направление сети обходом от источника, диаметры камер и текущий расход там, где их нет во входе. */
+        void network(List<NetworkSegment> segments, List<Chamber> chambers) {
+            if (source != null && (rawSegments.stream().anyMatch(r -> r.upstream == null)
+                    || rawChambers.stream().anyMatch(r -> r.upstream == null))) {
+                traverse();
+            }
+            for (RawSegment raw : rawSegments) {
+                if (raw.upstream == null) {
+                    add(raw.id, "upstream_object_id", "нет upstream_object_id, и обход сети от источника по стыкам до участка не дошёл");
+                    continue;
+                }
+                double flow = raw.flow != null ? raw.flow : RULES.defaultExistingFlow(raw.diameter);
+                segments.add(new NetworkSegment(raw.id, raw.geometry, raw.diameter, flow, raw.upstream));
+            }
+            STRtree ends = endIndex();
+            for (RawChamber raw : rawChambers) {
+                Integer diameter = raw.diameter;
+                if (diameter == null) {
+                    for (int[] end : near(ends, raw.geometry.getCoordinate())) {
+                        diameter = Math.max(diameter == null ? 0 : diameter, rawSegments.get(end[0]).diameter);
+                    }
+                }
+                if (diameter == null) {
+                    add(raw.id, "diameter", "нет diameter, и к камере не примыкает ни один участок сети");
+                } else if (raw.upstream == null) {
+                    add(raw.id, "upstream_object_id", "нет upstream_object_id, и обход сети от источника до камеры не дошёл");
+                } else {
+                    chambers.add(new Chamber(raw.id, raw.geometry, diameter, raw.upstream));
+                }
+            }
+        }
+
+        // Обход в ширину от источника: участок получает следующим к источнику объектом камеру в точке стыка
+        // или участок, от дальнего конца которого до него дошли; камера — участок, который первым дошёл до неё.
+        void traverse() {
+            STRtree ends = endIndex();
+            STRtree chamberIndex = new STRtree();
+            for (RawChamber chamber : rawChambers) {
+                chamberIndex.insert(chamber.geometry.getEnvelopeInternal(), chamber);
+            }
+            boolean[] reached = new boolean[rawSegments.size()];
+            List<int[]> queue = new ArrayList<>();
+            for (int[] end : near(ends, source.getGeometry().getCoordinate())) {
+                reach(end, source.getId(), reached, queue);
+            }
+            for (int head = 0; head < queue.size(); head++) {
+                int[] from = queue.get(head);
+                RawSegment segment = rawSegments.get(from[0]);
+                Coordinate far = endpoint(segment.geometry, 1 - from[1]);
+                RawChamber chamber = chamberAt(chamberIndex, far);
+                if (chamber != null && chamber.upstream == null) {
+                    chamber.upstream = segment.id;
+                }
+                String upstream = chamber != null ? chamber.id : segment.id;
+                for (int[] end : near(ends, far)) {
+                    reach(end, upstream, reached, queue);
+                }
+            }
+        }
+
+        void reach(int[] end, String upstream, boolean[] reached, List<int[]> queue) {
+            if (reached[end[0]]) {
+                return;
+            }
+            reached[end[0]] = true;
+            RawSegment segment = rawSegments.get(end[0]);
+            if (segment.upstream == null) {
+                segment.upstream = upstream;
+            }
+            queue.add(end);
+        }
+
+        STRtree endIndex() {
+            STRtree index = new STRtree();
+            for (int i = 0; i < rawSegments.size(); i++) {
+                for (int k = 0; k < 2; k++) {
+                    index.insert(new Envelope(endpoint(rawSegments.get(i).geometry, k)), new int[] {i, k});
+                }
+            }
+            return index;
+        }
+
+        List<int[]> near(STRtree ends, Coordinate at) {
+            Envelope envelope = new Envelope(at);
+            envelope.expandBy(JOINT_M);
+            List<int[]> found = new ArrayList<>();
+            for (Object item : ends.query(envelope)) {
+                int[] end = (int[]) item;
+                if (endpoint(rawSegments.get(end[0]).geometry, end[1]).distance(at) <= JOINT_M) {
+                    found.add(end);
+                }
+            }
+            found.sort((a, b) -> a[0] != b[0] ? Integer.compare(a[0], b[0]) : Integer.compare(a[1], b[1]));
+            return found;
+        }
+
+        RawChamber chamberAt(STRtree chamberIndex, Coordinate at) {
+            Envelope envelope = new Envelope(at);
+            envelope.expandBy(JOINT_M);
+            RawChamber best = null;
+            for (Object item : chamberIndex.query(envelope)) {
+                RawChamber chamber = (RawChamber) item;
+                if (chamber.geometry.getCoordinate().distance(at) <= JOINT_M
+                        && (best == null || rawChambers.indexOf(chamber) < rawChambers.indexOf(best))) {
+                    best = chamber;
+                }
+            }
+            return best;
+        }
+
+        /** Точки подключения датасета становятся перспективными ОКС, здание с точкой внутри — их геометрией. */
+        void consumers() {
+            STRtree index = new STRtree();
+            for (int i = 0; i < buildings.size(); i++) {
+                index.insert(buildings.get(i).getGeometry().getEnvelopeInternal(), i);
+            }
+            Set<Integer> future = new HashSet<>();
+            for (Consumer consumer : consumers) {
+                Integer building = null;
+                for (Object item : index.query(consumer.geometry.getEnvelopeInternal())) {
+                    int i = (Integer) item;
+                    if ((building == null || i < building) && buildings.get(i).getGeometry().covers(consumer.geometry)) {
+                        building = i;
+                    }
+                }
+                Geometry geometry = consumer.geometry;
+                if (building != null) {
+                    future.add(building);
+                    geometry = buildings.get(building).getGeometry();
+                }
+                futureOks.add(new FutureOks(consumer.id, geometry, consumer.flow, null));
+                connectionPoints.add(new ConnectionPoint(consumer.id, consumer.geometry, consumer.id));
+            }
+            for (int i = 0; i < buildings.size(); i++) {
+                if (!future.contains(i)) {
+                    existingOks.add(buildings.get(i));
+                }
+            }
         }
 
         // Расчёт реконструкции идёт по upstream_object_id до source, на цикле он зациклится.
@@ -297,7 +509,7 @@ public class GeoJsonStreamReader {
         }
 
         String upstream(JsonNode props, String id, String featureId) {
-            String upstream = string(props, featureId, "upstream_object_id");
+            String upstream = identifier(props, featureId, "upstream_object_id");
             if (upstream != null) {
                 refs.add(new Ref(featureId, "upstream_object_id", upstream, UPSTREAM_TYPES));
                 if (id != null) {
@@ -343,6 +555,27 @@ public class GeoJsonStreamReader {
                 return null;
             }
             return value.doubleValue();
+        }
+
+        boolean present(JsonNode props, String field) {
+            JsonNode value = props.get(field);
+            return value != null && !value.isNull();
+        }
+
+        /** Идентификатор: непустая строка или целое число, как в датасете организаторов. */
+        String identifier(JsonNode props, String featureId, String field) {
+            JsonNode value = required(props, featureId, field);
+            if (value == null) {
+                return null;
+            }
+            if (value.isIntegralNumber()) {
+                return value.asText();
+            }
+            if (!value.isTextual() || value.textValue().isEmpty()) {
+                add(featureId, field, "ожидается непустая строка или целое число, получено " + describe(value));
+                return null;
+            }
+            return value.textValue();
         }
 
         String string(JsonNode props, String featureId, String field) {
@@ -447,6 +680,10 @@ public class GeoJsonStreamReader {
             throw new IllegalArgumentException("ожидается непустой массив");
         }
         return node;
+    }
+
+    private static Coordinate endpoint(LineString line, int end) {
+        return line.getCoordinateN(end == 0 ? 0 : line.getNumPoints() - 1);
     }
 
     private static Coordinate[] positions(JsonNode node, int min) {

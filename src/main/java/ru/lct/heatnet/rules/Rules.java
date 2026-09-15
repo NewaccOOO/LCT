@@ -28,6 +28,7 @@ public final class Rules {
     private final double scoreLengthBaseM;
     private final double scoreWCost;
     private final double scoreWLength;
+    private final double existingFlowShare;
     private final Map<String, RestrictionRule> restrictions;
     private final RestrictionRule fallback;
 
@@ -65,6 +66,8 @@ public final class Rules {
         scoreLengthBaseM = number(score, "length_base_m");
         scoreWCost = number(score, "w_cost");
         scoreWLength = number(score, "w_length");
+        // во входе датасета у сети нет текущего расхода: доля между пропускной способностью соседних Ду, docs/interpretation.md
+        existingFlowShare = root.path("existing_flow").path("share").asDouble(0.0);
 
         Map<String, RestrictionRule> byType = new HashMap<>();
         JsonNode restrictionsNode = root.required("restrictions");
@@ -128,6 +131,18 @@ public final class Rules {
             }
         }
         throw new IllegalArgumentException("Стоимость камеры для DN" + dn + " не задана");
+    }
+
+    /** Текущий расход участка без flow_tph: cap(Ду-1) + share × (cap(Ду) − cap(Ду-1)). */
+    public double defaultExistingFlow(int dn) {
+        double previous = 0;
+        for (Diameter diameter : diameters) {
+            if (diameter.getDn() == dn) {
+                return previous + existingFlowShare * (diameter.getCapacityTph() - previous);
+            }
+            previous = diameter.getCapacityTph();
+        }
+        throw new IllegalArgumentException("Диаметра DN" + dn + " нет в таблице");
     }
 
     public double tieInCost() {

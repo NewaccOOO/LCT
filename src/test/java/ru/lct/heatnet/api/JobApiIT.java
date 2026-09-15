@@ -284,12 +284,11 @@ class JobApiIT {
         }
     }
 
-    // Нет flow_tph у ОКС, дробный диаметр камеры, повтор id и ссылка на несуществующий ОКС.
+    // Отрицательный расход участка сети, дробный диаметр камеры, повтор id и ссылка на несуществующий ОКС.
     private static byte[] brokenSample() throws Exception {
         ObjectNode root = (ObjectNode) MAPPER.readTree(SAMPLE.toFile());
         ArrayNode features = (ArrayNode) root.get("features");
-        ObjectNode oks = properties(features, "oks_future");
-        oks.remove("flow_tph");
+        properties(features, "heat_network").put("flow_tph", -5);
         properties(features, "heat_chamber").put("diameter", 12.5);
         properties(features, "oks_connection_point").put("oks_id", "oks-missing");
         features.add(features.get(0).deepCopy());

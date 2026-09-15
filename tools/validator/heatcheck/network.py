@@ -146,8 +146,8 @@ def path_from_root(net: Net, group: int) -> list[Feature] | None:
 
 
 def oks_flow(inp: Input, oks_id: str) -> float:
-    oks = inp.by_id.get(oks_id)
-    return float(oks.props.get("flow_tph", 0)) if oks is not None and oks.object_type == "oks_future" else 0.0
+    oks = inp.oks.get(oks_id)
+    return float(oks.props.get("flow_tph", 0)) if oks is not None else 0.0
 
 
 def root_tie(net: Net, variant: Variant, group: int) -> Feature:

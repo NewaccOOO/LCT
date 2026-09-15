@@ -63,7 +63,7 @@ def run_seed(seed: int) -> dict[str, Any]:
         features, bounds = generate(PRESETS[preset], seed, rules(), SUBSETS[subset])
         write_collection(input_path, features, bounds, 0.0, f"s{seed}-")
         data = json.loads(input_path.read_text(encoding="utf-8"))
-        found = {f["properties"]["restriction_type"] for f in data["features"] if f["properties"]["object_type"] == "restriction"}
+        found = {f["properties"]["restriction_type"] for f in data["features"] if f["properties"]["object_type"] == "restriction"} - {"oks"}
         result["types"] = sorted(found)
         if found != set(SUBSETS[subset]):
             errors.append(f"во входе типы {sorted(found)}, подмножество {subset} заказывает {sorted(SUBSETS[subset])}")

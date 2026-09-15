@@ -22,13 +22,18 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import ru.lct.heatnet.model.Chamber;
 import ru.lct.heatnet.model.Diagnostic;
+import ru.lct.heatnet.model.ExistingOks;
+import ru.lct.heatnet.model.FutureOks;
 import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.NetworkSegment;
 import ru.lct.heatnet.model.Restriction;
+import ru.lct.heatnet.rules.Rules;
 
 class GeoJsonStreamReaderTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final Rules RULES = Rules.load();
     private static final Path SAMPLE = Path.of("data/samples/small-1.geojson");
     private static final long LARGE_FILE_BYTES = 50L * 1024 * 1024;
 
@@ -43,15 +48,23 @@ class GeoJsonStreamReaderTest {
         assertEquals(List.of(), data.getDiagnostics());
         Map<String, Integer> counts = new HashMap<>();
         for (JsonNode feature : MAPPER.readTree(file.toFile()).get("features")) {
-            counts.merge(feature.get("properties").get("object_type").textValue(), 1, Integer::sum);
+            JsonNode properties = feature.get("properties");
+            String type = properties.get("object_type").textValue();
+            if (type.equals("restriction") && "oks".equals(properties.path("restriction_type").textValue())) {
+                type = "building";
+            } else if (type.equals("oks_connection_point") && !properties.has("oks_id")) {
+                counts.merge("consumer", 1, Integer::sum);
+            }
+            counts.merge(type, 1, Integer::sum);
         }
         assertEquals(1, counts.get("source"));
         assertNotNull(data.getSource());
         assertEquals(counts.getOrDefault("heat_network", 0), data.getSegments().size());
         assertEquals(counts.getOrDefault("heat_chamber", 0), data.getChambers().size());
-        assertEquals(counts.getOrDefault("oks_future", 0), data.getFutureOks().size());
+        assertEquals(counts.getOrDefault("oks_future", 0) + counts.getOrDefault("consumer", 0), data.getFutureOks().size());
         assertEquals(counts.getOrDefault("oks_connection_point", 0), data.getConnectionPoints().size());
-        assertEquals(counts.getOrDefault("oks_existing", 0), data.getExistingOks().size());
+        assertTrue(data.getExistingOks().size() >= counts.getOrDefault("oks_existing", 0));
+        assertTrue(data.getExistingOks().size() <= counts.getOrDefault("oks_existing", 0) + counts.getOrDefault("building", 0));
         assertEquals(counts.getOrDefault("restriction", 0), data.getRestrictions().size());
     }
 
@@ -78,9 +91,43 @@ class GeoJsonStreamReaderTest {
     @Test
     void missingRequiredAttribute() throws IOException {
         ArrayNode features = validFeatures();
-        props(features, "N1").remove("flow_tph");
+        props(features, "N1").remove("diameter");
 
-        assertOnly(features, "N1", "flow_tph");
+        assertOnly(features, "N1", "diameter");
+    }
+
+    @Test
+    void readsOrganizerDatasetFormat() throws IOException {
+        InputData data = GeoJsonStreamReader.read(write(datasetFeatures()));
+
+        assertEquals(List.of(), data.getDiagnostics());
+        Map<String, NetworkSegment> segments = data.getSegments().stream()
+                .collect(Collectors.toMap(NetworkSegment::getId, segment -> segment));
+        assertEquals("1", segments.get("10").getUpstreamId(), "первый участок идёт от источника");
+        assertEquals("20", segments.get("11").getUpstreamId(), "за камерой следующий к источнику объект — камера");
+        assertEquals("11", segments.get("12").getUpstreamId(), "стык без камеры — предыдущий участок");
+        assertEquals(RULES.defaultExistingFlow(300), segments.get("10").getFlowTph());
+        assertEquals(274.9, RULES.defaultExistingFlow(300), 1e-9, "при share = 0 расход — пропускная способность Ду 250");
+        Chamber chamber = data.getChambers().get(0);
+        assertEquals("10", chamber.getUpstreamId());
+        assertEquals(300, chamber.getDiameter(), "наибольший Ду примыкающих участков");
+        assertEquals(List.of("30", "31", "32"),
+                data.getFutureOks().stream().map(FutureOks::getId).collect(Collectors.toList()));
+        assertEquals(24.87, data.getFutureOks().get(0).getFlowTph());
+        assertEquals(data.getFutureOks().get(1).getGeometry(), data.getFutureOks().get(2).getGeometry(),
+                "два ввода одного здания — два ОКС с общей геометрией");
+        assertEquals("30", data.getConnectionPoints().get(0).getOksId());
+        assertEquals(List.of("42"), data.getExistingOks().stream().map(ExistingOks::getId).collect(Collectors.toList()));
+        assertEquals(List.of("railway"), data.getRestrictions().stream().map(Restriction::getType).collect(Collectors.toList()));
+    }
+
+    @Test
+    void datasetSegmentOffNetwork() throws IOException {
+        ArrayNode features = datasetFeatures();
+        features.add(feature("LineString", new double[][] {{37.70, 55.70}, {37.71, 55.70}},
+                "id", 13, "object_type", "heat_network", "diameter", 300));
+
+        assertOnly(features, "13", "upstream_object_id");
     }
 
     @Test
@@ -306,6 +353,32 @@ class GeoJsonStreamReaderTest {
             }
         }
         throw new IllegalArgumentException(id);
+    }
+
+    // Формат датасета организаторов: числовые id, расход на точке подключения, здания ограничением oks,
+    // у сети нет flow_tph и upstream_object_id, у камеры нет diameter.
+    private static ArrayNode datasetFeatures() {
+        ArrayNode features = MAPPER.createArrayNode();
+        features.add(feature("Point", new double[] {37.60, 55.75}, "id", 1, "object_type", "source", "name", "ТЭЦ"));
+        features.add(feature("LineString", new double[][] {{37.61, 55.75}, {37.60, 55.75}},
+                "id", 10, "object_type", "heat_network", "diameter", 300));
+        features.add(feature("Point", new double[] {37.61, 55.75}, "id", 20, "object_type", "heat_chamber"));
+        features.add(feature("LineString", new double[][] {{37.61, 55.75}, {37.62, 55.75}},
+                "id", 11, "object_type", "heat_network", "diameter", 200));
+        features.add(feature("LineString", new double[][] {{37.62, 55.75}, {37.62, 55.76}},
+                "id", 12, "object_type", "heat_network", "diameter", 150));
+        features.add(feature("Point", new double[] {37.635, 55.765}, "id", 30, "object_type", "oks_connection_point", "flow_tph", 24.87));
+        features.add(feature("Point", new double[] {37.655, 55.765}, "id", 31, "object_type", "oks_connection_point", "flow_tph", 10));
+        features.add(feature("Point", new double[] {37.656, 55.766}, "id", 32, "object_type", "oks_connection_point", "flow_tph", 12));
+        features.add(feature("MultiPolygon", new double[][][][] {{{{37.63, 55.76}, {37.64, 55.76}, {37.64, 55.77}, {37.63, 55.77}, {37.63, 55.76}}}},
+                "id", 40, "object_type", "restriction", "restriction_type", "oks"));
+        features.add(feature("MultiPolygon", new double[][][][] {{{{37.65, 55.76}, {37.66, 55.76}, {37.66, 55.77}, {37.65, 55.77}, {37.65, 55.76}}}},
+                "id", 41, "object_type", "restriction", "restriction_type", "oks"));
+        features.add(feature("MultiPolygon", new double[][][][] {{{{37.67, 55.76}, {37.68, 55.76}, {37.68, 55.77}, {37.67, 55.77}, {37.67, 55.76}}}},
+                "id", 42, "object_type", "restriction", "restriction_type", "oks", "address", "ул. Примерная, 1"));
+        features.add(feature("MultiPolygon", new double[][][][] {{{{37.60, 55.73}, {37.70, 55.73}, {37.70, 55.735}, {37.60, 55.735}, {37.60, 55.73}}}},
+                "id", 50, "object_type", "restriction", "restriction_type", "railway"));
+        return features;
     }
 
     // Тесты обращаются к фичам по позиции: R1 восьмая, её порядковый номер #8.

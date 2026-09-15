@@ -112,7 +112,7 @@ def metro_tunnel_axis_detour() -> tuple[Scene, Expect]:
     )
 
 
-@scenario("S14-04", tz=["TZ-11"], title="железнодорожные пути полигоном под 90°: один специальный участок, зона плюс 10 м, k 2,00")
+@scenario("S14-04", tz=["TZ-11"], title="железнодорожные пути полигоном под 90°: один специальный участок, зона плюс 3 м, k 1,75")
 def railway_strip_perpendicular() -> tuple[Scene, Expect]:
     sc = Scene()
     network(sc, ("Источник", "Магистраль", "Камера 1"), dn=200, flow=60)
@@ -126,9 +126,9 @@ def railway_strip_perpendicular() -> tuple[Scene, Expect]:
     )
 
 
-@scenario("S14-05", tz=["TZ-11"], title="две насыпи железной дороги одним MultiPolygon под 70° к прямой: два специальных участка с k 2,00")
+@scenario("S14-05", tz=["TZ-11"], title="две насыпи железной дороги одним MultiPolygon под 70° к прямой: два специальных участка с k 1,75")
 def railway_two_beds_at_70deg() -> tuple[Scene, Expect]:
-    # Оси насыпей в 38 м друг от друга: между зонами (полигон плюс 10 м) остаётся обычный участок, специальных участков два.
+    # Оси насыпей в 38 м друг от друга: между зонами (полигон плюс 3 м) остаётся обычный участок, специальных участков два.
     sc = Scene()
     network(sc, ("501", "502", "503"), dn=200, flow=60)
     sc.oks("510", cp=(300, 200), flow=20, away=NORTH)
@@ -143,7 +143,7 @@ def railway_two_beds_at_70deg() -> tuple[Scene, Expect]:
     )
 
 
-@scenario("S14-06", tz=["TZ-11"], title="ось железнодорожного пути линией под 90°: зона ±10 м от пересечения, стоимость по k 2,00, трасса прямая")
+@scenario("S14-06", tz=["TZ-11"], title="ось железнодорожного пути линией под 90°: зона ±3 м от пересечения, стоимость по k 1,75, трасса прямая")
 def railway_axis_line_perpendicular() -> tuple[Scene, Expect]:
     sc = Scene()
     network(sc, ("rw6.src", "rw6.main", "rw6.tk"), dn=200, flow=60)
@@ -158,12 +158,12 @@ def railway_axis_line_perpendicular() -> tuple[Scene, Expect]:
     )
 
 
-@scenario("S14-07", tz=["TZ-11"], title="длинные пути под 50° к прямой: для дороги угол годился бы, для railway нужно 60°, трасса доворачивает")
+@scenario("S14-07", tz=["TZ-11"], title="длинные пути под 40° к прямой: для railway нужно 45°, трасса доворачивает")
 def railway_50deg_turns_to_cross() -> tuple[Scene, Expect]:
     sc = Scene()
     network(sc, ("T7_SRC", "T7_NET", "T7_CH"), dn=200, flow=60)
     sc.oks("T7_OKS", cp=(300, 170), flow=8, away=NORTH)
-    sc.restriction("T7_RAIL", "railway", strip((300, 80), 40, TRACK_BED_M))
+    sc.restriction("T7_RAIL", "railway", strip((300, 80), 50, TRACK_BED_M))
     return sc, Expect(
         tie_ins=[pipe_tie("T7_NET")],
         special={"railway": 1},
@@ -172,10 +172,10 @@ def railway_50deg_turns_to_cross() -> tuple[Scene, Expect]:
     )
 
 
-@scenario("S14-08", tz=["TZ-11"], title="короткий тупик путей под 25° к прямой: обход его конца с отступом 4 м, без специального участка")
+@scenario("S14-08", tz=["TZ-11"], title="короткий тупик путей под 25° к прямой: обход его конца с отступом 1,5 м, без специального участка")
 def railway_acute_short_siding_detour() -> tuple[Scene, Expect]:
     # Конец тупика выходит за прямую на 10 м: обход удлиняет трассу на несколько метров,
-    # а переход добавил бы не меньше 32 м с k 2,00 и доворот до 60°.
+    # а переход добавил бы специальный участок с k 1,75 и доворот до 45°.
     sc = Scene()
     network(sc, ("депо/src", "депо/теплосеть", "депо/ТК"), dn=200, flow=60)
     sc.oks("депо/цех", cp=(300, 160), flow=12, away=NORTH)

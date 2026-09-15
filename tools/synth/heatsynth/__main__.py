@@ -45,7 +45,10 @@ SUB_BRANCH_PROBABILITY = 0.7
 EXTRA_CHAMBER_PROBABILITY = 0.3
 LOCAL_FLOW_MTPH = (300, 2500)
 OKS_FLOW_MTPH = (5000, 40000)
-GCAL_PER_TPH = 0.025
+# точка подключения внутри здания, у стены к сети: так датасет организаторов связывает ОКС с его точкой
+CP_INSET_M = 1.0
+BUILDING = "oks"
+PAD_ID_BASE = 10_000_000
 OKS_SIDE_M = (30.0, 80.0)
 OKS_DISTANCE_M = (50.0, 400.0)
 CHAMBER_RADIUS_M = 500.0
@@ -73,7 +76,6 @@ FORBID_TYPES = ("metro", "power_line_support", "park", "social_area", "prohibite
 CROSSING_TYPES = ("road", "tram_tracks", "railway")
 LINE_TYPES = ("gas_pipeline", "power_cable", "water_supply", "sewer")
 POINT_TYPES = ("power_line_support",)
-ID_KEYS = ("id", "oks_id", "upstream_object_id")
 DEFAULT_TYPES = ("park", "social_area", "prohibited_site", "water", "road", "tram_tracks", "gas_pipeline", "power_cable")
 RESTRICTION_SHARES = {
     "park": 0.2, "social_area": 0.1, "prohibited_site": 0.1, "water": 0.1,
@@ -196,8 +198,9 @@ def build_network(rng: random.Random, count: int, center: tuple[float, float]) -
 
 
 class Scene:
-    def __init__(self, rng: random.Random, net: Network, extra: dict[str, float]):
+    def __init__(self, rng: random.Random, net: Network, extra: dict[str, float], min_flows: list[int]):
         self.rng = rng
+        self.min_flows = min_flows
         self.extra = extra
         self.lines = [LineString([net.nodes[a], net.nodes[b]]) for a, b in net.segments]
         self.network_tree = STRtree(self.lines)
@@ -255,7 +258,8 @@ class Scene:
             distance = rng.uniform(*OKS_DISTANCE_M)
             depth = rng.uniform(*OKS_SIDE_M)
             cx, cy = ax + (bx - ax) * share + nx * distance, ay + (by - ay) * share + ny * distance
-            polygon = rectangle((cx + nx * depth / 2, cy + ny * depth / 2), math.atan2(ny, nx), depth, rng.uniform(*OKS_SIDE_M))
+            inset = depth / 2 - CP_INSET_M
+            polygon = rectangle((cx + nx * inset, cy + ny * inset), math.atan2(ny, nx), depth, rng.uniform(*OKS_SIDE_M))
             point = Point(cx, cy)
             _, gaps = self.network_tree.query_nearest(polygon, return_distance=True)
             if not OKS_DISTANCE_M[0] <= gaps[0] <= OKS_DISTANCE_M[1] or not self.is_free(polygon, []):
@@ -263,6 +267,9 @@ class Scene:
             _, gaps = self.network_tree.query_nearest(point, return_distance=True)
             near = self.network_tree.query(point, predicate="dwithin", distance=gaps[0] + 1.0)
             if near.size != 1:
+                continue
+            low_flow = max(OKS_FLOW_MTPH[0], self.min_flows[near[0]])
+            if low_flow > OKS_FLOW_MTPH[1]:
                 continue
             target = nearest_points(self.lines[near[0]], point)[0]
             if (target.x - cx) * nx + (target.y - cy) * ny > -0.5 * gaps[0]:
@@ -282,7 +289,7 @@ class Scene:
                 pending.append(self.zone(kind, obstacle))
                 obstacles.append((kind, obstacle))
             else:
-                self.oks.append(Oks(polygon, point, int(near[0]), approach, rng.randint(*OKS_FLOW_MTPH)))
+                self.oks.append(Oks(polygon, point, int(near[0]), approach, rng.randint(low_flow, OKS_FLOW_MTPH[1])))
                 for geom in pending:
                     self.commit(geom)
                 self.restrictions.extend(obstacles)
@@ -401,27 +408,6 @@ class Scene:
         raise RuntimeError(f"Не удалось разместить линию {kind}, увеличьте область или уменьшите число объектов")
 
 
-def overload(rng: random.Random, net: Network, oks: list[Oks], capacities: list[int]) -> None:
-    """Loads the segment nearest to each OKS so that adding the OKS flow needs a larger diameter."""
-    smallest_flow: dict[int, int] = {}
-    for item in oks:
-        smallest_flow[item.segment] = min(smallest_flow.get(item.segment, item.flow), item.flow)
-    depth = []
-    for start, _ in net.segments:
-        depth.append(0 if start == 0 else depth[net.parent[start]] + 1)
-    # deepest first: raising a segment changes only its ancestors, which come later
-    for segment in sorted(smallest_flow, key=lambda s: (-depth[s], s)):
-        flow = net.flows[segment]
-        capacity = next(c for c in capacities if c >= flow)
-        low = max(-(-capacity * 4 // 5) + 1, capacity - smallest_flow[segment] * 4 // 5)
-        if flow >= low:
-            continue
-        delta = rng.randint(low, capacity - 50) - flow
-        while segment != -1:
-            net.flows[segment] += delta
-            segment = net.parent[net.segments[segment][0]]
-
-
 def restriction_budget(total: int, types: list[str]) -> dict[str, int]:
     # fsum keeps the weight of the default eight at exactly 1.0, so their budget stays byte for byte
     weight = math.fsum(RESTRICTION_SHARES[kind] for kind in types)
@@ -454,7 +440,19 @@ def generate(preset: Preset, seed: int, rules: dict[str, Any], types: list[str])
     lines = [kind for kind in LINE_TYPES if kind in types]
     center = (BASE_UTM_M[0] + rng.uniform(-CENTER_SHIFT_M, CENTER_SHIFT_M), BASE_UTM_M[1] + rng.uniform(-CENTER_SHIFT_M, CENTER_SHIFT_M))
     net = build_network(rng, preset.segments, center)
-    scene = Scene(rng, net, extra)
+
+    def diameter(flow: int) -> int:
+        return next(row["dn"] for row, capacity in zip(table, capacities) if capacity >= flow)
+
+    # Текущий расход во входе не передаётся, сервис выводит его по Ду (docs/interpretation.md).
+    # ОКС ставится у участка, который его расход выводит за пропускную способность, так в сценах есть реконструкции.
+    share = rules["existing_flow"]["share"]
+    min_flows = []
+    for flow in net.flows:
+        index = next(i for i, capacity in enumerate(capacities) if capacity >= flow)
+        previous = capacities[index - 1] if index else 0
+        min_flows.append(math.floor((1 - share) * (capacities[index] - previous)) + 1)
+    scene = Scene(rng, net, extra, min_flows)
     budget = restriction_budget(preset.restrictions, selected)
     for index in range(preset.oks):
         forbid_type = forbid[index % len(forbid)] if forbid and index % 5 < 3 else None
@@ -473,40 +471,20 @@ def generate(preset: Preset, seed: int, rules: dict[str, Any], types: list[str])
     for kind in lines:
         for number in range(budget[kind]):
             scene.place_line(kind, number % 2 == 0, cp_tree, building_tree)
-    overload(rng, net, scene.oks, capacities)
-
-    def diameter(flow: int) -> int:
-        return next(row["dn"] for row, capacity in zip(table, capacities) if capacity >= flow)
-
-    chamber_ids = {node: f"hc-{number}" for number, node in enumerate(net.chambers, 1)}
-    features = [(Point(center), {"id": "src-1", "object_type": "source"})]
-    for node, chamber_id in chamber_ids.items():
-        adjacent = [net.parent[node], *net.children[node]]
-        features.append((Point(net.nodes[node]), {
-            "id": chamber_id, "object_type": "heat_chamber",
-            "diameter": max(diameter(net.flows[s]) for s in adjacent),
-            "upstream_object_id": f"hn-{net.parent[node] + 1}",
-        }))
-    for segment, (start, _) in enumerate(net.segments):
-        if start == 0:
-            upstream = "src-1"
-        else:
-            upstream = chamber_ids.get(start, f"hn-{net.parent[start] + 1}")
-        features.append((scene.lines[segment], {
-            "id": f"hn-{segment + 1}", "object_type": "heat_network",
-            "diameter": diameter(net.flows[segment]), "flow_tph": net.flows[segment] / 1000,
-            "upstream_object_id": upstream,
-        }))
-    for number, polygon in enumerate(scene.existing, 1):
-        features.append((polygon, {"id": f"oe-{number}", "object_type": "oks_existing"}))
-    for number, (kind, geom) in enumerate(scene.restrictions, 1):
-        features.append((geom, {"id": f"rs-{number}", "object_type": "restriction", "restriction_type": kind}))
-    for number, item in enumerate(scene.oks, 1):
-        features.append((item.polygon, {
-            "id": f"oks-{number}", "object_type": "oks_future",
-            "flow_tph": item.flow / 1000, "heat_load": round(item.flow / 1000 * GCAL_PER_TPH, 6),
-        }))
-        features.append((item.point, {"id": f"cp-{number}", "object_type": "oks_connection_point", "oks_id": f"oks-{number}"}))
+    # формат датасета организаторов: числовые id, у сети только диаметр, здания — ограничения oks
+    ids = itertools.count(1)
+    features: list[Feature] = [(Point(center), {"id": next(ids), "object_type": "source"})]
+    for segment in range(len(net.segments)):
+        features.append((scene.lines[segment], {"id": next(ids), "object_type": "heat_network", "diameter": diameter(net.flows[segment])}))
+    for node in net.chambers:
+        features.append((Point(net.nodes[node]), {"id": next(ids), "object_type": "heat_chamber"}))
+    for polygon in scene.existing:
+        features.append((polygon, {"id": next(ids), "object_type": "restriction", "restriction_type": BUILDING}))
+    for kind, geom in scene.restrictions:
+        features.append((geom, {"id": next(ids), "object_type": "restriction", "restriction_type": kind}))
+    for item in scene.oks:
+        features.append((item.polygon, {"id": next(ids), "object_type": "restriction", "restriction_type": BUILDING}))
+        features.append((item.point, {"id": next(ids), "object_type": "oks_connection_point", "flow_tph": item.flow / 1000}))
     return features, scene.bounds
 
 
@@ -529,12 +507,16 @@ def pad_features(bounds: Bounds, to_wgs: Transformer, prefix: str) -> Iterator[d
             yield {
                 "type": "Feature",
                 "geometry": {"type": "Polygon", "coordinates": [ring]},
-                "properties": {"id": f"{prefix}pad-{number}", "object_type": "restriction", "restriction_type": "park"},
+                "properties": {"id": with_prefix(prefix, PAD_ID_BASE + number), "object_type": "restriction", "restriction_type": "park"},
             }
 
 
+def with_prefix(prefix: str, number: int) -> int | str:
+    return f"{prefix}{number}" if prefix else number
+
+
 def write_collection(out: Path, features: list[Feature], bounds: Bounds, pad_mb: float, prefix: str) -> None:
-    """Writes features with every id and reference to an id prefixed, then pads the file up to pad_mb."""
+    """Writes features, turning every id into a prefixed string when a prefix is given, then pads the file up to pad_mb."""
     to_wgs = Transformer.from_crs("EPSG:32637", "EPSG:4326", always_xy=True)
     out.parent.mkdir(parents=True, exist_ok=True)
     limit = pad_mb * BYTES_PER_MB
@@ -544,7 +526,7 @@ def write_collection(out: Path, features: list[Feature], bounds: Bounds, pad_mb:
         for geom, properties in features:
             coordinates = mapping(transform(to_wgs.transform, geom))["coordinates"]
             geometry = {"type": geom.geom_type, "coordinates": rounded(coordinates)}
-            properties = {key: prefix + value if key in ID_KEYS else value for key, value in properties.items()}
+            properties = {**properties, "id": with_prefix(prefix, properties["id"])}
             feature = {"type": "Feature", "geometry": geometry, "properties": properties}
             written += file.write(separator + json.dumps(feature, separators=(",", ":")))
             separator = ",\n"
@@ -566,7 +548,7 @@ def main() -> None:
         "--types", type=lambda value: value.split(","), default=list(DEFAULT_TYPES),
         help="какие restriction_type размещать, через запятую; по умолчанию восемь типов таблицы ТЗ",
     )
-    parser.add_argument("--id-prefix", default="", help="префикс всех id и ссылок oks_id, upstream_object_id")
+    parser.add_argument("--id-prefix", default="", help="префикс id: с ним id становятся строками")
     args = parser.parse_args()
     rules = json.loads(RULES_PATH.read_text(encoding="utf-8"))
     unknown = [kind for kind in args.types if kind not in RESTRICTION_SHARES]
