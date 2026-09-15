@@ -35,7 +35,7 @@ CORRIDOR_FACTOR = 0.95
 CORRIDOR_BAND_M = 12.0
 CORRIDOR_ANGLE_DEG = 15.0
 CORRIDOR_TYPES = ("road", "tram_tracks")
-# после проходов по разбиениям с настройками по умолчанию бюджет перебирает эти множители коридора и цены поворота
+# после проходов с настройками по умолчанию бюджет перебирает эти множители коридора и масштабы цены поворота
 FACTOR_CHOICES = (0.85, 0.9, 1.0)
 SCALE_CHOICES = (0.5, 1.0, 3.0)
 # ponytail: не больше 4 приходов в узел; при 8 цена пути до врезок на L меняется до 0,004 S, поиск дольше на треть
@@ -239,12 +239,12 @@ class BendBuilder(tm.TreeBuilder):
 
 
 def settings(names: list[str], first: str, budget: int, seed: int) -> list[tuple[str, float, float]]:
-    """Разбиение, множитель коридора и масштаб цены поворота для каждого леса: сначала все разбиения с настройками
-    по умолчанию (первым — разбиение базового леса), затем перебор в порядке, заданном seed."""
-    defaults = [(name, CORRIDOR_FACTOR, 1.0) for name in [first] + [n for n in names if n != first]]
+    """Разбиение, множитель коридора и масштаб цены поворота для каждого леса: разбиение базового леса с коридором
+    и без него, остальные разбиения с настройками по умолчанию, затем перебор в порядке, заданном seed."""
+    head = [(first, CORRIDOR_FACTOR, 1.0), (first, 1.0, 1.0)] + [(name, CORRIDOR_FACTOR, 1.0) for name in names if name != first]
     extra = [(name, factor, scale) for name in names for factor in FACTOR_CHOICES for scale in SCALE_CHOICES]
     random.Random(seed).shuffle(extra)
-    return (defaults + extra)[:budget]
+    return (head + [item for item in extra if item not in head])[:budget]
 
 
 def solve(scene: Scene, graph: VisGraph, rules: dict[str, Any], quality: list[QualityRule] | None, budget: int = DEFAULT_BUDGET,

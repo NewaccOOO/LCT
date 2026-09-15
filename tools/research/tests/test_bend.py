@@ -56,7 +56,9 @@ def test_prefers_fewer_turns():
     assert plain == [0, 3, 4, 1] and turns(graph, plain) == 2
 
     meter = tm.meters(graph.rules, 1.0) + tm.rub(graph.rules, diameter_row(graph.rules, DN)["new_rub_m"])
-    found = bend.search(bend.Lattice(graph, []), 0, np.asarray(weights), meter, meter)
+    lattice = bend.Lattice(graph, [])
+    assert bend.search(lattice, 0, np.asarray(weights), 0.0, 0.0).path(1) == plain
+    found = bend.search(lattice, 0, np.asarray(weights), meter, meter)
     path = found.path(1)
     assert path == [0, 2, 1] and turns(graph, path) == 1
     # поворот 62° — без излома, повороты по 41° на пути 3–4 — изломы
