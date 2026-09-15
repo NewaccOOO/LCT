@@ -608,7 +608,10 @@ def check_bench(results: dict[str, Any], entries: list[dict[str, Any]], digest: 
             if status not in RUN_STATUSES:
                 problems.append(f"{sid}: нет запуска {name}-{mode}")
                 continue
-            if status == "ok" and number(run_record.get("S")) is None:
+            if status != "ok":
+                # AC-1.1: у каждой сцены есть результат сервиса и каждого кандидата в обоих режимах
+                problems.append(f"{sid}: у {name}-{mode} нет результата, status {status}")
+            elif number(run_record.get("S")) is None:
                 problems.append(f"{sid}: у {name}-{mode} status ok без числового S")
             if name != SERVICE and (run_record.get("seed") != SEED or run_record.get("budget") != budgets.get(name)):
                 problems.append(f"{sid}: у {name}-{mode} seed или budget не совпадает с прогоном")

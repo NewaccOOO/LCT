@@ -201,6 +201,7 @@ def mutate_timeout_run(results):
     (mutate_bench_time, "BENCH TIME OK", "CANDIDATE TIME OK"),
     (mutate_fake_elapsed, "BENCH TIME OK", "CANDIDATE TIME OK"),
     (mutate_missing_candidate, "BENCH OK", "BENCH TIME OK"),
+    (mutate_timeout_run, "BENCH OK", "BOUNDS OK"),
     (mutate_nan_score, "BENCH OK", "GAP OK"),
     (mutate_optimal_without_proof, "BENCH OK", "BOUNDS OK"),
 ])
