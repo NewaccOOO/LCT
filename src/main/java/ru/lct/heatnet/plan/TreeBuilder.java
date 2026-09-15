@@ -156,13 +156,38 @@ final class TreeBuilder {
                     continue;
                 }
                 List<Coordinate> head = new ArrayList<>(Arrays.asList(coords).subList(0, i + 1));
-                for (Spot spot : spots(pieces, touch)) {
-                    Coordinate[] branch = branch(head, spot.point);
-                    if (branch != null && valid(branch, pieces, spot)) {
-                        return new Attach(connection, branch, spot, route.getWeight());
+                List<Spot> spots = spots(pieces, touch);
+                Attach direct = attach(connection, head, spots, pieces, route.getWeight());
+                double length = coords[i].distance(coords[i + 1]);
+                if (direct != null || length == 0) {
+                    // отрезок нулевой длины: точка подключения лежит на дереве, обойти касание не из чего
+                    return direct;
+                }
+                // маршрут подошёл к дереву вдоль ребра, например через точку подключения другого ОКС на той же прямой:
+                // прямая ветка к любому месту легла бы на ребро, поэтому ветка обходит точку касания сбоку
+                double nx = (coords[i].y - coords[i + 1].y) / length;
+                double ny = (coords[i + 1].x - coords[i].x) / length;
+                for (double shift : SHIFTS_M) {
+                    for (int side : new int[] {1, -1}) {
+                        List<Coordinate> around = new ArrayList<>(head);
+                        around.add(new Coordinate(touch.x + side * shift * nx, touch.y + side * shift * ny));
+                        Attach aside = attach(connection, around, spots, pieces, route.getWeight());
+                        if (aside != null) {
+                            return aside;
+                        }
                     }
                 }
                 return null;
+            }
+            return null;
+        }
+
+        Attach attach(ConnectionPoint connection, List<Coordinate> head, List<Spot> spots, List<Piece> pieces, double weight) {
+            for (Spot spot : spots) {
+                Coordinate[] branch = branch(head, spot.point);
+                if (branch != null && valid(branch, pieces, spot)) {
+                    return new Attach(connection, branch, spot, weight);
+                }
             }
             return null;
         }

@@ -101,6 +101,7 @@ def segment(start: str, end: str, coords: list[tuple[float, float]], laying_meth
 
 
 def tie_in(chamber_id: str, required_diameter: int) -> dict:
+    # required_diameter — диаметр нового участка от врезки (ТП §10.2), а не камеры после подключения.
     chamber = CHAMBERS[chamber_id]
     return feature(
         point(chamber["xy"]), object_type="tie_in", existing_object_id=chamber_id, existing_object_type="heat_chamber",
@@ -112,9 +113,8 @@ def via_chamber_1() -> dict[str, list[dict]]:
     # Добавка идёт от ch_1 в net_1: 15 + 5 = 20 т/ч, Ду 100 хватает, реконструкции нет.
     net_1 = NETWORKS["net_1"]
     assert diameter_for(net_1["flow_tph"] + OKS_FLOW_TPH) <= net_1["diameter"]
-    required = max(diameter_for(OKS_FLOW_TPH), net_1["diameter"], NETWORKS["net_2"]["diameter"])
     return {
-        "tie": [tie_in("ch_1", required)],
+        "tie": [tie_in("ch_1", diameter_for(OKS_FLOW_TPH))],
         "seg": [segment("tie_1", "cp_1", [(200, 0), (230, 100), CONNECTION_POINT])],
     }
 
@@ -132,7 +132,7 @@ def via_chamber_2() -> dict[str, list[dict]]:
     required = max(diameter_for(OKS_FLOW_TPH), added_dn)
     assert required > CHAMBERS["ch_2"]["diameter"]
     return {
-        "tie": [tie_in("ch_2", required)],
+        "tie": [tie_in("ch_2", diameter_for(OKS_FLOW_TPH))],
         "node": [feature(point((400, low_y)), object_type="technical_node"), feature(point((400, high_y)), object_type="technical_node")],
         "seg": [
             segment("tie_1", "node_1", [(400, 0), (400, low_y)]),

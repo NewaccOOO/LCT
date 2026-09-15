@@ -39,6 +39,12 @@
     "tram_tracks": {"rule": "special", "clearance_m": 1.5, "min_angle_deg": 45, "margin_m": 3, "k_special": 1.75},
     "gas_pipeline": {"rule": "special", "clearance_m": 2.0, "margin_m": 2, "k_special": 1.25, "half_width_m": 0.2},
     "power_cable": {"rule": "special", "clearance_m": 2.0, "margin_m": 2, "k_special": 1.15, "half_width_m": 0.1},
-    "heat_network": {"rule": "special", "clearance_m": 1.0, "margin_m": 2, "k_special": 1.05}
+    "heat_network": {"rule": "special", "clearance_m": 1.0, "margin_m": 2, "k_special": 1.05},
+    "metro": {"rule": "forbid", "clearance_m": 10.0},
+    "railway": {"rule": "special", "clearance_m": 4.0, "min_angle_deg": 60, "margin_m": 10.0, "k_special": 2.00},
+    "water_supply": {"rule": "special", "clearance_m": 1.5, "margin_m": 2.0, "k_special": 1.10, "half_width_m": 0.0},
+    "sewer": {"rule": "special", "clearance_m": 1.0, "margin_m": 2.0, "k_special": 1.10, "half_width_m": 0.0},
+    "power_line_support": {"rule": "forbid", "clearance_m": 2.0},
+    "_fallback": {"rule": "forbid", "clearance_m": 1.0}
   }
 }

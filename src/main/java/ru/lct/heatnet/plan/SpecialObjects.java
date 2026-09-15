@@ -60,7 +60,8 @@ final class SpecialObjects {
         }
         for (Restriction restriction : input.getRestrictions()) {
             RestrictionRule rule = rules.restriction(restriction.getType());
-            if (!rule.forbid()) {
+            // точечный объект со специальным проходом обходится как запрет, см. ObstacleSet
+            if (!rule.forbid() && restriction.getGeometry().getDimension() > 0) {
                 double halfWidth = restriction.getGeometry().getDimension() < 2 && rule.getHalfWidthM() != null
                         ? rule.getHalfWidthM() : 0;
                 all.add(new Special(restriction.getGeometry(), false, rule, halfWidth));

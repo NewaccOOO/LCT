@@ -34,6 +34,8 @@ final class TieInFinder {
     private static final double DIST_MARGIN_M = 0.1;
     private static final double SAME_POINT_M = 1.0;
     private static final double END_GAP_EXTRA_M = 1.0;
+    /** Запас к otherTieM у сдвинутой врезки: ось участка может быть не прямой. */
+    private static final double ALONG_EXTRA_M = 1.0;
 
     private final InputData input;
     private final Rules rules;
@@ -68,6 +70,32 @@ final class TieInFinder {
         return new ArrayList<>(byKey.values());
     }
 
+    /**
+     * Врезки в участки, которых касается {@code tie}, на расстоянии больше {@code otherTieM} от неё вдоль оси в обе
+     * стороны, для второго варианта по правилу variants (D-11), когда среди ближайших кандидатов отличной врезки
+     * нет. Точка ближе max_dist_m к камере со свободным местом, как и в {@link #find}, становится врезкой в камеру.
+     */
+    List<TieCandidate> along(TieCandidate tie, int dn, double otherTieM) {
+        List<TieCandidate> result = new ArrayList<>();
+        for (NetworkSegment segment : input.getSegments()) {
+            if (!segment.getGeometry().isWithinDistance(tie.getPoint(), TOUCH_M)) {
+                continue;
+            }
+            double at = new LengthIndexedLine(segment.getGeometry()).project(tie.getPoint().getCoordinate());
+            for (double shift : new double[] {-otherTieM - ALONG_EXTRA_M, otherTieM + ALONG_EXTRA_M}) {
+                TieCandidate candidate = pipeCandidate(segment, at + shift, dn);
+                if (candidate == null || result.stream().anyMatch(c -> same(c, candidate))) {
+                    continue;
+                }
+                boolean otherObject = !candidate.getExistingObjectId().equals(tie.getExistingObjectId());
+                if (otherObject || candidate.getPoint().distance(tie.getPoint()) > otherTieM + DIST_MARGIN_M) {
+                    result.add(candidate);
+                }
+            }
+        }
+        return result;
+    }
+
     int links(String chamberId) {
         return linksByChamber.getOrDefault(chamberId, 0);
     }
@@ -94,6 +122,11 @@ final class TieInFinder {
     }
 
     private TieCandidate pipeCandidate(NetworkSegment segment, Point point, int dn) {
+        return pipeCandidate(segment, new LengthIndexedLine(segment.getGeometry()).project(point.getCoordinate()), dn);
+    }
+
+    /** Врезка в участок в точке {@code at} м от начала оси, прижатой к отступу от концов. */
+    private TieCandidate pipeCandidate(NetworkSegment segment, double at, int dn) {
         LineString line = segment.getGeometry();
         LengthIndexedLine indexed = new LengthIndexedLine(line);
         double length = line.getLength();
@@ -103,7 +136,7 @@ final class TieInFinder {
         if (length <= 2 * gap) {
             return null;
         }
-        double position = Math.max(gap, Math.min(length - gap, indexed.project(point.getCoordinate())));
+        double position = Math.max(gap, Math.min(length - gap, at));
         Point tie = factory.createPoint(indexed.extractPoint(position));
 
         ChamberRule rule = rules.chamberRule();

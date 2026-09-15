@@ -134,11 +134,12 @@ def load_input(data: Any, rules: dict[str, Any]) -> Input:
     forbid = [Obstacle(f, "oks_existing", restriction_rules["oks_existing"]) for f in by_type.get("oks_existing", [])]
     special = [Obstacle(f, "heat_network", restriction_rules["heat_network"]) for f in by_type.get("heat_network", [])]
     for feature in by_type.get("restriction", []):
-        restriction_type = feature.props.get("restriction_type")
-        params = restriction_rules.get(restriction_type)
-        if params is None or feature.geom is None:
+        if feature.geom is None:
             continue
-        target = forbid if params["rule"] == "forbid" else special
+        restriction_type = str(feature.props.get("restriction_type"))
+        params = restriction_rules.get(restriction_type, restriction_rules["_fallback"])
+        # Точку нельзя пересечь специальным участком, её обходят с отступом правила типа.
+        target = forbid if params["rule"] == "forbid" or feature.geom.geom_type == "Point" else special
         target.append(Obstacle(feature, restriction_type, params))
 
     networks = [f for f in by_type.get("heat_network", []) if f.geom is not None]

@@ -17,7 +17,7 @@
     "existing_object_id": "ch_1",
     "existing_object_type": "heat_chamber",
     "existing_diameter": 100,
-    "required_diameter": 100,
+    "required_diameter": 65,
     "cost": 5000000
    }
   },
@@ -93,7 +93,7 @@
     "existing_object_id": "ch_2",
     "existing_object_type": "heat_chamber",
     "existing_diameter": 80,
-    "required_diameter": 100,
+    "required_diameter": 65,
     "cost": 5000000
    }
   },
