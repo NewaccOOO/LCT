@@ -12,13 +12,19 @@ from collections.abc import (
     Callable,
     Iterator,
 )
-from dataclasses import dataclass
+from dataclasses import (
+    dataclass,
+    replace,
+)
 from functools import partial
 from typing import Any
 
 import numpy as np
 import shapely
-from heatcheck.model import diameter_row
+from heatcheck.model import (
+    TOUCH_TOL_M,
+    diameter_row,
+)
 from shapely import STRtree
 from shapely.geometry import Point
 
@@ -36,18 +42,28 @@ from heatopt.model import (
 )
 from heatopt.scene import Scene
 
-DEFAULT_BUDGET = 120
-# ход стоит len(graph.u) / EDGES_PER_UNIT единиц бюджета, но не меньше MIN_MOVE_UNIT: Дейкстра и поиск касаний
-# растут с числом рёбер, а сборка и проверка варианта на малом графе стоят столько же
+DEFAULT_BUDGET = 250
+# ход стоит (len(graph.u) / EDGES_PER_UNIT) ** MOVE_COST_POWER единиц бюджета, но не меньше MIN_MOVE_UNIT: время
+# хода на M-1 (66 тыс. рёбер) 0,07 с, на L-1 (340 тыс.) 0,75 с; сборка варианта на малом графе стоит столько же
 EDGES_PER_UNIT = 100_000
-MIN_MOVE_UNIT = 0.25
+MOVE_COST_POWER = 1.5
+MIN_MOVE_UNIT = 0.5
 ELITE_SIZE = 4
 NOISE = 0.3
 FAST_MARGIN_S = 0.02
 IMPROVE_EPS_S = 1e-6
 NEAREST_TREES = 2
 STEINER_NEAR = 3
+STEINER_MIN_GAIN_M = 10.0
+FERMAT_ITERATIONS = 30
+FERMAT_EPS_M = 1e-3
 PSEUDO = "steiner:"
+# окрестности спуска от дешёвых ходов уровня леса к дорогим перестройкам внутри дерева
+NEIGHBORHOODS = (
+    ("connect", "merge", "fuse", "move", "alone", "retie", "split"),
+    ("path", "eliminate"),
+    ("insert",),
+)
 SHAPE_KEYS = ("turn", "kink", "chamber")
 
 Move = tuple[tuple, Callable[[], list[tm.Tree] | None]]
@@ -60,7 +76,13 @@ class Plan:
     score: float
     fast: float
     violations: int
+    unconnected: int
     strategy: str
+
+    @property
+    def rank(self) -> tuple[int, float]:
+        """Сначала число неподключённых ОКС (журнал D-12: подключаются все достижимые), затем целевая функция."""
+        return self.unconnected, self.value
 
 
 def extract(tree: tm.Tree, top: int, skip: set[int], capacity: int | None = None) -> tm.Tree:
@@ -180,21 +202,72 @@ def well_formed(tree: tm.Tree) -> bool:
 
 
 def touches_self(tree: tm.Tree) -> bool:
-    """Отрезки дерева касаются друг друга вне круга 0,15 м вокруг общей точки (как правило топологии)."""
+    """Отрезки дерева касаются друг друга вне круга 0,15 м вокруг общей точки — как правило topology валидатора."""
     lines = tree.lines()
     if len(lines) < 2:
         return False
-    left, right = STRtree(lines).query(lines, predicate="dwithin", distance=2 * tm.TOUCH_M)
+    left, right = STRtree(lines).query(lines, predicate="dwithin", distance=TOUCH_TOL_M)
     for a, b in zip(left.tolist(), right.tolist()):
         if a >= b:
             continue
         shared = {tree.segs[a].a, tree.segs[a].b} & {tree.segs[b].a, tree.segs[b].b}
         if not shared:
             return True
-        clip = Point(tree.points[shared.pop()]).buffer(tm.SHARED_ROOT_CLIP_M)
-        if lines[a].difference(clip).distance(lines[b].difference(clip)) <= 2 * tm.TOUCH_M:
+        clip = Point(tree.points[shared.pop()]).buffer(tm.JUNCTION_CLIP_M)
+        rest_a, rest_b = lines[a].difference(clip), lines[b].difference(clip)
+        if not rest_a.is_empty and not rest_b.is_empty and rest_a.distance(rest_b) <= TOUCH_TOL_M:
             return True
     return False
+
+
+def steiner_pairs(tree: tm.Tree, kids: dict[int, list[int]]) -> list[tuple[int, int, int]]:
+    """Пары ключевых точек a и b из разных ветвей и ключевая точка top над их общим предком, по убыванию евклидова
+    выигрыша точки Ферма треугольника top, a, b; пары с выигрышем меньше STEINER_MIN_GAIN_M отброшены."""
+    parent = {seg.b: seg.a for seg in tree.segs}
+    order = dfs_order(kids)
+    chain = {0: [0]}
+    for pid in order[1:]:
+        chain[pid] = [pid] + chain[parent[pid]]
+    keys = [pid for pid in order[1:] if is_key(tree, kids, pid)]
+    pairs = []
+    for k, a in enumerate(keys):
+        above_a = set(chain[a])
+        for b in keys[k + 1:]:
+            if a in chain[b] or b in above_a:
+                continue
+            common = next(pid for pid in chain[b] if pid in above_a)
+            top = next((pid for pid in chain[common][1:] if is_key(tree, kids, pid)), 0)
+            gain = steiner_gain([tree.points[top], tree.points[a], tree.points[b]])
+            if gain > STEINER_MIN_GAIN_M:
+                pairs.append((gain, a, b, top))
+    return [(a, b, top) for _, a, b, top in sorted(pairs, key=lambda item: -item[0])]
+
+
+def steiner_gain(corners: list[tuple[float, float]]) -> float:
+    spot = fermat(corners)
+    return math.dist(corners[0], corners[1]) + math.dist(corners[0], corners[2]) - sum(math.dist(spot, c) for c in corners)
+
+
+def trim(tree: tm.Tree) -> tm.Tree:
+    """Копия дерева без висячих ветвей, которые не ведут к точкам подключения."""
+    keep = set(tree.terminals.values())
+    segs = tree.segs
+    while True:
+        starts = {seg.a for seg in segs}
+        kept = [seg for seg in segs if seg.b in starts or seg.b in keep]
+        if len(kept) == len(segs):
+            return extract(replace(tree, segs=kept), 0, set())
+        segs = kept
+
+
+def fermat(points: list[tuple[float, float]]) -> tuple[float, float]:
+    """Точка Ферма (геометрическая медиана) итерациями Вайсфельда."""
+    xy = np.array(points, dtype=float)
+    at = xy.mean(axis=0)
+    for _ in range(FERMAT_ITERATIONS):
+        weights = 1.0 / np.maximum(np.hypot(*(xy - at).T), FERMAT_EPS_M)
+        at = (xy * weights[:, None]).sum(axis=0) / weights.sum()
+    return float(at[0]), float(at[1])
 
 
 def shape_estimate(tree: tm.Tree) -> tuple[int, int, int]:
@@ -225,7 +298,7 @@ class Search:
         self.xy = np.array([n.xy for n in graph.nodes], dtype=float)
         self.passable = np.array([n.kind in PASSABLE for n in graph.nodes])
         self.left = 0.0
-        self.unit = max(len(graph.u) / EDGES_PER_UNIT, MIN_MOVE_UNIT)
+        self.unit = max((len(graph.u) / EDGES_PER_UNIT) ** MOVE_COST_POWER, MIN_MOVE_UNIT)
         self.failed: set[tuple] = set()
         self.accepted: Counter[str] = Counter()
         self.starts = 0
@@ -238,7 +311,7 @@ class Search:
         starts = [self.plan(tm.forest(self.builder, self.recon, partition), name)
                   for name, partition in tm.partitions(self.scene).items()]
         base = min(starts, key=lambda p: p.score)
-        queue = sorted((p for p in starts if p.value < math.inf), key=lambda p: p.value)
+        queue = sorted((p for p in starts if p.value < math.inf), key=lambda p: p.rank)
         pool: list[Plan] = []
         while self.left > 0 and (queue or pool):
             if queue:
@@ -251,19 +324,19 @@ class Search:
             current = self.descend(current)
             forest = sorted(tree_key(t) for t in current.trees)
             if all(sorted(tree_key(t) for t in p.trees) != forest for p in pool):
-                pool = sorted(pool + [current], key=lambda p: p.value)[:ELITE_SIZE]
+                pool = sorted(pool + [current], key=lambda p: p.rank)[:ELITE_SIZE]
         return self.best, base
 
     def plan(self, trees: list[tm.Tree], strategy: str) -> Plan:
         cost = model.cost(tm.solution(trees), self.scene, self.rules)
         value = self.objective(cost)
         violations = sum(model.validate(self.scene, cost).values())
-        plan = Plan(trees, value, cost.score_value, self.fast(trees), violations, strategy)
+        plan = Plan(trees, value, cost.score_value, self.fast(trees), violations, len(cost.unconnected), strategy)
         self.remember(plan)
         return plan
 
     def remember(self, plan: Plan) -> None:
-        if plan.violations == 0 and plan.value < math.inf and (self.best is None or plan.value < self.best.value):
+        if plan.violations == 0 and plan.value < math.inf and (self.best is None or plan.rank < self.best.rank):
             self.best = plan
 
     def objective(self, cost: model.CostBreakdown) -> float:
@@ -295,9 +368,14 @@ class Search:
         return tree.__dict__["_special"]
 
     def descend(self, plan: Plan) -> Plan:
-        """Первое улучшение с памятью неудачных ходов; остановка в локальном оптимуме или по бюджету."""
-        while self.left > 0:
-            for memo, move in self.moves(plan):
+        """Спуск по окрестностям NEIGHBORHOODS: следующая окрестность — только в локальном оптимуме предыдущих,
+        после принятого хода — снова первая. Внутри окрестности первое улучшение по кругу: обход продолжается
+        со следующей позиции. Неудачные ходы запоминаются; остановка в локальном оптимуме или по бюджету."""
+        level, position = 0, [0] * len(NEIGHBORHOODS)
+        while self.left > 0 and level < len(NEIGHBORHOODS):
+            moves = [item for item in self.moves(plan) if item[0][0] in NEIGHBORHOODS[level]]
+            start = position[level] % max(len(moves), 1)
+            for offset, (memo, move) in enumerate(moves[start:] + moves[:start]):
                 if memo in self.failed:
                     continue
                 if self.left <= 0:
@@ -310,9 +388,11 @@ class Search:
                     continue
                 self.accepted[memo[0]] += 1
                 plan = better
+                position[level] = start + offset + 1
+                level = 0
                 break
             else:
-                return plan
+                level += 1
         return plan
 
     def judge(self, trees: list[tm.Tree], plan: Plan) -> Plan | None:
@@ -322,13 +402,13 @@ class Search:
         if fast > plan.fast + FAST_MARGIN_S:
             return None
         cost = model.cost(tm.solution(trees), self.scene, self.rules)
-        value = self.objective(cost)
-        if value >= plan.value - IMPROVE_EPS_S:
+        value, unconnected = self.objective(cost), len(cost.unconnected)
+        if (unconnected, value) >= (plan.unconnected, plan.value - IMPROVE_EPS_S):
             return None
         violations = sum(model.validate(self.scene, cost).values())
         if violations > plan.violations:
             return None
-        better = Plan(trees, value, cost.score_value, fast, violations, plan.strategy)
+        better = Plan(trees, value, cost.score_value, fast, violations, unconnected, plan.strategy)
         self.remember(better)
         return better
 
@@ -384,33 +464,38 @@ class Search:
         for i, tree in enumerate(trees):
             if len(tree.terminals) < 2:
                 continue
-            below = flows_below(tree, self.builder.flow)
             kids = kids_of(tree)
             for q in dfs_order(kids)[1:]:
                 if len(kids[q]) >= 2:
                     yield ("eliminate", keys[i], tree.points[q]), partial(self.eliminate, trees, i, q)
-            branches = {tree.graph_node[pid]: below[pid] for pid in dfs_order(kids)
-                        if pid != 0 and len(kids[pid]) >= 2 and pid in tree.graph_node}
-            for node, flow in self.steiner_candidates(tree, kids, below):
-                yield ("insert", keys[i], node), partial(self.resteiner, trees, i, {**branches, node: flow})
+            for a, b, top in steiner_pairs(tree, kids):
+                yield ("insert", keys[i], tree.points[a], tree.points[b]), partial(self.insert, trees, i, a, b, top)
 
     def nearest(self, geom: Any, trees: list[tm.Tree], skip: int) -> list[tuple[float, int]]:
         return sorted((geom.distance(tree_geom(t)), j) for j, t in enumerate(trees) if j != skip)[:NEAREST_TREES]
 
-    def steiner_candidates(self, tree: tm.Tree, kids: dict[int, list[int]], below: dict[int, float]) -> list[tuple[int, float]]:
-        """Узлы графа, ближайшие к точкам ветвления дерева (включая корень с несколькими ветвями)."""
-        used = tree.graph_nodes()
-        found: dict[int, float] = {}
-        for pid in dfs_order(kids):
-            if len(kids[pid]) < 2:
-                continue
-            x, y = tree.points[pid]
-            dist = np.where(self.passable, np.hypot(self.xy[:, 0] - x, self.xy[:, 1] - y), np.inf)
-            order = np.argsort(dist, kind="stable")[:STEINER_NEAR + len(used) + len(found)].tolist()
-            near = [n for n in order if n not in used and n not in found and dist[n] < np.inf]
-            for node in near[:STEINER_NEAR]:
-                found[node] = below[pid]
-        return list(found.items())
+    def steiner_nodes(self, tree: tm.Tree, a: int, b: int, top: int) -> list[int]:
+        """Узлы графа вне дерева для вставки: ближайшие к точке Ферма треугольника top, a, b и, если a и b на узлах
+        графа, лучшие по сумме кратчайших путей до a и b при диаметрах их расходов и до top при общем расходе."""
+        used = list(tree.graph_nodes())
+        x, y = fermat([tree.points[top], tree.points[a], tree.points[b]])
+        near = np.where(self.passable, np.hypot(self.xy[:, 0] - x, self.xy[:, 1] - y), np.inf)
+        near[used] = np.inf
+        found = [int(n) for n in np.argsort(near, kind="stable")[:STEINER_NEAR] if near[n] < np.inf]
+        if a in tree.graph_node and b in tree.graph_node:
+            below = flows_below(tree, self.builder.flow)
+            parent = {seg.b: seg.a for seg in tree.segs}
+            while top not in tree.graph_node:
+                top = parent[top]
+            cp_at = {pid: cp for cp, pid in tree.terminals.items()}
+            total = np.zeros(len(self.graph.nodes))
+            for pid, flow in ((a, below[a]), (b, below[b]), (top, below[a] + below[b])):
+                sid = cp_at.get(pid) or self.pseudo(tree.graph_node[pid])
+                total += np.asarray(self.builder.table(sid, tm.dn_for_flow(self.rules, flow), set(), set(), None)[0])
+            total[~self.passable] = np.inf
+            total[used] = np.inf
+            found += [int(n) for n in np.argsort(total, kind="stable")[:STEINER_NEAR] if total[n] < np.inf]
+        return list(dict.fromkeys(found))
 
     def others(self, trees: list[tm.Tree], *skip: int) -> list[tm.Tree]:
         return [t for k, t in enumerate(trees) if k not in skip]
@@ -432,14 +517,29 @@ class Search:
             self.builder.flow[sid] = 0.0
         return sid
 
-    def connect(self, rest: tm.Tree, sub: tm.Tree, others: list[tm.Tree]) -> tm.Tree | None:
-        """Кратчайший путь при весах диаметра расхода поддерева от его корня до остатка дерева: сначала по
-        свободной таблице, при касании своих или чужих участков — в обход них."""
+    def attach_subtree(self, grown: tm.Tree, sub: tm.Tree, others: list[tm.Tree]) -> tm.Tree | None:
+        """Поддерево подключается от своего корня; корень вне узлов графа (точка касания пути) заменяют ветви под
+        ним, и точка ветвления складывается заново."""
+        if 0 in sub.graph_node:
+            return self.connect(grown, sub, others)
+        kids = kids_of(sub)
+        parts = [extract(sub, first_key_below(sub, kids, child), set()) for child in kids[0]]
+        for part in sorted(parts, key=lambda part: -sum(self.builder.flow[cp] for cp in part.terminals)):
+            grown = self.attach_subtree(grown, part, others)
+            if grown is None:
+                return None
+        return grown
+
+    def connect(self, rest: tm.Tree, sub: tm.Tree, others: list[tm.Tree], flow: float | None = None) -> tm.Tree | None:
+        """Кратчайший путь при весах диаметра расхода поддерева (или flow) от его корня до остатка дерева: сначала
+        по свободной таблице, при касании своих или чужих участков — в обход них."""
         q_node = sub.graph_node.get(0)
         if q_node is None:
             return None
         sid = next((cp for cp, pid in sub.terminals.items() if pid == 0), None) or self.pseudo(q_node)
-        dn = tm.dn_for_flow(self.rules, sum(self.builder.flow[cp] for cp in sub.terminals))
+        dn = tm.dn_for_flow(self.rules, sum(self.builder.flow[cp] for cp in sub.terminals) if flow is None else flow)
+        # поддерево входит в дерево rest: для blocked_by его корень общий, иначе вокруг q встанет зона чужой врезки
+        sub = replace(sub, root_node=rest.root_node)
         for blocked in (False, True):
             edges, nodes = tm.blocked_by(self.graph, others + [sub], rest.root_node) if blocked else (set(), set())
             nodes.discard(rest.root_node)
@@ -463,37 +563,13 @@ class Search:
         # при возмущённых весах и после прививки путь может задеть своё дерево, а model.cost на таком зацикливается
         return not touches_self(tree) and not tm.conflicts(tree, others) and self.builder.turns_ok(tree)
 
-    def rebuild(self, tie: int, cps: list[str], steiner: dict[int, float], others: list[tm.Tree]) -> tm.Tree | None:
-        """Дерево Такахаши–Мацуямы с узлами Штейнера как обязательными точками; висячие ветви к ним обрезаются."""
-        extra = [self.pseudo(node) for node in steiner]
-        weight_dn = {sid: tm.dn_for_flow(self.rules, flow) for sid, flow in zip(extra, steiner.values())}
-        room = self.room(tie, others)
-        tree = None
-        if self.weights_for is None:
-            tree = self.builder.build(tie, cps + extra, (), weight_dn, root_capacity=room)
-        if tree is None or self.lost(tree, cps) or tm.conflicts(tree, others):
-            tree = self.builder.build(tie, cps + extra, others, weight_dn, self.weights_for, room)
-        if self.lost(tree, cps) or not well_formed(tree):
-            return None
-        tree = self.prune(tree, cps, others)
-        return tree if self.sound(tree, others) else None
+    def rebuild(self, tie: int, cps: list[str], others: list[tm.Tree]) -> tm.Tree | None:
+        """Дерево Такахаши–Мацуямы на той же врезке при текущих (возмущённых) весах в обход чужих деревьев."""
+        tree = self.builder.build(tie, cps, others, None, self.weights_for, self.room(tie, others))
+        return tree if not self.lost(tree, cps) and well_formed(tree) and self.sound(tree, others) else None
 
     def lost(self, tree: tm.Tree, cps: list[str]) -> bool:
         return not tree.segs or any(cp in tree.unconnected for cp in cps)
-
-    def prune(self, tree: tm.Tree, cps: list[str], others: list[tm.Tree]) -> tm.Tree:
-        tree.terminals = {cp: pid for cp, pid in tree.terminals.items() if cp in cps}
-        keep = set(tree.terminals.values())
-        segs = tree.segs
-        while True:
-            starts = {seg.a for seg in segs}
-            kept = [seg for seg in segs if seg.b in starts or seg.b in keep]
-            if len(kept) == len(segs):
-                break
-            segs = kept
-        tree.segs = segs
-        tree.children = defaultdict(int, Counter(seg.a for seg in segs))
-        return self.straighten(tree, others)
 
     def options(self, cps: list[str], others: list[tm.Tree], exclude: int | None = None) -> tm.Tree | None:
         """Новое дерево блока на лучшей по предельной оценке свободной врезке, как в tm.forest."""
@@ -518,8 +594,7 @@ class Search:
         donor = trees[j]
         kids = kids_of(donor)
         for child in kids[0]:
-            _, sub = detach(donor, first_key_below(donor, kids, child))
-            grown = self.connect(grown, sub, others)
+            grown = self.attach_subtree(grown, extract(donor, first_key_below(donor, kids, child), set()), others)
             if grown is None:
                 return None
         return [grown if k == i else t for k, t in enumerate(trees) if k != j]
@@ -575,17 +650,47 @@ class Search:
         kids = kids_of(tree)
         rest, _ = detach(tree, q)
         grown = self.with_capacity(self.straighten(rest, others), others)
-        subs = [extract(tree, first_key_below(tree, kids, child), set()) for child in kids[q]]
-        for sub in sorted(subs, key=lambda sub: -sum(self.builder.flow[cp] for cp in sub.terminals)):
-            grown = self.connect(grown, sub, others)
-            if grown is None:
-                return None
-        return None if tree_key(grown) == tree_key(tree) else [grown if k == i else t for k, t in enumerate(trees)]
+        sub = extract(tree, q, set())
+        # корень без узла графа: attach_subtree подключит ветви под q, а не саму точку
+        sub.graph_node.pop(0, None)
+        grown = self.attach_subtree(grown, sub, others)
+        if grown is None or tree_key(grown) == tree_key(tree):
+            return None
+        return [grown if k == i else t for k, t in enumerate(trees)]
 
-    def resteiner(self, trees: list[tm.Tree], i: int, steiner: dict[int, float]) -> list[tm.Tree] | None:
-        """Вставка узла Штейнера: перестройка дерева с узлами ветвления и новым узлом как обязательными точками."""
-        tree = self.rebuild(trees[i].root_node, list(trees[i].terminals), steiner, self.others(trees, i))
-        return None if tree is None else [tree if k == i else t for k, t in enumerate(trees)]
+    def insert(self, trees: list[tm.Tree], i: int, a: int, b: int, top: int) -> list[tm.Tree] | None:
+        """Вставка узла Штейнера: ключевые пути над a и b снимаются, путь от узла Штейнера при расходе обеих ветвей
+        прокладывается к остатку дерева, затем a и b подключаются заново и сходятся у узла. Из узлов
+        steiner_nodes берётся лучший по быстрой оценке; каждый сверх первого стоит хода."""
+        tree, others = trees[i], self.others(trees, i)
+        parent = {seg.b: k for k, seg in enumerate(tree.segs)}
+        kids = kids_of(tree)
+        cut = set()
+        for end in (a, b):
+            while True:
+                cut.add(parent[end])
+                end = tree.segs[parent[end]].a
+                if is_key(tree, kids, end):
+                    break
+        below = flows_below(tree, self.builder.flow)
+        rest = self.with_capacity(self.straighten(trim(extract(tree, 0, cut)), others), others)
+        best = None
+        for count, node in enumerate(self.steiner_nodes(tree, a, b, top)):
+            if count:
+                self.left -= self.unit
+            hub = tm.Tree(tree.root_node, tree.tie, tree.capacity, [self.graph.nodes[node].xy], {0: node})
+            grown = self.connect(rest, hub, others, below[a] + below[b])
+            for end in sorted((a, b), key=lambda end: -below[end]):
+                grown = grown and self.attach_subtree(grown, extract(tree, end, set()), others)
+            if grown is None:
+                continue
+            grown = self.straighten(trim(grown), others)
+            if tree_key(grown) == tree_key(tree) or not self.sound(grown, others):
+                continue
+            forest = [grown if k == i else t for k, t in enumerate(trees)]
+            if self.fits(forest) and (best is None or self.fast(forest) < best[0]):
+                best = (self.fast(forest), forest)
+        return None if best is None else best[1]
 
     def perturb(self, plan: Plan) -> Plan:
         """Рестарт: деревья плана перестраиваются по очереди при весах рёбер с случайным множителем."""
@@ -601,12 +706,12 @@ class Search:
         trees = list(plan.trees)
         for i, old in enumerate(plan.trees):
             self.left -= self.unit
-            tree = self.rebuild(old.root_node, list(old.terminals), {}, self.others(trees, i))
+            tree = self.rebuild(old.root_node, list(old.terminals), self.others(trees, i))
             if tree is not None:
                 trees[i] = tree
         self.weights_for = None
         if not self.fits(trees):
-            return Plan(trees, math.inf, math.inf, math.inf, 0, plan.strategy)
+            return Plan(trees, math.inf, math.inf, math.inf, 0, len(self.scene.terminals), plan.strategy)
         return self.plan(trees, plan.strategy)
 
 
@@ -615,7 +720,7 @@ def solve(scene: Scene, graph: VisGraph, rules: dict[str, Any], quality: list[Qu
     started = time.perf_counter()
     search = Search(scene, graph, rules, quality, random.Random(seed))
     best, base = search.run(budget)
-    chosen = best if best is not None and best.value <= base.value else base
+    chosen = best if best is not None and best.rank <= base.rank else base
     meta = {"strategy": chosen.strategy, "budget": budget, "seed": seed, "starts": search.starts,
             "unused_budget": max(search.left, 0), "accepted": dict(sorted(search.accepted.items())),
             "baseline_score": base.score}
