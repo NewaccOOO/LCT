@@ -63,6 +63,13 @@ final class NetworkAssembler {
      * перекрыл бы расширенные зоны ровно на 0,1 м, на границе порога валидатора.
      */
     private static final double ZONE_GROW_M = 0.02;
+    /**
+     * Выход округляется до 9 знаков градуса, это около 0,1 мм: подотрезок ровно в метр становится короче метра,
+     * а у подотрезка в доли миллиметра направление, а с ним и излом в вершине, случайны.
+     */
+    private static final double ROUNDING_MARGIN_M = 0.01;
+    /** Разрез ближе этого к вершине ребра переносится в вершину; сдвиг вместе с ZONE_GROW_M не выходит за ZONE_TOL_M. */
+    private static final double VERTEX_SNAP_M = ZONE_TOL_M - ZONE_GROW_M;
     private static final double NEAR_STEP_M = 0.5;
     private static final double DIST_EPS_M = 0.001;
     private static final double MIN_TURN_DEG = 3;
@@ -75,6 +82,8 @@ final class NetworkAssembler {
     private final CostCalculator costs;
     private final DiameterPlanner planner;
     private final Map<String, Double> flowByOks = new HashMap<>();
+    /** ID входа: выходные ID с ними не совпадают (правило schema). */
+    private final Set<String> inputIds = new HashSet<>();
     /** Полигоны, которые считаются в правиле поворотов: запрещённые, дороги и трамвайные пути. */
     private final STRtree turnPolygons = new STRtree();
     private final GeometryFactory factory = new GeometryFactory();
@@ -128,19 +137,30 @@ final class NetworkAssembler {
         this.specials = specials;
         this.costs = new CostCalculator(rules);
         this.planner = new DiameterPlanner(rules);
+        inputIds.add(input.getSource().getId());
+        input.getSegments().forEach(segment -> inputIds.add(segment.getId()));
+        input.getChambers().forEach(chamber -> inputIds.add(chamber.getId()));
+        input.getConnectionPoints().forEach(connection -> inputIds.add(connection.getId()));
         for (FutureOks oks : input.getFutureOks()) {
             flowByOks.put(oks.getId(), oks.getFlowTph());
+            inputIds.add(oks.getId());
         }
         for (ExistingOks oks : input.getExistingOks()) {
             addTurnPolygon(oks.getGeometry(), extent);
+            inputIds.add(oks.getId());
         }
         for (Restriction restriction : input.getRestrictions()) {
+            inputIds.add(restriction.getId());
             RestrictionRule rule = rules.restriction(restriction.getType());
             if (restriction.getGeometry().getDimension() == 2 && (rule.forbid() || rule.getMinAngleDeg() != null)) {
                 addTurnPolygon(restriction.getGeometry(), extent);
             }
         }
         turnPolygons.build();
+    }
+
+    private boolean startsInputId(String prefix) {
+        return inputIds.stream().anyMatch(id -> id.startsWith(prefix));
     }
 
     private void addTurnPolygon(Geometry polygon, Envelope extent) {
@@ -184,7 +204,12 @@ final class NetworkAssembler {
         Build(String variantId, int rank, List<Tree> trees, List<FutureOks> unconnected) {
             this.variantId = variantId;
             this.rank = rank;
-            this.prefix = "v" + variantId + "_";
+            // вход может содержать ID вида v1_seg_1: префикс удлиняется, пока с него не начинается ни один ID входа
+            String free = "v" + variantId + "_";
+            while (startsInputId(free)) {
+                free = "v" + free;
+            }
+            this.prefix = free;
             this.unconnected = unconnected;
             for (Tree tree : trees) {
                 if (!tree.edges.isEmpty()) {
@@ -235,7 +260,8 @@ final class NetworkAssembler {
                         part.getLength(), part.getCost()));
             }
 
-            VariantSummary draft = costs.summary("summary_" + variantId, variantId, segments, chambers, tieIns,
+            String summaryId = inputIds.contains("summary_" + variantId) ? prefix + "summary" : "summary_" + variantId;
+            VariantSummary draft = costs.summary(summaryId, variantId, segments, chambers, tieIns,
                     reconstructions, chamberReconstructions, unconnected);
             VariantSummary summary = new VariantSummary(draft.getId(), variantId, rank, draft.getConstructionCost(),
                     draft.getChamberConstructionCost(), draft.getTieInCost(), draft.getReconstructionCost(),
@@ -273,7 +299,8 @@ final class NetworkAssembler {
                 }
                 List<double[]> intervals = new ArrayList<>(specialByEdge.get(i));
                 for (double vertex : TreeBuilder.vertexPositions(edge.source.line)) {
-                    intervals.add(new double[] {vertex - TreeBuilder.MIN_PIECE_M, vertex + TreeBuilder.MIN_PIECE_M});
+                    double gap = TreeBuilder.MIN_PIECE_M + ROUNDING_MARGIN_M;
+                    intervals.add(new double[] {vertex - gap, vertex + gap});
                 }
                 intervals.addAll(nearSpecial(edge, flows.get(edge.id)));
                 noCut.put(edge.id, intervals);
@@ -343,7 +370,14 @@ final class NetworkAssembler {
             Map<Double, Coordinate> points = new HashMap<>();
             points.put(0.0, edge.source.from.point);
             points.put(edge.length, edge.source.to.point);
-            for (double at : candidates) {
+            List<Double> vertices = TreeBuilder.vertexPositions(edge.source.line);
+            for (double candidate : candidates) {
+                double at = candidate;
+                for (double vertex : vertices) {
+                    if (Math.abs(vertex - candidate) <= VERTEX_SNAP_M) {
+                        at = vertex;
+                    }
+                }
                 Double floor = cuts.floorKey(at);
                 Double ceiling = cuts.ceilingKey(at);
                 if ((floor == null || at - floor > MERGE_M) && (ceiling == null || ceiling - at > MERGE_M)) {
@@ -507,23 +541,23 @@ final class NetworkAssembler {
             for (Map.Entry<String, List<Tree>> unit : units.entrySet()) {
                 TieCandidate tie = unit.getValue().get(0).tie;
                 String tieId = nodeIds.get(unit.getKey());
+                // ТП §10.2: required_diameter врезки — диаметр новой сети в точке врезки, то есть участков, которые
+                // в ней начинаются; реконструкция трубы и камеры на него не влияет (пример 10.8: 150 → 200, труба 250).
                 int maxNew = maxDnByNode.get(tieId);
-                int required;
                 if (tie.isChamber()) {
-                    required = recon.chamberRequiredDiameter(tie.getExistingObjectId(), maxNew);
+                    int required = recon.chamberRequiredDiameter(tie.getExistingObjectId(), maxNew);
                     if (required > tie.getExistingDiameter()) {
                         chamberReconstructions.add(new ChamberReconstruction(
                                 prefix + "chrecon_" + (chamberReconstructions.size() + 1), variantId, tie.getPoint(),
                                 tie.getExistingObjectId(), tie.getExistingDiameter(), required, costs.chamberCost(required)));
                     }
                 } else {
-                    required = recon.getRequiredDiameterByTieIn().get(unit.getKey());
-                    int dn = Math.max(maxNew, required);
+                    int dn = Math.max(maxNew, recon.getRequiredDiameterByTieIn().get(unit.getKey()));
                     chambers.add(new NewChamber(prefix + "ch_" + ++chamberNo, variantId, tie.getPoint(), dn,
                             costs.chamberCost(dn)));
                 }
                 tieIns.add(new TieIn(tieId, variantId, tie.getPoint(), tie.getExistingObjectId(),
-                        tie.getExistingObjectType(), tie.getExistingDiameter(), required, costs.tieInCost()));
+                        tie.getExistingObjectType(), tie.getExistingDiameter(), maxNew, costs.tieInCost()));
             }
             return recon;
         }

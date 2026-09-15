@@ -16,6 +16,8 @@ import java.util.TreeMap;
 import lombok.Value;
 
 public final class Rules {
+    private static final String FALLBACK = "_fallback";
+
     private final List<Diameter> diameters;
     private final List<ChamberPrice> chamberPrices;
     private final double tieInCost;
@@ -27,6 +29,7 @@ public final class Rules {
     private final double scoreWCost;
     private final double scoreWLength;
     private final Map<String, RestrictionRule> restrictions;
+    private final RestrictionRule fallback;
 
     @Value
     private static class ChamberPrice {
@@ -64,7 +67,8 @@ public final class Rules {
         scoreWLength = number(score, "w_length");
 
         Map<String, RestrictionRule> byType = new HashMap<>();
-        Iterator<Map.Entry<String, JsonNode>> fields = root.required("restrictions").fields();
+        JsonNode restrictionsNode = root.required("restrictions");
+        Iterator<Map.Entry<String, JsonNode>> fields = restrictionsNode.fields();
         while (fields.hasNext()) {
             Map.Entry<String, JsonNode> field = fields.next();
             if (!field.getKey().startsWith("_")) {
@@ -72,6 +76,7 @@ public final class Rules {
             }
         }
         restrictions = Map.copyOf(byType);
+        fallback = restrictionRule(FALLBACK, restrictionsNode.required(FALLBACK));
     }
 
     public static Rules load() {
@@ -133,12 +138,13 @@ public final class Rules {
         return penaltyFixed + penaltyPerTph * flowTph;
     }
 
+    /** Правило типа ограничения; тип, которого нет в справочнике, получает правило {@code _fallback}. */
     public RestrictionRule restriction(String type) {
-        RestrictionRule rule = restrictions.get(type);
-        if (rule == null) {
-            throw new IllegalArgumentException("Неизвестный тип ограничения: " + type);
-        }
-        return rule;
+        return restrictions.getOrDefault(type, fallback);
+    }
+
+    public boolean isKnown(String type) {
+        return restrictions.containsKey(type);
     }
 
     public ChamberRule chamberRule() {

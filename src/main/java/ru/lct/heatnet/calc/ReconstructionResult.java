@@ -17,7 +17,10 @@ public final class ReconstructionResult {
     private final Rules rules;
     @Getter
     private final List<ReconPart> parts;
-    /** Только врезки в трубу; для камеры — {@link #chamberRequiredDiameter}. */
+    /**
+     * Диаметр трубы в точке врезки после реконструкции, только врезки в трубу; для камеры —
+     * {@link #chamberRequiredDiameter}. Нужен для диаметра новой камеры, в tie_in.required_diameter не идёт.
+     */
     @Getter
     private final Map<String, Integer> requiredDiameterByTieIn;
     @Getter

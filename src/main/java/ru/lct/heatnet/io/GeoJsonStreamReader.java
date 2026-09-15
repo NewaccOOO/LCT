@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import org.locationtech.jts.geom.Coordinate;
@@ -36,6 +37,7 @@ import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.NetworkSegment;
 import ru.lct.heatnet.model.Restriction;
 import ru.lct.heatnet.model.Source;
+import ru.lct.heatnet.rules.RestrictionRule;
 import ru.lct.heatnet.rules.Rules;
 
 /**
@@ -58,7 +60,9 @@ public class GeoJsonStreamReader {
     private static final List<String> LINE = List.of("LineString");
     private static final List<String> POLYGONS = List.of("Polygon", "MultiPolygon");
     private static final List<String> LINES = List.of("LineString", "MultiLineString");
-    private static final List<String> ANY_RESTRICTION = List.of("Polygon", "MultiPolygon", "LineString", "MultiLineString");
+    private static final List<String> ANY_RESTRICTION = List.of(
+            "Point", "LineString", "MultiLineString", "Polygon", "MultiPolygon");
+    // Геометрия по типу задана только для типов из таблицы ТЗ; у новых и неизвестных типов её во входе не угадать.
     private static final Map<String, List<String>> RESTRICTION_GEOMETRY = Map.of(
             "park", POLYGONS, "social_area", POLYGONS, "prohibited_site", POLYGONS, "water", POLYGONS,
             "road", POLYGONS, "tram_tracks", POLYGONS, "gas_pipeline", LINES, "power_cable", LINES);
@@ -68,6 +72,7 @@ public class GeoJsonStreamReader {
     // Упакованная XY-последовательность хранит точку в 16 байтах вместо объекта Coordinate в 40 байт.
     private static final GeometryFactory GEOMETRY = new GeometryFactory(PackedCoordinateSequenceFactory.DOUBLE_FACTORY);
     private static final Rules RULES = Rules.load();
+    private static final Locale RUSSIAN = new Locale("ru");
 
     public static InputData read(Path path) {
         Scan scan = new Scan();
@@ -77,7 +82,7 @@ public class GeoJsonStreamReader {
             JsonLocation at = e.getLocation();
             String where = at == null ? "" : ", строка " + at.getLineNr() + ", столбец " + at.getColumnNr();
             List<Diagnostic> broken = List.of(new Diagnostic(FILE_ID, "json", "файл не разбирается как JSON" + where));
-            return new InputData(null, List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), broken);
+            return new InputData(null, List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), broken, List.of());
         } catch (IOException e) {
             throw new UncheckedIOException("Не удалось прочитать входной файл " + path, e);
         }
@@ -108,6 +113,7 @@ public class GeoJsonStreamReader {
         final List<Diagnostic> diagnostics = new ArrayList<>();
         final Map<String, String> typeById = new HashMap<>();
         final Map<String, String> upstreamById = new LinkedHashMap<>();
+        final Map<String, Integer> unknownRestrictionTypes = new LinkedHashMap<>();
         final List<Ref> refs = new ArrayList<>();
         Source source;
         int sources;
@@ -236,12 +242,11 @@ public class GeoJsonStreamReader {
                     String restrictionType = string(props, featureId, "restriction_type");
                     List<String> allowed = ANY_RESTRICTION;
                     if (restrictionType != null) {
-                        allowed = RESTRICTION_GEOMETRY.get(restrictionType);
-                        if (allowed == null) {
-                            add(featureId, "restriction_type", "неизвестный тип ограничения " + restrictionType);
-                            allowed = ANY_RESTRICTION;
-                        } else {
+                        allowed = RESTRICTION_GEOMETRY.getOrDefault(restrictionType, ANY_RESTRICTION);
+                        if (RULES.isKnown(restrictionType)) {
                             restrictionType = restrictionType.intern();
+                        } else {
+                            unknownRestrictionTypes.merge(restrictionType, 1, Integer::sum);
                         }
                     }
                     Geometry geometry = geometry(node, featureId, allowed);
@@ -269,7 +274,10 @@ public class GeoJsonStreamReader {
                 }
             }
             checkUpstreamCycles();
-            return new InputData(source, segments, chambers, futureOks, connectionPoints, existingOks, restrictions, diagnostics);
+            List<String> warnings = new ArrayList<>();
+            unknownRestrictionTypes.forEach((type, count) -> warnings.add(unknownTypeWarning(type, count)));
+            return new InputData(source, segments, chambers, futureOks, connectionPoints, existingOks, restrictions,
+                    diagnostics, warnings);
         }
 
         // Расчёт реконструкции идёт по upstream_object_id до source, на цикле он зациклится.
@@ -382,6 +390,13 @@ public class GeoJsonStreamReader {
         void add(String featureId, String field, String problem) {
             diagnostics.add(new Diagnostic(featureId, field, problem));
         }
+    }
+
+    private static String unknownTypeWarning(String type, int count) {
+        RestrictionRule rule = RULES.restriction(type);
+        String kind = rule.forbid() ? "запрета" : "специального прохода";
+        return String.format(RUSSIAN, "ПРЕДУПРЕЖДЕНИЕ: restriction_type \"%s\" нет в справочнике, объектов: %d, "
+                + "применено правило %s с отступом %.1f м", type, count, kind, rule.clearanceM(Integer.MAX_VALUE));
     }
 
     private static String describe(JsonNode value) {

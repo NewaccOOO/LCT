@@ -51,7 +51,7 @@ final class PlanFixture {
 
     InputData input() {
         return new InputData(new Source("src", point(0, 0)), segments, chambers, oks, connections, existing, restrictions,
-                List.of());
+                List.of(), List.of());
     }
 
     ConnectionPoint connection(String oksId) {

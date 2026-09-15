@@ -32,7 +32,7 @@
   tools/pyproject.toml          один проект uv (hatchling): пакеты synth/heatsynth и validator/heatcheck, Python 3.12+
   tools/synth/heatsynth/        генератор наборов
   tools/validator/heatcheck/    валидатор результата
-  tools/validator/tests/        фикстуры и тесты негативных контролей
+  tests/validator/        фикстуры и тесты негативных контролей
   data/samples/small-1.geojson  синтетический набор, единственное содержимое data/ в git
   scripts/gates/*.sh            команды гейтов
   data/                         входы, выходы, конкурсный набор (в .gitignore кроме data/samples)

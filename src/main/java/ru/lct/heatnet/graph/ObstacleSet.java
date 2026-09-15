@@ -124,7 +124,8 @@ public final class ObstacleSet {
             if (rule.getMinAngleDeg() != null && geometry.getDimension() == 2) {
                 crossingNodeZones.add(nodeZone);
             }
-            if (rule.forbid()) {
+            // точку нельзя пересечь под углом или пройти через её зону: её обходят с отступом правила, как запрет
+            if (rule.forbid() || geometry.getDimension() == 0) {
                 forbid.add(zone(geometry, distance));
             } else {
                 specialList.add(new Special(restriction.getId(), restriction.getType(), rule, geometry, zone(geometry, distance)));
@@ -184,6 +185,16 @@ public final class ObstacleSet {
      * {@code ignored} не проверяется, если a или b лежит на нём.
      */
     public double edgeWeight(Coordinate a, Coordinate b, Set<String> ignored) {
+        return edgeWeight(a, b, ignored, false, false);
+    }
+
+    /**
+     * Вес ребра графа. {@code aNode} и {@code bNode} говорят, что конец — узел графа, а не начало или конец пути.
+     * Узел может лежать в полосе margin_m пересечённого объекта. Тогда путь до узла прошёл часть этой полосы по
+     * соседнему ребру, и эта часть тоже специальная, хотя соседнее ребро объект не пересекает. Ребро получает её
+     * вес по нижней оценке, иначе переход со сдвигом вбок через узлы в полосе легче прямого.
+     */
+    public double edgeWeight(Coordinate a, Coordinate b, Set<String> ignored, boolean aNode, boolean bNode) {
         LineString edge = factory.createLineString(new Coordinate[] {a, b});
         Envelope envelope = edge.getEnvelopeInternal();
         for (Object item : forbidZones.query(envelope)) {
@@ -209,7 +220,39 @@ public final class ObstacleSet {
             }
             crossed.add(special);
         }
-        return weight(edge.getLength(), spans(edge, crossed, Set.of()));
+        double beforeA = 0;
+        double beforeB = 0;
+        for (Special special : crossed) {
+            double extra = special.rule.getKSpecial() - 1;
+            if (aNode) {
+                beforeA = Math.max(beforeA, extra * specialBeyond(special, a, b));
+            }
+            if (bNode) {
+                beforeB = Math.max(beforeB, extra * specialBeyond(special, b, a));
+            }
+        }
+        return weight(edge.getLength(), spans(edge, crossed, Set.of())) + beforeA + beforeB;
+    }
+
+    /**
+     * Длина специальной части за концом end, которую проходит любой путь, пришедший в end. У полигона это
+     * margin_m минус расстояние от end до полигона: не меньше этого путь идёт по буферу. У линии отсчёт margin_m
+     * от ближайшей к end точки пересечения продолжается через узел.
+     */
+    private double specialBeyond(Special special, Coordinate end, Coordinate other) {
+        double nearest = Double.POSITIVE_INFINITY;
+        if (special.polygon) {
+            nearest = special.object.getGeometry().distance(factory.createPoint(end));
+        } else {
+            LineIntersector intersector = new RobustLineIntersector();
+            for (LineSegment side : special.sides) {
+                intersector.computeIntersection(end, other, side.p0, side.p1);
+                for (int k = 0; k < intersector.getIntersectionNum(); k++) {
+                    nearest = Math.min(nearest, end.distance(intersector.getIntersection(k)));
+                }
+            }
+        }
+        return Math.max(0, special.rule.getMarginM() - nearest);
     }
 
     /**

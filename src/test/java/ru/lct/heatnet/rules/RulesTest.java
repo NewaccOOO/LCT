@@ -93,8 +93,26 @@ class RulesTest {
         assertNull(park.getKSpecial());
         assertNull(park.getMarginM());
 
-        assertThrows(IllegalArgumentException.class, () -> rules.restriction("_comment"));
-        assertThrows(IllegalArgumentException.class, () -> rules.restriction("bridge"));
+    }
+
+    @Test
+    void unknownTypeGetsFallbackRule() {
+        assertTrue(rules.isKnown("metro"));
+        assertFalse(rules.isKnown("bridge"));
+        assertFalse(rules.isKnown("_fallback"));
+
+        RestrictionRule bridge = rules.restriction("bridge");
+        assertTrue(bridge.forbid());
+        assertEquals(1.0, bridge.clearanceM(1400), EPS);
+        assertNull(bridge.getHalfWidthM());
+        assertEquals(bridge, rules.restriction("_comment"));
+
+        RestrictionRule railway = rules.restriction("railway");
+        assertFalse(railway.forbid());
+        assertEquals(60, railway.getMinAngleDeg(), EPS);
+        assertEquals(10, railway.getMarginM(), EPS);
+        assertEquals(2.0, railway.getKSpecial(), EPS);
+        assertEquals(0.0, rules.restriction("sewer").getHalfWidthM(), EPS);
     }
 
     @Test

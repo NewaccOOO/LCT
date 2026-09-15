@@ -44,7 +44,11 @@
 ## Контекст до старта
 
 - [research.md](research.md) — находки R-1…R-28: шов в коде, модели и солверы, эвристики с разрывами, нормы, практика. Источники правил уже собраны; T-5 только дополняет.
+<<<<<<< HEAD
 - [CONSTRAINTS.md](../../../CONSTRAINTS.md) и документы организатора в корне репозитория — правила кейса и формула S; `rules/rules.json` — все числа.
+=======
+- [CONSTRAINTS.md](../../../architecture/CONSTRAINTS.md) и документы организатора в `docs/source/` — правила кейса и формула S; `rules/rules.json` — все числа.
+>>>>>>> main
 - `docs/specs/backend-core/design.md` (решения по области расчёта, графу, дереву, вариантам и сборке) и `adr/0001-routing-approach.md` — как устроен текущий алгоритм; `docs/interpretation.md` — трактовки формата.
 - `tools/validator/heatcheck` — разбор выхода и подсчёт поворотов на Python (R-4), основа калькулятора метрик.
 - `tools/synth/heatsynth` — генератор сцен; класс сцены задаётся объектом `Preset(oks, restrictions, segments)` без правки генератора.

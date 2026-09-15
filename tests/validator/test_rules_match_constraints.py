@@ -4,8 +4,8 @@ from pathlib import Path
 
 from heatcheck.rules_check import compare
 
-ROOT = Path(__file__).resolve().parents[3]
-CONSTRAINTS = (ROOT / "CONSTRAINTS.md").read_text(encoding="utf-8")
+ROOT = Path(__file__).resolve().parents[2]
+CONSTRAINTS = (ROOT / "architecture" / "CONSTRAINTS.md").read_text(encoding="utf-8")
 RULES = json.loads((ROOT / "rules" / "rules.json").read_text(encoding="utf-8"))
 
 
