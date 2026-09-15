@@ -293,20 +293,28 @@ public final class VariantEnumerator {
         if (cached != null) {
             return cached;
         }
-        List<Option> options = options(region, region.dn, region.area, subset, false);
+        List<Point> points = points(subset);
+        List<Option> options = options(region, region.dn, region.area, subset, false, finder.find(points, region.dn));
         // ОКС, не вошедшие в общее дерево, draft подключает по одному, поэтому повторы нужны только одиночным
         if (subset.size() == 1) {
             int ownDn = rules.diameterFor(oksById.get(subset.get(0).getOksId()).getFlowTph()).getDn();
             if (incomplete(options) && ownDn < region.dn) {
                 // D-7: с запасом по диаметру маршрута нет — повтор с диаметром по расходу ОКС и проверкой отступов
-                options.addAll(options(region, ownDn, region.area, subset, true));
+                options.addAll(options(region, ownDn, region.area, subset, true, finder.find(points, ownDn)));
             }
             if (incomplete(options)) {
                 // обход может не поместиться в область вокруг ОКС и кандидатов: последняя попытка на широкой области
-                options.addAll(options(region, region.dn, region.wideArea, subset, false));
+                options.addAll(options(region, region.dn, region.wideArea, subset, false, finder.find(points, region.dn)));
             }
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
+        if (!options.isEmpty() && alternativeIndex(options) == 0) {
+            // все ближайшие кандидаты дают ту же врезку, а вариантов нужно не меньше двух (правило variants):
+            // пробуется та же сеть дальше OTHER_TIE_M от лучшей врезки
+            List<TieCandidate> along = finder.along(options.get(0).tree.tie, region.dn, OTHER_TIE_M);
+            options.addAll(options(region, region.dn, region.area, subset, false, along));
+            options.sort(Comparator.comparingDouble(option -> option.score));
+        }
         region.options.put(key, options);
         return options;
     }
@@ -315,9 +323,10 @@ public final class VariantEnumerator {
         return options.stream().allMatch(option -> !option.tree.unconnected.isEmpty());
     }
 
-    private List<Option> options(Region region, int dn, Envelope area, List<ConnectionPoint> subset, boolean verify) {
+    private List<Option> options(Region region, int dn, Envelope area, List<ConnectionPoint> subset, boolean verify,
+            List<TieCandidate> candidates) {
         List<Option> options = new ArrayList<>();
-        for (TieCandidate candidate : finder.find(points(subset), dn)) {
+        for (TieCandidate candidate : candidates) {
             Tree tree = builder.build(region.router(dn, area), dn, area, candidate, subset);
             if (tree.edges.isEmpty()) {
                 continue;
