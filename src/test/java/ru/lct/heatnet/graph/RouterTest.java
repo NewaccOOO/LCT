@@ -133,6 +133,37 @@ class RouterTest {
     }
 
     @Test
+    void perpendicularTramCrossingStaysStraight() {
+        // Узлы вдоль путей лежат в полосе margin_m: переход между ними со сдвигом вбок не должен быть легче прямого.
+        double tramWidth = 8;
+        Router router = router(List.of(new Restriction("tram-1", rect(-500, 66, 500, 66 + tramWidth), "tram_tracks")),
+                List.of());
+        RestrictionRule rule = rules.restriction("tram_tracks");
+
+        Route route = router.route(point(0, 0), point(0, 150), Set.of());
+
+        assertNotNull(route);
+        assertEquals(2, route.getGeometry().getNumPoints(), "трасса " + route.getGeometry());
+        assertEquals(150, route.getLength(), EPS);
+        assertEquals(150 + (rule.getKSpecial() - 1) * (tramWidth + 2 * rule.getMarginM()), route.getWeight(), EPS);
+    }
+
+    @Test
+    void graphNodeNearLineCrossingCarriesSpecialPartBeforeIt() {
+        // узел в 6 м от оси: отсчёт margin_m 10 м от пересечения продолжается за узел ещё на 4 м
+        Router router = router(List.of(new Restriction("rw-1", line(-100, 0, 100, 0), "railway")), List.of());
+        RestrictionRule rule = rules.restriction("railway");
+        Coordinate node = new Coordinate(0, -6);
+        Coordinate far = new Coordinate(0, 40);
+
+        double asPathEnd = router.obstacles().edgeWeight(node, far, Set.of());
+        double asNode = router.obstacles().edgeWeight(node, far, Set.of(), true, false);
+
+        assertEquals(46 + (rule.getKSpecial() - 1) * 16, asPathEnd, EPS);
+        assertEquals((rule.getKSpecial() - 1) * (rule.getMarginM() - 6), asNode - asPathEnd, EPS);
+    }
+
+    @Test
     void gasPipelineCrossingGivesFourMetreSpan() {
         LineString gas = line(-100, 0, 100, 0);
         Router router = router(List.of(new Restriction("gas-1", gas, "gas_pipeline")), List.of());
