@@ -133,3 +133,25 @@ def test_mutation_fails_its_rule(rule):
 
     assert f"RULE {rule}: FAILED ({len(result.violations)})" in report, report
     assert not any(v.message.startswith(CRASH_PREFIX) for v in result.violations), report
+
+
+@pytest.mark.parametrize(("restriction_type", "geometry_type", "shift_deg", "fails"), [
+    ("power_line_support", "Point", 0.0, True),
+    ("railway", "Point", 0.0, True),
+    ("depot_xyz", "Polygon", 0.0, True),
+    ("depot_xyz", "Point", 0.01, False),
+])
+def test_point_and_unknown_type_are_bypassed(restriction_type, geometry_type, shift_deg, fails):
+    # Точка любого типа и тип вне справочника обходятся с отступом правила forbid; вдали от трассы не мешают.
+    inp, out = copy.deepcopy(INPUT), copy.deepcopy(OUTPUT)
+    (x0, y0), (x1, y1) = find(out, "v1_seg_1")["geometry"]["coordinates"][:2]
+    x, y = (x0 + x1) / 2 + shift_deg, (y0 + y1) / 2
+    d = 0.00001
+    coordinates = [x, y] if geometry_type == "Point" else [[[x - d, y - d], [x + d, y - d], [x + d, y + d], [x - d, y + d], [x - d, y - d]]]
+    props = {"id": "extra_1", "object_type": "restriction", "restriction_type": restriction_type}
+    inp["features"].append({"type": "Feature", "geometry": {"type": geometry_type, "coordinates": coordinates}, "properties": props})
+
+    results = run_all(inp, out, RULES_DATA)
+
+    assert bool(results["forbid"].violations) == fails, render_all(results)
+    assert not any(result.violations for rule, result in results.items() if rule != "forbid"), render_all(results)

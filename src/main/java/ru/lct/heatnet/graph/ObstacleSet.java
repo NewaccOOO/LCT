@@ -124,7 +124,8 @@ public final class ObstacleSet {
             if (rule.getMinAngleDeg() != null && geometry.getDimension() == 2) {
                 crossingNodeZones.add(nodeZone);
             }
-            if (rule.forbid()) {
+            // точку нельзя пересечь под углом или пройти через её зону: её обходят с отступом правила, как запрет
+            if (rule.forbid() || geometry.getDimension() == 0) {
                 forbid.add(zone(geometry, distance));
             } else {
                 specialList.add(new Special(restriction.getId(), restriction.getType(), rule, geometry, zone(geometry, distance)));

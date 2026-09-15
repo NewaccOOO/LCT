@@ -49,6 +49,24 @@ class RouterTest {
     }
 
     @Test
+    void pointRestrictionsAreBypassedWithTheirClearance() {
+        // Точка railway, у которого правило special, тоже обходится: пересечь точку специальным участком нельзя.
+        List<Restriction> restrictions = List.of(new Restriction("pls-1", point(0, 0), "power_line_support"),
+                new Restriction("rw-1", point(40, 1), "railway"), new Restriction("x-1", rect(-45, -3, -41, 3), "depot_xyz"));
+        Router router = router(restrictions, List.of());
+
+        Route route = router.route(point(-70, 0), point(70, 0), Set.of());
+
+        assertNotNull(route);
+        assertTrue(route.getSpans().isEmpty());
+        for (Restriction restriction : restrictions) {
+            double distance = route.getGeometry().distance(restriction.getGeometry());
+            double clearance = rules.restriction(restriction.getType()).clearanceM(DN) + halfWidth;
+            assertTrue(distance >= clearance, restriction.getId() + ": расстояние " + distance + ", нужно " + clearance);
+        }
+    }
+
+    @Test
     void roadCrossingAt30DegreesIsRejected() {
         Geometry road = rect(-100, -10, 100, 10);
         Router router = router(List.of(new Restriction("road-1", road, "road")), List.of());
