@@ -135,6 +135,18 @@ def test_mutation_fails_its_rule(rule):
     assert not any(v.message.startswith(CRASH_PREFIX) for v in result.violations), report
 
 
+def test_tie_in_required_diameter_is_new_segment_diameter():
+    # ТП §10.2, пример 10.8: у врезки диаметр новой сети (200), а не существующей после подключения (150 или 250).
+    inp, out = copy.deepcopy(INPUT), copy.deepcopy(OUTPUT)
+    tie = props(out, "v1_tie_1")
+    assert tie["required_diameter"] == props(out, "v1_seg_1")["diameter"] < tie["existing_diameter"]
+    tie["required_diameter"] = tie["existing_diameter"]
+
+    result = run_rule("tie_in", inp, out, RULES_DATA)
+
+    assert [v.object_id for v in result.violations] == ["v1_tie_1"], render_only("tie_in", result)
+
+
 @pytest.mark.parametrize(("restriction_type", "geometry_type", "shift_deg", "fails"), [
     ("power_line_support", "Point", 0.0, True),
     ("railway", "Point", 0.0, True),
