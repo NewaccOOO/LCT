@@ -48,15 +48,26 @@ public final class ReconstructionResult {
         return requiredDiameterBySegment.getOrDefault(segmentId, segment.getDiameter());
     }
 
-    /** Наибольший диаметр примыкающих к камере участков: новых (maxNewDn) и существующих после реконструкции. */
+    /**
+     * Наибольший диаметр примыкающих к камере участков: новых (maxNewDn) и существующих с диаметром той их части,
+     * что касается камеры. Часть того же участка дальше от камеры, реконструированная из-за другой врезки, не в счёт.
+     */
     public int chamberRequiredDiameter(String chamberId, int maxNewDn) {
         Chamber chamber = chamber(chamberId);
         int required = maxNewDn;
         for (NetworkSegment segment : segments.values()) {
-            if (segment.getGeometry().getStartPoint().distance(chamber.getGeometry()) <= ENDPOINT_TOLERANCE_M
-                    || segment.getGeometry().getEndPoint().distance(chamber.getGeometry()) <= ENDPOINT_TOLERANCE_M) {
-                required = Math.max(required, diameterAfter(segment.getId()));
+            if (segment.getGeometry().getStartPoint().distance(chamber.getGeometry()) > ENDPOINT_TOLERANCE_M
+                    && segment.getGeometry().getEndPoint().distance(chamber.getGeometry()) > ENDPOINT_TOLERANCE_M) {
+                continue;
             }
+            int dn = segment.getDiameter();
+            for (ReconPart part : parts) {
+                if (part.getExistingObjectId().equals(segment.getId())
+                        && part.getGeometry().distance(chamber.getGeometry()) <= ENDPOINT_TOLERANCE_M) {
+                    dn = Math.max(dn, part.getRequiredDiameter());
+                }
+            }
+            required = Math.max(required, dn);
         }
         return required;
     }

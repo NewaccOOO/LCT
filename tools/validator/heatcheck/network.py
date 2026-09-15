@@ -304,7 +304,10 @@ def walk(net: Net, group: int, came_from: Feature, remaining: float) -> list[Bas
 
 
 def overlaps_zone(line: BaseGeometry, area: BaseGeometry) -> bool:
-    return line.intersection(area).length > NODE_TOL_M + LENGTH_TOL_M
+    # Куски сравниваются по одному: касание двух соседних зон по краям не складывается в перекрытие.
+    lines = [part for part in shapely.get_parts(line.intersection(area)) if part.length > 0]
+    pieces = shapely.get_parts(shapely.line_merge(MultiLineString(lines))) if lines else []
+    return max((piece.length for piece in pieces), default=0.0) > NODE_TOL_M + LENGTH_TOL_M
 
 
 def segment_k(zones: list[Zone], seg: Feature) -> float | None:

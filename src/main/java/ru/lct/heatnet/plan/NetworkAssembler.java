@@ -32,7 +32,6 @@ import ru.lct.heatnet.model.ChamberReconstruction;
 import ru.lct.heatnet.model.ExistingOks;
 import ru.lct.heatnet.model.FutureOks;
 import ru.lct.heatnet.model.InputData;
-import ru.lct.heatnet.model.NetworkSegment;
 import ru.lct.heatnet.model.NewChamber;
 import ru.lct.heatnet.model.NewSegment;
 import ru.lct.heatnet.model.Reconstruction;
@@ -66,7 +65,6 @@ final class NetworkAssembler {
     private static final double ZONE_GROW_M = 0.02;
     private static final double NEAR_STEP_M = 0.5;
     private static final double DIST_EPS_M = 0.001;
-    private static final double END_MATCH_M = 1e-6;
     private static final double MIN_TURN_DEG = 3;
     private static final int TURNS_PER_OBSTACLE = 3;
     private static final int TURNS_BASE = 4;
@@ -512,7 +510,7 @@ final class NetworkAssembler {
                 int maxNew = maxDnByNode.get(tieId);
                 int required;
                 if (tie.isChamber()) {
-                    required = chamberRequiredDiameter(tie, maxNew, recon);
+                    required = recon.chamberRequiredDiameter(tie.getExistingObjectId(), maxNew);
                     if (required > tie.getExistingDiameter()) {
                         chamberReconstructions.add(new ChamberReconstruction(
                                 prefix + "chrecon_" + (chamberReconstructions.size() + 1), variantId, tie.getPoint(),
@@ -528,35 +526,6 @@ final class NetworkAssembler {
                         tie.getExistingObjectType(), tie.getExistingDiameter(), required, costs.tieInCost()));
             }
             return recon;
-        }
-
-        /**
-         * Наибольший диаметр у камеры врезки: новые участки и существующие участки камеры с диаметром той их части,
-         * что примыкает к камере. {@code ReconstructionResult.chamberRequiredDiameter} берёт наибольший диаметр всех
-         * частей участка и ошибается, когда на том же участке дальше от камеры есть другая врезка.
-         */
-        int chamberRequiredDiameter(TieCandidate tie, int maxNew, ReconstructionResult recon) {
-            int required = maxNew;
-            Point chamber = tie.getPoint();
-            for (NetworkSegment segment : input.getSegments()) {
-                LineString line = segment.getGeometry();
-                Coordinate first = line.getCoordinateN(0);
-                Coordinate last = line.getCoordinateN(line.getNumPoints() - 1);
-                Coordinate end = first.distance(chamber.getCoordinate()) <= last.distance(chamber.getCoordinate()) ? first : last;
-                if (end.distance(chamber.getCoordinate()) > TieInFinder.TOUCH_M) {
-                    continue;
-                }
-                int dn = segment.getDiameter();
-                Point endPoint = factory.createPoint(end);
-                for (ReconPart part : recon.getParts()) {
-                    if (part.getExistingObjectId().equals(segment.getId())
-                            && part.getGeometry().isWithinDistance(endPoint, END_MATCH_M)) {
-                        dn = Math.max(dn, part.getRequiredDiameter());
-                    }
-                }
-                required = Math.max(required, dn);
-            }
-            return required;
         }
 
         /** Специальные зоны всех объектов по трассе варианта. */

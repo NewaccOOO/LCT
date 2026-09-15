@@ -134,6 +134,17 @@ class ReconstructionCalculatorTest {
         assertTrue(result.chamberReconstructions(Map.of("ch1", 50)).isEmpty());
     }
 
+    @Test
+    void chamberIgnoresReconstructedPartFarFromIt() {
+        // s3: часть 0–10 м получает 12 + 1 + 4 = 17 т/ч -> DN100; часть 10–100 м у ch1 получает 13 т/ч -> DN80
+        ReconstructionResult result = ReconstructionCalculator.calculate(network(false), rules,
+                List.of(chamberTieIn("k", 1.0), pipe("far", "s3", 10, 4.0)));
+
+        assertEquals(100, result.diameterAfter("s3"));
+        assertEquals(80, result.chamberRequiredDiameter("ch1", 50));
+        assertTrue(result.chamberReconstructions(Map.of("ch1", 50)).isEmpty());
+    }
+
     private static List<TieInLoad> twoTieInsInS2() {
         return List.of(pipe("far", "s2", 250, 1.5), pipe("near", "s2", 150, 2.0));
     }
