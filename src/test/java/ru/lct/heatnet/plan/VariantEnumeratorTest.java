@@ -54,6 +54,22 @@ class VariantEnumeratorTest {
     }
 
     @Test
+    void singleTieInCandidateStillGivesTwoDifferentVariants() {
+        // у ОКС одна ближайшая врезка: перпендикуляр на трубу или камера на её конце
+        PlanFixture onPipe = new PlanFixture().pipe("hn-1", 0, 0, 400, 0, 200, 100, "src").oks("o-1", 200, 60, 30);
+        PlanFixture atChamber = new PlanFixture().pipe("hn-1", 0, 0, 300, 0, 150, 50, "src")
+                .chamber("hc-1", 300, 0, 150, "hn-1").oks("o-1", 305, 80, 10);
+
+        for (PlanFixture fixture : List.of(onPipe, atChamber)) {
+            List<Variant> variants = new VariantEnumerator(fixture.input(), rules).run().getVariants();
+
+            assertTrue(variants.size() >= 2, "вариантов " + variants.size());
+            assertTrue(differ(variants.get(0), variants.get(1)), "варианты 1 и 2 не различаются");
+            assertTrue(variants.stream().allMatch(v -> v.getSummary().getUnconnectedOksIds().isEmpty()));
+        }
+    }
+
+    @Test
     void oksWithoutRouteIsUnconnectedWithPenaltyAndOtherOksKept() {
         // o-2 внутри кольца водоёма: выхода к сети нет ни при каком диаметре
         Polygon water = GEOMETRY.createPolygon(ring(420, 170, 580, 330), new LinearRing[] {ring(470, 220, 530, 280)});

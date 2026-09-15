@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Random;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.locationtech.jts.algorithm.Angle;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
@@ -46,6 +47,41 @@ class RouterTest {
         assertTrue(route.getLength() < 0.9 * orthogonalDetour, "длина " + route.getLength());
         assertTrue(route.getSpans().isEmpty());
         assertEquals(route.getLength(), route.getWeight(), EPS);
+    }
+
+    @Test
+    void pointRestrictionsAreBypassedWithTheirClearance() {
+        // Точка railway, у которого правило special, тоже обходится: пересечь точку специальным участком нельзя.
+        List<Restriction> restrictions = List.of(new Restriction("pls-1", point(0, 0), "power_line_support"),
+                new Restriction("rw-1", point(40, 1), "railway"), new Restriction("x-1", rect(-45, -3, -41, 3), "depot_xyz"));
+        Router router = router(restrictions, List.of());
+
+        Route route = router.route(point(-70, 0), point(70, 0), Set.of());
+
+        assertNotNull(route);
+        assertTrue(route.getSpans().isEmpty());
+        for (Restriction restriction : restrictions) {
+            double distance = route.getGeometry().distance(restriction.getGeometry());
+            double clearance = rules.restriction(restriction.getType()).clearanceM(DN) + halfWidth;
+            assertTrue(distance >= clearance, restriction.getId() + ": расстояние " + distance + ", нужно " + clearance);
+        }
+    }
+
+    @Test
+    void detourAroundSmallObstacleHasNoFlatVertices() {
+        // обход опоры на прямой длиной 120 м по углам её зоны даёт изломы около 2,5°, а меньше 3° запрещено
+        Router router = router(List.of(new Restriction("pls-1", point(0, 0), "power_line_support")), List.of());
+
+        Route route = router.route(point(0, -60), point(0, 60), Set.of());
+
+        assertNotNull(route);
+        Coordinate[] coords = route.getGeometry().getCoordinates();
+        for (int i = 1; i + 1 < coords.length; i++) {
+            double deflection = 180 - Math.toDegrees(Angle.angleBetween(coords[i - 1], coords[i], coords[i + 1]));
+            assertTrue(deflection >= 3, "излом " + deflection + "° в вершине " + i);
+        }
+        double clearance = rules.restriction("power_line_support").clearanceM(DN) + halfWidth;
+        assertTrue(route.getGeometry().distance(point(0, 0)) >= clearance);
     }
 
     @Test
@@ -222,7 +258,7 @@ class RouterTest {
     }
 
     private static InputData input(List<Restriction> restrictions, List<NetworkSegment> segments) {
-        return new InputData(null, segments, List.of(), List.of(), List.of(), List.of(), restrictions, List.of());
+        return new InputData(null, segments, List.of(), List.of(), List.of(), List.of(), restrictions, List.of(), List.of());
     }
 
     private Geometry rect(double minX, double minY, double maxX, double maxY) {

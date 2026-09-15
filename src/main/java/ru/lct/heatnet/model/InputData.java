@@ -13,4 +13,6 @@ public class InputData {
     List<ExistingOks> existingOks;
     List<Restriction> restrictions;
     List<Diagnostic> diagnostics;
+    /** Готовые строки предупреждений для человека: вход прочитан, но часть объектов обработана по умолчанию. */
+    List<String> warnings;
 }

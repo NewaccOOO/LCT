@@ -32,13 +32,10 @@ from heatcheck.model import (
 from heatcheck.network import (
     Net,
     build_net,
-    chamber_required,
     cluster,
     deflection_deg,
-    network_loads,
     oks_flow,
     path_from_root,
-    pipe_required,
 )
 
 JUNCTION_CLIP_M = 3 * NODE_TOL_M
@@ -139,6 +136,9 @@ def check_topology(inp: Input, out: Output, rules: dict[str, Any]) -> RuleResult
             if total > chamber_rule["max_segments"] or total - 1 > chamber_rule["max_branches"]:
                 add(min(net.members[group]), f"к камере примыкает участков {total} ({existing} существующих)")
 
+        if not segments:
+            # вариант, где все ОКС неподключены, допустим; пустой список STRtree.query не принимает
+            continue
         tree = STRtree([s.geom for s in segments])
         for i, j in zip(*tree.query([s.geom for s in segments], predicate="dwithin", distance=TOUCH_TOL_M)):
             if i >= j:
@@ -159,7 +159,6 @@ def check_tie_in(inp: Input, out: Output, rules: dict[str, Any]) -> RuleResult:
     chamber_tree = STRtree([c.geom for c in chambers])
     for variant in out.variants.values():
         net = build_net(inp, variant)
-        loads = network_loads(inp, net, variant)
         taken: dict[str, int] = defaultdict(int)
         for group in net.roots:
             for tie in variant.tie_ins:
@@ -193,7 +192,6 @@ def check_tie_in(inp: Input, out: Output, rules: dict[str, Any]) -> RuleResult:
                 after = new_count + len(inp.chamber_links.get(existing.id, []))
                 if after > chamber_rule["max_segments"]:
                     add(f"после подключения к камере примыкает участков {after}")
-                required = chamber_required(rules, inp, net, loads, existing, group)
             elif existing.object_type == "heat_network":
                 if tie.geom.distance(existing.geom) > NODE_TOL_M:
                     add("врезка в трубу стоит не на оси участка")
@@ -205,12 +203,14 @@ def check_tie_in(inp: Input, out: Output, rules: dict[str, Any]) -> RuleResult:
                     if after <= chamber_rule["max_segments"]:
                         distance = tie.geom.distance(chamber.geom)
                         add(f"камера {chamber.id} в {distance:.2f} м, после подключения у неё было бы {after} участков: врезка должна быть в камеру")
-                required = pipe_required(rules, inp, loads, existing, tie.geom)
             else:
                 add(f"врезка в объект типа {existing.object_type}")
                 continue
+            # ТП §10.2: диаметр новой сети в точке врезки, то есть участков, которые в ней начинаются.
+            new_dns = [s.props.get("diameter") for s in net.out_segs.get(group, [])]
+            required = max((dn for dn in new_dns if isinstance(dn, int)), default=None)
             if props.get("required_diameter") != required:
-                add(f"required_diameter={props.get('required_diameter')}, по расчёту {required}")
+                add(f"required_diameter={props.get('required_diameter')}, диаметр новых участков от врезки {required}")
     return RuleResult(violations, checked)
 
 

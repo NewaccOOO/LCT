@@ -46,6 +46,7 @@ public class CliRunner implements ApplicationRunner {
         long started = System.nanoTime();
         try {
             InputData input = GeoJsonStreamReader.read(Path.of(files.get(0)));
+            input.getWarnings().forEach(System.err::println);
             if (!input.getDiagnostics().isEmpty()) {
                 for (Diagnostic diagnostic : input.getDiagnostics()) {
                     System.err.printf("%s %s: %s%n", diagnostic.getFeatureId(), diagnostic.getField(), diagnostic.getProblem());

@@ -87,9 +87,11 @@ def check_special(inp: Input, out: Output, rules: dict[str, Any]) -> RuleResult:
 
         for zone in zones:
             min_angle = zone.obstacle.params.get("min_angle_deg")
-            boundary = zone.obstacle.feature.geom.boundary
             if min_angle is None:
                 continue
+            geom = zone.obstacle.feature.geom
+            # У полигона угол считается к стороне, у линии (например, ось railway) — к её отрезку.
+            boundary = geom.boundary if geom.geom_type in ("Polygon", "MultiPolygon") else geom
             ring_edges = [
                 (ring.coords[i], ring.coords[i + 1])
                 for ring in shapely.get_parts(boundary) for i in range(len(ring.coords) - 1)

@@ -83,6 +83,9 @@ public class JobWorker {
         try {
             Path input = Path.of(job.getInputPath());
             InputData data = GeoJsonStreamReader.read(input);
+            for (String warning : data.getWarnings()) {
+                log.warn("jobs: job {} {}", id, warning);
+            }
             List<Diagnostic> diagnostics = data.getDiagnostics();
             if (!diagnostics.isEmpty()) {
                 String message = "Входной файл не прошёл проверку, найдено ошибок: " + diagnostics.size();

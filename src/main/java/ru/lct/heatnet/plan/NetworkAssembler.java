@@ -507,23 +507,23 @@ final class NetworkAssembler {
             for (Map.Entry<String, List<Tree>> unit : units.entrySet()) {
                 TieCandidate tie = unit.getValue().get(0).tie;
                 String tieId = nodeIds.get(unit.getKey());
+                // ТП §10.2: required_diameter врезки — диаметр новой сети в точке врезки, то есть участков, которые
+                // в ней начинаются; реконструкция трубы и камеры на него не влияет (пример 10.8: 150 → 200, труба 250).
                 int maxNew = maxDnByNode.get(tieId);
-                int required;
                 if (tie.isChamber()) {
-                    required = recon.chamberRequiredDiameter(tie.getExistingObjectId(), maxNew);
+                    int required = recon.chamberRequiredDiameter(tie.getExistingObjectId(), maxNew);
                     if (required > tie.getExistingDiameter()) {
                         chamberReconstructions.add(new ChamberReconstruction(
                                 prefix + "chrecon_" + (chamberReconstructions.size() + 1), variantId, tie.getPoint(),
                                 tie.getExistingObjectId(), tie.getExistingDiameter(), required, costs.chamberCost(required)));
                     }
                 } else {
-                    required = recon.getRequiredDiameterByTieIn().get(unit.getKey());
-                    int dn = Math.max(maxNew, required);
+                    int dn = Math.max(maxNew, recon.getRequiredDiameterByTieIn().get(unit.getKey()));
                     chambers.add(new NewChamber(prefix + "ch_" + ++chamberNo, variantId, tie.getPoint(), dn,
                             costs.chamberCost(dn)));
                 }
                 tieIns.add(new TieIn(tieId, variantId, tie.getPoint(), tie.getExistingObjectId(),
-                        tie.getExistingObjectType(), tie.getExistingDiameter(), required, costs.tieInCost()));
+                        tie.getExistingObjectType(), tie.getExistingDiameter(), maxNew, costs.tieInCost()));
             }
             return recon;
         }
