@@ -22,10 +22,10 @@ Scope: REST-сервис на Java 11 строит варианты подклю
   EXPECT: /MVN VERIFY OK tests=([3-9]\d|\d{3,}) skipped=0/
   EVIDENCE: automatic-evidence=v1; definition-sha256=8b548b25cc3807fcc628522053ac4ad1c3fe3be3149968ed76f6ddc5e93c4caa; exit=0; EXPECT=matched; output-sha256=7f10c8d6c9f09952e6d733e3e730e11c3f62ef72fdfc5d297b6e386a5d9d9372; output-bytes=33; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
-- [ ] AC-5.1: compose поднимает приложение и базу, Swagger отвечает
+- [x] AC-5.1: compose поднимает приложение и базу, Swagger отвечает
   CHECK: bash scripts/gates/compose.sh
   EXPECT: COMPOSE OK
-  EVIDENCE: pending
+  EVIDENCE: automatic-evidence=v1; definition-sha256=4de5d7688bd6831481d55a76541e54f9be199b6cba2b79ad045610bce4b12830; exit=0; EXPECT=matched; output-sha256=f7d5bedcf3aa8b1c1c241c6e1145bf8e1d2af208b6bef6ab3575e021f86c7c60; output-bytes=11; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] AC-4.1: генератор даёт файлы по схеме раздела 12, детерминированно по сиду
   CHECK: bash scripts/gates/synth.sh
@@ -50,17 +50,17 @@ Scope: REST-сервис на Java 11 строит варианты подклю
 - [x] AC-3.2: валидатор падает на испорченной фикстуре по каждому из 15 правил
   CHECK: uv run --project tools pytest -q tools/validator/tests
   EXPECT: /^(1[5-9]|[2-9]\d|\d{3,}) passed in [\d.]+s/m
-  EVIDENCE: automatic-evidence=v1; definition-sha256=15f140dbcddd9569d167616073cc74be87b7dc9ebc5775eb81d8ece06286bfeb; exit=0; EXPECT=matched; output-sha256=7536898c006f0cf2918d2c213f9017dabd4ecc3ee7bed7112b0d431eeb75d072; output-bytes=99; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=15f140dbcddd9569d167616073cc74be87b7dc9ebc5775eb81d8ece06286bfeb; exit=0; EXPECT=matched; output-sha256=6b07b5e878b6a15e9b8af1aaf75d4afa7c28a8c12dbb1f5282b285be5f8cdd59; output-bytes=99; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] NFR-1: расчёт среднего пресета укладывается в 120 секунд на каждом из трёх сидов
   CHECK: bash scripts/gates/perf.sh
   EXPECT: /PERF medium OK max=\d+s/
-  EVIDENCE: automatic-evidence=v1; definition-sha256=eb1c2c8ee44251069ee55d3d2fee75024794db905055b0691aeca3f969c891e7; exit=0; EXPECT=matched; output-sha256=0b82a21d6b53513c236e803d41d8cdc53f1eb73b6bbb6b0efac84a588eaf12eb; output-bytes=107; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=eb1c2c8ee44251069ee55d3d2fee75024794db905055b0691aeca3f969c891e7; exit=0; EXPECT=matched; output-sha256=b0fbcd30338711dbf0652f0f0527a183fd2f0fdc62981e36a1e8ccf9c0cd05f1; output-bytes=106; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] AC-3.1: валидатор принимает выходы сервиса по правилу schema
   CHECK: bash scripts/gates/validate_rule.sh schema
   EXPECT: RULE schema: PASSED
-  EVIDENCE: automatic-evidence=v1; definition-sha256=a05505aa3369300c9c4ffcadd8821a10a8888da2350ada94d3f587d03801214a; exit=0; EXPECT=matched; output-sha256=c80bf8fc866d8403893a79f8fc86ce65aa82826e5ee50e5d52545e9a9000dae7; output-bytes=2141; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=a05505aa3369300c9c4ffcadd8821a10a8888da2350ada94d3f587d03801214a; exit=0; EXPECT=matched; output-sha256=013c4e9e0ac2bb418407cb0f9d09ea01ec16c40966c6c62cdae237362c00de89; output-bytes=2141; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] AC-2.1: каждый ОКС подключён, список неподключённых пуст
   CHECK: bash scripts/gates/validate_rule.sh coverage
@@ -130,29 +130,29 @@ Scope: REST-сервис на Java 11 строит варианты подклю
 - [x] AC-1.1: загрузка файла отвечает 202 с id, пустое тело отвечает 400
   CHECK: bash scripts/gates/api.sh AC-1.1
   EXPECT: API AC-1.1 OK
-  EVIDENCE: automatic-evidence=v1; definition-sha256=8075dda5940f3ba178601bd7872363aad4f2ed75943af727cf6f7b047faa5bd2; exit=0; EXPECT=matched; output-sha256=3bb8a53c96b7f501b85ff6e8583ae125966c0a28ba8974a8fbecce2cb8ede1f6; output-bytes=481; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=8075dda5940f3ba178601bd7872363aad4f2ed75943af727cf6f7b047faa5bd2; exit=0; EXPECT=matched; output-sha256=7a7ed1b7377229abcb565b2f628ee7e14d5f2b50e262c103fee6334bb293ff7c; output-bytes=481; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] AC-1.2: статус задачи проходит QUEUED, RUNNING, DONE и содержит сводки
   CHECK: bash scripts/gates/api.sh AC-1.2
   EXPECT: API AC-1.2 OK
-  EVIDENCE: automatic-evidence=v1; definition-sha256=9db6dd0e7a4f1fdac0ee52b888aa23260f6921597ba6be7d93f645b8a9df4c93; exit=0; EXPECT=matched; output-sha256=537a13280d936c5ed41ad8796193f089daaf4250aaea3dbc3e70992abfab0e98; output-bytes=252; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=9db6dd0e7a4f1fdac0ee52b888aa23260f6921597ba6be7d93f645b8a9df4c93; exit=0; EXPECT=matched; output-sha256=22e6b35d8b11f0d8f35190d1a570c2f7bc028e1a7b11d3d0372fb1e40fdf4b25; output-bytes=252; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] AC-1.3: результат и вход скачиваются, до DONE результат отвечает 409
   CHECK: bash scripts/gates/api.sh AC-1.3
   EXPECT: API AC-1.3 OK
-  EVIDENCE: automatic-evidence=v1; definition-sha256=60819aa315212b8ba5a4e44e4a91696b7ae8103decffc6fd75082deda2702850; exit=0; EXPECT=matched; output-sha256=73c243c1aeba4a8787dcd8558de227fd722a23cb105b86b0017f79083d447aa3; output-bytes=284; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=60819aa315212b8ba5a4e44e4a91696b7ae8103decffc6fd75082deda2702850; exit=0; EXPECT=matched; output-sha256=ff07175c6d20014e7848a626ac7869b0065d2af3caf09c9307bf9ea766b8a007; output-bytes=284; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] AC-1.4: битый вход даёт FAILED со списком диагностик
   CHECK: bash scripts/gates/api.sh AC-1.4
   EXPECT: API AC-1.4 OK
-  EVIDENCE: automatic-evidence=v1; definition-sha256=a9ab1c8a89ce6ab8c7b7351c2f97ff8828508efaee297f8a7a7790e3723ad697; exit=0; EXPECT=matched; output-sha256=3a7cee94eb9eab3a1b608d1c415fabf8407eac477a8df2b2726a74ddcbda2051; output-bytes=252; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=a9ab1c8a89ce6ab8c7b7351c2f97ff8828508efaee297f8a7a7790e3723ad697; exit=0; EXPECT=matched; output-sha256=1d9ca8a3bc02d45e93a99729078dd32493fb164250a0aefa4b34e1d7dcd0b395; output-bytes=252; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] NFR-2: файл 300 МБ проходит через API при куче 1 ГБ
   CHECK: bash scripts/gates/api.sh NFR-2
   EXPECT: API NFR-2 OK
-  EVIDENCE: automatic-evidence=v1; definition-sha256=9f106c398f541a68bdbdff782e18064cd9fe05859a6a950f193c218f56f05834; exit=0; EXPECT=matched; output-sha256=12ed226fa69e1f03740aa7ef49d7c2c77e9346778285c07529b92ed916559bcd; output-bytes=251; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=9f106c398f541a68bdbdff782e18064cd9fe05859a6a950f193c218f56f05834; exit=0; EXPECT=matched; output-sha256=e5885dbf1672c8efd2597cfe7ed07ac08cb1c5c85d54fcbce6b05dfd3bec18a2; output-bytes=251; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
 
 - [x] NFR-3: пять одновременных задач завершаются за 180 секунд
   CHECK: bash scripts/gates/api.sh NFR-3
   EXPECT: API NFR-3 OK
-  EVIDENCE: automatic-evidence=v1; definition-sha256=0102831fab9ad229ee8a4a4dae8c6ef2acc4611e888fffdc66ad1becf2d5df22; exit=0; EXPECT=matched; output-sha256=d6624cb6443bf7274cd3cce286c84055cefa25bd5a7b4a48aa959d340487ce71; output-bytes=251; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=0102831fab9ad229ee8a4a4dae8c6ef2acc4611e888fffdc66ad1becf2d5df22; exit=0; EXPECT=matched; output-sha256=a4e9acd4d82ee7a1a93a1e70a78db1bba1d458ab73132979c2f490f857f3321e; output-bytes=251; shell=/bin/sh; cwd=/Users/paveldurynin/L/LCT; path=253c039e0374/25 entries
