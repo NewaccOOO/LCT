@@ -31,6 +31,7 @@ from heatopt.scene import Scene
 SIMPLIFY_M = 0.05
 NODE_OFFSET_M = 0.05
 TIE_TOUCH_M = 0.5
+TIE_EXIT_M = 10.0
 ANGLE_MARGIN_DEG = 0.01
 CROSSING_STEP_M = 20.0
 MARGIN_QUAD_SEGS = 16
@@ -219,7 +220,7 @@ class Obstacles:
             hit, _ = self.forbid_tree.query(lines, predicate="intersects")
             ok[hit] = False
         if ignored:
-            ok &= self._leaves_network(a, b, length, ignored)
+            ok &= self._leaves_network(a, b, length, ignored) & self._exits_zone(a, b, length, ignored)
         if self.special_tree is None:
             return Checked(ok, length, special_len, k_special, cost_len)
         idx = np.nonzero(ok)[0]
@@ -312,6 +313,20 @@ class Obstacles:
             for i in range(len(a)):
                 hits[i] = sorted(float(v) * r_len[i] for v in t[i][proper[i]])
         return allowed, hits
+
+    def _exits_zone(self, a: np.ndarray, b: np.ndarray, length: np.ndarray, ignored: frozenset[str]) -> np.ndarray:
+        """Дальше TIE_EXIT_M от врезки отрезок вне зоны отступа её труб: валидатор прощает сближение только участку,
+        который начинается во врезке, а разрез по диаметру или спецзоне этот участок делит."""
+        zones = [s.zone for s in self.specials if s.id in ignored]
+        ok = np.ones(len(a), dtype=bool)
+        far = length > TIE_EXIT_M
+        if not zones or not far.any():
+            return ok
+        rows = np.nonzero(far)[0]
+        start = a[rows] + (b[rows] - a[rows]) * (TIE_EXIT_M / length[rows])[:, None]
+        tail = shapely.linestrings(np.stack([start, b[rows]], axis=1))
+        ok[rows] = ~shapely.intersects(tail, shapely.union_all(zones))
+        return ok
 
     def _leaves_network(self, a: np.ndarray, b: np.ndarray, length: np.ndarray, ignored: frozenset[str]) -> np.ndarray:
         """Отрезок от врезки дальше 0,5 м не пересекает участки, которых врезка касается (leavesNetwork)."""

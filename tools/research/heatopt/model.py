@@ -37,7 +37,6 @@ from heatcheck.network import (
     piece_geom,
     pieces as load_pieces,
     pipe_required,
-    segment_k,
     special_zones,
 )
 from pyproj import Transformer
@@ -54,6 +53,8 @@ from heatopt.scene import Scene
 INSERT_M = 2.0
 CUT_MARGIN_M = 0.5
 INSERT_GAP_M = 1.5
+# первый участок от врезки не делится вставкой: валидатор прощает ему сближение с трубами врезки
+TIE_CLEAR_M = 10.0
 CUT_DEDUP_M = NODE_TOL_M
 KINK_MAX_DEG = 50.0
 KINK_FREE_M = 5.0
@@ -61,6 +62,7 @@ MIN_TURN_DEG = 3.0
 # разрез внутри прямого куска: при склейке вершина убирается
 STRAIGHT_CUT_DEG = 1e-6
 MIN_PIECE_LEN_M = 1e-6
+ZONE_HIT_M = 1e-3
 KINK_POLYGON_TYPES = ("road", "tram_tracks")
 TO_WGS = Transformer.from_crs("EPSG:32637", "EPSG:4326", always_xy=True)
 
@@ -371,15 +373,16 @@ class Assembly:
                     limit -= self.lines[up].length
                 group.sort(key=lambda i: -top[i])
                 total = sum(top[i] for i in group)
+                gap = TIE_CLEAR_M if node in self.tie_nodes else INSERT_GAP_M
                 for i in group:
                     if total <= limit:
                         break
                     # вставка у верхнего узла ребра: ниже неё цепочка ребра уже не длиннее предела
-                    if room[i] < 2 * INSERT_GAP_M + INSERT_M or next_diameter(self.rules, dn) is None:
+                    if room[i] < gap + INSERT_GAP_M + INSERT_M or next_diameter(self.rules, dn) is None:
                         continue
                     total -= top[i]
-                    cuts[i].append(INSERT_GAP_M)
-                    top[i] = INSERT_GAP_M
+                    cuts[i].append(gap)
+                    top[i] = gap
                     total += top[i]
                 open_len[dn] = total
             edge = parent_edge.get(node)
@@ -393,7 +396,7 @@ class Assembly:
             while acc + position > limit and next_diameter(self.rules, dn) is not None:
                 at = position - (limit - acc) - INSERT_M
                 at = min(at, position - INSERT_M - (INSERT_GAP_M if acc == 0 else 0))
-                if at < INSERT_GAP_M:
+                if at < (TIE_CLEAR_M if oriented[edge][0] in self.tie_nodes else INSERT_GAP_M):
                     break
                 cuts[edge].append(at)
                 position = at
@@ -467,8 +470,12 @@ class Assembly:
                     split += [Piece(piece.edge, s, e, piece.dn) for s, e in zip(bounds, bounds[1:])]
                 pieces = split
                 variant = self.piece_features(pieces)
-        for feature, piece in zip(variant.segments, pieces):
-            piece.k = segment_k(zones, feature) if zones else None
+        # куски уже разрезаны по границам зон, поэтому принадлежность решает середина; segment_k валидатора
+        # не видит куски короче 0,1 м между границами близких пересечений
+        for piece in pieces:
+            middle = piece.geom.interpolate(0.5, normalized=True)
+            ks = [zone.obstacle.params["k_special"] for zone in zones if zone.geom.distance(middle) <= ZONE_HIT_M]
+            piece.k = max(ks) if ks else None
         return pieces
 
 
