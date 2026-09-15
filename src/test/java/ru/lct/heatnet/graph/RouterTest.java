@@ -222,7 +222,7 @@ class RouterTest {
     }
 
     private static InputData input(List<Restriction> restrictions, List<NetworkSegment> segments) {
-        return new InputData(null, segments, List.of(), List.of(), List.of(), List.of(), restrictions, List.of());
+        return new InputData(null, segments, List.of(), List.of(), List.of(), List.of(), restrictions, List.of(), List.of());
     }
 
     private Geometry rect(double minX, double minY, double maxX, double maxY) {

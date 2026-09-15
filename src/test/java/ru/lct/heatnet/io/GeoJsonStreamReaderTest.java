@@ -150,8 +150,8 @@ class GeoJsonStreamReaderTest {
         assertOnly(features, "R1", "geometry");
 
         features = validFeatures();
-        props(features, "R2").put("restriction_type", "fence");
-        assertOnly(features, "R2", "restriction_type");
+        ((ObjectNode) features.get(7)).set("geometry", geometry("Point", new double[] {37.66, 55.76}));
+        assertOnly(features, "R1", "geometry");
 
         features = validFeatures();
         props(features, "E1").put("object_type", "tree");
@@ -180,6 +180,23 @@ class GeoJsonStreamReaderTest {
                 .map(d -> d.getFeatureId() + " " + d.getField())
                 .collect(Collectors.toList());
         assertEquals(List.of("#0 object_type", "N1 upstream_object_id"), problems);
+    }
+
+    @Test
+    void unknownRestrictionTypeGivesOneWarningPerType() throws IOException {
+        ArrayNode features = validFeatures();
+        props(features, "R2").put("restriction_type", "fence");
+        features.add(feature("Point", new double[] {37.65, 55.74},
+                "id", "R3", "object_type", "restriction", "restriction_type", "fence"));
+        features.add(feature("Point", new double[] {37.66, 55.74},
+                "id", "R4", "object_type", "restriction", "restriction_type", "power_line_support"));
+
+        InputData data = GeoJsonStreamReader.read(write(features));
+
+        assertEquals(List.of(), data.getDiagnostics());
+        assertEquals(4, data.getRestrictions().size());
+        assertEquals(List.of("ПРЕДУПРЕЖДЕНИЕ: restriction_type \"fence\" нет в справочнике, объектов: 2, "
+                + "применено правило запрета с отступом 1,0 м"), data.getWarnings());
     }
 
     @Test
