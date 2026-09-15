@@ -75,6 +75,8 @@ final class NetworkAssembler {
     private final CostCalculator costs;
     private final DiameterPlanner planner;
     private final Map<String, Double> flowByOks = new HashMap<>();
+    /** ID входа: выходные ID с ними не совпадают (правило schema). */
+    private final Set<String> inputIds = new HashSet<>();
     /** Полигоны, которые считаются в правиле поворотов: запрещённые, дороги и трамвайные пути. */
     private final STRtree turnPolygons = new STRtree();
     private final GeometryFactory factory = new GeometryFactory();
@@ -128,19 +130,30 @@ final class NetworkAssembler {
         this.specials = specials;
         this.costs = new CostCalculator(rules);
         this.planner = new DiameterPlanner(rules);
+        inputIds.add(input.getSource().getId());
+        input.getSegments().forEach(segment -> inputIds.add(segment.getId()));
+        input.getChambers().forEach(chamber -> inputIds.add(chamber.getId()));
+        input.getConnectionPoints().forEach(connection -> inputIds.add(connection.getId()));
         for (FutureOks oks : input.getFutureOks()) {
             flowByOks.put(oks.getId(), oks.getFlowTph());
+            inputIds.add(oks.getId());
         }
         for (ExistingOks oks : input.getExistingOks()) {
             addTurnPolygon(oks.getGeometry(), extent);
+            inputIds.add(oks.getId());
         }
         for (Restriction restriction : input.getRestrictions()) {
+            inputIds.add(restriction.getId());
             RestrictionRule rule = rules.restriction(restriction.getType());
             if (restriction.getGeometry().getDimension() == 2 && (rule.forbid() || rule.getMinAngleDeg() != null)) {
                 addTurnPolygon(restriction.getGeometry(), extent);
             }
         }
         turnPolygons.build();
+    }
+
+    private boolean startsInputId(String prefix) {
+        return inputIds.stream().anyMatch(id -> id.startsWith(prefix));
     }
 
     private void addTurnPolygon(Geometry polygon, Envelope extent) {
@@ -184,7 +197,12 @@ final class NetworkAssembler {
         Build(String variantId, int rank, List<Tree> trees, List<FutureOks> unconnected) {
             this.variantId = variantId;
             this.rank = rank;
-            this.prefix = "v" + variantId + "_";
+            // вход может содержать ID вида v1_seg_1: префикс удлиняется, пока с него не начинается ни один ID входа
+            String free = "v" + variantId + "_";
+            while (startsInputId(free)) {
+                free = "v" + free;
+            }
+            this.prefix = free;
             this.unconnected = unconnected;
             for (Tree tree : trees) {
                 if (!tree.edges.isEmpty()) {
@@ -235,7 +253,8 @@ final class NetworkAssembler {
                         part.getLength(), part.getCost()));
             }
 
-            VariantSummary draft = costs.summary("summary_" + variantId, variantId, segments, chambers, tieIns,
+            String summaryId = inputIds.contains("summary_" + variantId) ? prefix + "summary" : "summary_" + variantId;
+            VariantSummary draft = costs.summary(summaryId, variantId, segments, chambers, tieIns,
                     reconstructions, chamberReconstructions, unconnected);
             VariantSummary summary = new VariantSummary(draft.getId(), variantId, rank, draft.getConstructionCost(),
                     draft.getChamberConstructionCost(), draft.getTieInCost(), draft.getReconstructionCost(),
