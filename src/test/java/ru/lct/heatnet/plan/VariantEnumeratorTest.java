@@ -18,6 +18,7 @@ import org.locationtech.jts.geom.LinearRing;
 import org.locationtech.jts.geom.Polygon;
 import ru.lct.heatnet.calc.CostCalculator;
 import ru.lct.heatnet.model.ConnectionPoint;
+import ru.lct.heatnet.model.ExistingOks;
 import ru.lct.heatnet.model.NewSegment;
 import ru.lct.heatnet.model.Result;
 import ru.lct.heatnet.model.TieIn;
@@ -87,6 +88,30 @@ class VariantEnumeratorTest {
             for (NewSegment segment : variant.getSegments()) {
                 assertFalse(segment.getEndNodeId().equals("cp-o-2") || segment.getGeometry().intersects(water));
             }
+        }
+    }
+
+    @Test
+    void gapWideEnoughForOwnDiameterIsUsedInsteadOfLongDetour() {
+        // ОКС на 690 т/ч получает Ду 400: проём в стене из зданий пропускает его с отступом 5 м, но не Ду 500 с 7 м
+        int dn = 400;
+        double offset = rules.restriction("oks_existing").clearanceM(dn) + rules.diameter(dn).getWidthM() / 2;
+        double gap = 2 * offset + 2;
+        PlanFixture fixture = new PlanFixture()
+                .pipe("hn-1", 0, 0, 400, 0, 600, 100, "src").chamber("hc-1", 400, 0, 600, "hn-1")
+                .pipe("hn-2", 400, 0, 800, 0, 600, 100, "hc-1")
+                .oks("o-1", 200, 130, 690);
+        Geometry wall = PlanFixture.rect(40, 40, 200 - gap / 2, 55).union(PlanFixture.rect(200 + gap / 2, 40, 360, 55));
+        fixture.existing.add(new ExistingOks("wall", wall));
+
+        Variant best = new VariantEnumerator(fixture.input(), rules).run().getVariants().get(0);
+
+        assertTrue(best.getSummary().getUnconnectedOksIds().isEmpty());
+        assertTrue(best.getSummary().getNewNetworkLength() < 131, "длина " + best.getSummary().getNewNetworkLength());
+        for (NewSegment segment : best.getSegments()) {
+            double required = rules.restriction("oks_existing").clearanceM(segment.getDiameter())
+                    + rules.diameter(segment.getDiameter()).getWidthM() / 2;
+            assertTrue(segment.getGeometry().distance(wall) >= required, "участок " + segment.getId() + " ближе отступа");
         }
     }
 

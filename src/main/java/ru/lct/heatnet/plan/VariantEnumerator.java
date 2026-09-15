@@ -44,6 +44,8 @@ public final class VariantEnumerator {
     /** R-11: варианты одинаковы, если больше этой доли длины меньшего лежит в полосе SAME_ROUTE_M от другого. */
     private static final double SAME_ROUTE_SHARE = 0.8;
     private static final double SAME_ROUTE_M = 1.0;
+    /** Дерево ОКС идёт в обход, если оно длиннее прямой до ближайшего кандидата врезки больше чем во столько раз. */
+    private static final double DETOUR_RATIO = 1.1;
     private static final double TREES_APART_M = 0.5;
     private static final double SHARED_ROOT_CLIP_M = 0.15;
     private static final double SHARED_ROOT_APART_M = 0.01;
@@ -298,9 +300,13 @@ public final class VariantEnumerator {
         // ОКС, не вошедшие в общее дерево, draft подключает по одному, поэтому повторы нужны только одиночным
         if (subset.size() == 1) {
             int ownDn = rules.diameterFor(oksById.get(subset.get(0).getOksId()).getFlowTph()).getDn();
-            if (incomplete(options) && ownDn < region.dn) {
-                // D-7: с запасом по диаметру маршрута нет — повтор с диаметром по расходу ОКС и проверкой отступов
-                options.addAll(options(region, ownDn, region.area, subset, true, finder.find(points, ownDn)));
+            if (ownDn < region.dn) {
+                List<TieCandidate> own = finder.find(points, ownDn);
+                if (detour(options, points.get(0), own)) {
+                    // D-7: с запасом по диаметру маршрута нет или он в обход, а отступы для Ду по расходу меньше и
+                    // могут пропустить короче: повтор с этим Ду, отступы и предельная длина — по фактическому Ду
+                    options.addAll(options(region, ownDn, region.area, subset, true, own));
+                }
             }
             if (incomplete(options)) {
                 // обход может не поместиться в область вокруг ОКС и кандидатов: последняя попытка на широкой области
@@ -321,6 +327,18 @@ public final class VariantEnumerator {
 
     private static boolean incomplete(List<Option> options) {
         return options.stream().allMatch(option -> !option.tree.unconnected.isEmpty());
+    }
+
+    /**
+     * Полного дерева нет или самое короткое длиннее прямой до ближайшего кандидата врезки больше чем в DETOUR_RATIO раз:
+     * только тогда граф с меньшими отступами может дать трассу заметно короче, иначе повтор не окупает время.
+     */
+    private static boolean detour(List<Option> options, Point point, List<TieCandidate> candidates) {
+        double shortest = options.stream().filter(option -> option.tree.unconnected.isEmpty())
+                .mapToDouble(option -> option.tree.length()).min().orElse(Double.POSITIVE_INFINITY);
+        double straight = candidates.stream().mapToDouble(candidate -> candidate.getPoint().distance(point))
+                .min().orElse(Double.POSITIVE_INFINITY);
+        return shortest > DETOUR_RATIO * straight;
     }
 
     private List<Option> options(Region region, int dn, Envelope area, List<ConnectionPoint> subset, boolean verify,
