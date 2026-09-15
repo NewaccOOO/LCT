@@ -1,0 +1,17 @@
+[project]
+name = "heatnet-tools"
+version = "0.1.0"
+description = "Генератор синтетических наборов и валидатор результата трассировки тепловых сетей"
+requires-python = ">=3.12"
+dependencies = [
+    "shapely>=2.1",
+    "pyproj>=3.7.1",
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["synth/heatsynth", "validator/heatcheck"]

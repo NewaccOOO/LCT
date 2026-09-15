@@ -1,0 +1,44 @@
+{
+  "diameters": [
+    {"dn": 50, "capacity_tph": 3.5, "max_length_m": 181, "new_rub_m": 74023, "recon_rub_m": 96180, "width_m": 0.400, "height_m": 0.125},
+    {"dn": 65, "capacity_tph": 8.3, "max_length_m": 245, "new_rub_m": 78631, "recon_rub_m": 109989, "width_m": 0.430, "height_m": 0.140},
+    {"dn": 80, "capacity_tph": 13.2, "max_length_m": 327, "new_rub_m": 83530, "recon_rub_m": 117582, "width_m": 0.470, "height_m": 0.160},
+    {"dn": 100, "capacity_tph": 22.3, "max_length_m": 419, "new_rub_m": 89748, "recon_rub_m": 133694, "width_m": 0.510, "height_m": 0.180},
+    {"dn": 125, "capacity_tph": 40.2, "max_length_m": 554, "new_rub_m": 97275, "recon_rub_m": 148030, "width_m": 0.600, "height_m": 0.225},
+    {"dn": 150, "capacity_tph": 65.1, "max_length_m": 696, "new_rub_m": 105507, "recon_rub_m": 152295, "width_m": 0.650, "height_m": 0.250},
+    {"dn": 200, "capacity_tph": 152.3, "max_length_m": 1042, "new_rub_m": 120275, "recon_rub_m": 181766, "width_m": 0.880, "height_m": 0.315},
+    {"dn": 250, "capacity_tph": 274.9, "max_length_m": 1379, "new_rub_m": 135323, "recon_rub_m": 202030, "width_m": 1.050, "height_m": 0.400},
+    {"dn": 300, "capacity_tph": 437.4, "max_length_m": 1718, "new_rub_m": 150022, "recon_rub_m": 228707, "width_m": 1.150, "height_m": 0.450},
+    {"dn": 400, "capacity_tph": 943.1, "max_length_m": 2477, "new_rub_m": 190299, "recon_rub_m": 271317, "width_m": 1.370, "height_m": 0.560},
+    {"dn": 500, "capacity_tph": 1663.4, "max_length_m": 3245, "new_rub_m": 224137, "recon_rub_m": 333884, "width_m": 1.670, "height_m": 0.710},
+    {"dn": 600, "capacity_tph": 2627.7, "max_length_m": 4037, "new_rub_m": 264790, "recon_rub_m": 372703, "width_m": 1.850, "height_m": 0.800},
+    {"dn": 700, "capacity_tph": 3735.1, "max_length_m": 4775, "new_rub_m": 324298, "recon_rub_m": 439571, "width_m": 2.050, "height_m": 0.900},
+    {"dn": 800, "capacity_tph": 5296.8, "max_length_m": 5644, "new_rub_m": 325996, "recon_rub_m": 489918, "width_m": 2.250, "height_m": 1.000},
+    {"dn": 900, "capacity_tph": 7165.0, "max_length_m": 6518, "new_rub_m": 327693, "recon_rub_m": 553607, "width_m": 2.450, "height_m": 1.100},
+    {"dn": 1000, "capacity_tph": 9391.8, "max_length_m": 7419, "new_rub_m": 418777, "recon_rub_m": 606679, "width_m": 2.650, "height_m": 1.200},
+    {"dn": 1200, "capacity_tph": 15012.8, "max_length_m": 9288, "new_rub_m": 428074, "recon_rub_m": 825692, "width_m": 3.100, "height_m": 1.425},
+    {"dn": 1400, "capacity_tph": 22501.9, "max_length_m": 11276, "new_rub_m": 683417, "recon_rub_m": 978584, "width_m": 3.450, "height_m": 1.600}
+  ],
+  "chamber_cost": [
+    {"dn_min": 50, "dn_max": 200, "cost": 3000000},
+    {"dn_min": 250, "dn_max": 500, "cost": 5000000},
+    {"dn_min": 600, "dn_max": 1000, "cost": 8000000},
+    {"dn_min": 1200, "dn_max": 1400, "cost": 12000000}
+  ],
+  "tie_in_cost": 5000000,
+  "chamber_rule": {"max_dist_m": 10, "max_segments": 4, "max_branches": 3},
+  "penalty": {"fixed": 100000000, "per_tph": 500000},
+  "score": {"cost_base": 25000000, "length_base_m": 100, "w_cost": 0.7, "w_length": 0.3},
+  "restrictions": {
+    "oks_existing": {"rule": "forbid", "clearance_m": [{"dn_max": 400, "m": 5}, {"dn_max": 800, "m": 7}, {"dn_max": 1400, "m": 9}], "_comment": "dn_max включительно: DN500 попадает во второй диапазон, 7 м"},
+    "park": {"rule": "forbid", "clearance_m": 1.0},
+    "social_area": {"rule": "forbid", "clearance_m": 1.0},
+    "prohibited_site": {"rule": "forbid", "clearance_m": 1.0},
+    "water": {"rule": "forbid", "clearance_m": 1.0},
+    "road": {"rule": "special", "clearance_m": 1.5, "min_angle_deg": 45, "margin_m": 3, "k_special": 1.60},
+    "tram_tracks": {"rule": "special", "clearance_m": 1.5, "min_angle_deg": 45, "margin_m": 3, "k_special": 1.75},
+    "gas_pipeline": {"rule": "special", "clearance_m": 2.0, "margin_m": 2, "k_special": 1.25, "half_width_m": 0.2},
+    "power_cable": {"rule": "special", "clearance_m": 2.0, "margin_m": 2, "k_special": 1.15, "half_width_m": 0.1},
+    "heat_network": {"rule": "special", "clearance_m": 1.0, "margin_m": 2, "k_special": 1.05}
+  }
+}
