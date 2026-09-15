@@ -681,15 +681,18 @@ class Search:
             hub = tm.Tree(tree.root_node, tree.tie, tree.capacity, [self.graph.nodes[node].xy], {0: node})
             grown = self.connect(rest, hub, others, below[a] + below[b])
             for end in sorted((a, b), key=lambda end: -below[end]):
-                grown = grown and self.attach_subtree(grown, extract(tree, end, set()), others)
+                if grown is not None:
+                    grown = self.attach_subtree(grown, extract(tree, end, set()), others)
             if grown is None:
                 continue
             grown = self.straighten(trim(grown), others)
             if tree_key(grown) == tree_key(tree) or not self.sound(grown, others):
                 continue
             forest = [grown if k == i else t for k, t in enumerate(trees)]
-            if self.fits(forest) and (best is None or self.fast(forest) < best[0]):
-                best = (self.fast(forest), forest)
+            if self.fits(forest):
+                fast = self.fast(forest)
+                if best is None or fast < best[0]:
+                    best = (fast, forest)
         return None if best is None else best[1]
 
     def perturb(self, plan: Plan) -> Plan:
