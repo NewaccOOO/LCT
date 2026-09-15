@@ -44,6 +44,9 @@ MAX_BRANCHES = 3
 MAX_RETRIES = 6
 SHARED_ROOT_CLIP_M = 0.15
 FOREIGN_TIE_M = 0.6
+JUNCTION_CLIP_M = 0.15
+TURNS_PER_OBSTACLE = 3
+TURNS_BASE = 4
 JUNCTION_REACH_M = 4.0
 TOP_TIES = 3
 PREFILTER = 2
@@ -208,6 +211,8 @@ class TreeBuilder:
         self.terminal_node = graph.terminal_nodes()
         self.flow = flows or {t.cp_id: t.flow for t in scene.terminals}
         self.free_tables: dict[tuple[str, int], tuple[list[float], list[int]]] = {}
+        self.foreign: list[LineString] = []
+        self._turn_polygons: STRtree | None = None
 
     def tie_of(self, node: int) -> TieIn:
         n = self.graph.nodes[node]
@@ -223,13 +228,15 @@ class TreeBuilder:
         return self.free_tables[key]
 
     def build(self, tie_node: int, cps: list[str], others: list["Tree"] = (), weight_dn: dict[str, int] | None = None,
-              weights_for=None) -> "Tree":
+              weights_for=None, root_capacity: int | None = None) -> "Tree":
         """Такахаши–Мацуяма: на каждом шаге присоединяется ОКС с самым лёгким путём до дерева. weights_for(dn)
         подменяет веса рёбер (штраф за изгиб, коридоры, перевзвешивание по расходу)."""
         graph = self.graph
         node = graph.nodes[tie_node]
-        tree = Tree(tie_node, self.tie_of(tie_node), 1 if node.kind == "tie_pipe" else node.capacity)
+        # capacity — свободные места для ветвей у корня: у камеры врезки их делят все деревья этой камеры
+        tree = Tree(tie_node, self.tie_of(tie_node), node.capacity if root_capacity is None else root_capacity)
         tree.point_id(node.xy, tie_node)
+        self.foreign = [line for other in others for line in other.lines()]
         blocked_edges, blocked_nodes = blocked_by(graph, list(others), tie_node)
         blocked_nodes.discard(tie_node)
         remaining = [cp for cp in cps if cp in self.terminal_node]
@@ -284,13 +291,41 @@ class TreeBuilder:
                 a, b, c = tree.points[up.a], tree.points[pid], tree.points[down.b]
                 angle = model.deflection_deg(a, b, c)
                 short = math.dist(a, b) < MIN_PIECE_M or math.dist(b, c) < MIN_PIECE_M
-                if (angle is None or angle < model.MIN_TURN_DEG or short) and self.segment(tree, a, c) is not None:
+                if (angle is None or angle < model.MIN_TURN_DEG or short) and self.segment(tree, a, c) is not None \
+                        and self.clear(tree, a, c, {i, child[pid][0]}):
                     tree.segs[i] = TreeSeg(up.a, down.b)
                     tree.segs.pop(child[pid][0])
                     tree.graph_node.pop(pid, None)
                     tree.children.pop(pid, None)
                     changed = True
                     break
+
+    def clear(self, tree: "Tree", a: XY, c: XY, skip: set[int]) -> bool:
+        """Спрямлённый отрезок не касается остальных участков дерева и чужих деревьев вне своих концов."""
+        line = LineString([a, c]).difference(shapely.union_all([Point(a).buffer(JUNCTION_CLIP_M), Point(c).buffer(JUNCTION_CLIP_M)]))
+        if line.is_empty:
+            return True
+        others = [seg_line for k, seg_line in enumerate(tree.lines()) if k not in skip] + self.foreign
+        return all(line.distance(other) > 2 * TOUCH_M for other in others)
+
+    def turns_ok(self, tree: "Tree") -> bool:
+        """Правило geometry: на пути от врезки до точки подключения поворотов не больше 3k + 4."""
+        if self._turn_polygons is None:
+            polygons = [o.feature.geom for o in self.scene.inp.forbid + self.scene.inp.special
+                        if o.feature.geom.geom_type in ("Polygon", "MultiPolygon") and (o.params["rule"] == "forbid" or "min_angle_deg" in o.params)]
+            self._turn_polygons = STRtree(polygons)
+        parent = {seg.b: seg.a for seg in tree.segs}
+        for pid in tree.terminals.values():
+            chain = [pid]
+            while chain[-1] != 0 and chain[-1] in parent:
+                chain.append(parent[chain[-1]])
+            coords = [tree.points[k] for k in reversed(chain)]
+            turns = sum(1 for k in range(1, len(coords) - 1)
+                        if (model.deflection_deg(coords[k - 1], coords[k], coords[k + 1]) or 0.0) >= model.MIN_TURN_DEG)
+            crossed = len(self._turn_polygons.query(LineString([coords[0], coords[-1]]), predicate="intersects"))
+            if turns > TURNS_PER_OBSTACLE * crossed + TURNS_BASE:
+                return False
+        return True
 
     def attachable(self, tree: "Tree", pid: int) -> bool:
         if pid == 0:
@@ -313,8 +348,10 @@ class TreeBuilder:
             hits = []
             if index is not None:
                 for j in index.query(seg, predicate="dwithin", distance=TOUCH_M):
-                    near = shapely.shortest_line(seg, lines[j])
-                    hits.append((seg.project(Point(near.coords[0])), int(j)))
+                    # у совпадающих отрезков shortest_line даёт любую точку наложения, нужна первая вдоль пути
+                    near = shapely.get_coordinates(seg.intersection(lines[j].buffer(TOUCH_M)))
+                    if len(near):
+                        hits.append((min(seg.project(Point(xy)) for xy in near), int(j)))
             elif seg.distance(Point(tree.points[0])) <= TOUCH_M:
                 hits.append((seg.project(Point(tree.points[0])), -1))
             if hits:
@@ -342,7 +379,7 @@ class TreeBuilder:
         head = coords[:i + 1]
         while head and math.dist(head[-1], touch) < MIN_PIECE_M:
             head.pop()
-        if not head or self.segment(tree, touch, head[-1]) is None:
+        if not head or self.segment(tree, touch, head[-1]) is None or not LineString(head + [touch]).is_simple:
             return bad
         if pid is None:
             seg = tree.segs[j]
@@ -505,7 +542,7 @@ def block_options(builder: TreeBuilder, recon: Recon, cps: list[str], ties: list
     options = []
     for _, tie in rough[:max(limit * PREFILTER, limit)]:
         tree = builder.build(tie, cps)
-        if tree.unconnected or not tree.segs:
+        if tree.unconnected or not tree.segs or not builder.turns_ok(tree):
             continue
         options.append((tree_estimate(builder, tree) + recon.cost(loads + [(tree.tie, flow)]) - base, tie, tree))
     options.sort(key=lambda item: item[0])
@@ -519,21 +556,29 @@ def forest(builder: TreeBuilder, recon: Recon, partition: list[list[str]]) -> li
     ties = graph.tie_nodes()
     queue = sorted(partition, key=lambda block: (-len(block), block[0]))
     trees: list[Tree] = []
-    used: dict[int, int] = defaultdict(int)
+    branches: dict[int, int] = defaultdict(int)
+
+    def room(tie: int) -> int:
+        node = graph.nodes[tie]
+        if node.kind == "tie_pipe":
+            # в одной точке трубы валидатор допускает только одну врезку
+            return 0 if branches[tie] else node.capacity
+        return node.capacity - branches[tie]
+
     while queue:
         cps = queue.pop(0)
-        free = [t for t in ties if used[t] < (1 if graph.nodes[t].kind == "tie_pipe" else graph.nodes[t].capacity)]
+        free = [t for t in ties if room(t) > 0]
         loads = [(tree.tie, sum(builder.flow[cp] for cp in tree.terminals)) for tree in trees]
         chosen = None
         for _, tie, tree in block_options(builder, recon, cps, free, TOP_TIES, loads):
-            if conflicts(tree, trees):
-                tree = builder.build(tie, cps, trees)
-            if tree.segs and not tree.unconnected:
+            if tree.children[0] > room(tie) or conflicts(tree, trees):
+                tree = builder.build(tie, cps, trees, root_capacity=room(tie))
+            if tree.segs and not tree.unconnected and builder.turns_ok(tree):
                 chosen = (tie, tree)
                 break
         if chosen is not None:
             trees.append(chosen[1])
-            used[chosen[0]] += 1
+            branches[chosen[0]] += chosen[1].children[0]
         elif len(cps) > 1:
             queue += [[cp] for cp in cps]
     return trees

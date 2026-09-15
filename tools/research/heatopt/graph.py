@@ -32,6 +32,8 @@ SIMPLIFY_M = 0.05
 NODE_OFFSET_M = 0.05
 TIE_TOUCH_M = 0.5
 TIE_EXIT_M = 10.0
+# сверх специального участка ребро может идти в зоне сближения объекта не дольше этого числа её ширин (угол не круче ~20°)
+ALONG_ZONE_WIDTHS = 6.0
 ANGLE_MARGIN_DEG = 0.01
 CROSSING_STEP_M = 20.0
 MARGIN_QUAD_SEGS = 16
@@ -78,6 +80,7 @@ class Special:
     sides: np.ndarray
     k: float
     min_angle: float | None
+    distance: float
 
 
 @dataclass
@@ -154,7 +157,7 @@ class Obstacles:
             specials.append(Special(
                 obstacle.feature.id, obstacle.restriction_type, rule, geom, polygon, zone(geom, distance),
                 shapely.buffer(geom, rule["margin_m"], quad_segs=MARGIN_QUAD_SEGS) if polygon else None,
-                sides_of(geom), float(rule["k_special"]), rule.get("min_angle_deg"),
+                sides_of(geom), float(rule["k_special"]), rule.get("min_angle_deg"), distance,
             ))
         self.forbid = list(shapely.get_parts(shapely.union_all(forbid))) if forbid else []
         self.forbid_tree = STRtree(self.forbid) if self.forbid else None
@@ -247,6 +250,18 @@ class Obstacles:
             good = chunk_rows[allowed]
             if not len(good):
                 continue
+            inside = shapely.length(shapely.intersection(lines[good], special.zone))
+            if special.polygon:
+                covered = shapely.length(shapely.intersection(lines[good], special.margin_zone))
+            else:
+                covered = np.array([2 * special.rule["margin_m"] * len(h) for h in hits[allowed]])
+            # почти параллельный проход с пересечением под малым углом: обычная часть лежала бы в зоне сближения
+            along = inside > covered + ALONG_ZONE_WIDTHS * special.distance
+            ok[good[along]] = False
+            good = good[~along]
+            hits_good = hits[allowed][~along]
+            if not len(good):
+                continue
             if special.polygon:
                 parts, owner = shapely.get_parts(shapely.intersection(lines[good], special.margin_zone), return_index=True)
                 keep = (shapely.get_type_id(parts) == 1) & (shapely.length(parts) > 0)
@@ -257,7 +272,7 @@ class Obstacles:
                     spans[row].append((lo, hi, special.k))
             else:
                 margin = special.rule["margin_m"]
-                for row, at_list in zip(good, hits[allowed]):
+                for row, at_list in zip(good, hits_good):
                     for at in at_list:
                         if ignored and (at <= TIE_TOUCH_M or at >= length[row] - TIE_TOUCH_M):
                             continue

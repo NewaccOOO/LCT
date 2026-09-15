@@ -55,6 +55,8 @@ CUT_MARGIN_M = 0.5
 INSERT_GAP_M = 1.5
 # первый участок от врезки не делится вставкой: валидатор прощает ему сближение с трубами врезки
 TIE_CLEAR_M = 10.0
+NO_CUT_M = 6.0
+NO_CUT_STEP_M = 1.0
 CUT_DEDUP_M = NODE_TOL_M
 KINK_MAX_DEG = 50.0
 KINK_FREE_M = 5.0
@@ -230,6 +232,7 @@ class Assembly:
             self.cp_node[self.index.add((terminal.point.x, terminal.point.y))] = terminal.cp_id
         self.lines: list[LineString | None] = []
         self.tie_nodes: dict[int, list[TieIn]] = defaultdict(list)
+        self.special_tree: STRtree | bool | None = None
 
     def violation(self, message: str) -> None:
         self.result.violations.append(message)
@@ -367,7 +370,8 @@ class Assembly:
             open_len: dict[int, float] = {}
             up = parent_edge.get(node)
             for dn, group in by_dn.items():
-                limit = diameter_row(self.rules, dn)["max_length_m"] - CUT_MARGIN_M
+                # запас на кусок INSERT_GAP_M под вставкой у нижнего узла ребра выше
+                limit = diameter_row(self.rules, dn)["max_length_m"] - CUT_MARGIN_M - INSERT_GAP_M
                 if up is not None and minimal[up] == dn and self.lines[up].length < INSERT_M + 2 * INSERT_GAP_M:
                     # короткое ребро вверх не вмещает вставку и целиком войдёт в цепочку
                     limit -= self.lines[up].length
@@ -380,9 +384,10 @@ class Assembly:
                     # вставка у верхнего узла ребра: ниже неё цепочка ребра уже не длиннее предела
                     if room[i] < gap + INSERT_GAP_M + INSERT_M or next_diameter(self.rules, dn) is None:
                         continue
+                    at = self.clear_insert(i, gap, room[i] - INSERT_M - INSERT_GAP_M)
                     total -= top[i]
-                    cuts[i].append(gap)
-                    top[i] = gap
+                    cuts[i].append(at)
+                    top[i] = at
                     total += top[i]
                 open_len[dn] = total
             edge = parent_edge.get(node)
@@ -394,10 +399,10 @@ class Assembly:
             acc = open_len.get(dn, 0.0)
             position = length
             while acc + position > limit and next_diameter(self.rules, dn) is not None:
-                at = position - (limit - acc) - INSERT_M
-                at = min(at, position - INSERT_M - (INSERT_GAP_M if acc == 0 else 0))
+                at = min(position - (limit - acc) - INSERT_M, position - INSERT_M - INSERT_GAP_M)
                 if at < (TIE_CLEAR_M if oriented[edge][0] in self.tie_nodes else INSERT_GAP_M):
                     break
+                at = self.clear_insert(edge, at, position - INSERT_M - INSERT_GAP_M)
                 cuts[edge].append(at)
                 position = at
                 acc = 0.0
@@ -415,6 +420,22 @@ class Assembly:
             result.append(Piece(i, start, length, minimal[i]))
         return [p for p in result if p.end - p.start > MIN_PIECE_LEN_M]
 
+
+    def clear_insert(self, edge: int, low: float, high: float) -> float:
+        """Первое положение вставки от low до high, чьи концы дальше NO_CUT_M от объектов специального прохода:
+        вставка у пересечения отрезала бы обычный участок в зоне сближения от специального участка."""
+        line = self.lines[edge]
+        if self.special_tree is None:
+            self.special_tree = STRtree([o.feature.geom for o in self.scene.inp.special]) if self.scene.inp.special else False
+        if not self.special_tree:
+            return low
+        at = low
+        while at <= high:
+            ends = [line.interpolate(at), line.interpolate(at + INSERT_M)]
+            if not any(len(self.special_tree.query(point, predicate="dwithin", distance=NO_CUT_M)) for point in ends):
+                return at
+            at += NO_CUT_STEP_M
+        return low
 
     def piece_features(self, pieces: list[Piece]) -> Variant:
         variant = Variant(self.vid)
