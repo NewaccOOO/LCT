@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[3]
 ORIGIN_E, ORIGIN_N = 413000.0, 6180000.0
 COORD_DIGITS = 9
 OKS_SIDE_M = 20.0
+HEAT_LOAD_PER_TPH = 0.05
 TO_WGS = Transformer.from_crs("EPSG:32637", "EPSG:4326", always_xy=True)
 
 Ring = list[tuple[float, float]]
@@ -78,6 +79,7 @@ class Scene:
 
         Без `polygon` строится квадрат 20 м: середина ближней стороны в `cp`, сам квадрат в направлении
         от источника сцены к `cp` или по `away`. Несколько колец в `polygon` дают MultiPolygon.
+        Без `heat_load` пишется справочная нагрузка flow × 0,05: сервис требует атрибут, в расчёте он не участвует.
         """
         if polygon is None:
             if away is not None:
@@ -96,10 +98,9 @@ class Scene:
                 (x - nx * half + ux * OKS_SIDE_M, y - ny * half + uy * OKS_SIDE_M),
                 (x + nx * half + ux * OKS_SIDE_M, y + ny * half + uy * OKS_SIDE_M),
             ]]
-        props: dict[str, Any] = {"flow_tph": flow}
-        if heat_load is not None:
-            props["heat_load"] = heat_load
-        self.add(polygon_geom(polygon), id=id, object_type="oks_future", **props)
+        if heat_load is None:
+            heat_load = round(flow * HEAT_LOAD_PER_TPH, 3)
+        self.add(polygon_geom(polygon), id=id, object_type="oks_future", flow_tph=flow, heat_load=heat_load)
         cp_id = f"{id}-cp"
         self.add(shapely.Point(cp), id=cp_id, object_type="oks_connection_point", oks_id=id)
         return cp_id
