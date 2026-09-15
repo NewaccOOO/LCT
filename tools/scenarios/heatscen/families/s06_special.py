@@ -1,4 +1,5 @@
 import math
+from typing import Any
 
 from shapely.affinity import rotate
 from shapely.geometry import (
@@ -7,6 +8,7 @@ from shapely.geometry import (
     Polygon,
     box,
 )
+from shapely.geometry.base import BaseGeometry
 
 from heatcheck.model import (
     diameter_for,
@@ -35,7 +37,7 @@ ROAD_M = 12.0
 TRAM_M = 8.0
 
 
-def params(kind: str) -> dict:
+def params(kind: str) -> dict[str, Any]:
     return rules()["restrictions"][kind]
 
 
@@ -61,11 +63,7 @@ def polygon_zone(kind: str, width: float) -> float:
     return width + 2 * params(kind)["margin_m"]
 
 
-def line_zone(kind: str) -> float:
-    return 2 * params(kind)["margin_m"]
-
-
-def straight_crossing(kind: str, obstacle, cp: tuple[float, float], dn: int) -> tuple[Scene, Expect]:
+def straight_crossing(kind: str, obstacle: BaseGeometry, cp: tuple[float, float], dn: int) -> tuple[Scene, Expect]:
     # Переход без ограничения угла или под прямым углом не удлиняет трассу: она идёт по прямой от врезки к ОКС.
     sc = Scene()
     single_oks(sc, cp, dn)
@@ -78,16 +76,18 @@ def straight_crossing(kind: str, obstacle, cp: tuple[float, float], dn: int) -> 
     )
 
 
-def angled_crossing(kind: str, zone: float, obstacle, cp: tuple[float, float], dn: int) -> tuple[Scene, Expect]:
+def angled_crossing(
+    kind: str, width: float, center: tuple[float, float], angle_deg: float, cp: tuple[float, float], dn: int,
+) -> tuple[Scene, Expect]:
     # Переход под допустимым углом сервис может довернуть к прямому; это короче, чем прямая плюс вся зона.
     sc = Scene()
     single_oks(sc, cp, dn)
-    sc.restriction("obj-1", kind, obstacle)
+    sc.restriction("obj-1", kind, strip(center, angle_deg, ANGLED_M, width))
     return sc, Expect(
         special={kind: 1},
         technical_nodes=2,
         costs_by_formula=True,
-        max_new_length=cp[1] + zone,
+        max_new_length=cp[1] + polygon_zone(kind, width),
     )
 
 
@@ -124,7 +124,7 @@ def road_30deg_long_turns_to_cross() -> tuple[Scene, Expect]:
 
 @scenario("S06-03", tz=["TZ-30", "TZ-34", "TZ-55"], title="дорога под 60° к прямой: специальный участок, k 1,60, технические узлы на границах зоны")
 def road_60deg_special() -> tuple[Scene, Expect]:
-    return angled_crossing("road", polygon_zone("road", ROAD_M), strip((200, 60), 30, ANGLED_M, ROAD_M), (200, 120), SMALL_DN)
+    return angled_crossing("road", ROAD_M, (200, 60), 30, (200, 120), SMALL_DN)
 
 
 @scenario("S06-04", tz=["TZ-30", "TZ-34", "TZ-39", "TZ-55"], title="дорога под 90°: специальный участок — полигон плюс 3 м с каждой стороны, стоимость × 1,60")
@@ -139,7 +139,7 @@ def tram_perpendicular_zone_and_k() -> tuple[Scene, Expect]:
 
 @scenario("S06-06", tz=["TZ-30", "TZ-35", "TZ-55"], title="трамвайные пути под 50° к прямой: переход допустим, специальный участок, k 1,75")
 def tram_50deg_special() -> tuple[Scene, Expect]:
-    return angled_crossing("tram_tracks", polygon_zone("tram_tracks", TRAM_M), strip((200, 70), 40, ANGLED_M, TRAM_M), (200, 140), 100)
+    return angled_crossing("tram_tracks", TRAM_M, (200, 70), 40, (200, 140), 100)
 
 
 @scenario("S06-07", tz=["TZ-30", "TZ-31", "TZ-36", "TZ-39"], title="газопровод поперёк прямой: специальный участок по 2 м от точки пересечения, всего 4 м, × 1,25")
@@ -160,8 +160,7 @@ def power_cable_perpendicular() -> tuple[Scene, Expect]:
 @scenario("S06-10", tz=["TZ-30", "TZ-37", "TZ-55"], title="два кабеля одним MultiLineString: два специальных участка и четыре технических узла")
 def power_cable_multilinestring_two_crossings() -> tuple[Scene, Expect]:
     sc = Scene()
-    dn = SMALL_DN
-    single_oks(sc, (220, 120), dn)
+    single_oks(sc, (220, 120), SMALL_DN)
     cables = MultiLineString([[(-300, 40), (700, 40)], [(-300, 80), (700, 80)]])
     sc.restriction("cable-1", "power_cable", cables)
     return sc, Expect(
@@ -173,7 +172,7 @@ def power_cable_multilinestring_two_crossings() -> tuple[Scene, Expect]:
 
 
 def crossing_network(branch: list[tuple[float, float]], cp: tuple[float, float]) -> tuple[Scene, Expect]:
-    # Ветка Ду 50 идёт от источника и пересекает прямую к ОКС. Врезка в неё тянет реконструкцию всей ветки
+    # Ветка наименьшего Ду идёт от источника и пересекает прямую к ОКС. Врезка в неё тянет реконструкцию всей ветки
     # до источника, поэтому врезка в магистраль с переходом через ветку дешевле в разы.
     sc = Scene()
     dn = 100
@@ -199,9 +198,10 @@ def heat_network_oblique_crossing() -> tuple[Scene, Expect]:
     return crossing_network([(0, 0), (0, 20), (180, 200)], (120, 200))
 
 
-def nested_zones(outer: str, width: float, inner: str, center: tuple[float, float], dn: int) -> tuple[Scene, Expect]:
+def nested_zones(
+    outer: str, width: float, inner: str, center: tuple[float, float], cp: tuple[float, float], dn: int,
+) -> tuple[Scene, Expect]:
     sc = Scene()
-    cp = (center[0], 2 * center[1])
     single_oks(sc, cp, dn)
     sc.restriction("outer-1", outer, strip(center, 0, LONG_M, width))
     sc.restriction("inner-1", inner, axis(center, 0, LONG_M))
@@ -215,15 +215,15 @@ def nested_zones(outer: str, width: float, inner: str, center: tuple[float, floa
 
 @scenario("S06-13", tz=["TZ-30", "TZ-35", "TZ-37"], title="кабель вдоль оси трамвайных путей: одна зона внутри другой, участок получает наибольший k 1,75")
 def tram_and_cable_take_max_k() -> tuple[Scene, Expect]:
-    return nested_zones("tram_tracks", TRAM_M, "power_cable", (180, 60), SMALL_DN)
+    return nested_zones("tram_tracks", TRAM_M, "power_cable", (180, 60), (180, 120), SMALL_DN)
 
 
 @scenario("S06-14", tz=["TZ-30", "TZ-34", "TZ-36"], title="газопровод под дорогой: одна зона внутри другой, участок получает наибольший k 1,60")
 def road_and_gas_take_max_k() -> tuple[Scene, Expect]:
-    return nested_zones("road", ROAD_M, "gas_pipeline", (230, 75), 150)
+    return nested_zones("road", ROAD_M, "gas_pipeline", (230, 75), (230, 150), 150)
 
 
-def near_pass(kind: str, obstacle, obstacle_id: str, cp: tuple[float, float]) -> tuple[Scene, Expect]:
+def near_pass(kind: str, obstacle: BaseGeometry, obstacle_id: str, cp: tuple[float, float]) -> tuple[Scene, Expect]:
     sc = Scene()
     single_oks(sc, cp, SMALL_DN)
     sc.restriction(obstacle_id, kind, obstacle)
@@ -237,13 +237,13 @@ def near_pass(kind: str, obstacle, obstacle_id: str, cp: tuple[float, float]) ->
 
 # Объект вдоль прямой ближе отступа начинается и кончается в 15–25 м от врезки и ОКС: обход у его торцов даёт
 # повороты круче 3°, иначе трасса со сдвигом на метр нарушала бы правило изломов.
-@scenario("S06-15", tz=["TZ-31", "TZ-34"], title="дорога вдоль прямой в четверти отступа: пересечь её под 45° нельзя, трасса идёт рядом на 1,5 м плюс полширины")
+@scenario("S06-15", tz=["TZ-31", "TZ-34"], title="дорога вдоль прямой ближе отступа: трасса идёт рядом на 1,5 м плюс полширины, не пересекая дорогу")
 def road_alongside_near_pass_clearance() -> tuple[Scene, Expect]:
     edge = 200 + offset("road", SMALL_DN) / 4
     return near_pass("road", box(edge, 15, edge + ROAD_M, 95), "road-1", (200, 120))
 
 
-@scenario("S06-16", tz=["TZ-31", "TZ-36"], title="газопровод вдоль прямой в четверти отступа: трасса идёт рядом на 2,0 м плюс полуширины трубы и газопровода")
+@scenario("S06-16", tz=["TZ-31", "TZ-36"], title="газопровод вдоль прямой ближе отступа: трасса идёт рядом на 2,0 м плюс полуширины трубы и газопровода")
 def gas_alongside_near_pass_clearance() -> tuple[Scene, Expect]:
     x = 220 + offset("gas_pipeline", SMALL_DN) / 4
     return near_pass("gas_pipeline", LineString([(x, 15), (x, 100)]), "gas-1", (220, 130))
@@ -264,10 +264,12 @@ def reconstruction_under_road_without_k() -> tuple[Scene, Expect]:
     sc.pipe("hn-1", [(0, 0), (300, 0)], dn=old_dn, flow=old_flow, upstream="src")
     sc.chamber("hc-1", 300, 0, dn=old_dn, upstream="hn-1")
     sc.pipe("hn-2", [(300, 0), (600, 0)], dn=old_dn, flow=old_flow, upstream="hc-1")
-    sc.oks("oks-1", cp=(250, 80), flow=flow)
+    cp = (250.0, 80.0)
+    sc.oks("oks-1", cp=cp, flow=flow)
     sc.restriction("road-1", "road", strip((100, 0), 90, 400, ROAD_M))
     required = diameter_for(rules(), old_flow + flow)
-    length = 250
+    # Врезка — проекция точки подключения на трубу; реконструируется часть от неё до начала трубы у источника.
+    length = cp[0]
     return sc, Expect(
         recon=[{
             "existing_object_id": "hn-1",
@@ -288,12 +290,12 @@ def special_k_on_new_segment_not_on_reconstruction() -> tuple[Scene, Expect]:
     sc.pipe("hn-1", [(0, 0), (400, 0)], dn=old_dn, flow=old_flow, upstream="src")
     sc.chamber("hc-1", 400, 0, dn=old_dn, upstream="hn-1")
     sc.pipe("hn-2", [(400, 0), (800, 0)], dn=old_dn, flow=old_flow, upstream="hc-1")
-    sc.oks("oks-1", cp=(300, 120), flow=flow)
+    cp = (300.0, 120.0)
+    sc.oks("oks-1", cp=cp, flow=flow)
     sc.restriction("tram-1", "tram_tracks", strip((150, 0), 90, 60, TRAM_M))
-    road_width = 10.0
-    sc.restriction("road-1", "road", strip((300, 55), 0, LONG_M, road_width))
+    sc.restriction("road-1", "road", strip((300, 55), 0, LONG_M, 10))
     required = diameter_for(rules(), old_flow + flow)
-    length = 300
+    length = cp[0]
     return sc, Expect(
         recon=[{
             "existing_object_id": "hn-1",
@@ -303,5 +305,5 @@ def special_k_on_new_segment_not_on_reconstruction() -> tuple[Scene, Expect]:
         }],
         special={"road": 1},
         costs_by_formula=True,
-        summary={"new_network_length": 120},
+        summary={"new_network_length": cp[1]},
     )

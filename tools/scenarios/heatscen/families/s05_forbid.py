@@ -21,6 +21,8 @@ from heatscen import (
 from heatscen.expect import required_offset
 
 TRUNK_END = 400.0
+YARD_CP = (200.0, 130.0)
+SOUTH_WALL = (40.0, 55.0)
 # Запас к отступу в границах длины и ширинах проёмов: сервис строит граф на ступень Ду выше и упрощает буферы.
 SLACK_M = 1.0
 SMALL_DN = 65
@@ -76,14 +78,22 @@ def tier_step(dn: int) -> float:
 
 
 def courtyard(gaps: list[tuple[float, float]]) -> BaseGeometry:
-    """Двор из существующих зданий: стены 15 м вокруг (100..400, 55..200), проёмы в южной стене — (центр по x, ширина)."""
-    walls = box(85, 40, 415, 215).difference(box(100, 55, 400, 200))
+    """Двор из существующих зданий со стенами 15 м вокруг точки YARD_CP; проёмы в южной стене — (центр по x, ширина)."""
+    bottom, top = SOUTH_WALL
+    walls = box(85, bottom, 415, 215).difference(box(100, top, 400, 200))
     for center, width in gaps:
-        walls = walls.difference(box(center - width / 2, 30, center + width / 2, 65))
+        walls = walls.difference(box(center - width / 2, bottom - 1, center + width / 2, top + 1))
     return walls
 
 
-def forbid_on_line(kind: str, obstacle: Polygon, cp: tuple[float, float]) -> tuple[Scene, Expect]:
+def through_gap(center: float, dn: int) -> float:
+    """Длина допустимой трассы от врезки под ОКС через проём с центром center: к проёму, сквозь стену, к ОКС."""
+    off = routing_offset("oks_existing", dn)
+    bottom, top = SOUTH_WALL
+    return LineString([(YARD_CP[0], 0), (center, bottom - off), (center, top + off), YARD_CP]).length
+
+
+def forbid_on_line(kind: str, obstacle: BaseGeometry, cp: tuple[float, float]) -> tuple[Scene, Expect]:
     sc = Scene()
     flow = flow_for(SMALL_DN)
     trunk(sc, flow)
@@ -102,12 +112,12 @@ def forbid_on_line(kind: str, obstacle: Polygon, cp: tuple[float, float]) -> tup
 
 @scenario("S05-01", tz=["TZ-29", "TZ-31", "TZ-33"], title="парк на прямой от врезки к ОКС: обход с отступом 1,0 м плюс полширины")
 def park_on_straight_line() -> tuple[Scene, Expect]:
-    return forbid_on_line("park", box(150, 50, 250, 100), (200, 150))
+    return forbid_on_line("park", box(50, 50, 150, 100), (100, 150))
 
 
 @scenario("S05-02", tz=["TZ-29", "TZ-31", "TZ-33"], title="социальный объект неправильной формы на прямой: обход")
 def social_area_on_straight_line() -> tuple[Scene, Expect]:
-    return forbid_on_line("social_area", Polygon([(110, 40), (240, 55), (220, 110), (125, 95)]), (170, 160))
+    return forbid_on_line("social_area", Polygon([(50, 40), (180, 55), (160, 110), (65, 95)]), (110, 160))
 
 
 @scenario("S05-03", tz=["TZ-29", "TZ-33"], title="запрещённая территория на прямой: обход")
@@ -125,26 +135,25 @@ def oks_existing_on_straight_line() -> tuple[Scene, Expect]:
     return forbid_on_line("oks_existing", box(170, 40, 230, 80), (200, 140))
 
 
-def courtyard_scene(dn: int, gaps: list[tuple[float, float]]) -> tuple[Scene, str, BaseGeometry]:
+def courtyard_scene(dn: int, gaps: list[tuple[float, float]]) -> tuple[Scene, str]:
     sc = Scene()
     flow = flow_for(dn)
     trunk(sc, flow)
-    cp_id = sc.oks("oks-1", cp=(200, 130), flow=flow)
-    walls = courtyard(gaps)
-    sc.existing_oks("yard-1", rings(walls))
-    return sc, cp_id, walls
+    cp_id = sc.oks("oks-1", cp=YARD_CP, flow=flow)
+    sc.existing_oks("yard-1", rings(courtyard(gaps)))
+    return sc, cp_id
 
 
 @scenario("S05-06", tz=["TZ-3", "TZ-32"], title="Ду 400, двор с одним проёмом: проём шире двух отступов 5 м, но уже двух по 7 м — трасса через него")
 def oks_existing_dn400_single_gap() -> tuple[Scene, Expect]:
     dn = 400
     gap = 2 * offset("oks_existing", dn) + tier_step(dn)
-    sc, cp_id, _ = courtyard_scene(dn, [(200, gap)])
+    sc, cp_id = courtyard_scene(dn, [(YARD_CP[0], gap)])
     return sc, Expect(
         clearance=["yard-1"],
         unconnected=[],
         segment_dn={cp_id: dn},
-        max_new_length=130 + SLACK_M,
+        max_new_length=YARD_CP[1] + SLACK_M,
     )
 
 
@@ -152,13 +161,12 @@ def oks_existing_dn400_single_gap() -> tuple[Scene, Expect]:
 def oks_existing_dn500_wide_gap() -> tuple[Scene, Expect]:
     dn = 500
     narrow = 2 * offset("oks_existing", dn) - tier_step(dn)
-    sc, cp_id, _ = courtyard_scene(dn, [(200, narrow), (320, 40)])
-    off = routing_offset("oks_existing", dn)
+    sc, cp_id = courtyard_scene(dn, [(YARD_CP[0], narrow), (320, 40)])
     return sc, Expect(
         clearance=["yard-1"],
         unconnected=[],
         segment_dn={cp_id: dn},
-        max_new_length=LineString([(200, 0), (320, 40 - off), (320, 55 + off), (200, 130)]).length,
+        max_new_length=through_gap(320, dn),
     )
 
 
@@ -166,13 +174,12 @@ def oks_existing_dn500_wide_gap() -> tuple[Scene, Expect]:
 def oks_existing_dn900_wide_gap() -> tuple[Scene, Expect]:
     dn = 900
     narrow = 2 * offset("oks_existing", dn) - tier_step(dn)
-    sc, cp_id, _ = courtyard_scene(dn, [(200, narrow), (320, 50)])
-    off = routing_offset("oks_existing", dn)
+    sc, cp_id = courtyard_scene(dn, [(YARD_CP[0], narrow), (320, 50)])
     return sc, Expect(
         clearance=["yard-1"],
         unconnected=[],
         segment_dn={cp_id: dn},
-        max_new_length=LineString([(200, 0), (320, 40 - off), (320, 55 + off), (200, 130)]).length,
+        max_new_length=through_gap(320, dn),
     )
 
 
@@ -180,12 +187,12 @@ def oks_existing_dn900_wide_gap() -> tuple[Scene, Expect]:
 def oks_existing_dn400_narrow_gap_preferred() -> tuple[Scene, Expect]:
     dn = 400
     narrow = 2 * offset("oks_existing", dn) + tier_step(dn)
-    sc, cp_id, _ = courtyard_scene(dn, [(200, narrow), (320, 40)])
+    sc, cp_id = courtyard_scene(dn, [(YARD_CP[0], narrow), (320, 40)])
     return sc, Expect(
         clearance=["yard-1"],
         unconnected=[],
         segment_dn={cp_id: dn},
-        max_new_length=130 + SLACK_M,
+        max_new_length=YARD_CP[1] + SLACK_M,
     )
 
 
@@ -211,14 +218,14 @@ def water_multipolygon_on_line() -> tuple[Scene, Expect]:
     sc = Scene()
     flow = flow_for(SMALL_DN)
     trunk(sc, flow)
-    sc.oks("oks-1", cp=(210, 150), flow=flow)
-    water = box(140, 40, 260, 65).union(box(160, 95, 240, 115))
+    sc.oks("oks-1", cp=(130, 150), flow=flow)
+    water = box(60, 40, 180, 65).union(box(80, 95, 160, 115))
     sc.restriction("water-1", "water", water)
     return sc, Expect(
         clearance=["water-1"],
         no_special=True,
         unconnected=[],
-        max_new_length=detour((210, 0), (210, 150), water, routing_offset("water", SMALL_DN)),
+        max_new_length=detour((130, 0), (130, 150), water, routing_offset("water", SMALL_DN)),
     )
 
 
@@ -227,12 +234,13 @@ def future_oks_across(polygon: list[list[tuple[float, float]]], cp2: tuple[float
     sc = Scene()
     flow = flow_for(SMALL_DN)
     trunk(sc, flow)
-    sc.oks("oks-1", cp=(200, 150), flow=flow)
+    cp1 = (200.0, 150.0)
+    sc.oks("oks-1", cp=cp1, flow=flow)
     sc.oks("oks-2", cp=cp2, flow=flow, polygon=polygon)
     return sc, Expect(
         no_special=True,
         unconnected=[],
-        max_new_length=150 + cp2[1] + SLACK_M,
+        max_new_length=cp1[1] + cp2[1] + SLACK_M,
     )
 
 
@@ -249,7 +257,7 @@ def oks_future_multipolygon_is_not_obstacle() -> tuple[Scene, Expect]:
     )
 
 
-def cp_in_clearance(kind: str, obstacle: Polygon) -> tuple[Scene, Expect]:
+def cp_in_clearance(kind: str, obstacle: BaseGeometry) -> tuple[Scene, Expect]:
     # Точка подключения oks-1 в (200, 150) ближе отступа к препятствию: любой последний участок нарушает запрет.
     sc = Scene()
     flow1, flow2 = flow_for(SMALL_DN), flow_for(80)
