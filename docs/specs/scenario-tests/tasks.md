@@ -1,0 +1,111 @@
+# Задачи: сценарный прогон модели трассировки
+
+Критерии — в [requirements.md](requirements.md), гейты — в [GATES.md](GATES.md), решения — в [design.md](design.md).
+
+## Контракт исполнения
+
+- **Режим:** параллельно, unlazy scope `scenario-tests`. Волна 0 и волны 2–4 выполняет драйвер, волну 1 — субагенты, не больше пяти одновременно; T-6 и T-7 стартуют, как только освобождается слот.
+- **Тулчейн и команды:** из корня репозитория, всегда после `source scripts/gates/env.sh`. JDK 11, Maven 3.9, `uv run --project tools …`, Docker Desktop для гейтов backend-core. Все гейты пакета запускаются `node ~/.claude/skills/unlazy/scripts/gate-check.mjs --cwd . --timeout 1800 docs/specs/scenario-tests/GATES.md`.
+- **Гейты:** `CHECK:` в GATES.md одобрил пользователь до запуска через `gate-check --approve`; исполнитель не одобряет проверки сам. Новый или изменённый гейт добавляется с `ABANDON: <id> нужно одобрение пользователя на новую проверку`, работа продолжается.
+- **Ветка:** `feature/scenario-tests` от `feature/backend-core` (C-2). Субагенты работают в отдельных git worktree (`isolation: worktree`), первым действием делают `git merge --ff-only feature/scenario-tests`, коммитят только свои файлы без трейлеров атрибуции и не пушат; драйвер вливает ветку worktree и перепроверяет леджер листа в основном дереве.
+- **Интерфейсы** (заполнены до параллельного запуска, менять только через журнал):
+  - `heatscen.Scene`, `heatscen.Expect`, `heatscen.scenario` — сигнатуры и поля по D-2, D-3 и примеру в design.md; `heatscen.rules()` возвращает разобранный `rules/rules.json`; `heatscen.runner.run(scene, scenario_id) -> Run(exit_code, stdout, stderr, output, elapsed)`; `heatscen.expect.check(run, expect, rules) -> list[str]` — пустой список означает успех.
+  - Модуль семейства `tools/scenarios/heatscen/families/s<NN>_<name>.py` регистрирует сценарии декоратором; ID `S<NN>-<номер>`, поле `tz` — список ID из tz-inventory.md, `title` на русском; slug pytest-id строится из имени функции, поэтому функции про `required_diameter` и `unknown_type` содержат эти слова в имени.
+  - Леджер листа с семейством сценариев считает лист готовым, когда: сценариев не меньше минимума D-10, у каждого есть `tz` и не меньше одного поля `Expect`, `pytest -k S<NN>` не даёт ошибок сбора и исключений в сценариях, а каждый красный сценарий разобран по D-9 и либо исправлен, либо записан в `docs/testing/defects.md` с причиной «сервис». Зелёность всех сценариев — гейт пакета AC-1.1, он закрывается в T-9.
+  - Скрипты гейтов: `scenarios.sh [аргументы pytest]`, `sweep.sh`, `synth_types.sh` по D-4 и D-6; правила скриптов по C-7.
+  - Изменения сервиса и валидатора по D-8 принадлежат T-1; агенты семейств пишут ожидания сразу по ТЗ (например, `required_diameter` равен диаметру нового участка) и не подстраивают их под текущее поведение.
+
+## Список
+
+- [ ] **T-0** Библиотека сцен, прогон и скрипты гейтов работают на одном сценарии
+  - Требования: AC-1.1, AC-0.2
+  - Зависит от: —
+  - Файлы: `tools/pyproject.toml`, `tools/scenarios/heatscen/{__init__,scene,expect,runner,registry}.py`, `tools/scenarios/heatscen/families/__init__.py`, `tools/scenarios/heatscen/families/s00_smoke.py`, `tools/scenarios/tests/**`, `scripts/gates/scenarios.sh`, `scripts/gates/sweep.sh`, `scripts/gates/synth_types.sh`, `docs/testing/defects.md`
+  - Волна: 0
+  - Содержание: ветка `feature/scenario-tests`, первым коммитом в неё — сам пакет `docs/specs/scenario-tests/`, потому что гейт AC-3.2 и субагенты читают его из репозитория; D-1…D-4 целиком, включая все поля `Expect` и их сравнение; `sweep.sh` и `synth_types.sh` пока завершаются ошибкой «не реализовано» ненулевым кодом; сценарий `S00-01` на сцене фикстуры валидатора проходит через `scenarios.sh`; замер времени одного сценария записывается в журнал (A-1); `defects.md` с пустой таблицей; коммит и пуш ветки, чтобы субагенты стартовали от неё.
+
+- [ ] **T-1** Сервис и валидатор следуют ТЗ: `required_diameter`, типы вне таблицы, неизвестный тип
+  - Требования: AC-3.1, AC-3.2, AC-3.3, AC-3.4, AC-0.1
+  - Зависит от: T-0
+  - Файлы: `rules/rules.json`, `src/main/**`, `src/test/**`, `tools/validator/**`, `docs/interpretation.md`
+  - Волна: 1
+  - Содержание: D-8 целиком; `RULES MATCH` и `mvn verify` зелёные; `PipelineSampleIT` и фикстура валидатора проходят с новой трактовкой; в журнал — список изменённых мест `interpretation.md`. Строки про эти два расхождения (R-10, R-11) в `docs/testing/defects.md` добавляет T-9, когда появятся сценарии `required_diameter` и `unknown_type`, на которые можно сослаться.
+
+- [ ] **T-2** Генератор принимает подмножества типов и префикс ID, случайный прогон гоняет 300 сидов
+  - Требования: AC-2.1, AC-2.2
+  - Зависит от: T-0
+  - Файлы: `tools/synth/**`, `tools/scenarios/heatscen/sweep.py`, `scripts/gates/sweep.sh`, `scripts/gates/synth_types.sh`
+  - Волна: 1
+  - Содержание: D-6; `synth.sh` backend-core остаётся зелёным (типы по умолчанию — десять исходных, чтобы AC-4.1 backend-core про восемь значений `restriction_type` не изменился); новые типы размещаются только при явном `--types`; в журнал — время прогона 300 сидов при `--workers 3`.
+
+- [ ] **T-3** Семейства S01–S04: врезки, дерево, расход и диаметр, предельная длина
+  - Требования: AC-1.1, AC-1.2, AC-3.1
+  - Зависит от: T-0
+  - Файлы: `tools/scenarios/heatscen/families/s01_tie_in.py`, `tools/scenarios/heatscen/families/s02_tree.py`, `tools/scenarios/heatscen/families/s03_flow_diameter.py`, `tools/scenarios/heatscen/families/s04_length_limit.py`
+  - Волна: 1
+  - Содержание: сценарии по D-10 не меньше минимума, ожидания по ТЗ; расходы для DN 500 и выше — сотни и тысячи т/ч у одного ОКС.
+
+- [ ] **T-4** Семейства S05–S06: запреты и специальные проходы
+  - Требования: AC-1.1, AC-1.2
+  - Зависит от: T-0
+  - Файлы: `tools/scenarios/heatscen/families/s05_forbid.py`, `tools/scenarios/heatscen/families/s06_special.py`
+  - Волна: 1
+  - Содержание: сценарии по D-10; отступы считаются сценарием через shapely от оси участка до объекта и сравниваются с `clearance + width/2` по диаметру участка; угол дороги — между отрезком трассы и стороной полигона.
+
+- [ ] **T-5** Семейства S07–S09: реконструкция, камеры, стоимость
+  - Требования: AC-1.1, AC-1.2
+  - Зависит от: T-0
+  - Файлы: `tools/scenarios/heatscen/families/s07_reconstruction.py`, `tools/scenarios/heatscen/families/s08_chamber.py`, `tools/scenarios/heatscen/families/s09_cost.py`
+  - Волна: 1
+  - Содержание: сценарии по D-10; длины частей реконструкции считаются от геометрии сцены; пример 10.8 — сцена с участком DN 200 длиной 145,2 м через дорогу и реконструкцией 75 м, допуск 100 руб. (C-6).
+
+- [ ] **T-6** Семейства S10–S13: варианты, неподключённые, вход, выход
+  - Требования: AC-1.1, AC-1.2
+  - Зависит от: T-0
+  - Файлы: `tools/scenarios/heatscen/families/s10_variants.py`, `tools/scenarios/heatscen/families/s11_unconnected.py`, `tools/scenarios/heatscen/families/s12_input.py`, `tools/scenarios/heatscen/families/s13_output.py`
+  - Волна: 1
+  - Содержание: сценарии по D-10; сценарии входа строят фичи через `Scene.raw` и ожидают код 2 с парами `(featureId, field)`.
+
+- [ ] **T-7** Мутации, отчёт и сверка новых типов
+  - Требования: AC-1.3, AC-4.1, AC-4.2, NFR-1, AC-3.2
+  - Зависит от: T-0
+  - Файлы: `tools/scenarios/heatscen/{mutate,report,rules_ext}.py`, `docs/testing/scenario-report.md`
+  - Волна: 1
+  - Содержание: D-5, D-7; `rules_ext` парсит таблицу research.md так же, как `rules_check` парсит CONSTRAINTS.md; отчёт собирается на текущих данных, даже если семейства ещё не влиты.
+
+- [ ] **T-8** Семейство S14: типы вне таблицы, неизвестный тип, подмножества
+  - Требования: AC-3.3, AC-3.4, AC-1.1, AC-1.2
+  - Зависит от: T-1, T-0
+  - Файлы: `tools/scenarios/heatscen/families/s14_types.py`
+  - Волна: 2
+  - Содержание: сценарии по D-10; ожидания по таблице research.md; для `unknown_type` — `stderr_contains` со строкой предупреждения и отступ 1,0 м плюс половина ширины.
+
+- [ ] **T-9** Все сценарии, случайный прогон и гейты backend-core зелёные
+  - Требования: AC-1.1, AC-1.2, AC-1.3, AC-2.1, AC-0.1, NFR-1
+  - Зависит от: T-1, T-2, T-3, T-4, T-5, T-6, T-7, T-8
+  - Файлы: любые, кроме документов пакетов и CONSTRAINTS.md
+  - Волна: 3
+  - Содержание: полный прогон `gate-check` без `--approve`; каждый красный сценарий по D-9; правки сервиса — отдельными коммитами со строкой в `defects.md`; после правок — `sweep.sh` и `--reverify` backend-core; отчёт пересобран и закоммичен.
+
+- [ ] **T-10** Сквозная проверка: все гейты перепроверены, отчёт сверен с brief.md
+  - Требования: AC-0.1, AC-0.2, AC-1.1, AC-1.2, AC-1.3, AC-2.1, AC-2.2, AC-3.1, AC-3.2, AC-3.3, AC-3.4, AC-4.1, AC-4.2, NFR-1
+  - Зависит от: T-9
+  - Файлы: `docs/specs/scenario-tests/tasks.md` (журнал), `docs/specs/scenario-tests/index.md` (статус)
+  - Волна: 4
+  - Содержание: `gate-check --reverify`, `check_trace.py`, перечитать brief.md и раздел «Как выполнить формально без пользы», отчёт с ID гейтов, коммит и пуш ветки `feature/scenario-tests`.
+
+## Журнал исполнения
+
+Заполняет исполнитель, только дописывает, не переписывает.
+
+### Прогресс
+
+- (пусто до старта)
+
+### Отклонения и находки
+
+- (пусто до старта)
+
+### Самревью циклов
+
+- (пусто до старта)
