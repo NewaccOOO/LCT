@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
@@ -177,15 +178,38 @@ public final class VariantEnumerator {
         }
         List<Draft> drafts = new ArrayList<>();
         for (List<List<ConnectionPoint>> partition : partitions) {
-            drafts.add(draft(partition, false));
-            drafts.add(draft(partition, true));
+            drafts.add(draft(partition, subset -> false));
+            drafts.add(draft(partition, subset -> true));
         }
         if (anySplit) {
-            drafts.add(draft(split, false));
+            drafts.add(draft(split, subset -> false));
         }
+        List<Draft> picked = pick(drafts);
+        if (picked.size() < 2) {
+            // другие врезки всех ОКС разом могут дать тот же набор врезок, например ОКС поменялись камерами местами:
+            // пробуется другая врезка у одного подмножества при лучших у остальных
+            for (List<List<ConnectionPoint>> partition : partitions) {
+                if (partition.size() > 1) {
+                    for (List<ConnectionPoint> one : partition) {
+                        drafts.add(draft(partition, subset -> subset == one));
+                    }
+                }
+            }
+            picked = pick(drafts);
+        }
+
+        List<Variant> variants = new ArrayList<>();
+        for (int i = 0; i < picked.size(); i++) {
+            Draft draft = picked.get(i);
+            variants.add(assembler.assemble(String.valueOf(i + 1), i + 1, draft.trees, draft.unconnected));
+        }
+        return new Result(variants);
+    }
+
+    /** До трёх лучших по score черновиков, попарно различных по правилу variants и по трассе (R-11). */
+    private List<Draft> pick(List<Draft> drafts) {
         drafts.removeIf(Objects::isNull);
         drafts.sort(Comparator.comparingDouble(Draft::score));
-
         List<Draft> picked = new ArrayList<>();
         for (Draft draft : drafts) {
             if (picked.size() < MAX_VARIANTS && picked.stream().allMatch(p -> differ(p, draft) && !sameRoute(p, draft))) {
@@ -201,20 +225,15 @@ public final class VariantEnumerator {
             }
             picked.sort(Comparator.comparingDouble(Draft::score));
         }
-
-        List<Variant> variants = new ArrayList<>();
-        for (int i = 0; i < picked.size(); i++) {
-            Draft draft = picked.get(i);
-            variants.add(assembler.assemble(String.valueOf(i + 1), i + 1, draft.trees, draft.unconnected));
-        }
-        return new Result(variants);
+        return picked;
     }
 
     /**
-     * Вариант разбиения: подмножества по убыванию размера берут лучшее совместимое дерево (или первое с другой
-     * врезкой). ОКС, которые не вошли в общее дерево, подключаются отдельными врезками; без маршрута — в штраф.
+     * Вариант разбиения: подмножества по убыванию размера берут лучшее совместимое дерево, а те, что отобраны
+     * {@code alternative}, — первое с другой врезкой. ОКС, которые не вошли в общее дерево, подключаются отдельными
+     * врезками; без маршрута — в штраф.
      */
-    private Draft draft(List<List<ConnectionPoint>> partition, boolean alternative) {
+    private Draft draft(List<List<ConnectionPoint>> partition, Predicate<List<ConnectionPoint>> alternative) {
         List<List<ConnectionPoint>> queue = new ArrayList<>(partition);
         queue.sort(Comparator.comparingInt((List<ConnectionPoint> subset) -> -subset.size())
                 .thenComparing(subset -> subset.get(0).getId()));
@@ -223,7 +242,7 @@ public final class VariantEnumerator {
         for (int next = 0; next < queue.size(); next++) {
             List<ConnectionPoint> subset = queue.get(next);
             List<Option> options = options(subset);
-            int start = alternative ? alternativeIndex(options) : 0;
+            int start = alternative.test(subset) ? alternativeIndex(options) : 0;
             Tree chosen = null;
             // с другой врезкой ищем от первого отличного дерева, а если все дальше несовместимы — с начала списка
             for (int k = 0; k < options.size() && chosen == null; k++) {

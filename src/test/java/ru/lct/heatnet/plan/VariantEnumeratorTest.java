@@ -71,6 +71,21 @@ class VariantEnumeratorTest {
     }
 
     @Test
+    void secondVariantWhenAlternativeTieInsOnlySwapChambers() {
+        // у каждого ОКС своя камера рядом, другая врезка каждого ОКС — камера соседа: все другие врезки разом дают
+        // тот же набор камер, отличный вариант получается сменой врезки у одного ОКС
+        PlanFixture fixture = new PlanFixture().pipe("hn-1", 0, 0, 400, 0, 200, 60, "src")
+                .chamber("hc-1", 400, 0, 200, "hn-1").pipe("hn-2", 400, 0, 1000, 0, 150, 30, "hc-1")
+                .chamber("hc-2", 1000, 0, 150, "hn-2").oks("o-1", 405, 60, 8).oks("o-2", 1000, -90, 6);
+
+        List<Variant> variants = new VariantEnumerator(fixture.input(), rules).run().getVariants();
+
+        assertTrue(variants.size() >= 2, "вариантов " + variants.size());
+        assertTrue(differ(variants.get(0), variants.get(1)), "варианты 1 и 2 не различаются");
+        assertTrue(variants.stream().allMatch(v -> v.getSummary().getUnconnectedOksIds().isEmpty()));
+    }
+
+    @Test
     void oksWithoutRouteIsUnconnectedWithPenaltyAndOtherOksKept() {
         // o-2 внутри кольца водоёма: выхода к сети нет ни при каком диаметре
         Polygon water = GEOMETRY.createPolygon(ring(420, 170, 580, 330), new LinearRing[] {ring(470, 220, 530, 280)});
