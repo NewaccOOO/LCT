@@ -8,7 +8,7 @@
 [![Spring Boot](https://img.shields.io/badge/Spring_Boot-2.6.3-6DB33F?style=for-the-badge&logo=springboot&logoColor=white)](pom.xml)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](docker-compose.yml)
 <br>
-[![версия](https://img.shields.io/badge/%D0%B2%D0%B5%D1%80%D1%81%D0%B8%D1%8F-v0.3.2-0ea5e9?style=for-the-badge)](#-версии-и-динамика-качества)
+[![версия](https://img.shields.io/badge/%D0%B2%D0%B5%D1%80%D1%81%D0%B8%D1%8F-v0.3.3-0ea5e9?style=for-the-badge)](#-версии-и-динамика-качества)
 [![S на датасете](https://img.shields.io/badge/S_%D0%BD%D0%B0_%D0%B4%D0%B0%D1%82%D0%B0%D1%81%D0%B5%D1%82%D0%B5-13%2C149-0ea5e9?style=for-the-badge)](#-версии-и-динамика-качества)
 [![сценарии](https://img.shields.io/badge/%D1%81%D1%86%D0%B5%D0%BD%D0%B0%D1%80%D0%B8%D0%B8-221_%D0%B8%D0%B7_221-22c55e?style=for-the-badge)](docs/testing/scenario-report.md)
 [![валидатор](https://img.shields.io/badge/%D0%B2%D0%B0%D0%BB%D0%B8%D0%B4%D0%B0%D1%82%D0%BE%D1%80-15_%D0%BF%D1%80%D0%B0%D0%B2%D0%B8%D0%BB-22c55e?style=for-the-badge)](tools/validator/heatcheck)
@@ -159,12 +159,13 @@ flowchart LR
 <br>
 
 > [!TIP]
-> **Лучшая рабочая версия: v0.3.2.** Вернуться к ней: `git checkout v0.3.2`. Порядок выпуска версий и правила — в [CONTRIBUTING.md](CONTRIBUTING.md#версии).
+> **Лучшая рабочая версия: v0.3.3.** Вернуться к ней: `git checkout v0.3.3`. Порядок выпуска версий и правила — в [CONTRIBUTING.md](CONTRIBUTING.md#версии).
 
 Замер на датасете организаторов `data/real/dataset.geojson`: S и стоимость варианта 1 из `variant_summary`, время — стенные секунды расчёта через CLI. Машина: MacBook, 11 ядер, 18 ГБ, один процесс, `scripts/bench.sh`. На стенде экспертов время будет другим, S и стоимость с версии 0.3.0 те же.
 
 | Версия | Дата | S | Стоимость, млн руб. | Время, с | Что изменилось |
 |---|---|---|---|---|---|
+| v0.3.3 | 17.09.2026 | 13,149 | 276,0 | 46 | пространственный индекс препятствий: на входе с 200 тыс. зданий расчёт на треть быстрее; выход на датасете тот же, что у 0.3.2, время датасета не мерили на свободной машине, процессорное время прежнее |
 | v0.3.2 | 17.09.2026 | 13,149 | 276,0 | 46 | подмена файла правил и пример водопровода, дополнительные критерии и причины неподключения в сводке API и файле CLI, офлайн-карта результата `make viz`; выход на датасете тот же, что у 0.3.1 |
 | v0.3.1 | 16.09.2026 | 13,149 | 276,0 | 46 | надбавки к целям присоединения ветки (H-1), стенд `scripts/bench.sh`; выход на датасете тот же, что у 0.3.0 |
 | v0.3.0 | 16.09.2026 | 13,149 | 276,0 | 51 | поиск детерминирован по бюджету 300 сборок, кэш таблиц Дейкстры, отсечение целей, перезапуск поиска от лучшего черновика |
