@@ -123,7 +123,11 @@ public final class Router {
         return routeToAny(from, List.of(to), ignored);
     }
 
-    /** Кратчайший маршрут до ближайшей по весу цели или {@code null}, если ни одна цель не достижима. */
+    /**
+     * Кратчайший маршрут до ближайшей по весу цели или {@code null}, если ни одна цель не достижима. Если в
+     * {@code userData} цели лежит {@link Double}, это надбавка к её весу в метрах (например, стоимость камеры,
+     * которую придётся построить в этой точке); вес маршрута возвращается с надбавкой выбранной цели.
+     */
     public synchronized Route routeToAny(Point from, Collection<Point> targets, Set<String> ignored) {
         int n = nodes.size();
         Coordinate source = from.getCoordinate();
@@ -133,11 +137,13 @@ public final class Router {
         double bestWeight = Double.POSITIVE_INFINITY;
         Coordinate bestTarget = null;
         int bestVia = -1;
+        double bestExtra = 0;
         for (Point target : targets) {
             Coordinate t = target.getCoordinate();
+            double extra = target.getUserData() instanceof Double ? (Double) target.getUserData() : 0;
             // вес не меньше расстояния по прямой: цель дальше уже найденного веса не может выиграть, её веса до узлов
             // не считаются (это самая дорогая часть: цели дерева меняются с каждым черновиком и в кэш не попадают)
-            if (t.distance(source) >= bestWeight) {
+            if (t.distance(source) + extra >= bestWeight) {
                 continue;
             }
             double direct = obstacles.edgeWeight(t, source, ignored, false, false);
@@ -157,10 +163,11 @@ public final class Router {
                     via = v;
                 }
             }
-            if (weight < bestWeight) {
-                bestWeight = weight;
+            if (weight + extra < bestWeight) {
+                bestWeight = weight + extra;
                 bestTarget = t;
                 bestVia = via;
+                bestExtra = extra;
             }
         }
         if (bestTarget == null) {
@@ -177,7 +184,7 @@ public final class Router {
         straighten(coords, ignored);
         LineString line = from.getFactory().createLineString(coords.toArray(new Coordinate[0]));
         List<SpecialSpan> spans = obstacles.spans(line, ignored);
-        return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), spans), spans);
+        return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), spans) + bestExtra, spans);
     }
 
     /** Таблица Дейкстры от точки запроса, из кэша по координате и набору пропускаемых объектов. */

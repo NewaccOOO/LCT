@@ -196,6 +196,14 @@ public final class Rules {
         return chamberRule;
     }
 
+    /**
+     * Сколько рублей стоимости весит один метр длины в S: (w_length / length_base) / (w_cost / cost_base). Нужен,
+     * чтобы переводить разовые расходы в метры трассы при сравнении присоединений.
+     */
+    public double lengthWorthRub() {
+        return (scoreWLength / scoreLengthBaseM) / (scoreWCost / scoreCostBase);
+    }
+
     public double score(double cost, double length) {
         return scoreWCost * (cost / scoreCostBase) + scoreWLength * (length / scoreLengthBaseM);
     }

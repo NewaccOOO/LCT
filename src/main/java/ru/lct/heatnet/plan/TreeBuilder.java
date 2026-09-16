@@ -102,7 +102,18 @@ final class TreeBuilder {
      * Недостижимые точки попадают в {@link Tree#unconnected}.
      */
     Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections) {
-        return new Run(router, dn, area, tie).build(connections);
+        return build(router, dn, area, tie, connections, 0, 0);
+    }
+
+    /**
+     * То же с надбавками к целям в метрах: {@code chamberPenaltyM} за присоединение посреди ребра, где придётся
+     * построить камеру, {@code tieInPenaltyM} за второй и следующие лучи из существующей камеры врезки, каждый из
+     * которых — своя врезка. Так ветка предпочитает свободный луч уже построенной камеры, если крюк до неё короче
+     * стоимости новой.
+     */
+    Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
+            double chamberPenaltyM, double tieInPenaltyM) {
+        return new Run(router, dn, area, tie, chamberPenaltyM, tieInPenaltyM).build(connections);
     }
 
     private final class Run {
@@ -112,18 +123,22 @@ final class TreeBuilder {
         final Envelope area;
         final Tree tree;
         final Set<String> ignored;
+        final double chamberPenaltyM;
+        final double tieInPenaltyM;
         // ребро дерева не меняется после создания, а его специальные части и допустимые цели нужны на каждом шаге
         // для каждого оставшегося ОКС
         final Map<Tree.Edge, List<SpecialSpan>> spansByEdge = new IdentityHashMap<>();
         final Map<Tree.Edge, List<Point>> targetsByEdge = new IdentityHashMap<>();
 
-        Run(Router router, int dn, Envelope area, TieCandidate tie) {
+        Run(Router router, int dn, Envelope area, TieCandidate tie, double chamberPenaltyM, double tieInPenaltyM) {
             this.router = router;
             this.obstacles = router.obstacles();
             this.dn = dn;
             this.area = area;
             this.tree = new Tree(tie);
             this.ignored = tie.getIgnored();
+            this.chamberPenaltyM = chamberPenaltyM;
+            this.tieInPenaltyM = tieInPenaltyM;
         }
 
         Tree build(List<ConnectionPoint> connections) {
@@ -260,7 +275,11 @@ final class TreeBuilder {
         List<Point> targets() {
             List<Point> targets = new ArrayList<>();
             if (tree.degree(tree.root) < tree.tie.getCapacity()) {
-                targets.add(factory.createPoint(tree.root.point));
+                Point root = factory.createPoint(tree.root.point);
+                if (tree.tie.isChamber() && tree.degree(tree.root) >= 1) {
+                    root.setUserData(tieInPenaltyM);
+                }
+                targets.add(root);
             }
             Set<Tree.Node> junctions = new LinkedHashSet<>();
             for (Tree.Edge edge : tree.edges) {
@@ -288,7 +307,9 @@ final class TreeBuilder {
             }
             for (double at : positions) {
                 if (allowed(edge, at, spans)) {
-                    targets.add(factory.createPoint(indexed.extractPoint(at)));
+                    Point target = factory.createPoint(indexed.extractPoint(at));
+                    target.setUserData(chamberPenaltyM);
+                    targets.add(target);
                 }
             }
             return targets;

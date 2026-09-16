@@ -317,7 +317,7 @@ public final class ObstacleSet {
         return spans(line, crossed, ignored);
     }
 
-    static double weight(double length, List<SpecialSpan> spans) {
+    public static double weight(double length, List<SpecialSpan> spans) {
         double weight = length;
         for (SpecialSpan span : spans) {
             weight += (span.getKSpecial() - 1) * (span.getToM() - span.getFromM());

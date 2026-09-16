@@ -588,7 +588,10 @@ public final class VariantEnumerator {
         List<Option> options = new ArrayList<>();
         String label = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(","));
         for (TieCandidate candidate : cheapestCandidates(subset, candidates)) {
-            Tree tree = builder.build(region.router(dn, area), dn, area, candidate, subset);
+            // метр ветки стоит в S и как стоимость трубы, и как длина: разовый расход переводится в метры по обоим
+            double metreRub = rules.diameter(dn).getNewRubM() + rules.lengthWorthRub();
+            Tree tree = builder.build(region.router(dn, area), dn, area, candidate, subset,
+                    rules.chamberCost(dn) / metreRub, rules.tieInCost() / metreRub);
             if (tree.edges.isEmpty()) {
                 log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
                 continue;
