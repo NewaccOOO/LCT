@@ -81,7 +81,11 @@ public final class Router {
     }
 
     public Router(InputData input, Rules rules, Envelope area, int dn) {
-        obstacles = new ObstacleSet(input, rules, area, dn);
+        this(new ObstacleIndex(input, rules), rules, area, dn);
+    }
+
+    public Router(ObstacleIndex index, Rules rules, Envelope area, int dn) {
+        obstacles = new ObstacleSet(index, rules, area, dn);
         this.rules = rules;
         nodes = obstacles.nodes();
         int n = nodes.size();

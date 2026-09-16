@@ -19,6 +19,7 @@ import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
+import ru.lct.heatnet.graph.ObstacleIndex;
 import ru.lct.heatnet.graph.ObstacleSet;
 import ru.lct.heatnet.graph.Router;
 import ru.lct.heatnet.calc.ReconPart;
@@ -74,6 +75,7 @@ public final class VariantEnumerator {
     private final InputData input;
     private final Rules rules;
     private final TieInFinder finder;
+    private final ObstacleIndex obstacleIndex;
     private final SpecialObjects specials;
     private final TurnRule turnRule;
     private final TreeBuilder builder;
@@ -122,7 +124,7 @@ public final class VariantEnumerator {
 
         Router router(int routerDn, Envelope routerArea) {
             return routers.computeIfAbsent(routerDn + "@" + routerArea,
-                    key -> new Router(input, rules, routerArea, routerDn));
+                    key -> new Router(obstacleIndex, rules, routerArea, routerDn));
         }
     }
 
@@ -171,6 +173,7 @@ public final class VariantEnumerator {
         this.input = input;
         this.rules = rules;
         this.finder = new TieInFinder(input, rules);
+        this.obstacleIndex = new ObstacleIndex(input, rules);
         Map<String, LineString> networkById = new HashMap<>();
         for (NetworkSegment segment : input.getSegments()) {
             networkById.put(segment.getId(), segment.getGeometry());
@@ -644,7 +647,7 @@ public final class VariantEnumerator {
     /** Отступы дерева, построенного по графу меньшего диаметра, проверяются для наибольшего фактического диаметра. */
     private boolean clearanceHolds(Tree tree, Variant alone, Envelope area) {
         int dn = alone.getSegments().stream().mapToInt(NewSegment::getDiameter).max().orElseThrow();
-        ObstacleSet obstacles = new ObstacleSet(input, rules, area, dn);
+        ObstacleSet obstacles = new ObstacleSet(obstacleIndex, rules, area, dn);
         for (Tree.Edge edge : tree.edges) {
             Coordinate[] coords = edge.line.getCoordinates();
             for (int i = 0; i + 1 < coords.length; i++) {

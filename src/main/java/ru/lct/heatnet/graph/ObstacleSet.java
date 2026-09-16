@@ -101,6 +101,10 @@ public final class ObstacleSet {
     }
 
     public ObstacleSet(InputData input, Rules rules, Envelope area, int dn) {
+        this(new ObstacleIndex(input, rules), rules, area, dn);
+    }
+
+    public ObstacleSet(ObstacleIndex index, Rules rules, Envelope area, int dn) {
         double halfWidth = rules.diameter(dn).getWidthM() / 2;
         List<Geometry> forbid = new ArrayList<>();
         List<Geometry> nodeZones = new ArrayList<>();
@@ -108,13 +112,13 @@ public final class ObstacleSet {
         List<Special> specialList = new ArrayList<>();
 
         double oksDistance = rules.restriction(OKS_EXISTING).clearanceM(dn) + halfWidth;
-        for (ExistingOks oks : input.getExistingOks()) {
+        for (ExistingOks oks : index.existingOks(area)) {
             if (near(oks.getGeometry(), oksDistance, area)) {
                 forbid.add(zone(oks.getGeometry(), oksDistance));
                 nodeZones.add(nodeZone(oks.getGeometry(), oksDistance));
             }
         }
-        for (Restriction restriction : input.getRestrictions()) {
+        for (Restriction restriction : index.restrictions(area)) {
             RestrictionRule rule = rules.restriction(restriction.getType());
             Geometry geometry = restriction.getGeometry();
             double distance = rule.clearanceM(dn) + halfWidth;
@@ -137,7 +141,7 @@ public final class ObstacleSet {
             }
         }
         RestrictionRule network = rules.restriction(HEAT_NETWORK);
-        for (NetworkSegment segment : input.getSegments()) {
+        for (NetworkSegment segment : index.segments(area)) {
             double distance = network.clearanceM(dn) + halfWidth + rules.diameter(segment.getDiameter()).getWidthM() / 2;
             if (near(segment.getGeometry(), distance, area)) {
                 nodeZones.add(nodeZone(segment.getGeometry(), distance));
