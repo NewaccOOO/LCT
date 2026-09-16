@@ -100,7 +100,7 @@ svg{width:100%;height:100%;display:block;cursor:grab;background:var(--bg)}
 svg.drag{cursor:grabbing}
 aside{width:380px;max-width:45vw;border-left:1px solid var(--line);overflow:auto;padding:12px 16px}
 h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:16px 0 8px}
-table{width:100%;border-collapse:collapse;font-size:13px}td{padding:3px 0;border-bottom:1px solid var(--line);vertical-align:top}td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+table{width:100%;border-collapse:collapse;font-size:13px}td{padding:3px 0;border-bottom:1px solid var(--line);vertical-align:top}td:last-child{text-align:right;white-space:nowrap;padding-left:12px;font-variant-numeric:tabular-nums}
 .layers label{display:inline-flex;gap:6px;align-items:center;margin:0 12px 6px 0;font-size:13px;color:var(--muted)}
 .legend{position:absolute;left:12px;bottom:12px;background:rgba(15,23,42,.92);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:12px;color:var(--muted);display:flex;flex-wrap:wrap;gap:6px 14px;max-width:calc(100% - 24px)}
 .legend i{display:inline-block;width:18px;height:4px;border-radius:2px;margin-right:6px;vertical-align:middle}
@@ -134,6 +134,12 @@ const svg = document.getElementById("svg");
 const FILL = {oks:"#334155", oks_existing:"#334155", park:"#14532d", social_area:"#4c1d95", prohibited_site:"#7f1d1d",
   water:"#1e3a8a", road:"#1f2937", tram_tracks:"#3f2d1a", railway:"#3f2d1a", metro:"#3b0764"};
 const LINE = {gas_pipeline:"#eab308", power_cable:"#a855f7", water_supply:"#06b6d4", sewer:"#78716c"};
+const NAMES = {oks_existing:"существующий ОКС", park:"парк", social_area:"социальный объект", prohibited_site:"запретная территория",
+  water:"водный объект", road:"дорога", tram_tracks:"трамвайные пути", gas_pipeline:"газопровод", power_cable:"силовой кабель",
+  heat_network:"существующая теплосеть", metro:"метро", railway:"железная дорога", water_supply:"водопровод", sewer:"канализация",
+  power_line_support:"опора ЛЭП", source:"источник", heat_chamber:"тепловая камера", oks_future:"перспективный ОКС",
+  oks_connection_point:"точка подключения", restriction:"ограничение"};
+const name = k => NAMES[k] || k;
 const SUMMARY = [["calculated_cost","Итоговая стоимость, руб."],["construction_cost","Новые участки"],
   ["chamber_construction_cost","Новые камеры"],["tie_in_cost","Врезки"],["reconstruction_cost","Реконструкция участков"],
   ["chamber_reconstruction_cost","Реконструкция камер"],["unconnected_penalty","Штраф за неподключённые"],
@@ -146,7 +152,7 @@ const CRITERIA = [["connected_oks","Подключено ОКС"],["connected_fl
   ["reconstruction_share","Доля реконструкции в длине"],["cost_per_oks","Стоимость на один ОКС, руб."],
   ["cost_per_tph","Стоимость на 1 т/ч, руб."]];
 const fmt = v => Array.isArray(v) ? (v.length ? v.join(", ") : "нет")
-  : (v && typeof v === "object") ? (Object.keys(v).length ? Object.entries(v).map(([k,n]) => k + ": " + n).join(", ") : "нет")
+  : (v && typeof v === "object") ? (Object.keys(v).length ? Object.entries(v).map(([k,n]) => name(k) + ": " + n).join("<br>") : "нет")
   : typeof v === "number" ? v.toLocaleString("ru-RU", {maximumFractionDigits: 3}) : (v === null || v === undefined ? "—" : String(v));
 const el = (name, attrs, parent) => { const e = document.createElementNS(NS, name); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
 const d = parts => parts.map(p => "M" + p.map(q => q[0] + "," + q[1]).join("L")).join("");
@@ -167,7 +173,7 @@ function applyVb(){ svg.setAttribute("viewBox", vb.join(" ")); const s = scale()
     e.style.display = e.dataset.len && e.dataset.len / s < 110 ? "none" : ""; }); }
 
 function select(props){ const box = document.getElementById("details"); box.className = "";
-  box.innerHTML = "<table>" + Object.entries(props).map(([k,v]) => "<tr><td>" + k + "</td><td>" + fmt(v) + "</td></tr>").join("") + "</table>"; }
+  box.innerHTML = "<table>" + Object.entries(props).map(([k,v]) => "<tr><td>" + k + "</td><td>" + (k.endsWith("_type") ? name(v) : fmt(v)) + "</td></tr>").join("") + "</table>"; }
 
 // вход
 for (const f of DATA.input) {
