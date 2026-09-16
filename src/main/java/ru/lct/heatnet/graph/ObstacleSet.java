@@ -1,10 +1,10 @@
 package ru.lct.heatnet.graph;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Comparator;
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.locationtech.jts.algorithm.LineIntersector;
 import org.locationtech.jts.algorithm.Orientation;
@@ -51,6 +51,7 @@ public final class ObstacleSet {
     private static final double CROSSING_STEP_M = 20;
     // shapely по умолчанию строит буфер с 16 сегментами на четверть круга, валидатор считает так же
     private static final int MARGIN_QUADRANT_SEGMENTS = 16;
+    private static final double TANGENT_EPS = 1e-9;
     private static final BufferParameters ZONE_BUFFER = new BufferParameters(
             BufferParameters.DEFAULT_QUADRANT_SEGMENTS, BufferParameters.CAP_SQUARE,
             BufferParameters.JOIN_MITRE, BufferParameters.DEFAULT_MITRE_LIMIT);
@@ -59,6 +60,8 @@ public final class ObstacleSet {
     private final STRtree forbidZones = new STRtree();
     private final STRtree specials = new STRtree();
     private final List<Coordinate> nodes = new ArrayList<>();
+    // соседи узла по кольцу его зоны или null у точек вдоль дорог: ребро полезно, только если касается зоны
+    private final List<Coordinate[]> rings = new ArrayList<>();
 
     private static final class Zone {
         final Geometry geometry;
@@ -154,7 +157,7 @@ public final class ObstacleSet {
         forbidZones.build();
         specials.build();
 
-        Set<Coordinate> candidates = new LinkedHashSet<>();
+        Map<Coordinate, Coordinate[]> candidates = new LinkedHashMap<>();
         for (Geometry nodeZone : nodeZones) {
             for (int i = 0; i < nodeZone.getNumGeometries(); i++) {
                 Polygon polygon = (Polygon) nodeZone.getGeometryN(i);
@@ -166,11 +169,14 @@ public final class ObstacleSet {
         }
         // Вдоль сторон дорог и путей нужны точки поворота, иначе при остром угле к дороге остаётся только обход её конца.
         for (Geometry nodeZone : crossingNodeZones) {
-            candidates.addAll(Arrays.asList(Densifier.densify(nodeZone.getBoundary(), CROSSING_STEP_M).getCoordinates()));
+            for (Coordinate c : Densifier.densify(nodeZone.getBoundary(), CROSSING_STEP_M).getCoordinates()) {
+                candidates.putIfAbsent(c, null);
+            }
         }
-        for (Coordinate candidate : candidates) {
-            if (!insideAnyZone(candidate)) {
-                nodes.add(candidate);
+        for (Map.Entry<Coordinate, Coordinate[]> candidate : candidates.entrySet()) {
+            if (!insideAnyZone(candidate.getKey())) {
+                nodes.add(candidate.getKey());
+                rings.add(candidate.getValue());
             }
         }
     }
@@ -178,6 +184,24 @@ public final class ObstacleSet {
     /** Узлы visibility graph: выпуклые снаружи вершины зон и точки вдоль сторон дорог, не лежащие ни в одной зоне. */
     public List<Coordinate> nodes() {
         return nodes;
+    }
+
+    /**
+     * Отрезок от узла node к other касается зоны узла: оба соседа по кольцу лежат по одну сторону от него. Ребро,
+     * которое входит в вершину зоны и уходит через неё «внутрь угла», в кратчайшем пути не бывает, и его можно не
+     * проверять; узлы без кольца (точки вдоль дорог) допускают любые рёбра.
+     */
+    public boolean tangent(int node, Coordinate other) {
+        Coordinate[] ring = rings.get(node);
+        if (ring == null) {
+            return true;
+        }
+        Coordinate v = nodes.get(node);
+        double dx = other.x - v.x;
+        double dy = other.y - v.y;
+        double prev = dx * (ring[0].y - v.y) - dy * (ring[0].x - v.x);
+        double next = dx * (ring[1].y - v.y) - dy * (ring[1].x - v.x);
+        return prev * next >= -TANGENT_EPS;
     }
 
     /**
@@ -421,7 +445,7 @@ public final class ObstacleSet {
         return zone(geometry, distance + 2 * SIMPLIFY_M + NODE_OFFSET_M);
     }
 
-    private static void addConvexVertices(LinearRing ring, boolean shell, Set<Coordinate> out) {
+    private static void addConvexVertices(LinearRing ring, boolean shell, Map<Coordinate, Coordinate[]> out) {
         Coordinate[] coords = ring.getCoordinates();
         int n = coords.length - 1;
         if (n < 3) {
@@ -429,8 +453,9 @@ public final class ObstacleSet {
         }
         int obstacleTurn = shell == Orientation.isCCW(coords) ? Orientation.COUNTERCLOCKWISE : Orientation.CLOCKWISE;
         for (int i = 0; i < n; i++) {
-            if (Orientation.index(coords[(i + n - 1) % n], coords[i], coords[i + 1]) == obstacleTurn) {
-                out.add(coords[i]);
+            Coordinate prev = coords[(i + n - 1) % n];
+            if (Orientation.index(prev, coords[i], coords[i + 1]) == obstacleTurn) {
+                out.putIfAbsent(coords[i], new Coordinate[] {prev, coords[i + 1]});
             }
         }
     }

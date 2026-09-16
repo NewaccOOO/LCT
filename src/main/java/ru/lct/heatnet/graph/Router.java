@@ -41,8 +41,7 @@ public final class Router {
     public Router(InputData input, Rules rules, Envelope area, int dn) {
         obstacles = new ObstacleSet(input, rules, area, dn);
         vertices = new ArrayList<>(obstacles.nodes());
-        // ponytail: полный перебор O(n²) пар, при 2,5 тыс. узлов около 3 млн проверок. Если NFR-1 красный,
-        // резать область (D-6) или отбрасывать рёбра, не касательные к препятствию в обоих концах.
+        // перебор O(n²) пар, но геометрия проверяется только у рёбер, касательных к зонам в обоих концах
         for (int i = 0; i < vertices.size(); i++) {
             graph.addVertex(i);
             connect(i, i, Set.of());
@@ -105,13 +104,20 @@ public final class Router {
         int nodeCount = obstacles.nodes().size();
         // последовательно: параллельный расчёт над общими геометриями JTS изредка давал разные трассы на одном входе
         double[] weights = IntStream.range(0, count)
-                .mapToDouble(other -> obstacles.edgeWeight(c, vertices.get(other), ignored, id < nodeCount, other < nodeCount))
+                .mapToDouble(other -> tangent(id, other, nodeCount)
+                        ? obstacles.edgeWeight(c, vertices.get(other), ignored, id < nodeCount, other < nodeCount)
+                        : Double.NaN)
                 .toArray();
         for (int other = 0; other < count; other++) {
             if (!Double.isNaN(weights[other])) {
                 graph.setEdgeWeight(graph.addEdge(id, other), weights[other]);
             }
         }
+    }
+
+    private boolean tangent(int a, int b, int nodeCount) {
+        return (a >= nodeCount || obstacles.tangent(a, vertices.get(b)))
+                && (b >= nodeCount || obstacles.tangent(b, vertices.get(a)));
     }
 
     // Убирает вершины с отклонением меньше 3° и подотрезки короче 1 м вне специальных частей, если спрямлённый
