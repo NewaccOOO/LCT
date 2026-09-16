@@ -1,5 +1,8 @@
 data/*
 !data/samples/
+!data/real/
+data/real/*
+!data/real/dataset.geojson
 target/
 .venv/
 __pycache__/

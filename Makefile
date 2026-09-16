@@ -10,7 +10,7 @@ ARGS ?=
 ENV := . scripts/gates/env.sh
 PY := uv run --project tools
 
-.PHONY: help up down logs jar cli synth validate e2e test test-unit test-java test-python test-scenarios sweep gate
+.PHONY: help up down logs jar cli synth validate e2e real test test-unit test-java test-python test-scenarios sweep gate
 
 help: ## список команд
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -39,6 +39,9 @@ validate: ## проверить OUT валидатором по всем пра�
 	$(PY) python -m heatcheck $(IN) $(OUT)
 
 e2e: synth cli validate ## сгенерировать вход, посчитать через CLI, проверить валидатором
+
+real: ## датасет организаторов: посчитать через CLI и проверить валидатором
+	$(MAKE) cli validate IN=data/real/dataset.geojson OUT=data/out/real.geojson
 
 test: test-java test-python test-scenarios ## все тесты
 
