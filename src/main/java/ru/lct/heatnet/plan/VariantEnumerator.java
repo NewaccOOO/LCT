@@ -21,6 +21,9 @@ import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
 import ru.lct.heatnet.graph.ObstacleSet;
 import ru.lct.heatnet.graph.Router;
+import ru.lct.heatnet.calc.ReconPart;
+import ru.lct.heatnet.calc.ReconstructionCalculator;
+import ru.lct.heatnet.calc.TieInLoad;
 import ru.lct.heatnet.model.ConnectionPoint;
 import ru.lct.heatnet.model.FutureOks;
 import ru.lct.heatnet.model.InputData;
@@ -59,16 +62,19 @@ public final class VariantEnumerator {
     private static final int SEARCH_BUDGET = Integer.getInteger("heatnet.search.budget", 150);
     /** И не дольше этого по стенным часам (свойство heatnet.search.seconds): столько же меряет гейт perf.sh. */
     private static final long SEARCH_SECONDS = Long.getLong("heatnet.search.seconds", 60);
-    /** Деревья подмножества строятся не на всех кандидатах врезки, а на ближайших к его точкам подключения. */
+    /** Деревья подмножества строятся не на всех кандидатах врезки, а на лучших по грубой оценке стоимости. */
     private static final int CANDIDATE_LIMIT = 6;
     /** Слияния и переносы пробуются только между блоками, ближайшими друг к другу по точкам подключения. */
     private static final int NEAREST_BLOCKS = 2;
     private static final double IMPROVE_EPS = 1e-6;
+    /** Из локального оптимума спуск продолжается с наименее плохого соседа, если он хуже не больше чем на столько S. */
+    private static final double WALK_THRESHOLD = 0.5;
 
     private final InputData input;
     private final Rules rules;
     private final TieInFinder finder;
     private final SpecialObjects specials;
+    private final TurnRule turnRule;
     private final TreeBuilder builder;
     private NetworkAssembler assembler;
     private final GeometryFactory factory = new GeometryFactory();
@@ -119,6 +125,30 @@ public final class VariantEnumerator {
         }
     }
 
+    /** Соседнее разбиение; alternative — блок, который берёт дерево с другой врезкой, а не с лучшей. */
+    private static final class Move {
+        final List<List<ConnectionPoint>> blocks;
+        final List<ConnectionPoint> alternative;
+
+        Move(List<List<ConnectionPoint>> blocks, List<ConnectionPoint> alternative) {
+            this.blocks = blocks;
+            this.alternative = alternative;
+        }
+
+        Draft realize(VariantEnumerator enumerator) {
+            return enumerator.draft(blocks, subset -> subset == alternative);
+        }
+
+        String key() {
+            List<String> parts = new ArrayList<>();
+            for (List<ConnectionPoint> block : blocks) {
+                parts.add(block.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(",")));
+            }
+            parts.sort(Comparator.naturalOrder());
+            return String.join("|", parts) + (alternative == null ? "" : "#" + alternative.get(0).getId());
+        }
+    }
+
     /** Собранный вариант до присвоения ранга. */
     private static final class Draft {
         final List<Tree> trees;
@@ -145,7 +175,8 @@ public final class VariantEnumerator {
             networkById.put(segment.getId(), segment.getGeometry());
         }
         this.specials = new SpecialObjects(input, rules);
-        this.builder = new TreeBuilder(finder.nodeLimit(), networkById, specials);
+        this.turnRule = new TurnRule(input, rules);
+        this.builder = new TreeBuilder(finder.nodeLimit(), networkById, specials, turnRule);
         for (FutureOks oks : input.getFutureOks()) {
             oksById.put(oks.getId(), oks);
         }
@@ -158,15 +189,13 @@ public final class VariantEnumerator {
 
     public Result run() {
         List<List<ConnectionPoint>> groups = groups(new ArrayList<>(connectionByOks.values()));
-        Envelope extent = new Envelope();
         for (List<ConnectionPoint> group : groups) {
             Region region = new Region(group);
-            extent.expandToInclude(region.wideArea);
             for (ConnectionPoint connection : group) {
                 regionByConnection.put(connection.getId(), region);
             }
         }
-        assembler = new NetworkAssembler(input, rules, specials, extent);
+        assembler = new NetworkAssembler(input, rules, specials, turnRule);
         List<List<ConnectionPoint>> singles = new ArrayList<>();
         for (ConnectionPoint connection : connectionByOks.values()) {
             singles.add(List.of(connection));
@@ -225,8 +254,10 @@ public final class VariantEnumerator {
     }
 
     /**
-     * Спуск по разбиениям ОКС с первым улучшением: слияние двух блоков, перенос ОКС в соседний блок, выделение ОКС
-     * в свой блок, разбиение блока k-means. Каждый шаг — новый черновик через {@link #draft}; budget — их число.
+     * Локальный поиск по разбиениям ОКС: спуск с первым улучшением по ходам {@link #moves}, а из локального оптимума —
+     * шаг на наименее плохого ещё не посещённого соседа (не хуже текущего на WALK_THRESHOLD), и спуск снова. Каждый
+     * шаг — новый черновик через {@link #draft}; budget — их число, SEARCH_SECONDS — предел по часам. Возвращает
+     * лучший найденный черновик.
      */
     private Draft search(Draft start, int budget) {
         List<List<ConnectionPoint>> blocks = new ArrayList<>();
@@ -239,42 +270,63 @@ public final class VariantEnumerator {
                 blocks.add(new ArrayList<>(List.of(connection)));
             }
         }
+        Draft best = start;
         Draft current = start;
+        Set<String> visited = new HashSet<>();
+        visited.add(new Move(blocks, null).key());
         long started = System.nanoTime();
         int spent = 0;
-        boolean improved = true;
-        while (improved && spent < budget) {
-            improved = false;
-            for (List<List<ConnectionPoint>> candidate : moves(blocks)) {
-                if (spent++ >= budget || System.nanoTime() - started > SEARCH_SECONDS * 1_000_000_000L) {
+        while (spent < budget) {
+            Move step = null;
+            Draft stepDraft = null;
+            for (Move move : moves(blocks)) {
+                if (spent >= budget || System.nanoTime() - started > SEARCH_SECONDS * 1_000_000_000L) {
                     break;
                 }
-                Draft draft = draft(candidate, subset -> false);
-                if (draft != null && draft.unconnected.size() <= current.unconnected.size()
-                        && draft.score() < current.score() - IMPROVE_EPS) {
-                    blocks = candidate;
-                    current = draft;
-                    improved = true;
-                    log.info("search: score={} trees={} drafts={} elapsed={}s", current.score(), blocks.size(), spent,
-                            (System.nanoTime() - started) / 1_000_000_000L);
+                String key = move.key();
+                if (!visited.add(key)) {
+                    continue;
+                }
+                spent++;
+                Draft draft = move.realize(this);
+                if (draft == null || draft.unconnected.size() > current.unconnected.size()) {
+                    continue;
+                }
+                if (draft.score() < current.score() - IMPROVE_EPS) {
+                    step = move;
+                    stepDraft = draft;
                     break;
+                }
+                if (stepDraft == null || draft.score() < stepDraft.score()) {
+                    step = move;
+                    stepDraft = draft;
                 }
             }
+            if (step == null || stepDraft.score() > current.score() + WALK_THRESHOLD) {
+                break;
+            }
+            blocks = step.blocks;
+            current = stepDraft;
+            if (current.score() < best.score() - IMPROVE_EPS) {
+                best = current;
+                log.info("search: score={} trees={} drafts={} elapsed={}s", best.score(), blocks.size(), spent,
+                        (System.nanoTime() - started) / 1_000_000_000L);
+            }
         }
-        log.info("search: done score={} drafts={} elapsed={}s", current.score(), spent, (System.nanoTime() - started) / 1_000_000_000L);
-        return current;
+        log.info("search: done score={} drafts={} elapsed={}s", best.score(), spent, (System.nanoTime() - started) / 1_000_000_000L);
+        return best;
     }
 
-    /** Соседние разбиения в порядке: слияния ближайших блоков, переносы ОКС, выделения, разбиения k-means. */
-    private List<List<List<ConnectionPoint>>> moves(List<List<ConnectionPoint>> blocks) {
-        List<List<List<ConnectionPoint>>> result = new ArrayList<>();
+    /** Соседние разбиения в порядке: слияния ближайших блоков, переносы ОКС, выделения, разбиения k-means, другая врезка. */
+    private List<Move> moves(List<List<ConnectionPoint>> blocks) {
+        List<Move> result = new ArrayList<>();
         for (int i = 0; i < blocks.size(); i++) {
             for (int j : nearestBlocks(blocks, blocks.get(i), i)) {
                 if (j > i) {
                     List<List<ConnectionPoint>> fused = copy(blocks);
                     fused.get(i).addAll(fused.get(j));
                     fused.remove(j);
-                    result.add(fused);
+                    result.add(new Move(fused, null));
                 }
             }
         }
@@ -287,7 +339,7 @@ public final class VariantEnumerator {
                     List<List<ConnectionPoint>> moved = copy(blocks);
                     moved.get(i).remove(connection);
                     moved.get(j).add(connection);
-                    result.add(moved);
+                    result.add(new Move(moved, null));
                 }
             }
         }
@@ -299,7 +351,7 @@ public final class VariantEnumerator {
                 List<List<ConnectionPoint>> alone = copy(blocks);
                 alone.get(i).remove(connection);
                 alone.add(new ArrayList<>(List.of(connection)));
-                result.add(alone);
+                result.add(new Move(alone, null));
             }
         }
         for (int i = 0; i < blocks.size(); i++) {
@@ -311,8 +363,12 @@ public final class VariantEnumerator {
                 List<List<ConnectionPoint>> split = copy(blocks);
                 split.remove(i);
                 split.addAll(parts);
-                result.add(split);
+                result.add(new Move(split, null));
             }
+        }
+        for (int i = 0; i < blocks.size(); i++) {
+            List<List<ConnectionPoint>> same = copy(blocks);
+            result.add(new Move(same, same.get(i)));
         }
         return result;
     }
@@ -506,9 +562,11 @@ public final class VariantEnumerator {
     private List<Option> options(Region region, int dn, Envelope area, List<ConnectionPoint> subset, boolean verify,
             List<TieCandidate> candidates) {
         List<Option> options = new ArrayList<>();
-        for (TieCandidate candidate : nearestCandidates(subset, candidates)) {
+        String label = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(","));
+        for (TieCandidate candidate : cheapestCandidates(subset, candidates)) {
             Tree tree = builder.build(region.router(dn, area), dn, area, candidate, subset);
             if (tree.edges.isEmpty()) {
+                log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
                 continue;
             }
             Set<String> ids = new HashSet<>();
@@ -518,19 +576,41 @@ public final class VariantEnumerator {
                 if (!verify || clearanceHolds(tree, alone, area)) {
                     options.add(new Option(tree, alone.getSummary().getScore()));
                 }
+                log.debug("options: subset={} tie={} score={} unconnected={}", label, candidate.nodeKey(),
+                        alone.getSummary().getScore(), tree.unconnected.size());
             } catch (IllegalStateException | IllegalArgumentException e) {
                 // дерево нарушает правила при сборке (предельная длина, отступ участка, число поворотов): кандидат отбрасывается
+                log.debug("options: subset={} tie={} отброшено: {}", label, candidate.nodeKey(), e.getMessage());
             }
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
         return options;
     }
 
-    /** До CANDIDATE_LIMIT кандидатов с наименьшей суммой расстояний до точек подключения подмножества. */
-    private static List<TieCandidate> nearestCandidates(List<ConnectionPoint> subset, List<TieCandidate> candidates) {
+    /**
+     * До CANDIDATE_LIMIT кандидатов с наименьшей грубой оценкой: прямые от точек подключения по цене трубы диаметра
+     * блока, реконструкция цепочки к источнику от расхода блока и камера, если врезка в трубу. Реконструкция здесь
+     * решает: врезка выше по сети короче не делает трассу, но избавляет от замены участков ниже.
+     */
+    private List<TieCandidate> cheapestCandidates(List<ConnectionPoint> subset, List<TieCandidate> candidates) {
+        double flow = flow(subset);
+        int dn = rules.diameterFor(flow).getDn();
+        double pricePerM = rules.diameter(dn).getNewRubM();
+        Map<TieCandidate, Double> estimate = new HashMap<>();
+        for (TieCandidate candidate : candidates) {
+            double rub = candidate.isChamber() ? 0 : rules.chamberCost(dn);
+            for (ConnectionPoint connection : subset) {
+                rub += connection.getGeometry().distance(candidate.getPoint()) * pricePerM;
+            }
+            TieInLoad load = new TieInLoad(candidate.nodeKey(), candidate.getExistingObjectId(),
+                    candidate.getExistingObjectType(), candidate.getPoint(), flow);
+            for (ReconPart part : ReconstructionCalculator.calculate(input, rules, List.of(load)).getParts()) {
+                rub += part.getCost();
+            }
+            estimate.put(candidate, rub);
+        }
         List<TieCandidate> sorted = new ArrayList<>(candidates);
-        sorted.sort(Comparator.comparingDouble(candidate -> subset.stream()
-                .mapToDouble(connection -> connection.getGeometry().distance(candidate.getPoint())).sum()));
+        sorted.sort(Comparator.comparingDouble(estimate::get));
         return sorted.subList(0, Math.min(CANDIDATE_LIMIT, sorted.size()));
     }
 

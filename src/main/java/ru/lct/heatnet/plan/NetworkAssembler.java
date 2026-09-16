@@ -15,9 +15,6 @@ import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
-import org.locationtech.jts.geom.prep.PreparedGeometry;
-import org.locationtech.jts.geom.prep.PreparedGeometryFactory;
-import org.locationtech.jts.index.strtree.STRtree;
 import org.locationtech.jts.linearref.LengthIndexedLine;
 import ru.lct.heatnet.calc.CostCalculator;
 import ru.lct.heatnet.calc.DiameterPlanner;
@@ -41,7 +38,6 @@ import ru.lct.heatnet.model.TieIn;
 import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.model.VariantSummary;
 import ru.lct.heatnet.rules.Diameter;
-import ru.lct.heatnet.rules.RestrictionRule;
 import ru.lct.heatnet.rules.Rules;
 
 /**
@@ -73,8 +69,6 @@ final class NetworkAssembler {
     private static final double NEAR_STEP_M = 0.5;
     private static final double DIST_EPS_M = 0.001;
     private static final double MIN_TURN_DEG = 3;
-    private static final int TURNS_PER_OBSTACLE = 3;
-    private static final int TURNS_BASE = 4;
 
     private final InputData input;
     private final Rules rules;
@@ -85,7 +79,7 @@ final class NetworkAssembler {
     /** ID входа: выходные ID с ними не совпадают (правило schema). */
     private final Set<String> inputIds = new HashSet<>();
     /** Полигоны, которые считаются в правиле поворотов: запрещённые, дороги и трамвайные пути. */
-    private final STRtree turnPolygons = new STRtree();
+    private final TurnRule turnRule;
     private final GeometryFactory factory = new GeometryFactory();
 
     /** Часть ребра в специальной зоне одного объекта. */
@@ -130,8 +124,7 @@ final class NetworkAssembler {
         }
     }
 
-    /** extent — область, где могут лежать врезки и точки подключения: полигоны вне её в правило поворотов не попадут. */
-    NetworkAssembler(InputData input, Rules rules, SpecialObjects specials, Envelope extent) {
+    NetworkAssembler(InputData input, Rules rules, SpecialObjects specials, TurnRule turnRule) {
         this.input = input;
         this.rules = rules;
         this.specials = specials;
@@ -146,27 +139,16 @@ final class NetworkAssembler {
             inputIds.add(oks.getId());
         }
         for (ExistingOks oks : input.getExistingOks()) {
-            addTurnPolygon(oks.getGeometry(), extent);
             inputIds.add(oks.getId());
         }
         for (Restriction restriction : input.getRestrictions()) {
             inputIds.add(restriction.getId());
-            RestrictionRule rule = rules.restriction(restriction.getType());
-            if (restriction.getGeometry().getDimension() == 2 && (rule.forbid() || rule.getMinAngleDeg() != null)) {
-                addTurnPolygon(restriction.getGeometry(), extent);
-            }
         }
-        turnPolygons.build();
+        this.turnRule = turnRule;
     }
 
     private boolean startsInputId(String prefix) {
         return inputIds.stream().anyMatch(id -> id.startsWith(prefix));
-    }
-
-    private void addTurnPolygon(Geometry polygon, Envelope extent) {
-        if (polygon.getEnvelopeInternal().intersects(extent)) {
-            turnPolygons.insert(polygon.getEnvelopeInternal(), PreparedGeometryFactory.prepare(polygon));
-        }
     }
 
     /**
@@ -507,23 +489,11 @@ final class NetworkAssembler {
                     }
                     node = segment.getStartNodeId();
                 }
-                int turns = 0;
-                for (int i = 1; i + 1 < coords.size(); i++) {
-                    if (coords.get(i - 1).distance(coords.get(i)) > 0 && coords.get(i).distance(coords.get(i + 1)) > 0
-                            && TreeBuilder.deflectionDeg(coords.get(i - 1), coords.get(i), coords.get(i + 1)) >= MIN_TURN_DEG) {
-                        turns++;
-                    }
-                }
-                LineString chord = factory.createLineString(new Coordinate[] {tiePoint.get(node), edge.source.to.point});
-                int crossed = 0;
-                for (Object item : turnPolygons.query(chord.getEnvelopeInternal())) {
-                    if (((PreparedGeometry) item).intersects(chord)) {
-                        crossed++;
-                    }
-                }
-                if (turns > TURNS_PER_OBSTACLE * crossed + TURNS_BASE) {
+                int turns = TurnRule.turns(coords);
+                int allowed = turnRule.allowed(tiePoint.get(node), edge.source.to.point);
+                if (turns > allowed) {
                     throw new IllegalStateException("На пути к " + edge.source.to.connection.getId() + " поворотов "
-                            + turns + ", допустимо " + (TURNS_PER_OBSTACLE * crossed + TURNS_BASE));
+                            + turns + ", допустимо " + allowed);
                 }
             }
         }

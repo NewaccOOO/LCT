@@ -37,10 +37,13 @@ final class TreeBuilder {
     private static final double SAMPLE_STEP_M = 10;
     private static final double CONNECTION_GAP_M = 3;
     private static final double[] SHIFTS_M = {3, 6, 12, 24};
+    /** Сколько целей маршрута перебирается, пока путь через дерево не уложится в правило поворотов. */
+    private static final int TURN_RETRIES = 8;
 
     private final int nodeLimit;
     private final Map<String, LineString> networkById;
     private final SpecialObjects specials;
+    private final TurnRule turnRule;
     private final GeometryFactory factory = new GeometryFactory();
 
     /** Место присоединения ветки: узел дерева или точка на ребре. */
@@ -63,12 +66,15 @@ final class TreeBuilder {
         final Coordinate[] branch;
         final Spot spot;
         final double weight;
+        /** Цель маршрута, к которой он пришёл; место присоединения spot может быть сдвинуто от неё. */
+        final Coordinate target;
 
-        Attach(ConnectionPoint connection, Coordinate[] branch, Spot spot, double weight) {
+        Attach(ConnectionPoint connection, Coordinate[] branch, Spot spot, double weight, Coordinate target) {
             this.connection = connection;
             this.branch = branch;
             this.spot = spot;
             this.weight = weight;
+            this.target = target;
         }
     }
 
@@ -84,10 +90,11 @@ final class TreeBuilder {
         }
     }
 
-    TreeBuilder(int nodeLimit, Map<String, LineString> networkById, SpecialObjects specials) {
+    TreeBuilder(int nodeLimit, Map<String, LineString> networkById, SpecialObjects specials, TurnRule turnRule) {
         this.nodeLimit = nodeLimit;
         this.networkById = networkById;
         this.specials = specials;
+        this.turnRule = turnRule;
     }
 
     /**
@@ -139,8 +146,58 @@ final class TreeBuilder {
             return tree;
         }
 
+        /**
+         * Лучшее присоединение по весу маршрута. Если путь от врезки через ствол к ОКС нарушает правило поворотов,
+         * пробуется прямая ветка к врезке: у неё повороты только свои. Иначе остаётся первое присоединение, и сборка
+         * отбросит дерево сама.
+         */
         Attach attach(ConnectionPoint connection) {
             List<Point> targets = targets();
+            Attach best = attach(connection, targets);
+            Attach first = best;
+            for (int retry = 0; best != null && !turnsOk(best, connection) && retry < TURN_RETRIES; retry++) {
+                // цель, к которой пришёл маршрут, убирается, и маршрут ищется к следующей по весу
+                Coordinate end = best.target;
+                targets.removeIf(target -> target.getCoordinate().distance(end) <= TOUCH_M);
+                best = attach(connection, targets);
+            }
+            return best != null && turnsOk(best, connection) ? best : first;
+        }
+
+        boolean turnsOk(Attach attach, ConnectionPoint connection) {
+            return TurnRule.turns(pathThrough(attach)) <= turnRule.allowed(tree.root.point, connection.getGeometry().getCoordinate());
+        }
+
+        /** Координаты пути от врезки по дереву до места присоединения и дальше по ветке к ОКС. */
+        List<Coordinate> pathThrough(Attach attach) {
+            List<Coordinate> path = new ArrayList<>();
+            Spot spot = attach.spot;
+            Tree.Node node = spot.node != null ? spot.node : spot.edge.from;
+            List<Tree.Edge> chain = new ArrayList<>();
+            while (node != tree.root) {
+                Tree.Edge incoming = null;
+                for (Tree.Edge edge : tree.edges) {
+                    if (edge.to == node) {
+                        incoming = edge;
+                    }
+                }
+                chain.add(0, incoming);
+                node = incoming.from;
+            }
+            for (Tree.Edge edge : chain) {
+                path.addAll(Arrays.asList(edge.line.getCoordinates()));
+            }
+            if (spot.edge != null) {
+                path.addAll(Arrays.asList(new LengthIndexedLine(spot.edge.line).extractLine(0, spot.position).getCoordinates()));
+                path.add(spot.point);
+            }
+            for (int i = attach.branch.length - 1; i >= 0; i--) {
+                path.add(attach.branch[i]);
+            }
+            return path;
+        }
+
+        Attach attach(ConnectionPoint connection, List<Point> targets) {
             if (targets.isEmpty()) {
                 return null;
             }
@@ -154,6 +211,7 @@ final class TreeBuilder {
                     return null;
                 }
             }
+            Coordinate target = coords[coords.length - 1];
             List<Piece> pieces = pieces();
             for (int i = 0; i + 1 < coords.length; i++) {
                 Coordinate touch = firstTouch(coords[i], coords[i + 1], pieces);
@@ -162,7 +220,7 @@ final class TreeBuilder {
                 }
                 List<Coordinate> head = new ArrayList<>(Arrays.asList(coords).subList(0, i + 1));
                 List<Spot> spots = spots(pieces, touch);
-                Attach direct = attach(connection, head, spots, pieces, route.getWeight());
+                Attach direct = attach(connection, head, spots, pieces, route.getWeight(), target);
                 double length = coords[i].distance(coords[i + 1]);
                 if (direct != null || length == 0) {
                     // отрезок нулевой длины: точка подключения лежит на дереве, обойти касание не из чего
@@ -176,7 +234,7 @@ final class TreeBuilder {
                     for (int side : new int[] {1, -1}) {
                         List<Coordinate> around = new ArrayList<>(head);
                         around.add(new Coordinate(touch.x + side * shift * nx, touch.y + side * shift * ny));
-                        Attach aside = attach(connection, around, spots, pieces, route.getWeight());
+                        Attach aside = attach(connection, around, spots, pieces, route.getWeight(), target);
                         if (aside != null) {
                             return aside;
                         }
@@ -187,11 +245,12 @@ final class TreeBuilder {
             return null;
         }
 
-        Attach attach(ConnectionPoint connection, List<Coordinate> head, List<Spot> spots, List<Piece> pieces, double weight) {
+        Attach attach(ConnectionPoint connection, List<Coordinate> head, List<Spot> spots, List<Piece> pieces, double weight,
+                Coordinate target) {
             for (Spot spot : spots) {
                 Coordinate[] branch = branch(head, spot.point);
                 if (branch != null && valid(branch, pieces, spot)) {
-                    return new Attach(connection, branch, spot, weight);
+                    return new Attach(connection, branch, spot, weight, target);
                 }
             }
             return null;

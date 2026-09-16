@@ -114,7 +114,7 @@ class TreeBuilderTest {
         for (NetworkSegment segment : input.getSegments()) {
             networkById.put(segment.getId(), segment.getGeometry());
         }
-        return new TreeBuilder(finder.nodeLimit(), networkById, new SpecialObjects(input, rules));
+        return new TreeBuilder(finder.nodeLimit(), networkById, new SpecialObjects(input, rules), new TurnRule(input, rules));
     }
 
     private static void assertTouchOnlyAtSharedNode(Tree.Edge a, Tree.Edge b) {
