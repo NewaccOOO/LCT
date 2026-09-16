@@ -68,7 +68,7 @@ docker-compose down -v
 | `APP_PORT` | `8080` | порт приложения на хосте |
 | `POSTGRES_HOST_PORT` | `55432` | порт PostgreSQL на хосте; внутри compose приложение ходит в базу по 5432 |
 | `JOB_WORKERS` | `2` | сколько задач считается одновременно |
-| `JAVA_OPTS` | пусто | параметры JVM, например `-Xmx4g`; сюда же бюджет локального поиска `-Dheatnet.search.budget=300` — число сборок черновика, предела по времени нет |
+| `JAVA_OPTS` | пусто | параметры JVM, например `-Xmx4g`; сюда же бюджет локального поиска `-Dheatnet.search.budget=300` — число сборок черновика, предела по времени нет; потолок кэша маршрутов на расчёт `-Dheatnet.route.cache.mb=1024`; `-Dheatnet.read.all=true` держит в памяти все здания и ограничения, а не только вокруг групп ОКС |
 | `DATA_DIR` | `/data` в контейнере, `data` локально | каталог входных и выходных файлов задач |
 | `HEATNET_RULES` | пусто, берётся `rules.json` из jar | путь к файлу правил или `classpath:/examples/water-supply.json` |
 | `SPRING_DATASOURCE_URL` | `jdbc:postgresql://localhost:55432/heatnet` | адрес базы при запуске jar без compose |
