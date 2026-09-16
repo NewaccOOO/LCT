@@ -69,6 +69,20 @@ class RouterTest {
     }
 
     @Test
+    void repeatedQueryUsesCachedDijkstraTableAndGivesSameRoute() {
+        Geometry park = rect(-50, -20, 50, 20);
+        Router router = router(List.of(new Restriction("park-1", park, "park")), List.of());
+
+        Route first = router.routeToAny(point(-70, 0), List.of(point(70, 0)), Set.of());
+        Route second = router.routeToAny(point(-70, 0), List.of(point(70, 0)), Set.of());
+
+        assertEquals(first.getGeometry(), second.getGeometry());
+        long[] stats = router.tableStats();
+        assertEquals(2, stats[0]);
+        assertEquals(1, stats[1]);
+    }
+
+    @Test
     void routeToTieDoesNotRunAlongTiePipe() {
         // врезка в камеру (0, 0) на трубе вдоль оси x; точка подключения в (-130, 60): прямая под 155° раскладывается
         // на запад и северо-запад, но идти по трубе от врезки нельзя — сначала диагональ, потом запад

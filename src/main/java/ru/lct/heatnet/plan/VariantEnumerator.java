@@ -58,10 +58,11 @@ public final class VariantEnumerator {
     private static final double SHARED_ROOT_APART_M = 0.01;
     private static final int MAX_VARIANTS = 3;
     private static final int KMEANS_ITERATIONS = 20;
-    /** Локальный поиск по разбиениям ОКС: сколько сборок черновика он может потратить (свойство heatnet.search.budget). */
-    private static final int SEARCH_BUDGET = Integer.getInteger("heatnet.search.budget", 150);
-    /** И не дольше этого по стенным часам (свойство heatnet.search.seconds): столько же меряет гейт perf.sh. */
-    private static final long SEARCH_SECONDS = Long.getLong("heatnet.search.seconds", 60);
+    /**
+     * Локальный поиск по разбиениям ОКС: сколько сборок черновика он может потратить (свойство heatnet.search.budget).
+     * Предела по стенным часам нет: результат не зависит от скорости и загрузки машины.
+     */
+    private static final int SEARCH_BUDGET = Integer.getInteger("heatnet.search.budget", 300);
     /** Деревья подмножества строятся не на всех кандидатах врезки, а на лучших по грубой оценке стоимости. */
     private static final int CANDIDATE_LIMIT = 6;
     /** Слияния и переносы пробуются только между блоками, ближайшими друг к другу по точкам подключения. */
@@ -255,9 +256,10 @@ public final class VariantEnumerator {
 
     /**
      * Локальный поиск по разбиениям ОКС: спуск с первым улучшением по ходам {@link #moves}, а из локального оптимума —
-     * шаг на наименее плохого ещё не посещённого соседа (не хуже текущего на WALK_THRESHOLD), и спуск снова. Каждый
-     * шаг — новый черновик через {@link #draft}; budget — их число, SEARCH_SECONDS — предел по часам. Возвращает
-     * лучший найденный черновик.
+     * шаг на наименее плохого ещё не посещённого соседа (не хуже текущего на WALK_THRESHOLD), и спуск снова. Когда
+     * и такого соседа нет, приём walk: спуск перезапускается от лучшего найденного черновика по его наименее плохому
+     * непосещённому соседу без порога, пока есть бюджет. Каждый шаг — новый черновик через {@link #draft}; budget —
+     * их число, других пределов нет, поэтому результат детерминирован. Возвращает лучший найденный черновик.
      */
     private Draft search(Draft start, int budget) {
         List<List<ConnectionPoint>> blocks = new ArrayList<>();
@@ -271,6 +273,7 @@ public final class VariantEnumerator {
             }
         }
         Draft best = start;
+        List<List<ConnectionPoint>> bestBlocks = blocks;
         Draft current = start;
         Set<String> visited = new HashSet<>();
         visited.add(new Move(blocks, null).key());
@@ -280,7 +283,7 @@ public final class VariantEnumerator {
             Move step = null;
             Draft stepDraft = null;
             for (Move move : moves(blocks)) {
-                if (spent >= budget || System.nanoTime() - started > SEARCH_SECONDS * 1_000_000_000L) {
+                if (spent >= budget) {
                     break;
                 }
                 String key = move.key();
@@ -302,18 +305,39 @@ public final class VariantEnumerator {
                     stepDraft = draft;
                 }
             }
-            if (step == null || stepDraft.score() > current.score() + WALK_THRESHOLD) {
-                break;
+            if (step == null) {
+                if (current == best) {
+                    break;
+                }
+                blocks = bestBlocks;
+                current = best;
+                continue;
+            }
+            if (stepDraft.score() > current.score() + WALK_THRESHOLD && current != best) {
+                // walk: застряли — перезапуск от лучшего черновика; от него самого порог не действует
+                blocks = bestBlocks;
+                current = best;
+                continue;
             }
             blocks = step.blocks;
             current = stepDraft;
             if (current.score() < best.score() - IMPROVE_EPS) {
                 best = current;
+                bestBlocks = blocks;
                 log.info("search: score={} trees={} drafts={} elapsed={}s", best.score(), blocks.size(), spent,
                         (System.nanoTime() - started) / 1_000_000_000L);
             }
         }
-        log.info("search: done score={} drafts={} elapsed={}s", best.score(), spent, (System.nanoTime() - started) / 1_000_000_000L);
+        long[] tables = new long[2];
+        for (Region region : new HashSet<>(regionByConnection.values())) {
+            for (Router router : region.routers.values()) {
+                long[] stats = router.tableStats();
+                tables[0] += stats[0];
+                tables[1] += stats[1];
+            }
+        }
+        log.info("search: done score={} drafts={} elapsed={}s dijkstra={} cached={}", best.score(), spent,
+                (System.nanoTime() - started) / 1_000_000_000L, tables[0], tables[1]);
         return best;
     }
 

@@ -37,6 +37,10 @@ public final class Router {
     // ponytail: точки запроса повторяются десятками раз (одна точка подключения на каждом шаге дерева, одни и те же
     // цели у всех ОКС шага), кэш их весов до узлов графа. 4096 записей по n double; при n в десятки тысяч ужать.
     private static final int WEIGHT_CACHE_SIZE = 4096;
+    // ponytail: таблица Дейкстры от точки запроса зависит только от неё и набора пропускаемых объектов, а локальный
+    // поиск запрашивает одни и те же точки подключения десятки раз. 256 записей по 2n чисел; при n в десятки тысяч ужать.
+    private static final int TABLE_CACHE_SIZE = 256;
+    private static final double UNKNOWN = Double.NEGATIVE_INFINITY;
 
     private final ObstacleSet obstacles;
     private final Rules rules;
@@ -50,6 +54,31 @@ public final class Router {
             return size() > WEIGHT_CACHE_SIZE;
         }
     };
+    private final Map<List<Object>, double[]> partialCache = new LinkedHashMap<>(64, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<List<Object>, double[]> eldest) {
+            return size() > WEIGHT_CACHE_SIZE;
+        }
+    };
+    private final Map<List<Object>, Table> tableCache = new LinkedHashMap<>(16, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<List<Object>, Table> eldest) {
+            return size() > TABLE_CACHE_SIZE;
+        }
+    };
+    private long tableRequests;
+    private long tableHits;
+
+    /** Таблица Дейкстры от точки запроса: расстояния до узлов и предшественники. */
+    private static final class Table {
+        final double[] dist;
+        final int[] pred;
+
+        Table(double[] dist, int[] pred) {
+            this.dist = dist;
+            this.pred = pred;
+        }
+    }
 
     public Router(InputData input, Rules rules, Envelope area, int dn) {
         obstacles = new ObstacleSet(input, rules, area, dn);
@@ -98,6 +127,68 @@ public final class Router {
     public synchronized Route routeToAny(Point from, Collection<Point> targets, Set<String> ignored) {
         int n = nodes.size();
         Coordinate source = from.getCoordinate();
+        Table table = table(source, ignored);
+        double[] dist = table.dist;
+        int[] pred = table.pred;
+        double bestWeight = Double.POSITIVE_INFINITY;
+        Coordinate bestTarget = null;
+        int bestVia = -1;
+        for (Point target : targets) {
+            Coordinate t = target.getCoordinate();
+            // вес не меньше расстояния по прямой: цель дальше уже найденного веса не может выиграть, её веса до узлов
+            // не считаются (это самая дорогая часть: цели дерева меняются с каждым черновиком и в кэш не попадают)
+            if (t.distance(source) >= bestWeight) {
+                continue;
+            }
+            double direct = obstacles.edgeWeight(t, source, ignored, false, false);
+            double weight = Double.isNaN(direct) ? Double.POSITIVE_INFINITY : direct;
+            int via = -1;
+            double[] toNodes = partialWeights(t, ignored);
+            for (int v = 0; v < n; v++) {
+                // нижняя оценка через узел: до него по графу плюс по прямой; вес до узла считается только если она бьёт текущий
+                if (dist[v] + nodes.get(v).distance(t) >= weight) {
+                    continue;
+                }
+                if (toNodes[v] == UNKNOWN) {
+                    toNodes[v] = obstacles.tangent(v, t) ? obstacles.edgeWeight(t, nodes.get(v), ignored, false, true) : Double.NaN;
+                }
+                if (!Double.isNaN(toNodes[v]) && dist[v] + toNodes[v] < weight) {
+                    weight = dist[v] + toNodes[v];
+                    via = v;
+                }
+            }
+            if (weight < bestWeight) {
+                bestWeight = weight;
+                bestTarget = t;
+                bestVia = via;
+            }
+        }
+        if (bestTarget == null) {
+            return null;
+        }
+        List<Coordinate> coords = new ArrayList<>();
+        for (int v = bestVia; v >= 0; v = pred[v]) {
+            coords.add(0, nodes.get(v));
+        }
+        coords.add(0, source);
+        coords.add(bestTarget);
+        straighten(coords, ignored);
+        octilinearize(coords, ignored);
+        straighten(coords, ignored);
+        LineString line = from.getFactory().createLineString(coords.toArray(new Coordinate[0]));
+        List<SpecialSpan> spans = obstacles.spans(line, ignored);
+        return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), spans), spans);
+    }
+
+    /** Таблица Дейкстры от точки запроса, из кэша по координате и набору пропускаемых объектов. */
+    private Table table(Coordinate source, Set<String> ignored) {
+        tableRequests++;
+        Table cached = tableCache.get(List.of(source.x, source.y, ignored));
+        if (cached != null) {
+            tableHits++;
+            return cached;
+        }
+        int n = nodes.size();
         double[] dist = nodeWeights(source, ignored).clone();
         int[] pred = new int[n];
         Arrays.fill(pred, -1);
@@ -127,42 +218,14 @@ public final class Router {
                 }
             }
         }
-        double bestWeight = Double.POSITIVE_INFINITY;
-        Coordinate bestTarget = null;
-        int bestVia = -1;
-        for (Point target : targets) {
-            Coordinate t = target.getCoordinate();
-            double direct = obstacles.edgeWeight(t, source, ignored, false, false);
-            double weight = Double.isNaN(direct) ? Double.POSITIVE_INFINITY : direct;
-            int via = -1;
-            double[] toNodes = nodeWeights(t, ignored);
-            for (int v = 0; v < n; v++) {
-                if (!Double.isNaN(toNodes[v]) && dist[v] + toNodes[v] < weight) {
-                    weight = dist[v] + toNodes[v];
-                    via = v;
-                }
-            }
-            if (weight < bestWeight) {
-                bestWeight = weight;
-                bestTarget = t;
-                bestVia = via;
-            }
-        }
-        if (bestTarget == null) {
-            return null;
-        }
-        List<Coordinate> coords = new ArrayList<>();
-        for (int v = bestVia; v >= 0; v = pred[v]) {
-            coords.add(0, nodes.get(v));
-        }
-        coords.add(0, source);
-        coords.add(bestTarget);
-        straighten(coords, ignored);
-        octilinearize(coords, ignored);
-        straighten(coords, ignored);
-        LineString line = from.getFactory().createLineString(coords.toArray(new Coordinate[0]));
-        List<SpecialSpan> spans = obstacles.spans(line, ignored);
-        return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), spans), spans);
+        Table table = new Table(dist, pred);
+        tableCache.put(List.of(source.x, source.y, ignored), table);
+        return table;
+    }
+
+    /** Сколько таблиц Дейкстры запрошено и сколько из них взято из кэша. */
+    public synchronized long[] tableStats() {
+        return new long[] {tableRequests, tableHits};
     }
 
     /**
@@ -170,6 +233,15 @@ public final class Router {
      * кэшируются по координате и набору пропускаемых объектов. Считаются последовательно: параллельный расчёт над
      * общими геометриями JTS изредка давал разные трассы на одном входе.
      */
+    /** Веса от цели до узлов, считаются лениво по мере надобности; UNKNOWN — ещё не считался. Кэш отдельный от полных. */
+    private double[] partialWeights(Coordinate c, Set<String> ignored) {
+        return partialCache.computeIfAbsent(List.of(c.x, c.y, ignored), key -> {
+            double[] weights = new double[nodes.size()];
+            Arrays.fill(weights, UNKNOWN);
+            return weights;
+        });
+    }
+
     private double[] nodeWeights(Coordinate c, Set<String> ignored) {
         return weightCache.computeIfAbsent(List.of(c.x, c.y, ignored), key -> {
             double[] weights = new double[nodes.size()];

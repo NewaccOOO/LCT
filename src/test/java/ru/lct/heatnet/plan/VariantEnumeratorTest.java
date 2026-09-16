@@ -55,6 +55,23 @@ class VariantEnumeratorTest {
     }
 
     @Test
+    void twoRunsGiveIdenticalResult() {
+        // поиск ограничен только бюджетом сборок, без стенных часов: два прогона совпадают до копейки
+        PlanFixture fixture = PlanFixture.trunk().oks("o-1", 100, 150, 5).oks("o-2", 500, 150, 5).oks("o-3", 300, 120, 8);
+
+        Result first = new VariantEnumerator(fixture.input(), rules).run();
+        Result second = new VariantEnumerator(fixture.input(), rules).run();
+
+        assertEquals(first.getVariants().size(), second.getVariants().size());
+        for (int i = 0; i < first.getVariants().size(); i++) {
+            assertEquals(first.getVariants().get(i).getSummary().getCalculatedCost(),
+                    second.getVariants().get(i).getSummary().getCalculatedCost(), 1e-9);
+            assertEquals(first.getVariants().get(i).getSummary().getLength(),
+                    second.getVariants().get(i).getSummary().getLength(), 1e-9);
+        }
+    }
+
+    @Test
     void singleTieInCandidateStillGivesTwoDifferentVariants() {
         // у ОКС одна ближайшая врезка: перпендикуляр на трубу или камера на её конце
         PlanFixture onPipe = new PlanFixture().pipe("hn-1", 0, 0, 400, 0, 200, 100, "src").oks("o-1", 200, 60, 30);
