@@ -57,6 +57,10 @@ public final class VariantEnumerator {
     private static final int KMEANS_ITERATIONS = 20;
     /** Локальный поиск по разбиениям ОКС: сколько сборок черновика он может потратить (свойство heatnet.search.budget). */
     private static final int SEARCH_BUDGET = Integer.getInteger("heatnet.search.budget", 150);
+    /** И не дольше этого по стенным часам (свойство heatnet.search.seconds): столько же меряет гейт perf.sh. */
+    private static final long SEARCH_SECONDS = Long.getLong("heatnet.search.seconds", 60);
+    /** Деревья подмножества строятся не на всех кандидатах врезки, а на ближайших к его точкам подключения. */
+    private static final int CANDIDATE_LIMIT = 6;
     /** Слияния и переносы пробуются только между блоками, ближайшими друг к другу по точкам подключения. */
     private static final int NEAREST_BLOCKS = 2;
     private static final double IMPROVE_EPS = 1e-6;
@@ -242,7 +246,7 @@ public final class VariantEnumerator {
         while (improved && spent < budget) {
             improved = false;
             for (List<List<ConnectionPoint>> candidate : moves(blocks)) {
-                if (spent++ >= budget) {
+                if (spent++ >= budget || System.nanoTime() - started > SEARCH_SECONDS * 1_000_000_000L) {
                     break;
                 }
                 Draft draft = draft(candidate, subset -> false);
@@ -502,7 +506,7 @@ public final class VariantEnumerator {
     private List<Option> options(Region region, int dn, Envelope area, List<ConnectionPoint> subset, boolean verify,
             List<TieCandidate> candidates) {
         List<Option> options = new ArrayList<>();
-        for (TieCandidate candidate : candidates) {
+        for (TieCandidate candidate : nearestCandidates(subset, candidates)) {
             Tree tree = builder.build(region.router(dn, area), dn, area, candidate, subset);
             if (tree.edges.isEmpty()) {
                 continue;
@@ -520,6 +524,14 @@ public final class VariantEnumerator {
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
         return options;
+    }
+
+    /** До CANDIDATE_LIMIT кандидатов с наименьшей суммой расстояний до точек подключения подмножества. */
+    private static List<TieCandidate> nearestCandidates(List<ConnectionPoint> subset, List<TieCandidate> candidates) {
+        List<TieCandidate> sorted = new ArrayList<>(candidates);
+        sorted.sort(Comparator.comparingDouble(candidate -> subset.stream()
+                .mapToDouble(connection -> connection.getGeometry().distance(candidate.getPoint())).sum()));
+        return sorted.subList(0, Math.min(CANDIDATE_LIMIT, sorted.size()));
     }
 
     /** Отступы дерева, построенного по графу меньшего диаметра, проверяются для наибольшего фактического диаметра. */
