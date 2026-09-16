@@ -16,12 +16,15 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.locationtech.jts.geom.Envelope;
 import ru.lct.heatnet.model.Chamber;
 import ru.lct.heatnet.model.Diagnostic;
 import ru.lct.heatnet.model.ExistingOks;
@@ -66,6 +69,40 @@ class GeoJsonStreamReaderTest {
         assertTrue(data.getExistingOks().size() >= counts.getOrDefault("oks_existing", 0));
         assertTrue(data.getExistingOks().size() <= counts.getOrDefault("oks_existing", 0) + counts.getOrDefault("building", 0));
         assertEquals(counts.getOrDefault("restriction", 0), data.getRestrictions().size());
+    }
+
+    @Test
+    void skipsFarObstaclesButStillChecksThem() throws IOException {
+        ArrayNode features = validFeatures();
+        features.add(feature("Polygon", new double[][][] {{{38.50, 55.76}, {38.51, 55.76}, {38.51, 55.77}, {38.50, 55.76}}},
+                "id", "far", "object_type", "restriction", "restriction_type", "park"));
+        features.add(feature("Polygon", new double[][][] {{{38.52, 55.76}, {38.53, 55.76}, {38.53, 55.77}, {38.52, 55.76}}},
+                "id", "v1_far", "object_type", "oks_existing"));
+        Path file = write(features);
+        List<InputData> partials = new ArrayList<>();
+
+        InputData data = GeoJsonStreamReader.read(file, partial -> {
+            partials.add(partial);
+            Envelope extent = partial.getConnectionPoints().get(0).getGeometry().getEnvelopeInternal();
+            extent.expandBy(10_000);
+            return extent;
+        });
+
+        assertEquals(List.of(), data.getDiagnostics());
+        assertEquals(List.of(), partials.get(0).getRestrictions());
+        assertEquals(List.of(), partials.get(0).getExistingOks());
+        assertEquals(List.of("E1", "v1_far"), ids(data.getExistingOks(), ExistingOks::getId));
+        assertEquals(List.of("R1", "R2"), ids(data.getRestrictions(), Restriction::getId));
+        assertEquals(List.of("R1", "R2", "far"), ids(GeoJsonStreamReader.read(file).getRestrictions(), Restriction::getId));
+
+        features.add(feature("Polygon", new double[][][] {{{38.60, 55.76}, {38.61, 55.77}, {38.61, 55.76}, {38.60, 55.77}, {38.60, 55.76}}},
+                "id", "far-bowtie", "object_type", "restriction", "restriction_type", "park"));
+        InputData broken = GeoJsonStreamReader.read(write(features), partial -> new Envelope());
+        assertEquals(List.of("far-bowtie"), ids(broken.getDiagnostics(), Diagnostic::getFeatureId));
+    }
+
+    private static <T> List<String> ids(List<T> items, Function<T, String> id) {
+        return items.stream().map(id).collect(Collectors.toList());
     }
 
     @Test

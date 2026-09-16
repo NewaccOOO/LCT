@@ -26,12 +26,12 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Component;
 import ru.lct.heatnet.calc.VariantCriteria;
 import ru.lct.heatnet.core.Pipeline;
-import ru.lct.heatnet.io.GeoJsonStreamReader;
 import ru.lct.heatnet.io.GeoJsonStreamWriter;
 import ru.lct.heatnet.model.Diagnostic;
 import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.Result;
 import ru.lct.heatnet.model.Variant;
+import ru.lct.heatnet.plan.VariantEnumerator;
 import ru.lct.heatnet.rules.Rules;
 
 /** Выполняет задачи в пуле потоков; каждая смена статуса сохраняется отдельной короткой транзакцией. */
@@ -89,7 +89,7 @@ public class JobWorker {
         jobs.save(job);
         try {
             Path input = Path.of(job.getInputPath());
-            InputData data = GeoJsonStreamReader.read(input);
+            InputData data = VariantEnumerator.read(input, RULES);
             for (String warning : data.getWarnings()) {
                 log.warn("jobs: job {} {}", id, warning);
             }

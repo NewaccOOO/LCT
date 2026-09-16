@@ -18,9 +18,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import org.locationtech.jts.geom.Coordinate;
-import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.CoordinateXY;
+import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
@@ -97,7 +98,22 @@ public class GeoJsonStreamReader {
     private static final Locale RUSSIAN = new Locale("ru");
 
     public static InputData read(Path path) {
-        Scan scan = new Scan();
+        return scan(path, new Scan(false, null));
+    }
+
+    /**
+     * Чтение в два прохода без дальних препятствий. Первый проход берёт всё, кроме зданий и ограничений, и по нему
+     * {@code obstacleExtent} считает прямоугольник, вне которого препятствия на расчёт не влияют; null — оставить
+     * все. Второй проход проверяет каждый объект как обычно, но кладёт в память только здания и ограничения,
+     * пересекающие прямоугольник. На городе, где ОКС в одном районе, куча не растёт с числом зданий.
+     */
+    public static InputData read(Path path, Function<InputData, Envelope> obstacleExtent) {
+        InputData partial = scan(path, new Scan(true, null));
+        Envelope extent = partial.getDiagnostics().isEmpty() ? obstacleExtent.apply(partial) : null;
+        return scan(path, new Scan(false, extent));
+    }
+
+    private static InputData scan(Path path, Scan scan) {
         try (JsonParser parser = MAPPER.getFactory().createParser(path.toFile())) {
             scan.read(parser);
         } catch (JsonProcessingException e) {
@@ -182,9 +198,24 @@ public class GeoJsonStreamReader {
         final Map<String, String> upstreamById = new LinkedHashMap<>();
         final Map<String, Integer> unknownRestrictionTypes = new LinkedHashMap<>();
         final List<Ref> refs = new ArrayList<>();
+        final boolean skipObstacles;
+        final Envelope extent;
         Source source;
         int sources;
         int ordinal;
+
+        Scan(boolean skipObstacles, Envelope extent) {
+            this.skipObstacles = skipObstacles;
+            this.extent = extent;
+        }
+
+        /**
+         * Препятствие нужно расчёту: пересекает прямоугольник или extent не задан. ID на «v» остаются всегда: по ним
+         * сборщик выбирает префикс выходных ID, см. NetworkAssembler.
+         */
+        boolean keep(String id, Geometry geometry) {
+            return extent == null || id.startsWith("v") || geometry.getEnvelopeInternal().intersects(extent);
+        }
 
         void read(JsonParser parser) throws IOException {
             if (parser.nextToken() != JsonToken.START_OBJECT) {
@@ -244,7 +275,7 @@ public class GeoJsonStreamReader {
             if (id != null && typeById.putIfAbsent(id, objectType == null ? "" : objectType) != null) {
                 add(featureId, "id", "id повторяется");
             }
-            if (objectType == null) {
+            if (objectType == null || skipObstacles && (objectType.equals(OKS_EXISTING) || objectType.equals(RESTRICTION))) {
                 return;
             }
             switch (objectType) {
@@ -309,7 +340,7 @@ public class GeoJsonStreamReader {
                 }
                 case OKS_EXISTING: {
                     Geometry geometry = geometry(node, featureId, POLYGONS);
-                    if (diagnostics.size() == before) {
+                    if (diagnostics.size() == before && keep(id, geometry)) {
                         existingOks.add(new ExistingOks(id, geometry));
                     }
                     break;
@@ -318,7 +349,7 @@ public class GeoJsonStreamReader {
                     String restrictionType = string(props, featureId, "restriction_type");
                     if (BUILDING.equals(restrictionType)) {
                         Geometry geometry = geometry(node, featureId, POLYGONS);
-                        if (diagnostics.size() == before) {
+                        if (diagnostics.size() == before && keep(id, geometry)) {
                             buildings.add(new ExistingOks(id, geometry));
                         }
                         break;
@@ -333,7 +364,7 @@ public class GeoJsonStreamReader {
                         }
                     }
                     Geometry geometry = geometry(node, featureId, allowed);
-                    if (diagnostics.size() == before) {
+                    if (diagnostics.size() == before && keep(id, geometry)) {
                         restrictions.add(new Restriction(id, geometry, restrictionType));
                     }
                     break;

@@ -1,5 +1,6 @@
 package ru.lct.heatnet.plan;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -26,6 +27,7 @@ import ru.lct.heatnet.graph.Router;
 import ru.lct.heatnet.calc.ReconPart;
 import ru.lct.heatnet.calc.ReconstructionCalculator;
 import ru.lct.heatnet.calc.TieInLoad;
+import ru.lct.heatnet.io.GeoJsonStreamReader;
 import ru.lct.heatnet.model.ConnectionPoint;
 import ru.lct.heatnet.model.FutureOks;
 import ru.lct.heatnet.model.InputData;
@@ -59,6 +61,11 @@ public final class VariantEnumerator {
     private static final double SHARED_ROOT_CLIP_M = 0.15;
     private static final double SHARED_ROOT_APART_M = 0.01;
     private static final int MAX_VARIANTS = 3;
+    /**
+     * Запас вокруг областей групп при отборе препятствий на чтении: отступы ObstacleSet — десятки метров, а причины
+     * неподключения ищут кольцо зон в 2 км от точки подключения (VariantCriteria).
+     */
+    private static final double EXTENT_MARGIN_M = 2500;
     private static final int KMEANS_ITERATIONS = 20;
     /**
      * Локальный поиск по разбиениям ОКС: сколько сборок черновика он может потратить (свойство heatnet.search.budget).
@@ -190,6 +197,35 @@ public final class VariantEnumerator {
             if (oksById.containsKey(connection.getOksId())) {
                 connectionByOks.putIfAbsent(connection.getOksId(), connection);
             }
+        }
+    }
+
+    /**
+     * Вход для расчёта: чтение без дальних препятствий, см. {@link #obstacleExtent}. Свойство
+     * {@code heatnet.read.all=true} читает все препятствия, как раньше.
+     */
+    public static InputData read(Path path, Rules rules) {
+        return Boolean.getBoolean("heatnet.read.all") ? GeoJsonStreamReader.read(path)
+                : GeoJsonStreamReader.read(path, partial -> obstacleExtent(partial, rules));
+    }
+
+    /**
+     * Прямоугольник, вне которого здания и ограничения на расчёт не влияют: объединение широких областей всех групп
+     * ОКС, как их строит {@link #run()}, с запасом {@link #EXTENT_MARGIN_M}. Считается по входу без препятствий:
+     * области зависят только от точек подключения, расходов и существующей сети. null — оставить все препятствия.
+     */
+    public static Envelope obstacleExtent(InputData input, Rules rules) {
+        try {
+            VariantEnumerator enumerator = new VariantEnumerator(input, rules);
+            Envelope extent = new Envelope();
+            for (List<ConnectionPoint> group : groups(new ArrayList<>(enumerator.connectionByOks.values()))) {
+                extent.expandToInclude(enumerator.new Region(group).wideArea);
+            }
+            extent.expandBy(EXTENT_MARGIN_M);
+            return extent;
+        } catch (RuntimeException e) {
+            // вход, на котором расчёт упадёт, читается целиком: ошибка будет та же, что без отбора
+            return null;
         }
     }
 

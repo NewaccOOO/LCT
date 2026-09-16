@@ -18,12 +18,12 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 import ru.lct.heatnet.calc.VariantCriteria;
 import ru.lct.heatnet.core.Pipeline;
-import ru.lct.heatnet.io.GeoJsonStreamReader;
 import ru.lct.heatnet.io.GeoJsonStreamWriter;
 import ru.lct.heatnet.model.Diagnostic;
 import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.Result;
 import ru.lct.heatnet.model.Variant;
+import ru.lct.heatnet.plan.VariantEnumerator;
 import ru.lct.heatnet.rules.Rules;
 
 /**
@@ -58,7 +58,7 @@ public class CliRunner implements ApplicationRunner {
         }
         long started = System.nanoTime();
         try {
-            InputData input = GeoJsonStreamReader.read(Path.of(files.get(0)));
+            InputData input = VariantEnumerator.read(Path.of(files.get(0)), Rules.load());
             input.getWarnings().forEach(System.err::println);
             if (!input.getDiagnostics().isEmpty()) {
                 for (Diagnostic diagnostic : input.getDiagnostics()) {
