@@ -19,6 +19,7 @@
 | [specs/backend-core/](specs/backend-core/index.md) | сервис на Java, CLI, генератор синтетики, валидатор | готов |
 | [specs/scenario-tests/](specs/scenario-tests/index.md) | сценарные тесты S00–S14, случайный прогон sweep, отчёт | готов |
 | [specs/routing-research/](specs/routing-research/index.md) | ресёрч алгоритма трассировки на синтетике: точная модель, кандидаты, правила разумной трассы | в работе |
+| [specs/exact-subproblem/](specs/exact-subproblem/index.md) | цикл с точной подзадачей в Java-сервисе: снять 5–7 ОКС, решить точно, починить спуском; журнал экспериментов с проверкой скриптом | черновик |
 
 Статус меняет агент, который ведёт пакет. Новый пакет добавляется строкой в эту таблицу.
 
