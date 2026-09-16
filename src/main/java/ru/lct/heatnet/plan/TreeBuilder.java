@@ -2,6 +2,7 @@ package ru.lct.heatnet.plan;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -104,6 +105,10 @@ final class TreeBuilder {
         final Envelope area;
         final Tree tree;
         final Set<String> ignored;
+        // ребро дерева не меняется после создания, а его специальные части и допустимые цели нужны на каждом шаге
+        // для каждого оставшегося ОКС
+        final Map<Tree.Edge, List<SpecialSpan>> spansByEdge = new IdentityHashMap<>();
+        final Map<Tree.Edge, List<Point>> targetsByEdge = new IdentityHashMap<>();
 
         Run(Router router, int dn, Envelope area, TieCandidate tie) {
             this.router = router;
@@ -209,19 +214,29 @@ final class TreeBuilder {
                 }
             }
             for (Tree.Edge edge : tree.edges) {
-                List<SpecialSpan> spans = obstacles.spans(edge.line, ignored);
-                LengthIndexedLine indexed = new LengthIndexedLine(edge.line);
-                List<Double> positions = vertexPositions(edge.line);
-                for (double at = SAMPLE_STEP_M; at < edge.line.getLength(); at += SAMPLE_STEP_M) {
-                    positions.add(at);
-                }
-                for (double at : positions) {
-                    if (allowed(edge, at, spans)) {
-                        targets.add(factory.createPoint(indexed.extractPoint(at)));
-                    }
+                targets.addAll(targetsByEdge.computeIfAbsent(edge, this::edgeTargets));
+            }
+            return targets;
+        }
+
+        List<Point> edgeTargets(Tree.Edge edge) {
+            List<Point> targets = new ArrayList<>();
+            List<SpecialSpan> spans = spans(edge);
+            LengthIndexedLine indexed = new LengthIndexedLine(edge.line);
+            List<Double> positions = vertexPositions(edge.line);
+            for (double at = SAMPLE_STEP_M; at < edge.line.getLength(); at += SAMPLE_STEP_M) {
+                positions.add(at);
+            }
+            for (double at : positions) {
+                if (allowed(edge, at, spans)) {
+                    targets.add(factory.createPoint(indexed.extractPoint(at)));
                 }
             }
             return targets;
+        }
+
+        List<SpecialSpan> spans(Tree.Edge edge) {
+            return spansByEdge.computeIfAbsent(edge, e -> obstacles.spans(e.line, ignored));
         }
 
         /** Точка на отрезке p–q, где маршрут впервые подходит к дереву ближе TOUCH_M, или null. */
@@ -304,7 +319,7 @@ final class TreeBuilder {
         }
 
         void addEdgeSpot(List<Spot> spots, Tree.Edge edge, double position) {
-            if (allowed(edge, position, obstacles.spans(edge.line, ignored))) {
+            if (allowed(edge, position, spans(edge))) {
                 spots.add(new Spot(null, edge, position, new LengthIndexedLine(edge.line).extractPoint(position)));
             }
         }

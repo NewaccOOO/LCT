@@ -1,17 +1,13 @@
 package ru.lct.heatnet.graph;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.Set;
-import java.util.stream.IntStream;
-import org.jgrapht.GraphPath;
-import org.jgrapht.alg.interfaces.ShortestPathAlgorithm.SingleSourcePaths;
-import org.jgrapht.alg.shortestpath.DijkstraShortestPath;
-import org.jgrapht.graph.DefaultWeightedEdge;
-import org.jgrapht.graph.SimpleWeightedGraph;
 import org.locationtech.jts.algorithm.Angle;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
@@ -23,8 +19,9 @@ import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.rules.Rules;
 
 /**
- * Кратчайшие маршруты по visibility graph одной области и диаметра. Граф строится в конструкторе один раз,
- * точки запроса добавляются в него на время вызова и удаляются после.
+ * Кратчайшие маршруты по visibility graph одной области и диаметра. Граф узлов строится в конструкторе один раз;
+ * точки запроса в граф не добавляются: их веса до узлов считаются (и кэшируются) отдельно, а Дейкстра идёт по
+ * массивам смежности от виртуального источника.
  */
 public final class Router {
     private static final double MIN_TURN_DEG = 3;
@@ -39,9 +36,9 @@ public final class Router {
 
     private final ObstacleSet obstacles;
     private final GeometryFactory factory = new GeometryFactory();
-    private final SimpleWeightedGraph<Integer, DefaultWeightedEdge> graph =
-            new SimpleWeightedGraph<>(DefaultWeightedEdge.class);
-    private final List<Coordinate> vertices;
+    private final List<Coordinate> nodes;
+    private final int[][] adjacency;
+    private final double[][] adjacencyWeight;
     private final Map<List<Object>, double[]> weightCache = new LinkedHashMap<>(64, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<List<Object>, double[]> eldest) {
@@ -51,11 +48,34 @@ public final class Router {
 
     public Router(InputData input, Rules rules, Envelope area, int dn) {
         obstacles = new ObstacleSet(input, rules, area, dn);
-        vertices = new ArrayList<>(obstacles.nodes());
+        nodes = obstacles.nodes();
+        int n = nodes.size();
+        List<List<Integer>> to = new ArrayList<>();
+        List<List<Double>> weight = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            to.add(new ArrayList<>());
+            weight.add(new ArrayList<>());
+        }
         // перебор O(n²) пар, но геометрия проверяется только у рёбер, касательных к зонам в обоих концах
-        for (int i = 0; i < vertices.size(); i++) {
-            graph.addVertex(i);
-            connect(i, i, Set.of());
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < i; j++) {
+                if (!obstacles.tangent(i, nodes.get(j)) || !obstacles.tangent(j, nodes.get(i))) {
+                    continue;
+                }
+                double w = obstacles.edgeWeight(nodes.get(i), nodes.get(j), Set.of(), true, true);
+                if (!Double.isNaN(w)) {
+                    to.get(i).add(j);
+                    weight.get(i).add(w);
+                    to.get(j).add(i);
+                    weight.get(j).add(w);
+                }
+            }
+        }
+        adjacency = new int[n][];
+        adjacencyWeight = new double[n][];
+        for (int i = 0; i < n; i++) {
+            adjacency[i] = to.get(i).stream().mapToInt(Integer::intValue).toArray();
+            adjacencyWeight[i] = weight.get(i).stream().mapToDouble(Double::doubleValue).toArray();
         }
     }
 
@@ -70,83 +90,86 @@ public final class Router {
 
     /** Кратчайший маршрут до ближайшей по весу цели или {@code null}, если ни одна цель не достижима. */
     public synchronized Route routeToAny(Point from, Collection<Point> targets, Set<String> ignored) {
-        int base = vertices.size();
-        try {
-            vertices.add(from.getCoordinate());
-            graph.addVertex(base);
-            connect(base, base, ignored);
-            for (Point target : targets) {
-                int id = vertices.size();
-                vertices.add(target.getCoordinate());
-                graph.addVertex(id);
-                connect(id, base + 1, ignored);
+        int n = nodes.size();
+        Coordinate source = from.getCoordinate();
+        double[] dist = nodeWeights(source, ignored).clone();
+        int[] pred = new int[n];
+        Arrays.fill(pred, -1);
+        boolean[] done = new boolean[n];
+        PriorityQueue<double[]> heap = new PriorityQueue<>((a, b) -> Double.compare(a[0], b[0]));
+        for (int v = 0; v < n; v++) {
+            if (!Double.isNaN(dist[v])) {
+                heap.add(new double[] {dist[v], v});
+            } else {
+                dist[v] = Double.POSITIVE_INFINITY;
             }
-            SingleSourcePaths<Integer, DefaultWeightedEdge> paths = new DijkstraShortestPath<>(graph).getPaths(base);
-            int best = -1;
-            for (int id = base + 1; id < vertices.size(); id++) {
-                if (best < 0 || paths.getWeight(id) < paths.getWeight(best)) {
-                    best = id;
+        }
+        while (!heap.isEmpty()) {
+            double[] top = heap.poll();
+            int v = (int) top[1];
+            if (done[v] || top[0] > dist[v]) {
+                continue;
+            }
+            done[v] = true;
+            for (int k = 0; k < adjacency[v].length; k++) {
+                int w = adjacency[v][k];
+                double candidate = dist[v] + adjacencyWeight[v][k];
+                if (candidate < dist[w]) {
+                    dist[w] = candidate;
+                    pred[w] = v;
+                    heap.add(new double[] {candidate, w});
                 }
             }
-            GraphPath<Integer, DefaultWeightedEdge> path = best < 0 ? null : paths.getPath(best);
-            if (path == null) {
-                return null;
+        }
+        double bestWeight = Double.POSITIVE_INFINITY;
+        Coordinate bestTarget = null;
+        int bestVia = -1;
+        for (Point target : targets) {
+            Coordinate t = target.getCoordinate();
+            double direct = obstacles.edgeWeight(t, source, ignored, false, false);
+            double weight = Double.isNaN(direct) ? Double.POSITIVE_INFINITY : direct;
+            int via = -1;
+            double[] toNodes = nodeWeights(t, ignored);
+            for (int v = 0; v < n; v++) {
+                if (!Double.isNaN(toNodes[v]) && dist[v] + toNodes[v] < weight) {
+                    weight = dist[v] + toNodes[v];
+                    via = v;
+                }
             }
-            List<Coordinate> coords = new ArrayList<>();
-            for (int id : path.getVertexList()) {
-                coords.add(vertices.get(id));
-            }
-            straighten(coords, ignored);
-            LineString line = from.getFactory().createLineString(coords.toArray(new Coordinate[0]));
-            List<SpecialSpan> spans = obstacles.spans(line, ignored);
-            return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), spans), spans);
-        } finally {
-            for (int id = vertices.size() - 1; id >= base; id--) {
-                graph.removeVertex(id);
-                vertices.remove(id);
+            if (weight < bestWeight) {
+                bestWeight = weight;
+                bestTarget = t;
+                bestVia = via;
             }
         }
-    }
-
-    // Соединяет вершину id со всеми вершинами [0, count), к которым ведёт допустимый отрезок. Первые
-    // obstacles.nodes().size() вершин — узлы графа, остальные — точки запроса, в которых путь начинается или кончается.
-    private void connect(int id, int count, Set<String> ignored) {
-        Coordinate c = vertices.get(id);
-        int nodeCount = obstacles.nodes().size();
-        double[] weights;
-        if (id < nodeCount) {
-            weights = weights(id, 0, count, ignored);
-        } else {
-            // веса точки запроса до узлов графа не зависят от других точек запроса и кэшируются по координате
-            weights = weightCache.computeIfAbsent(List.of(c.x, c.y, ignored), key -> weights(id, 0, nodeCount, ignored));
-            if (count > nodeCount) {
-                double[] full = new double[count];
-                System.arraycopy(weights, 0, full, 0, nodeCount);
-                System.arraycopy(weights(id, nodeCount, count, ignored), 0, full, nodeCount, count - nodeCount);
-                weights = full;
-            }
+        if (bestTarget == null) {
+            return null;
         }
-        for (int other = 0; other < count; other++) {
-            if (!Double.isNaN(weights[other])) {
-                graph.setEdgeWeight(graph.addEdge(id, other), weights[other]);
-            }
+        List<Coordinate> coords = new ArrayList<>();
+        for (int v = bestVia; v >= 0; v = pred[v]) {
+            coords.add(0, nodes.get(v));
         }
+        coords.add(0, source);
+        coords.add(bestTarget);
+        straighten(coords, ignored);
+        LineString line = from.getFactory().createLineString(coords.toArray(new Coordinate[0]));
+        List<SpecialSpan> spans = obstacles.spans(line, ignored);
+        return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), spans), spans);
     }
 
-    // последовательно: параллельный расчёт над общими геометриями JTS изредка давал разные трассы на одном входе
-    private double[] weights(int id, int from, int to, Set<String> ignored) {
-        Coordinate c = vertices.get(id);
-        int nodeCount = obstacles.nodes().size();
-        return IntStream.range(from, to)
-                .mapToDouble(other -> tangent(id, other, nodeCount)
-                        ? obstacles.edgeWeight(c, vertices.get(other), ignored, id < nodeCount, other < nodeCount)
-                        : Double.NaN)
-                .toArray();
-    }
-
-    private boolean tangent(int a, int b, int nodeCount) {
-        return (a >= nodeCount || obstacles.tangent(a, vertices.get(b)))
-                && (b >= nodeCount || obstacles.tangent(b, vertices.get(a)));
+    /**
+     * Веса от точки запроса до узлов графа, NaN — отрезок недопустим. Не зависят от других точек запроса, поэтому
+     * кэшируются по координате и набору пропускаемых объектов. Считаются последовательно: параллельный расчёт над
+     * общими геометриями JTS изредка давал разные трассы на одном входе.
+     */
+    private double[] nodeWeights(Coordinate c, Set<String> ignored) {
+        return weightCache.computeIfAbsent(List.of(c.x, c.y, ignored), key -> {
+            double[] weights = new double[nodes.size()];
+            for (int v = 0; v < weights.length; v++) {
+                weights[v] = obstacles.tangent(v, c) ? obstacles.edgeWeight(c, nodes.get(v), ignored, false, true) : Double.NaN;
+            }
+            return weights;
+        });
     }
 
     // Убирает вершины с отклонением меньше 3° и подотрезки короче 1 м вне специальных частей, если спрямлённый
