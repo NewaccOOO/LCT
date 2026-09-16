@@ -13,6 +13,7 @@
 [![сценарии](https://img.shields.io/badge/%D1%81%D1%86%D0%B5%D0%BD%D0%B0%D1%80%D0%B8%D0%B8-221_%D0%B8%D0%B7_221-22c55e?style=for-the-badge)](docs/testing/scenario-report.md)
 [![валидатор](https://img.shields.io/badge/%D0%B2%D0%B0%D0%BB%D0%B8%D0%B4%D0%B0%D1%82%D0%BE%D1%80-15_%D0%BF%D1%80%D0%B0%D0%B2%D0%B8%D0%BB-22c55e?style=for-the-badge)](tools/validator/heatcheck)
 
+[Задача и статус](TASK.md) ·
 [Быстрый старт](#-быстрый-старт) ·
 [Как считает](#-как-считает) ·
 [API](#-api) ·
@@ -189,6 +190,7 @@ flowchart LR
 
 | Документ | Что в нём |
 |---|---|
+| [TASK.md](TASK.md) | задача хакатона, все требования заказчика, открытые вопросы и статус: что сделано и что осталось |
 | [CONSTRAINTS.md](architecture/CONSTRAINTS.md) | правила кейса из ТЗ и уточнения организаторов |
 | [ARCHITECTURE.md](architecture/ARCHITECTURE.md) | устройство сервиса и алгоритм по шагам |
 | [BACKEND.md](architecture/BACKEND.md) | запуск, API, сборка, переменные окружения, границы применения |
