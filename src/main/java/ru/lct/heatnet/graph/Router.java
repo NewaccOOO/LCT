@@ -2,7 +2,9 @@ package ru.lct.heatnet.graph;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.IntStream;
 import org.jgrapht.GraphPath;
@@ -31,12 +33,21 @@ public final class Router {
     private static final double PUSH_TURN_DEG = 6;
     private static final double[] PUSH_STEPS_M = {0.5, 1, 2, 4, 8};
     private static final int MAX_PUSHES = 20;
+    // ponytail: точки запроса повторяются десятками раз (одна точка подключения на каждом шаге дерева, одни и те же
+    // цели у всех ОКС шага), кэш их весов до узлов графа. 4096 записей по n double; при n в десятки тысяч ужать.
+    private static final int WEIGHT_CACHE_SIZE = 4096;
 
     private final ObstacleSet obstacles;
     private final GeometryFactory factory = new GeometryFactory();
     private final SimpleWeightedGraph<Integer, DefaultWeightedEdge> graph =
             new SimpleWeightedGraph<>(DefaultWeightedEdge.class);
     private final List<Coordinate> vertices;
+    private final Map<List<Object>, double[]> weightCache = new LinkedHashMap<>(64, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<List<Object>, double[]> eldest) {
+            return size() > WEIGHT_CACHE_SIZE;
+        }
+    };
 
     public Router(InputData input, Rules rules, Envelope area, int dn) {
         obstacles = new ObstacleSet(input, rules, area, dn);
@@ -102,17 +113,35 @@ public final class Router {
     private void connect(int id, int count, Set<String> ignored) {
         Coordinate c = vertices.get(id);
         int nodeCount = obstacles.nodes().size();
-        // последовательно: параллельный расчёт над общими геометриями JTS изредка давал разные трассы на одном входе
-        double[] weights = IntStream.range(0, count)
-                .mapToDouble(other -> tangent(id, other, nodeCount)
-                        ? obstacles.edgeWeight(c, vertices.get(other), ignored, id < nodeCount, other < nodeCount)
-                        : Double.NaN)
-                .toArray();
+        double[] weights;
+        if (id < nodeCount) {
+            weights = weights(id, 0, count, ignored);
+        } else {
+            // веса точки запроса до узлов графа не зависят от других точек запроса и кэшируются по координате
+            weights = weightCache.computeIfAbsent(List.of(c.x, c.y, ignored), key -> weights(id, 0, nodeCount, ignored));
+            if (count > nodeCount) {
+                double[] full = new double[count];
+                System.arraycopy(weights, 0, full, 0, nodeCount);
+                System.arraycopy(weights(id, nodeCount, count, ignored), 0, full, nodeCount, count - nodeCount);
+                weights = full;
+            }
+        }
         for (int other = 0; other < count; other++) {
             if (!Double.isNaN(weights[other])) {
                 graph.setEdgeWeight(graph.addEdge(id, other), weights[other]);
             }
         }
+    }
+
+    // последовательно: параллельный расчёт над общими геометриями JTS изредка давал разные трассы на одном входе
+    private double[] weights(int id, int from, int to, Set<String> ignored) {
+        Coordinate c = vertices.get(id);
+        int nodeCount = obstacles.nodes().size();
+        return IntStream.range(from, to)
+                .mapToDouble(other -> tangent(id, other, nodeCount)
+                        ? obstacles.edgeWeight(c, vertices.get(other), ignored, id < nodeCount, other < nodeCount)
+                        : Double.NaN)
+                .toArray();
     }
 
     private boolean tangent(int a, int b, int nodeCount) {
