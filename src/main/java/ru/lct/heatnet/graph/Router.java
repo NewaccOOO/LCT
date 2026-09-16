@@ -3,9 +3,7 @@ package ru.lct.heatnet.graph;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Set;
 import org.locationtech.jts.algorithm.Angle;
@@ -34,12 +32,6 @@ public final class Router {
     private static final double ALIGN_TOL_DEG = 0.5;
     /** Шаги сдвига соседней вершины вдоль её выровненного отрезка, м. */
     private static final double[] SLIDES_M = {1, 2, 3, 5, 8, 13, 21};
-    // ponytail: точки запроса повторяются десятками раз (одна точка подключения на каждом шаге дерева, одни и те же
-    // цели у всех ОКС шага), кэш их весов до узлов графа. 4096 записей по n double; при n в десятки тысяч ужать.
-    private static final int WEIGHT_CACHE_SIZE = 4096;
-    // ponytail: таблица Дейкстры от точки запроса зависит только от неё и набора пропускаемых объектов, а локальный
-    // поиск запрашивает одни и те же точки подключения десятки раз. 256 записей по 2n чисел; при n в десятки тысяч ужать.
-    private static final int TABLE_CACHE_SIZE = 256;
     private static final double UNKNOWN = Double.NEGATIVE_INFINITY;
 
     private final ObstacleSet obstacles;
@@ -48,24 +40,8 @@ public final class Router {
     private final List<Coordinate> nodes;
     private final int[][] adjacency;
     private final double[][] adjacencyWeight;
-    private final Map<List<Object>, double[]> weightCache = new LinkedHashMap<>(64, 0.75f, true) {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<List<Object>, double[]> eldest) {
-            return size() > WEIGHT_CACHE_SIZE;
-        }
-    };
-    private final Map<List<Object>, double[]> partialCache = new LinkedHashMap<>(64, 0.75f, true) {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<List<Object>, double[]> eldest) {
-            return size() > WEIGHT_CACHE_SIZE;
-        }
-    };
-    private final Map<List<Object>, Table> tableCache = new LinkedHashMap<>(16, 0.75f, true) {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<List<Object>, Table> eldest) {
-            return size() > TABLE_CACHE_SIZE;
-        }
-    };
+    // веса точек запроса и таблицы Дейкстры: одни и те же точки запрашиваются десятки и сотни раз за расчёт
+    private final RouteCache cache;
     private long tableRequests;
     private long tableHits;
 
@@ -85,6 +61,11 @@ public final class Router {
     }
 
     public Router(ObstacleIndex index, Rules rules, Envelope area, int dn) {
+        this(index, rules, area, dn, new RouteCache(RouteCache.DEFAULT_MB));
+    }
+
+    public Router(ObstacleIndex index, Rules rules, Envelope area, int dn, RouteCache cache) {
+        this.cache = cache;
         obstacles = new ObstacleSet(index, rules, area, dn);
         this.rules = rules;
         nodes = obstacles.nodes();
@@ -194,7 +175,8 @@ public final class Router {
     /** Таблица Дейкстры от точки запроса, из кэша по координате и набору пропускаемых объектов. */
     private Table table(Coordinate source, Set<String> ignored) {
         tableRequests++;
-        Table cached = tableCache.get(List.of(source.x, source.y, ignored));
+        List<Object> key = List.of(this, "table", source.x, source.y, ignored);
+        Table cached = cache.get(key);
         if (cached != null) {
             tableHits++;
             return cached;
@@ -230,7 +212,7 @@ public final class Router {
             }
         }
         Table table = new Table(dist, pred);
-        tableCache.put(List.of(source.x, source.y, ignored), table);
+        cache.put(key, table, 12L * n);
         return table;
     }
 
@@ -246,7 +228,7 @@ public final class Router {
      */
     /** Веса от цели до узлов, считаются лениво по мере надобности; UNKNOWN — ещё не считался. Кэш отдельный от полных. */
     private double[] partialWeights(Coordinate c, Set<String> ignored) {
-        return partialCache.computeIfAbsent(List.of(c.x, c.y, ignored), key -> {
+        return cache.computeIfAbsent(List.of(this, "partial", c.x, c.y, ignored), 8L * nodes.size(), () -> {
             double[] weights = new double[nodes.size()];
             Arrays.fill(weights, UNKNOWN);
             return weights;
@@ -254,7 +236,7 @@ public final class Router {
     }
 
     private double[] nodeWeights(Coordinate c, Set<String> ignored) {
-        return weightCache.computeIfAbsent(List.of(c.x, c.y, ignored), key -> {
+        return cache.computeIfAbsent(List.of(this, "weights", c.x, c.y, ignored), 8L * nodes.size(), () -> {
             double[] weights = new double[nodes.size()];
             for (int v = 0; v < weights.length; v++) {
                 weights[v] = obstacles.tangent(v, c) ? obstacles.edgeWeight(c, nodes.get(v), ignored, false, true) : Double.NaN;

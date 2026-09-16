@@ -21,6 +21,7 @@ import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
 import ru.lct.heatnet.graph.ObstacleIndex;
 import ru.lct.heatnet.graph.ObstacleSet;
+import ru.lct.heatnet.graph.RouteCache;
 import ru.lct.heatnet.graph.Router;
 import ru.lct.heatnet.calc.ReconPart;
 import ru.lct.heatnet.calc.ReconstructionCalculator;
@@ -76,6 +77,7 @@ public final class VariantEnumerator {
     private final Rules rules;
     private final TieInFinder finder;
     private final ObstacleIndex obstacleIndex;
+    private final RouteCache routeCache = new RouteCache(RouteCache.DEFAULT_MB);
     private final SpecialObjects specials;
     private final TurnRule turnRule;
     private final TreeBuilder builder;
@@ -124,7 +126,7 @@ public final class VariantEnumerator {
 
         Router router(int routerDn, Envelope routerArea) {
             return routers.computeIfAbsent(routerDn + "@" + routerArea,
-                    key -> new Router(obstacleIndex, rules, routerArea, routerDn));
+                    key -> new Router(obstacleIndex, rules, routerArea, routerDn, routeCache));
         }
     }
 
@@ -332,15 +334,20 @@ public final class VariantEnumerator {
             }
         }
         long[] tables = new long[2];
+        int routers = 0;
+        int nodes = 0;
         for (Region region : new HashSet<>(regionByConnection.values())) {
             for (Router router : region.routers.values()) {
+                routers++;
+                nodes = Math.max(nodes, router.obstacles().nodes().size());
                 long[] stats = router.tableStats();
                 tables[0] += stats[0];
                 tables[1] += stats[1];
             }
         }
-        log.info("search: done score={} drafts={} elapsed={}s dijkstra={} cached={}", best.score(), spent,
-                (System.nanoTime() - started) / 1_000_000_000L, tables[0], tables[1]);
+        log.info("search: done score={} drafts={} elapsed={}s dijkstra={} cached={} routers={} nodes={} {}", best.score(),
+                spent, (System.nanoTime() - started) / 1_000_000_000L, tables[0], tables[1], routers, nodes,
+                routeCache.stats());
         return best;
     }
 
