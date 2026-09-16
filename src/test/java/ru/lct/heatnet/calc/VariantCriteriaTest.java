@@ -10,6 +10,7 @@ import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
+import ru.lct.heatnet.model.ConnectionPoint;
 import ru.lct.heatnet.model.FutureOks;
 import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.NetworkSegment;
@@ -70,6 +71,38 @@ class VariantCriteriaTest {
         assertEquals(new BigDecimal("0.000"), criteria.get("reconstruction_share"));
         assertEquals(BigDecimal.valueOf(construction + 8_000_000).setScale(2, java.math.RoundingMode.HALF_UP),
                 criteria.get("cost_per_oks"));
+    }
+
+    @Test
+    void explainsWhyOksIsUnconnected() {
+        // ОКС a в кольце воды, точка b внутри парка, у c нет точки подключения, d на открытом месте
+        Restriction water = new Restriction("water-1", factory.toGeometry(new Envelope(-50, 50, -50, 50))
+                .difference(factory.toGeometry(new Envelope(-20, 20, -20, 20))), "water");
+        Restriction park = new Restriction("park-1", factory.toGeometry(new Envelope(200, 260, -30, 30)), "park");
+        List<FutureOks> oks = List.of(oks("oks-a"), oks("oks-b"), oks("oks-c"), oks("oks-d"));
+        List<ConnectionPoint> points = List.of(point("oks-a", 0, 0), point("oks-b", 230, 0), point("oks-d", 600, 0));
+        InputData input = new InputData(null, List.of(), List.of(), oks, points, List.of(), List.of(water, park),
+                List.of(), List.of());
+        VariantSummary summary = new VariantSummary("summary_1", "1", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                List.of("oks-a", "oks-b", "oks-c", "oks-d"));
+        Variant variant = new Variant("1", List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), summary);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> reasons = (List<Map<String, Object>>) new VariantCriteria(input, rules).of(variant)
+                .get("unconnected_reasons");
+
+        assertEquals(List.of("enclosed", "inside_forbidden_zone", "no_connection_point", "no_route"),
+                reasons.stream().map(r -> r.get("reason")).collect(java.util.stream.Collectors.toList()));
+        assertEquals(List.of("water-1"), reasons.get(0).get("object_ids"));
+        assertEquals(List.of("park-1"), reasons.get(1).get("object_ids"));
+    }
+
+    private FutureOks oks(String id) {
+        return new FutureOks(id, factory.createPoint(new Coordinate(0, 0)), 5, null);
+    }
+
+    private ConnectionPoint point(String oksId, double x, double y) {
+        return new ConnectionPoint("cp-" + oksId, factory.createPoint(new Coordinate(x, y)), oksId);
     }
 
     private NewSegment segment(String id, String from, String to, LineString line, double length, String laying, double k) {

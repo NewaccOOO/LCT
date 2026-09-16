@@ -104,6 +104,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}td{padding:3px 0;border
 .layers label{display:inline-flex;gap:6px;align-items:center;margin:0 12px 6px 0;font-size:13px;color:var(--muted)}
 .legend{position:absolute;left:12px;bottom:12px;background:rgba(15,23,42,.92);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:12px;color:var(--muted);display:flex;flex-wrap:wrap;gap:6px 14px;max-width:calc(100% - 24px)}
 .legend i{display:inline-block;width:18px;height:4px;border-radius:2px;margin-right:6px;vertical-align:middle}
+td.reason{text-align:left;white-space:normal;color:var(--rose);padding-left:0}
 .hint{color:var(--muted);font-size:12px}
 .sel{outline:none}
 </style></head><body>
@@ -220,6 +221,8 @@ function show(v){
   document.getElementById("summary").innerHTML = SUMMARY.map(([k, n]) => "<tr><td>" + n + "</td><td>" + fmt(s[k]) + "</td></tr>").join("");
   const c = (DATA.criteria.find(r => String(r.variant_id) === v) || {}).criteria;
   document.getElementById("criteria").innerHTML = c ? CRITERIA.map(([k, n]) => "<tr><td>" + n + "</td><td>" + fmt(c[k]) + "</td></tr>").join("")
+      + (c.unconnected_reasons || []).map(r => "<tr><td colspan=2 class=reason><b>" + r.oks_id + "</b> не подключён: " + r.message
+        + (r.object_ids.length ? ". Объекты: " + r.object_ids.join(", ") : "") + "</td></tr>").join("")
     : "<tr><td class=hint>Нет файла *.criteria.json рядом с выходом: его пишет CLI.</td></tr>";
   document.querySelectorAll("[data-layer=recon]").forEach(b => svg.querySelectorAll(".recon").forEach(g => g.style.display = b.checked ? "" : "none"));
 }

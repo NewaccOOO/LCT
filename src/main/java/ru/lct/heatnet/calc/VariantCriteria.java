@@ -12,10 +12,16 @@ import java.util.Set;
 import java.util.TreeMap;
 import org.locationtech.jts.algorithm.Angle;
 import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.Point;
+import org.locationtech.jts.geom.Polygon;
+import org.locationtech.jts.operation.union.UnaryUnionOp;
 import org.locationtech.jts.geom.prep.PreparedGeometry;
 import org.locationtech.jts.geom.prep.PreparedGeometryFactory;
 import org.locationtech.jts.index.strtree.STRtree;
+import ru.lct.heatnet.model.ConnectionPoint;
+import ru.lct.heatnet.model.ExistingOks;
 import ru.lct.heatnet.model.FutureOks;
 import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.NetworkSegment;
@@ -24,6 +30,8 @@ import ru.lct.heatnet.model.Restriction;
 import ru.lct.heatnet.model.TechnicalNode;
 import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.model.VariantSummary;
+import ru.lct.heatnet.rules.Diameter;
+import ru.lct.heatnet.rules.RestrictionRule;
 import ru.lct.heatnet.rules.Rules;
 
 /**
@@ -36,10 +44,14 @@ public final class VariantCriteria {
     private static final double MIN_TURN_DEG = 3;
     private static final String SPECIAL = "special";
     private static final String HEAT_NETWORK = "heat_network";
+    private static final String OKS_EXISTING = "oks_existing";
+    // ponytail: замкнутость ищется среди зон в этом радиусе; кольцо шире даст причину no_route вместо enclosed
+    private static final double ENCLOSURE_RADIUS_M = 2000;
 
     private final InputData input;
     private final Rules rules;
     private final STRtree crossable = new STRtree();
+    private final Map<String, Map<String, Object>> reasons = new HashMap<>();
 
     /** Объект, который новая сеть может пересечь спецпереходом. */
     private static final class Crossable {
@@ -109,6 +121,11 @@ public final class VariantCriteria {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("connected_oks", connected);
         result.put("connected_flow_tph", scaled(connectedFlow, 3));
+        List<Map<String, Object>> unconnectedReasons = new ArrayList<>();
+        for (String oksId : summary.getUnconnectedOksIds()) {
+            unconnectedReasons.add(reasons.computeIfAbsent(oksId, this::reason));
+        }
+        result.put("unconnected_reasons", unconnectedReasons);
         result.put("tie_ins", variant.getTieIns().size());
         result.put("new_chambers", variant.getChambers().size());
         result.put("technical_nodes", variant.getNodes().size());
@@ -162,6 +179,92 @@ public final class VariantCriteria {
             }
         }
         return new int[] {all, nonstandard};
+    }
+
+    /**
+     * Почему у ОКС нет маршрута. Причина ищется после расчёта по тем же зонам запрета с отступами, что у поиска
+     * маршрута при диаметре по расходу ОКС: точка внутри зоны или в кольце зон. Иначе зоны точку не замыкают, и
+     * трассу не дали предельная длина, правило поворотов, углы пересечения или соседние деревья.
+     */
+    private Map<String, Object> reason(String oksId) {
+        ConnectionPoint connection = input.getConnectionPoints().stream()
+                .filter(c -> oksId.equals(c.getOksId())).findFirst().orElse(null);
+        if (connection == null) {
+            return reason(oksId, "no_connection_point", "у ОКС нет точки подключения", List.of());
+        }
+        double flow = input.getFutureOks().stream().filter(o -> oksId.equals(o.getId()))
+                .mapToDouble(FutureOks::getFlowTph).findFirst().orElse(0);
+        List<Diameter> diameters = rules.diameters();
+        if (flow > diameters.get(diameters.size() - 1).getCapacityTph()) {
+            return reason(oksId, "flow_exceeds_capacity", "расход больше пропускной способности наибольшего диаметра",
+                    List.of());
+        }
+        Diameter diameter = rules.diameterFor(flow);
+        Point point = connection.getGeometry();
+        Envelope around = new Envelope(point.getCoordinate());
+        around.expandBy(ENCLOSURE_RADIUS_M);
+        Map<String, Geometry> zones = new LinkedHashMap<>();
+        double halfWidth = diameter.getWidthM() / 2;
+        for (ExistingOks oks : input.getExistingOks()) {
+            double distance = rules.restriction(OKS_EXISTING).clearanceM(diameter.getDn()) + halfWidth;
+            addZone(zones, oks.getId(), oks.getGeometry(), distance, around);
+        }
+        for (Restriction restriction : input.getRestrictions()) {
+            RestrictionRule rule = rules.restriction(restriction.getType());
+            Geometry geometry = restriction.getGeometry();
+            if (!rule.forbid() && geometry.getDimension() > 0) {
+                continue;
+            }
+            double distance = rule.clearanceM(diameter.getDn()) + halfWidth;
+            if (geometry.getDimension() == 1 && rule.getHalfWidthM() != null) {
+                distance += rule.getHalfWidthM();
+            }
+            addZone(zones, restriction.getId(), geometry, distance, around);
+        }
+
+        List<String> inside = new ArrayList<>();
+        zones.forEach((id, zone) -> {
+            if (zone.covers(point)) {
+                inside.add(id);
+            }
+        });
+        if (!inside.isEmpty()) {
+            return reason(oksId, "inside_forbidden_zone", "точка подключения внутри запретной зоны с учётом отступа", inside);
+        }
+        if (!zones.isEmpty()) {
+            Geometry union = UnaryUnionOp.union(zones.values());
+            for (int i = 0; i < union.getNumGeometries(); i++) {
+                Geometry part = union.getGeometryN(i);
+                if (part instanceof Polygon && part.getFactory().createPolygon(((Polygon) part).getExteriorRing().getCoordinates()).contains(point)) {
+                    List<String> ring = new ArrayList<>();
+                    zones.forEach((id, zone) -> {
+                        if (zone.intersects(part)) {
+                            ring.add(id);
+                        }
+                    });
+                    return reason(oksId, "enclosed", "точка подключения окружена запретными зонами, обхода нет", ring);
+                }
+            }
+        }
+        return reason(oksId, "no_route", "запретные зоны точку не замыкают, но допустимая трасса не найдена: "
+                + "мешают предельная длина, правило поворотов, углы пересечения или соседние трассы", List.of());
+    }
+
+    private static void addZone(Map<String, Geometry> zones, String id, Geometry geometry, double distance, Envelope around) {
+        Envelope envelope = new Envelope(geometry.getEnvelopeInternal());
+        envelope.expandBy(distance);
+        if (envelope.intersects(around)) {
+            zones.put(id, geometry.buffer(distance));
+        }
+    }
+
+    private static Map<String, Object> reason(String oksId, String code, String message, List<String> objectIds) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("oks_id", oksId);
+        result.put("reason", code);
+        result.put("message", message);
+        result.put("object_ids", objectIds);
+        return result;
     }
 
     private static double deflection(Coordinate a, Coordinate b, Coordinate c) {

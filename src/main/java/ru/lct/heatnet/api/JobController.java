@@ -190,7 +190,7 @@ public class JobController {
                                             + "\"calculated_cost\": 33000000.00, \"new_network_length\": 340.50, "
                                             + "\"reconstruction_length\": 0.00, \"length\": 340.50, \"score\": 1.946, "
                                             + "\"unconnected_oks_ids\": [], \"criteria\": {\"connected_oks\": 1, "
-                                            + "\"connected_flow_tph\": 5.000, \"tie_ins\": 1, \"new_chambers\": 1, "
+                                            + "\"connected_flow_tph\": 5.000, \"unconnected_reasons\": [], \"tie_ins\": 1, \"new_chambers\": 1, "
                                             + "\"technical_nodes\": 0, \"chamber_reconstructions\": 0, \"special_segments\": 0, "
                                             + "\"special_length_m\": 0.00, \"crossed_objects\": {}, \"turns\": 1, "
                                             + "\"nonstandard_turns\": 0, \"surcharge_cost\": 0.00, \"reconstruction_share\": 0.000, "
