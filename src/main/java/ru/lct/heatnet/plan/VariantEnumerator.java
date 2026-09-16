@@ -11,6 +11,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
@@ -35,6 +37,7 @@ import ru.lct.heatnet.rules.Rules;
  * выбираются до трёх лучших по score, попарно различающихся набором врезок или разбиением ОКС по деревьям.
  */
 public final class VariantEnumerator {
+    private static final Logger log = LoggerFactory.getLogger(VariantEnumerator.class);
     /** ОКС ближе этого по точкам подключения считаются близкими и пробуются общим деревом. */
     private static final double GROUP_DISTANCE_M = 300;
     /** Запас области графа вокруг ОКС и кандидатов врезки (D-6). */
@@ -52,6 +55,11 @@ public final class VariantEnumerator {
     private static final double SHARED_ROOT_APART_M = 0.01;
     private static final int MAX_VARIANTS = 3;
     private static final int KMEANS_ITERATIONS = 20;
+    /** Локальный поиск по разбиениям ОКС: сколько сборок черновика он может потратить (свойство heatnet.search.budget). */
+    private static final int SEARCH_BUDGET = Integer.getInteger("heatnet.search.budget", 150);
+    /** Слияния и переносы пробуются только между блоками, ближайшими друг к другу по точкам подключения. */
+    private static final int NEAREST_BLOCKS = 2;
+    private static final double IMPROVE_EPS = 1e-6;
 
     private final InputData input;
     private final Rules rules;
@@ -184,6 +192,12 @@ public final class VariantEnumerator {
         if (anySplit) {
             drafts.add(draft(split, subset -> false));
         }
+        drafts.removeIf(Objects::isNull);
+        drafts.sort(Comparator.comparingDouble(Draft::score));
+        // локальный поиск от лучшего черновика: слияния деревьев дают одну врезку и одну реконструкцию вместо нескольких
+        if (!drafts.isEmpty()) {
+            drafts.add(search(drafts.get(0), SEARCH_BUDGET));
+        }
         List<Draft> picked = pick(drafts);
         if (picked.size() < 2) {
             // другие врезки всех ОКС разом могут дать тот же набор врезок, например ОКС поменялись камерами местами:
@@ -204,6 +218,131 @@ public final class VariantEnumerator {
             variants.add(assembler.assemble(String.valueOf(i + 1), i + 1, draft.trees, draft.unconnected));
         }
         return new Result(variants);
+    }
+
+    /**
+     * Спуск по разбиениям ОКС с первым улучшением: слияние двух блоков, перенос ОКС в соседний блок, выделение ОКС
+     * в свой блок, разбиение блока k-means. Каждый шаг — новый черновик через {@link #draft}; budget — их число.
+     */
+    private Draft search(Draft start, int budget) {
+        List<List<ConnectionPoint>> blocks = new ArrayList<>();
+        for (Tree tree : start.trees) {
+            blocks.add(new ArrayList<>(tree.connected()));
+        }
+        for (FutureOks oks : start.unconnected) {
+            ConnectionPoint connection = connectionByOks.get(oks.getId());
+            if (connection != null) {
+                blocks.add(new ArrayList<>(List.of(connection)));
+            }
+        }
+        Draft current = start;
+        long started = System.nanoTime();
+        int spent = 0;
+        boolean improved = true;
+        while (improved && spent < budget) {
+            improved = false;
+            for (List<List<ConnectionPoint>> candidate : moves(blocks)) {
+                if (spent++ >= budget) {
+                    break;
+                }
+                Draft draft = draft(candidate, subset -> false);
+                if (draft != null && draft.unconnected.size() <= current.unconnected.size()
+                        && draft.score() < current.score() - IMPROVE_EPS) {
+                    blocks = candidate;
+                    current = draft;
+                    improved = true;
+                    log.info("search: score={} trees={} drafts={} elapsed={}s", current.score(), blocks.size(), spent,
+                            (System.nanoTime() - started) / 1_000_000_000L);
+                    break;
+                }
+            }
+        }
+        log.info("search: done score={} drafts={} elapsed={}s", current.score(), spent, (System.nanoTime() - started) / 1_000_000_000L);
+        return current;
+    }
+
+    /** Соседние разбиения в порядке: слияния ближайших блоков, переносы ОКС, выделения, разбиения k-means. */
+    private List<List<List<ConnectionPoint>>> moves(List<List<ConnectionPoint>> blocks) {
+        List<List<List<ConnectionPoint>>> result = new ArrayList<>();
+        for (int i = 0; i < blocks.size(); i++) {
+            for (int j : nearestBlocks(blocks, blocks.get(i), i)) {
+                if (j > i) {
+                    List<List<ConnectionPoint>> fused = copy(blocks);
+                    fused.get(i).addAll(fused.get(j));
+                    fused.remove(j);
+                    result.add(fused);
+                }
+            }
+        }
+        for (int i = 0; i < blocks.size(); i++) {
+            if (blocks.get(i).size() < 2) {
+                continue;
+            }
+            for (ConnectionPoint connection : blocks.get(i)) {
+                for (int j : nearestBlocks(blocks, List.of(connection), i)) {
+                    List<List<ConnectionPoint>> moved = copy(blocks);
+                    moved.get(i).remove(connection);
+                    moved.get(j).add(connection);
+                    result.add(moved);
+                }
+            }
+        }
+        for (int i = 0; i < blocks.size(); i++) {
+            if (blocks.get(i).size() < 2) {
+                continue;
+            }
+            for (ConnectionPoint connection : blocks.get(i)) {
+                List<List<ConnectionPoint>> alone = copy(blocks);
+                alone.get(i).remove(connection);
+                alone.add(new ArrayList<>(List.of(connection)));
+                result.add(alone);
+            }
+        }
+        for (int i = 0; i < blocks.size(); i++) {
+            if (blocks.get(i).size() < 3) {
+                continue;
+            }
+            List<List<ConnectionPoint>> parts = kMeans(blocks.get(i));
+            if (parts.size() == 2) {
+                List<List<ConnectionPoint>> split = copy(blocks);
+                split.remove(i);
+                split.addAll(parts);
+                result.add(split);
+            }
+        }
+        return result;
+    }
+
+    /** Индексы NEAREST_BLOCKS блоков той же группы, ближайших к points по точкам подключения, кроме skip. */
+    private List<Integer> nearestBlocks(List<List<ConnectionPoint>> blocks, List<ConnectionPoint> points, int skip) {
+        Region region = regionByConnection.get(points.get(0).getId());
+        List<double[]> distances = new ArrayList<>();
+        for (int j = 0; j < blocks.size(); j++) {
+            if (j == skip || blocks.get(j).isEmpty() || regionByConnection.get(blocks.get(j).get(0).getId()) != region) {
+                continue;
+            }
+            double distance = Double.POSITIVE_INFINITY;
+            for (ConnectionPoint p : points) {
+                for (ConnectionPoint q : blocks.get(j)) {
+                    distance = Math.min(distance, p.getGeometry().distance(q.getGeometry()));
+                }
+            }
+            distances.add(new double[] {distance, j});
+        }
+        distances.sort(Comparator.comparingDouble(d -> d[0]));
+        List<Integer> nearest = new ArrayList<>();
+        for (int k = 0; k < Math.min(NEAREST_BLOCKS, distances.size()); k++) {
+            nearest.add((int) distances.get(k)[1]);
+        }
+        return nearest;
+    }
+
+    private static List<List<ConnectionPoint>> copy(List<List<ConnectionPoint>> blocks) {
+        List<List<ConnectionPoint>> result = new ArrayList<>();
+        for (List<ConnectionPoint> block : blocks) {
+            result.add(new ArrayList<>(block));
+        }
+        return result;
     }
 
     /** До трёх лучших по score черновиков, попарно различных по правилу variants и по трассе (R-11). */
