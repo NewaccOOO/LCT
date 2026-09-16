@@ -93,7 +93,8 @@ public class JobController {
         @Schema(description = "Ошибка при статусе FAILED, иначе null", implementation = ApiError.class, nullable = true)
         JsonNode error;
         @ArraySchema(arraySchema = @Schema(
-                description = "Сводки вариантов (variant_summary из выходного файла) при статусе DONE, иначе null",
+                description = "Сводки вариантов (variant_summary из выходного файла) при статусе DONE, иначе null. "
+                        + "В поле criteria каждой сводки — дополнительные критерии варианта, в выходном файле их нет",
                 nullable = true))
         JsonNode summary;
     }
@@ -188,7 +189,12 @@ public class JobController {
                                             + "\"chamber_reconstruction_cost\": 0.00, \"unconnected_penalty\": 0.00, "
                                             + "\"calculated_cost\": 33000000.00, \"new_network_length\": 340.50, "
                                             + "\"reconstruction_length\": 0.00, \"length\": 340.50, \"score\": 1.946, "
-                                            + "\"unconnected_oks_ids\": []}]}"),
+                                            + "\"unconnected_oks_ids\": [], \"criteria\": {\"connected_oks\": 1, "
+                                            + "\"connected_flow_tph\": 5.000, \"tie_ins\": 1, \"new_chambers\": 1, "
+                                            + "\"technical_nodes\": 0, \"chamber_reconstructions\": 0, \"special_segments\": 0, "
+                                            + "\"special_length_m\": 0.00, \"crossed_objects\": {}, \"turns\": 1, "
+                                            + "\"nonstandard_turns\": 0, \"surcharge_cost\": 0.00, \"reconstruction_share\": 0.000, "
+                                            + "\"cost_per_oks\": 33000000.00, \"cost_per_tph\": 6600000.00}}]}"),
                                     @ExampleObject(name = "Ошибка входа", value = "{\"id\": \"" + JOB_ID_EXAMPLE + "\", "
                                             + "\"status\": \"FAILED\", \"createdAt\": \"2026-09-15T10:00:00Z\", "
                                             + "\"startedAt\": \"2026-09-15T10:00:01Z\", \"finishedAt\": \"2026-09-15T10:00:02Z\", "

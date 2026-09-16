@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -17,6 +19,9 @@ import lombok.Value;
 
 public final class Rules {
     private static final String FALLBACK = "_fallback";
+    public static final String RULES_PROPERTY = "heatnet.rules";
+    private static final String RULES_ENV = "HEATNET_RULES";
+    private static final String CLASSPATH = "classpath:";
 
     private final List<Diameter> diameters;
     private final List<ChamberPrice> chamberPrices;
@@ -97,14 +102,25 @@ public final class Rules {
         fallback = restrictionRule(FALLBACK, restrictionsNode.required(FALLBACK));
     }
 
+    /**
+     * Правила расчёта. Файл задаётся свойством {@code heatnet.rules} или переменной {@code HEATNET_RULES}: путь на диске
+     * или {@code classpath:/…} для файла внутри jar. Без них — {@code rules.json} кейса тепловых сетей. Так тот же
+     * сервис считает другой ресурс, например водопровод, без изменения кода.
+     */
     public static Rules load() {
-        try (InputStream in = Rules.class.getResourceAsStream("/rules.json")) {
+        String source = System.getProperty(RULES_PROPERTY, System.getenv(RULES_ENV));
+        if (source == null || source.isBlank()) {
+            source = CLASSPATH + "/rules.json";
+        }
+        try (InputStream in = source.startsWith(CLASSPATH)
+                ? Rules.class.getResourceAsStream(source.substring(CLASSPATH.length()))
+                : Files.newInputStream(Path.of(source))) {
             if (in == null) {
-                throw new IllegalStateException("rules.json не найден в classpath");
+                throw new IllegalStateException("Файл правил не найден: " + source);
             }
             return new Rules(new ObjectMapper().readTree(in));
         } catch (IOException e) {
-            throw new UncheckedIOException("Не удалось прочитать rules.json", e);
+            throw new UncheckedIOException("Не удалось прочитать файл правил " + source, e);
         }
     }
 

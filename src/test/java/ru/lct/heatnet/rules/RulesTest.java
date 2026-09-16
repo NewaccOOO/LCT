@@ -6,6 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -133,6 +136,30 @@ class RulesTest {
         assertEquals(1.5, rules.kTurn(30), EPS);
         assertEquals(1.5, rules.kTurn(46.1), EPS);
         assertEquals(1.5, rules.kTurn(135), EPS);
+    }
+
+    @Test
+    void rulesFileIsTakenFromPropertyPathOrClasspath() throws IOException {
+        Path file = Files.createTempFile("rules", ".json");
+        String custom;
+        try (var in = Rules.class.getResourceAsStream("/rules.json")) {
+            custom = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+                    .replace("\"tie_in_cost\": 5000000", "\"tie_in_cost\": 1234567");
+        }
+        Files.writeString(file, custom);
+        try {
+            System.setProperty(Rules.RULES_PROPERTY, file.toString());
+            assertEquals(1_234_567, Rules.load().tieInCost(), EPS);
+            System.setProperty(Rules.RULES_PROPERTY, "classpath:/examples/water-supply.json");
+            Rules water = Rules.load();
+            assertTrue(water.tieInCost() < rules.tieInCost(), "пример водопровода со своей ценой врезки");
+            System.setProperty(Rules.RULES_PROPERTY, "classpath:/examples/нет.json");
+            assertThrows(IllegalStateException.class, Rules::load);
+        } finally {
+            System.clearProperty(Rules.RULES_PROPERTY);
+            Files.delete(file);
+        }
+        assertEquals(5_000_000, Rules.load().tieInCost(), EPS);
     }
 
     @Test

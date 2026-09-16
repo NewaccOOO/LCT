@@ -136,6 +136,10 @@ class JobApiIT {
         assertEquals(1, summary.get(0).get("rank").asInt());
         assertEquals("1.946", summary.get(0).get("score").decimalValue().toPlainString());
         assertTrue(summary.get(0).has("unconnected_oks_ids"));
+        JsonNode criteria = summary.get(0).get("criteria");
+        assertEquals(0, criteria.get("tie_ins").asInt());
+        assertTrue(criteria.get("crossed_objects").isObject());
+        assertTrue(criteria.has("cost_per_oks"));
     }
 
     @Test

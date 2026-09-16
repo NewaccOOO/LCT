@@ -29,7 +29,7 @@
 
 ## Состав
 
-Сервис лежит в `src/main/java/ru/lct/heatnet/`, Java 11 и Spring Boot 2.6.3. Все числа кейса читаются из `rules/rules.json`, тот же файл читают Python-инструменты.
+Сервис лежит в `src/main/java/ru/lct/heatnet/`, Java 11 и Spring Boot 2.6.3. Все числа кейса читаются из `rules/rules.json`, тот же файл читают Python-инструменты. Файл правил можно подменить, раздел «Правила для другого ресурса».
 
 | Пакет | Что внутри |
 |---|---|
@@ -70,6 +70,7 @@ docker-compose down -v
 | `JOB_WORKERS` | `2` | сколько задач считается одновременно |
 | `JAVA_OPTS` | пусто | параметры JVM, например `-Xmx4g`; сюда же бюджет локального поиска `-Dheatnet.search.budget=300` — число сборок черновика, предела по времени нет |
 | `DATA_DIR` | `/data` в контейнере, `data` локально | каталог входных и выходных файлов задач |
+| `HEATNET_RULES` | пусто, берётся `rules.json` из jar | путь к файлу правил или `classpath:/examples/water-supply.json` |
 | `SPRING_DATASOURCE_URL` | `jdbc:postgresql://localhost:55432/heatnet` | адрес базы при запуске jar без compose |
 
 > [!WARNING]
@@ -86,6 +87,8 @@ docker-compose down -v
 | `GET /api/v1/jobs/{id}` | статус `QUEUED`, `RUNNING`, `DONE` или `FAILED`, времена, ошибка, после `DONE` — сводки вариантов |
 | `GET /api/v1/jobs/{id}/result` | выходной GeoJSON; `409`, пока задача не `DONE` |
 | `GET /api/v1/jobs/{id}/input` | исходный файл байт в байт |
+
+Сводка варианта в `summary` повторяет `variant_summary` из выхода и дополнительно содержит объект `criteria`, описанный в разделе «Дополнительные критерии».
 
 ```bash
 curl -s -X POST -H 'Content-Type: application/geo+json' \
@@ -118,6 +121,55 @@ java -jar target/heatnet.jar --cli data/samples/small-1.geojson data/out/small-1
 | `0` | расчёт завершён | `PIPELINE DONE variants=<n> elapsed=<s>s` |
 | `2` | во входе ошибки данных, выходной файл не создаётся | список ошибок по объектам |
 | `1` | любая другая ошибка | текст ошибки |
+
+Рядом с выходом CLI пишет `<имя выхода>.criteria.json`: для каждого варианта `variant_id`, `rank`, `score`, `calculated_cost` и `criteria`. Путь печатается строкой `CRITERIA <путь>`.
+
+### Дополнительные критерии
+
+Критерии не входят в формулу S и не меняют выбор вариантов. Они помогают сравнить варианты на защите. В выходной GeoJSON они не пишутся, пока организаторы не ответили, можно ли добавлять атрибуты сверх раздела 13.
+
+| Поле | Что значит |
+|---|---|
+| `connected_oks`, `connected_flow_tph` | сколько ОКС подключено и их суммарный расход, т/ч |
+| `tie_ins`, `new_chambers`, `technical_nodes`, `chamber_reconstructions` | число врезок, новых камер, технических узлов и реконструируемых камер |
+| `special_segments`, `special_length_m` | число участков спецперехода и их длина, м |
+| `crossed_objects` | сколько разных объектов каждого типа пересекают участки спецперехода, например `{"road": 3, "heat_network": 1}` |
+| `turns`, `nonstandard_turns` | изломы трассы от 3° внутри участков и в технических узлах; из них не 45° и не 90°, то есть с коэффициентом больше 1 |
+| `surcharge_cost` | сколько добавили к стоимости участков коэффициенты спецперехода и угла, руб. |
+| `reconstruction_share` | доля длины реконструкции в длине варианта |
+| `cost_per_oks`, `cost_per_tph` | стоимость без штрафа за неподключённые ОКС на один ОКС и на 1 т/ч; `null`, если подключать нечего |
+
+### Правила для другого ресурса
+
+Все таблицы и коэффициенты берутся из одного файла правил. По умолчанию это `rules.json` внутри jar. Другой файл задаётся одним из способов. Если заданы несколько, побеждает верхний в списке:
+
+1. аргумент `--rules=<путь>` при запуске jar;
+2. параметр JVM `-Dheatnet.rules=<путь>`;
+3. переменная окружения `HEATNET_RULES`, в том числе в `docker-compose.yml`.
+
+Путь с префиксом `classpath:` читается из jar. Пример правил водопровода лежит в `rules/examples/water-supply.json` и попадает в jar:
+
+```bash
+java -jar target/heatnet.jar --cli --rules=classpath:/examples/water-supply.json \
+  data/samples/small-1.geojson data/out/small-1-water.geojson
+make cli validate IN=data/samples/small-1.geojson OUT=data/out/water.geojson RULES=rules/examples/water-supply.json
+```
+
+> [!CAUTION]
+> Числа в примере водопровода условные: пропускная способность при скорости 1,2 м/с, цены и отступы подобраны для демонстрации. Это не выдержка из СП 31.13330 и СП 42.13330. Перед реальным применением таблицы нужно заполнить по нормам.
+
+Формат файла тот же, что у `rules.json`. Валидатор принимает тот же файл: `--rules <путь>`.
+
+### Карта результата
+
+`scripts/visualize.py` строит из входа и выхода одну HTML-страницу, которая открывается без сети и без сервера. На ней варианты во вкладках, толщина трубы по диаметру, спецпереходы и реконструкция отдельными цветами, подписи диаметра и расхода, сводка варианта и дополнительные критерии. Клик по объекту показывает его атрибуты.
+
+```bash
+python3 scripts/visualize.py data/samples/small-1.geojson data/out/small-1.geojson
+make viz IN=data/samples/small-1.geojson OUT=data/out/small-1.geojson
+```
+
+Файл критериев ищется рядом с выходом, страница пишется в `<имя выхода>.html`. Другие пути задают `--criteria` и `--html`. Нужен только Python 3 без пакетов.
 
 ## Сборка и тесты
 

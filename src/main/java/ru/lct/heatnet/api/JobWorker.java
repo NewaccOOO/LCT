@@ -8,10 +8,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
@@ -21,12 +24,15 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Component;
+import ru.lct.heatnet.calc.VariantCriteria;
 import ru.lct.heatnet.core.Pipeline;
 import ru.lct.heatnet.io.GeoJsonStreamReader;
 import ru.lct.heatnet.io.GeoJsonStreamWriter;
 import ru.lct.heatnet.model.Diagnostic;
 import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.Result;
+import ru.lct.heatnet.model.Variant;
+import ru.lct.heatnet.rules.Rules;
 
 /** Выполняет задачи в пуле потоков; каждая смена статуса сохраняется отдельной короткой транзакцией. */
 @Profile("!cli")
@@ -34,6 +40,7 @@ import ru.lct.heatnet.model.Result;
 public class JobWorker {
     static final int MAX_STORED_ERRORS = 1000;
     // Точные десятичные: сводка в API совпадает с числами выходного файла, 12.30 не превращается в 12.3.
+    private static final Rules RULES = Rules.load();
     static final ObjectMapper JSON = new ObjectMapper()
             .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
             .setNodeFactory(JsonNodeFactory.withExactBigDecimals(true));
@@ -101,7 +108,7 @@ public class JobWorker {
             Result result = pipeline.run(data);
             Path output = input.resolveSibling("result.geojson");
             GeoJsonStreamWriter.write(result, output);
-            job.setSummary(summaries(output));
+            job.setSummary(summaries(output, criteria(result, data)));
             job.setOutputPath(output.toString());
             job.setStatus(JobEntity.Status.DONE);
             job.setFinishedAt(Instant.now());
@@ -126,8 +133,18 @@ public class JobWorker {
         job.setFinishedAt(Instant.now());
     }
 
-    // Сводки берутся из готового файла, чтобы API отдавал ровно те поля и числа, что записаны в результат.
-    private static String summaries(Path output) throws IOException {
+    private static Map<String, Map<String, Object>> criteria(Result result, InputData data) {
+        VariantCriteria criteria = new VariantCriteria(data, RULES);
+        Map<String, Map<String, Object>> byVariant = new HashMap<>();
+        for (Variant variant : result.getVariants()) {
+            byVariant.put(variant.getId(), criteria.of(variant));
+        }
+        return byVariant;
+    }
+
+    // Сводки берутся из готового файла, чтобы API отдавал ровно те поля и числа, что записаны в результат. Рядом
+    // кладутся дополнительные критерии варианта: в файл результата они не пишутся.
+    private static String summaries(Path output, Map<String, Map<String, Object>> criteria) throws IOException {
         ArrayNode summaries = JSON.createArrayNode();
         try (JsonParser parser = JSON.getFactory().createParser(output.toFile())) {
             JsonToken token;
@@ -136,6 +153,10 @@ public class JobWorker {
                     parser.nextToken();
                     JsonNode properties = JSON.readTree(parser);
                     if ("variant_summary".equals(properties.path("object_type").textValue())) {
+                        Map<String, Object> extra = criteria.get(properties.path("variant_id").textValue());
+                        if (extra != null) {
+                            ((ObjectNode) properties).set("criteria", JSON.valueToTree(extra));
+                        }
                         summaries.add(properties);
                     }
                 }

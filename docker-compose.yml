@@ -28,6 +28,7 @@ services:
       DATA_DIR: /data
       JOB_WORKERS: "${JOB_WORKERS:-2}"
       JAVA_OPTS: "${JAVA_OPTS:-}"
+      HEATNET_RULES: "${HEATNET_RULES:-}"
     ports:
       - "${APP_PORT:-8080}:8080"
     volumes:

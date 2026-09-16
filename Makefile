@@ -7,10 +7,11 @@ SEED ?= 1
 IN ?= data/synth/$(PRESET)-$(SEED).geojson
 OUT ?= data/out/$(PRESET)-$(SEED).geojson
 ARGS ?=
+RULES ?=
 ENV := . scripts/gates/env.sh
 PY := uv run --project tools
 
-.PHONY: help up down logs jar cli synth validate e2e real test test-unit test-java test-python test-scenarios sweep gate
+.PHONY: help up down logs jar cli synth validate e2e real test test-unit test-java test-python test-scenarios sweep gate viz
 
 help: ## список команд
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -28,7 +29,7 @@ jar: ## собрать target/heatnet.jar, если исходники нове�
 	$(ENV); ensure_jar
 
 cli: jar ## расчёт из командной строки: IN -> OUT
-	$(ENV); mkdir -p $(dir $(OUT)); java -jar target/heatnet.jar --cli $(IN) $(OUT)
+	$(ENV); mkdir -p $(dir $(OUT)); java -jar target/heatnet.jar --cli $(IN) $(OUT) $(if $(RULES),--rules=$(RULES))
 
 synth: ## сгенерировать синтетический вход PRESET/SEED в IN
 	mkdir -p $(dir $(IN))
@@ -36,7 +37,10 @@ synth: ## сгенерировать синтетический вход PRESET/
 	$(PY) python -m heatsynth.check $(IN) $(if $(filter medium,$(PRESET)),--preset medium)
 
 validate: ## проверить OUT валидатором по всем правилам
-	$(PY) python -m heatcheck $(IN) $(OUT)
+	$(PY) python -m heatcheck $(IN) $(OUT) $(if $(RULES),--rules $(RULES))
+
+viz: ## офлайн HTML-карта результата OUT рядом с ним
+	python3 scripts/visualize.py $(IN) $(OUT)
 
 e2e: synth cli validate ## сгенерировать вход, посчитать через CLI, проверить валидатором
 

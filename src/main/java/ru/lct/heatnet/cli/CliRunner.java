@@ -1,22 +1,35 @@
 package ru.lct.heatnet.cli;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
+import ru.lct.heatnet.calc.VariantCriteria;
 import ru.lct.heatnet.core.Pipeline;
 import ru.lct.heatnet.io.GeoJsonStreamReader;
 import ru.lct.heatnet.io.GeoJsonStreamWriter;
 import ru.lct.heatnet.model.Diagnostic;
 import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.Result;
+import ru.lct.heatnet.model.Variant;
+import ru.lct.heatnet.rules.Rules;
 
-/** Режим CLI (D-16): {@code java -jar heatnet.jar --cli <input> <output>}, без веба и базы. */
+/**
+ * Режим CLI (D-16): {@code java -jar heatnet.jar --cli [--rules=<файл правил>] <input> <output>}, без веба и базы.
+ * Рядом с выходом пишется {@code <output>.criteria.json} с дополнительными критериями вариантов.
+ */
 @Component
 @Profile("cli")
 public class CliRunner implements ApplicationRunner {
@@ -40,7 +53,7 @@ public class CliRunner implements ApplicationRunner {
 
     private int execute(List<String> files) {
         if (files.size() != 2) {
-            System.err.println("Использование: java -jar heatnet.jar --cli <входной GeoJSON> <выходной GeoJSON>");
+            System.err.println("Использование: java -jar heatnet.jar --cli [--rules=<файл правил>] <входной GeoJSON> <выходной GeoJSON>");
             return FAILED;
         }
         long started = System.nanoTime();
@@ -54,14 +67,40 @@ public class CliRunner implements ApplicationRunner {
                 return INVALID_INPUT;
             }
             Result result = pipeline.run(input);
-            GeoJsonStreamWriter.write(result, Path.of(files.get(1)));
+            Path output = Path.of(files.get(1));
+            GeoJsonStreamWriter.write(result, output);
+            Path criteria = writeCriteria(result, input, output);
             double elapsed = (System.nanoTime() - started) / 1e9;
             System.out.printf(Locale.ROOT, "PIPELINE DONE variants=%d elapsed=%.1fs%n", result.getVariants().size(), elapsed);
+            System.out.println("CRITERIA " + criteria);
             return OK;
         } catch (RuntimeException e) {
             System.err.println("Расчёт не выполнен: " + e);
             e.printStackTrace();
             return FAILED;
         }
+    }
+
+    /** Критерии вариантов в {@code <имя выхода без .geojson>.criteria.json} рядом с выходом. */
+    private static Path writeCriteria(Result result, InputData input, Path output) {
+        String name = output.getFileName().toString().replaceFirst("\\.geojson$", "");
+        Path path = output.resolveSibling(name + ".criteria.json");
+        VariantCriteria criteria = new VariantCriteria(input, Rules.load());
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (Variant variant : result.getVariants()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("variant_id", variant.getId());
+            row.put("rank", variant.getSummary().getRank());
+            row.put("score", variant.getSummary().getScore());
+            row.put("calculated_cost", variant.getSummary().getCalculatedCost());
+            row.put("criteria", criteria.of(variant));
+            rows.add(row);
+        }
+        try {
+            new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT).writeValue(path.toFile(), rows);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Не удалось записать " + path, e);
+        }
+        return path;
     }
 }

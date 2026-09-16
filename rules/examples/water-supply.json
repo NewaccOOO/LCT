@@ -1,0 +1,282 @@
+{
+  "_comment": "Условный пример правил для водопровода: показывает, что сервис считает другой ресурс без изменения кода. Числа демонстрационные, это не нормативы: перед применением сверить с СП 31.13330 и СП 42.13330. Пропускная способность — при скорости 1,2 м/с, м³/ч; предельной длины одного диаметра у водопровода нет, поэтому max_length_m заведомо большое; камеры — водопроводные колодцы; во входе существующая сеть по-прежнему называется heat_network.",
+  "diameters": [
+    {
+      "dn": 50,
+      "capacity_tph": 8.5,
+      "max_length_m": 100000,
+      "new_rub_m": 22800,
+      "recon_rub_m": 30800,
+      "width_m": 0.057,
+      "height_m": 0.057
+    },
+    {
+      "dn": 65,
+      "capacity_tph": 14.3,
+      "max_length_m": 100000,
+      "new_rub_m": 24200,
+      "recon_rub_m": 32700,
+      "width_m": 0.075,
+      "height_m": 0.075
+    },
+    {
+      "dn": 80,
+      "capacity_tph": 21.7,
+      "max_length_m": 100000,
+      "new_rub_m": 25600,
+      "recon_rub_m": 34600,
+      "width_m": 0.092,
+      "height_m": 0.092
+    },
+    {
+      "dn": 100,
+      "capacity_tph": 33.9,
+      "max_length_m": 100000,
+      "new_rub_m": 27500,
+      "recon_rub_m": 37100,
+      "width_m": 0.115,
+      "height_m": 0.115
+    },
+    {
+      "dn": 125,
+      "capacity_tph": 53.0,
+      "max_length_m": 100000,
+      "new_rub_m": 29900,
+      "recon_rub_m": 40400,
+      "width_m": 0.144,
+      "height_m": 0.144
+    },
+    {
+      "dn": 150,
+      "capacity_tph": 76.3,
+      "max_length_m": 100000,
+      "new_rub_m": 32200,
+      "recon_rub_m": 43500,
+      "width_m": 0.172,
+      "height_m": 0.172
+    },
+    {
+      "dn": 200,
+      "capacity_tph": 135.7,
+      "max_length_m": 100000,
+      "new_rub_m": 37000,
+      "recon_rub_m": 50000,
+      "width_m": 0.23,
+      "height_m": 0.23
+    },
+    {
+      "dn": 250,
+      "capacity_tph": 212.1,
+      "max_length_m": 100000,
+      "new_rub_m": 41800,
+      "recon_rub_m": 56400,
+      "width_m": 0.287,
+      "height_m": 0.287
+    },
+    {
+      "dn": 300,
+      "capacity_tph": 305.4,
+      "max_length_m": 100000,
+      "new_rub_m": 46500,
+      "recon_rub_m": 62800,
+      "width_m": 0.345,
+      "height_m": 0.345
+    },
+    {
+      "dn": 400,
+      "capacity_tph": 542.9,
+      "max_length_m": 100000,
+      "new_rub_m": 56000,
+      "recon_rub_m": 75600,
+      "width_m": 0.46,
+      "height_m": 0.46
+    },
+    {
+      "dn": 500,
+      "capacity_tph": 848.2,
+      "max_length_m": 100000,
+      "new_rub_m": 65500,
+      "recon_rub_m": 88400,
+      "width_m": 0.575,
+      "height_m": 0.575
+    },
+    {
+      "dn": 600,
+      "capacity_tph": 1221.5,
+      "max_length_m": 100000,
+      "new_rub_m": 75000,
+      "recon_rub_m": 101200,
+      "width_m": 0.69,
+      "height_m": 0.69
+    },
+    {
+      "dn": 700,
+      "capacity_tph": 1662.5,
+      "max_length_m": 100000,
+      "new_rub_m": 84500,
+      "recon_rub_m": 114100,
+      "width_m": 0.805,
+      "height_m": 0.805
+    },
+    {
+      "dn": 800,
+      "capacity_tph": 2171.5,
+      "max_length_m": 100000,
+      "new_rub_m": 94000,
+      "recon_rub_m": 126900,
+      "width_m": 0.92,
+      "height_m": 0.92
+    },
+    {
+      "dn": 900,
+      "capacity_tph": 2748.3,
+      "max_length_m": 100000,
+      "new_rub_m": 103500,
+      "recon_rub_m": 139700,
+      "width_m": 1.035,
+      "height_m": 1.035
+    },
+    {
+      "dn": 1000,
+      "capacity_tph": 3392.9,
+      "max_length_m": 100000,
+      "new_rub_m": 113000,
+      "recon_rub_m": 152600,
+      "width_m": 1.15,
+      "height_m": 1.15
+    }
+  ],
+  "chamber_cost": [
+    {
+      "dn_min": 50,
+      "dn_max": 200,
+      "cost": 900000
+    },
+    {
+      "dn_min": 250,
+      "dn_max": 500,
+      "cost": 1800000
+    },
+    {
+      "dn_min": 600,
+      "dn_max": 1000,
+      "cost": 3500000
+    }
+  ],
+  "tie_in_cost": 1500000,
+  "existing_flow": {
+    "share": 0.0
+  },
+  "chamber_rule": {
+    "max_dist_m": 10,
+    "max_segments": 4,
+    "max_branches": 3
+  },
+  "penalty": {
+    "fixed": 100000000,
+    "per_tph": 500000
+  },
+  "score": {
+    "cost_base": 25000000,
+    "length_base_m": 100,
+    "w_cost": 0.7,
+    "w_length": 0.3
+  },
+  "turn": {
+    "k_nonstandard": 1.5,
+    "standard_deg": [
+      45,
+      90
+    ],
+    "tolerance_deg": 1.0,
+    "limit_per_obstacle": 3,
+    "limit_base": 6
+  },
+  "restrictions": {
+    "oks_existing": {
+      "rule": "forbid",
+      "clearance_m": [
+        {
+          "dn_max": 1000,
+          "m": 5
+        }
+      ]
+    },
+    "park": {
+      "rule": "forbid",
+      "clearance_m": 1.5
+    },
+    "social_area": {
+      "rule": "forbid",
+      "clearance_m": 1.5
+    },
+    "prohibited_site": {
+      "rule": "forbid",
+      "clearance_m": 1.5
+    },
+    "water": {
+      "rule": "forbid",
+      "clearance_m": 1.5
+    },
+    "road": {
+      "rule": "special",
+      "clearance_m": 2.0,
+      "min_angle_deg": 60,
+      "margin_m": 3,
+      "k_special": 1.5
+    },
+    "tram_tracks": {
+      "rule": "special",
+      "clearance_m": 2.0,
+      "min_angle_deg": 60,
+      "margin_m": 3,
+      "k_special": 1.7
+    },
+    "gas_pipeline": {
+      "rule": "special",
+      "clearance_m": 1.5,
+      "margin_m": 2,
+      "k_special": 1.2,
+      "half_width_m": 0.2
+    },
+    "power_cable": {
+      "rule": "special",
+      "clearance_m": 1.0,
+      "margin_m": 2,
+      "k_special": 1.1,
+      "half_width_m": 0.1
+    },
+    "heat_network": {
+      "rule": "special",
+      "clearance_m": 1.5,
+      "margin_m": 2,
+      "k_special": 1.1
+    },
+    "metro": {
+      "rule": "forbid",
+      "clearance_m": 10.0
+    },
+    "railway": {
+      "rule": "special",
+      "clearance_m": 4.0,
+      "min_angle_deg": 60,
+      "margin_m": 3.0,
+      "k_special": 1.8
+    },
+    "sewer": {
+      "rule": "special",
+      "clearance_m": 1.5,
+      "margin_m": 2.0,
+      "k_special": 1.1,
+      "half_width_m": 0.0
+    },
+    "power_line_support": {
+      "rule": "forbid",
+      "clearance_m": 2.0
+    },
+    "_fallback": {
+      "rule": "forbid",
+      "clearance_m": 1.0
+    }
+  }
+}

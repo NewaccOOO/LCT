@@ -117,6 +117,14 @@ make cli IN=data/samples/small-1.geojson OUT=data/out/small-1.geojson
 make validate IN=data/samples/small-1.geojson OUT=data/out/small-1.geojson
 ```
 
+Карта результата для защиты открывается в браузере без сети:
+
+```bash
+make viz IN=data/samples/small-1.geojson OUT=data/out/small-1.geojson
+```
+
+Правила другого ресурса, например условный водопровод из `rules/examples/water-supply.json`, подставляются параметром `RULES=` или аргументом `--rules=` у jar.
+
 Та же сборка есть для Gradle: `./gradlew bootJar`. Переменные окружения, сборка и тесты подробно — в [BACKEND.md](architecture/BACKEND.md).
 
 </details>
@@ -174,7 +182,7 @@ flowchart LR
 | `GET /api/v1/jobs/{id}/result` | выходной GeoJSON; `409`, пока задача не готова |
 | `GET /api/v1/jobs/{id}/input` | исходный файл байт в байт |
 
-Невалидный вход не считается: задача получает `FAILED` со списком проблем вида «объект, поле, что не так». Формат выхода по типам объектов — в разделе 13 [CONSTRAINTS.md](architecture/CONSTRAINTS.md).
+Невалидный вход не считается: задача получает `FAILED` со списком проблем вида «объект, поле, что не так». Формат выхода по типам объектов — в разделе 13 [CONSTRAINTS.md](architecture/CONSTRAINTS.md). В сводке задачи у каждого варианта есть `criteria`: пересечённые объекты по типам, повороты, длина спецпереходов, надбавки и удельная стоимость; поля описаны в [BACKEND.md](architecture/BACKEND.md#дополнительные-критерии).
 
 ## ✅ Как проверяется качество
 
