@@ -230,6 +230,23 @@ class GeoJsonStreamReaderTest {
     }
 
     @Test
+    void heatLoadIsOptional() throws IOException {
+        ArrayNode features = validFeatures();
+        props(features, "O1").remove("heat_load");
+        assertTrue(GeoJsonStreamReader.read(write(features)).getDiagnostics().isEmpty());
+    }
+
+    @Test
+    void selfIntersectingPolygonIsReported() throws IOException {
+        ArrayNode features = validFeatures();
+        ((ObjectNode) features.get(4)).set("geometry", geometry("Polygon", new double[][][] {
+            {{37.6, 55.7}, {37.61, 55.71}, {37.61, 55.7}, {37.6, 55.71}, {37.6, 55.7}}}));
+        assertOnly(features, "O1", "geometry");
+        String problem = GeoJsonStreamReader.read(write(features)).getDiagnostics().get(0).getProblem();
+        assertTrue(problem.startsWith("невалидная геометрия: самопересечение"), problem);
+    }
+
+    @Test
     void unknownRestrictionTypeGivesOneWarningPerType() throws IOException {
         ArrayNode features = validFeatures();
         props(features, "R2").put("restriction_type", "fence");

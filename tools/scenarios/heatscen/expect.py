@@ -25,6 +25,7 @@ from heatcheck.model import (
     load_input,
     load_output,
 )
+from heatcheck.money import turn_k
 from heatcheck.validate import (
     examples,
     run_all,
@@ -39,6 +40,7 @@ DIST_EPS_M = 0.001
 ZONE_TOL_M = 0.05
 TIE_TOL_M = 0.5
 FLOAT_EPS = 1e-9
+OCTILINEAR_SLACK = 1.05
 STDERR_TAIL_CHARS = 400
 OPTIONS = {"formula_tol_rub"}
 RUN_FIELDS = {"exit_code", "diagnostics", "stderr_contains", "no_output"}
@@ -267,10 +269,13 @@ def check_distinct_tie_in_sets(ctx: Context, expected: bool) -> list[str]:
 
 
 def check_max_new_length(ctx: Context, expected: float) -> list[str]:
+    # Границы семейств посчитаны по кратчайшему обходу; трасса из отрезков через 45° (протокол 16.09.2026 п. 9)
+    # длиннее его не больше чем на OCTILINEAR_SLACK.
+    limit = expected * OCTILINEAR_SLACK
     actual = ctx.summary.get("new_network_length")
-    if isinstance(actual, int | float) and actual <= expected:
+    if isinstance(actual, int | float) and actual <= limit:
         return []
-    return [f"max_new_length: new_network_length {actual}, граница {expected}"]
+    return [f"max_new_length: new_network_length {actual}, граница {expected} × {OCTILINEAR_SLACK} = {limit:.2f}"]
 
 
 def check_summary(ctx: Context, expected: dict[str, Any]) -> list[str]:
@@ -280,6 +285,17 @@ def check_summary(ctx: Context, expected: dict[str, Any]) -> list[str]:
         if not same(key, actual, value):
             messages.append(f"summary: {key} = {actual}, ожидалось {value}")
     return messages
+
+
+def bend_coords_of(ctx: Context, seg: Feature) -> list[tuple[float, float]]:
+    """Как bend_coords валидатора: у участка из технического узла спереди предпоследняя точка входящего участка."""
+    coords = list(seg.geom.coords)
+    start = seg.props.get("start_node_id")
+    if start in {n.id for n in ctx.best.nodes}:
+        incoming = [s for s in ctx.best.segments if s.props.get("end_node_id") == start]
+        if incoming:
+            coords = [list(incoming[0].geom.coords)[-2]] + coords
+    return coords
 
 
 def check_costs_by_formula(ctx: Context, expected: bool) -> list[str]:
@@ -297,6 +313,7 @@ def check_costs_by_formula(ctx: Context, expected: bool) -> list[str]:
             if k is None:
                 messages.append(f"costs_by_formula: специальный участок {seg.id} вне зон специальных объектов сцены")
                 continue
+        k *= turn_k(ctx.rules, bend_coords_of(ctx, seg))
         need = props.get("length", 0) * row["new_rub_m"] * k
         cost = props.get("cost")
         if not isinstance(cost, int | float) or abs(cost - need) > tol + FLOAT_EPS:

@@ -24,7 +24,7 @@
 4. Черновик варианта собирает деревья по разбиению ОКС на блоки, считает расходы, диаметры, реконструкцию и стоимость. Локальный поиск сливает блоки, переносит и выделяет ОКС, меняет врезку, пока улучшается S или не кончится лимит времени.
 5. До трёх лучших черновиков, различающихся врезками или разбиением, выдаются вариантами с рангами.
 
-Подробно — в [architecture/ARCHITECTURE.md](architecture/ARCHITECTURE.md), причины решений — в [ADR-0001](docs/specs/backend-core/adr/0001-routing-approach.md) и [ADR-0002](docs/specs/backend-core/adr/0002-partition-local-search.md). На датасете организаторов расчёт занимает около 70 секунд, вариант 1 стоит 359 млн руб. против 537 у версии без локального поиска; числа и ход ресёрча — в [docs/research/](docs/research/real-dataset.md).
+Подробно — в [architecture/ARCHITECTURE.md](architecture/ARCHITECTURE.md), причины решений — в [ADR-0001](docs/specs/backend-core/adr/0001-routing-approach.md) и [ADR-0002](docs/specs/backend-core/adr/0002-partition-local-search.md). На датасете организаторов расчёт занимает около 70 секунд, вариант 1 стоит 297 млн руб. при S 14,0 (прогон 16.09.2026: трассы по сетке 45°, полуторакратный коэффициент за нестандартный угол и врезка на каждую ветку из камеры по протоколу организаторов); сравнение с версией без локального поиска и ход ресёрча — в [docs/research/](docs/research/real-dataset.md).
 
 ## Быстрый старт
 
@@ -56,6 +56,7 @@ Swagger UI открывается на `http://localhost:8080/swagger-ui/index.h
 | `tools/` | Python-инструменты одним uv-проектом: генератор, валидатор, сценарии |
 | `tests/` | pytest-тесты Python-инструментов, как запускать — в [tests/README.md](tests/README.md) |
 | `Makefile` | команды запуска, тестов и прогонов, `make help` |
+| `pom.xml`, `build.gradle` | сборка Maven (основная, её используют Dockerfile и Makefile) и та же сборка Gradle через `./gradlew` |
 | `scripts/gates/` | скрипты проверки приёмки |
 | `docs/` | документы организатора, пакеты спек задач, отчёты ресёрча и тестов; индекс в [docs/README.md](docs/README.md) |
 | `data/samples/` | небольшой синтетический набор для пробы; остальное в `data/` не коммитится |

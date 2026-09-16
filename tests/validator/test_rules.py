@@ -187,3 +187,48 @@ def test_point_and_unknown_type_are_bypassed(restriction_type, geometry_type, sh
 
     assert bool(results["forbid"].violations) == fails, render_all(results)
     assert not any(result.violations for rule, result in results.items() if rule != "forbid"), render_all(results)
+
+
+def test_nonstandard_bend_needs_higher_segment_cost():
+    from shapely.geometry import shape
+
+    from heatcheck.model import to_utm
+
+    inp, out = copy.deepcopy(INPUT), copy.deepcopy(OUTPUT)
+    seg = find(out, "v2_seg_3")
+    del seg["geometry"]["coordinates"][2]  # остаётся излом 63° в (400, 110)
+    length = round(to_utm(shape(seg["geometry"])).length, 2)
+    rub_m = next(d for d in RULES_DATA["diameters"] if d["dn"] == seg["properties"]["diameter"])["new_rub_m"]
+    seg["properties"]["length"] = length
+
+    seg["properties"]["cost"] = round(length * rub_m, 2)
+    violated = [v.object_id for v in run_rule("cost", inp, out, RULES_DATA).violations]
+    assert "v2_seg_3" in violated, violated
+
+    seg["properties"]["cost"] = round(length * rub_m * RULES_DATA["turn"]["k_nonstandard"], 2)
+    violated = [v.object_id for v in run_rule("cost", inp, out, RULES_DATA).violations]
+    assert "v2_seg_3" not in violated, violated
+
+
+def test_second_ray_from_existing_chamber_needs_its_own_tie_in():
+    # Протокол 16.09.2026 п. 8: две новые ветки из одной камеры — две независимые врезки.
+    inp, out = copy.deepcopy(INPUT), copy.deepcopy(OUTPUT)
+    seg = find(out, "v1_seg_1")
+    ray = copy.deepcopy(seg)
+    ray["properties"]["id"] = "v1_seg_ray"
+    ray["properties"]["end_node_id"] = "v1_node_ray"
+    coords = ray["geometry"]["coordinates"]
+    coords[:] = [coords[0], [coords[0][0] + 0.001, coords[0][1] + 0.001]]
+    node = {"type": "Feature", "geometry": {"type": "Point", "coordinates": coords[-1]},
+            "properties": {"id": "v1_node_ray", "object_type": "technical_node", "variant_id": "1"}}
+    out["features"] += [ray, node]
+
+    violated = [v.message for v in run_rule("tie_in", inp, out, RULES_DATA).violations]
+    assert any("по одной врезке на участок" in m for m in violated), violated
+
+    tie = copy.deepcopy(find(out, "v1_tie_1"))
+    tie["properties"]["id"] = "v1_tie_ray"
+    ray["properties"]["start_node_id"] = "v1_tie_ray"
+    out["features"].append(tie)
+    violated = [v.message for v in run_rule("tie_in", inp, out, RULES_DATA).violations]
+    assert not any("по одной врезке" in m for m in violated), violated

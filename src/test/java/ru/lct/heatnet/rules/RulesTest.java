@@ -126,6 +126,16 @@ class RulesTest {
     }
 
     @Test
+    void kTurnIsOneOnlyNearStandardAngles() {
+        assertEquals(1, rules.kTurn(45), EPS);
+        assertEquals(1, rules.kTurn(90.9), EPS);
+        assertEquals(1, rules.kTurn(44.1), EPS);
+        assertEquals(1.5, rules.kTurn(30), EPS);
+        assertEquals(1.5, rules.kTurn(46.1), EPS);
+        assertEquals(1.5, rules.kTurn(135), EPS);
+    }
+
+    @Test
     void scoreWeightsCostAndLength() {
         assertEquals(1.0, rules.score(25_000_000, 100), EPS);
         assertEquals(0.7 * 2 + 0.3 * 2.5, rules.score(50_000_000, 250), EPS);

@@ -2,23 +2,30 @@ import itertools
 from collections import defaultdict
 from typing import Any
 
+from shapely.geometry import LineString
+
 from heatcheck.model import (
     COST_TOL_RUB,
     FLOW_TOL_TPH,
     LENGTH_TOL_M,
+    MIN_TURN_DEG,
     NODE_TOL_M,
     SCORE_TOL,
+    Feature,
     Input,
     Output,
     RuleResult,
+    Variant,
     Violation,
     chamber_cost,
     diameter_for,
     diameter_row,
 )
 from heatcheck.network import (
+    Net,
     build_net,
     chamber_required,
+    deflection_deg,
     network_loads,
     piece_geom,
     pieces,
@@ -152,6 +159,26 @@ def check_chamber_recon(inp: Input, out: Output, rules: dict[str, Any]) -> RuleR
     return RuleResult(violations, checked)
 
 
+def bend_coords(net: Net, variant: Variant, seg: Feature) -> list[tuple[float, float]]:
+    """Вершины участка для изломов; у участка из технического узла спереди предпоследняя точка входящего участка."""
+    coords = list(seg.geom.coords)
+    group = net.start[seg.id]
+    incoming = [s for s in net.in_segs.get(group, []) if isinstance(s.geom, LineString)]
+    if incoming and net.members[group] <= {n.id for n in variant.nodes}:
+        coords = [list(incoming[0].geom.coords)[-2]] + coords
+    return coords
+
+
+def turn_k(rules: dict[str, Any], coords: list[tuple[float, float]]) -> float:
+    """Протокол 16.09.2026 п. 9: излом не 45° и не 90° (с допуском) — участок дороже в k_nonstandard раз."""
+    turn = rules["turn"]
+    for i in range(1, len(coords) - 1):
+        angle = deflection_deg(coords[i - 1], coords[i], coords[i + 1])
+        if angle is not None and angle >= MIN_TURN_DEG and all(abs(angle - s) > turn["tolerance_deg"] for s in turn["standard_deg"]):
+            return turn["k_nonstandard"]
+    return 1.0
+
+
 def check_cost(inp: Input, out: Output, rules: dict[str, Any]) -> RuleResult:
     violations, checked = [], 0
     for variant in out.variants.values():
@@ -177,6 +204,8 @@ def check_cost(inp: Input, out: Output, rules: dict[str, Any]) -> RuleResult:
             k = 1.0
             if props.get("laying_method") == "special":
                 k = segment_k(zones, seg) if seg.id in net.start else None
+            if k and seg.id in net.start:
+                k *= turn_k(rules, bend_coords(net, variant, seg))
             expected = length * row["new_rub_m"] * k if row and is_number(length) and k else None
             verify(seg.id, props.get("cost"), expected, "construction_cost")
             sums["new_network_length"] += length if is_number(length) else 0

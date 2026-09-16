@@ -42,6 +42,8 @@ public final class ObstacleSet {
     private static final String HEAT_NETWORK = "heat_network";
     private static final double SIMPLIFY_M = 0.05;
     private static final double NODE_OFFSET_M = 0.05;
+    private static final double ALONG_SKIP_M = 0.5;
+    private static final double ALONG_TOL_M = 0.01;
     private static final double SPAN_JOIN_M = 1e-6;
     // Объект врезки пропускается только у отрезков, которые начинаются или заканчиваются на нём (A-9: до 0,5 м).
     private static final double TIE_IN_TOUCH_M = 0.5;
@@ -277,6 +279,27 @@ public final class ObstacleSet {
             }
         }
         return Math.max(0, special.rule.getMarginM() - nearest);
+    }
+
+    /**
+     * Отрезок a–b дальше ALONG_SKIP_M от a пересекает объект из {@code ignored} или идёт по нему: так отрезок пути
+     * у врезки ложится на трубу врезки или пересекает её, а проверка отступов их для него пропускает (как
+     * leavesNetwork в TreeBuilder).
+     */
+    public boolean alongIgnored(Coordinate a, Coordinate b, Set<String> ignored) {
+        double length = a.distance(b);
+        if (ignored.isEmpty() || length <= ALONG_SKIP_M) {
+            return false;
+        }
+        LineString away = factory.createLineString(new Coordinate[] {new LineSegment(a, b).pointAlong(ALONG_SKIP_M / length), b});
+        for (Object item : specials.query(away.getEnvelopeInternal())) {
+            Special special = (Special) item;
+            // по расстоянию, а не intersects: у отрезка, разложенного по сетке, координаты с шумом 1e-15
+            if (ignored.contains(special.id) && special.object.getGeometry().isWithinDistance(away, ALONG_TOL_M)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

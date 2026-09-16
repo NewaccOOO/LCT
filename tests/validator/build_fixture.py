@@ -115,7 +115,8 @@ def via_chamber_1() -> dict[str, list[dict]]:
     assert diameter_for(net_1["flow_tph"] + OKS_FLOW_TPH) <= net_1["diameter"]
     return {
         "tie": [tie_in("ch_1", diameter_for(OKS_FLOW_TPH))],
-        "seg": [segment("tie_1", "cp_1", [(200, 0), (230, 100), CONNECTION_POINT])],
+        # изломы 45° и 45°: протокол 16.09.2026 п. 9, нестандартный угол дороже в полтора раза
+        "seg": [segment("tie_1", "cp_1", [(200, 0), (200, 60), (290, 150), CONNECTION_POINT])],
     }
 
 
@@ -137,7 +138,7 @@ def via_chamber_2() -> dict[str, list[dict]]:
         "seg": [
             segment("tie_1", "node_1", [(400, 0), (400, low_y)]),
             segment("node_1", "node_2", [(400, low_y), (400, high_y)], "special", road["k_special"]),
-            segment("node_2", "cp_1", [(400, high_y), (400, 110), CONNECTION_POINT]),
+            segment("node_2", "cp_1", [(400, high_y), (400, 110), (360, 150), CONNECTION_POINT]),  # изломы 45° и 45°
         ],
         "recon": [feature(
             recon_geometry, object_type="heat_network_reconstruction", existing_object_id="net_2",

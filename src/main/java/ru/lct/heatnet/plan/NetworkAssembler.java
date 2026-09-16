@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
@@ -152,7 +153,8 @@ final class NetworkAssembler {
     }
 
     /**
-     * Вариант из деревьев; деревья с общей камерой врезки собираются одной врезкой. Бросает
+     * Вариант из деревьев; деревья с общей точкой врезки собираются в один узел, у существующей камеры каждое
+     * ребро из неё — своя врезка (протокол 16.09.2026 п. 8). Бросает
      * {@link IllegalStateException}, если диаметры не разрезаются по предельной длине или собранная сеть нарушает
      * отступ от объектов специального прохода, число поворотов или форму участков: такое дерево не выдаётся.
      */
@@ -173,6 +175,8 @@ final class NetworkAssembler {
         final Map<String, Double> flowByUnit = new HashMap<>();
         final Map<String, List<SizedPiece>> piecesByEdge = new HashMap<>();
         final Map<String, String> nodeIds = new HashMap<>();
+        /** ID врезки по индексу ребра из корня-камеры: каждый луч из существующей камеры — своя врезка. */
+        final Map<Integer, String> tieIdByEdge = new HashMap<>();
         final Map<String, Integer> maxDnByNode = new HashMap<>();
         final Map<String, Set<SpecialObjects.Special>> exemptByNode = new HashMap<>();
         final Map<String, NewSegment> incomingByNode = new HashMap<>();
@@ -318,8 +322,18 @@ final class NetworkAssembler {
         void nameNodes() {
             int tieNo = 0;
             int chamberNo = 0;
-            for (List<Tree> unit : units.values()) {
-                nodeIds.put(unit.get(0).root.key, prefix + "tie_" + ++tieNo);
+            for (Map.Entry<String, List<Tree>> unit : units.entrySet()) {
+                nodeIds.put(unit.getKey(), prefix + "tie_" + ++tieNo);
+                // протокол 16.09.2026 п. 8: несколько новых веток к одной камере — несколько независимых врезок
+                if (unit.getValue().get(0).tie.isChamber()) {
+                    boolean first = true;
+                    for (int i = 0; i < edges.size(); i++) {
+                        if (edges.get(i).from().equals(unit.getKey())) {
+                            tieIdByEdge.put(i, first ? nodeIds.get(unit.getKey()) : prefix + "tie_" + ++tieNo);
+                            first = false;
+                        }
+                    }
+                }
             }
             for (Edge edge : edges) {
                 for (Tree.Node node : List.of(edge.source.from, edge.source.to)) {
@@ -338,7 +352,7 @@ final class NetworkAssembler {
             List<double[]> special = specialByEdge.get(index);
             List<SizedPiece> pieces = piecesByEdge.get(edge.id);
             TreeMap<Double, String> cuts = new TreeMap<>();
-            cuts.put(0.0, nodeIds.get(edge.from()));
+            cuts.put(0.0, tieIdByEdge.getOrDefault(index, nodeIds.get(edge.from())));
             cuts.put(edge.length, nodeIds.get(edge.to()));
             List<Double> candidates = new ArrayList<>();
             for (double[] interval : special) {
@@ -390,6 +404,7 @@ final class NetworkAssembler {
                         exemptByNode.computeIfAbsent(endId, id -> new HashSet<>()).addAll(crossed);
                         k = crossed.stream().mapToDouble(s -> s.rule.getKSpecial()).max().orElse(1);
                     }
+                    k *= kTurn(coords, from == 0.0 ? null : incomingByNode.get(startId));
                     NewSegment segment = new NewSegment(prefix + "seg_" + (segments.size() + 1), variantId, line, startId,
                             endId, flowByEdge.get(edge.id), dn, length, isSpecial ? SPECIAL : BASE, null, null,
                             costs.segmentCost(length, dn, k));
@@ -400,6 +415,26 @@ final class NetworkAssembler {
                 }
                 from = to;
             }
+        }
+
+        /**
+         * Коэффициент за изломы участка (протокол 16.09.2026 п. 9): вершины внутри линии и, если участок начинается
+         * в техническом узле, излом к входящему участку. Изломы в камерах и врезках не считаются.
+         */
+        double kTurn(Coordinate[] coords, NewSegment incoming) {
+            double k = 1;
+            Coordinate[] before = incoming == null ? null : incoming.getGeometry().getCoordinates();
+            for (int i = 0; i + 1 < coords.length; i++) {
+                Coordinate prev = i > 0 ? coords[i - 1] : before == null ? null : before[before.length - 2];
+                if (prev == null) {
+                    continue;
+                }
+                double deflection = TreeBuilder.deflectionDeg(prev, coords[i], coords[i + 1]);
+                if (deflection >= MIN_TURN_DEG) {
+                    k = Math.max(k, rules.kTurn(deflection));
+                }
+            }
+            return k;
         }
 
         /** Объекты, чьи зоны валидатор засчитает специальному участку: перекрытие больше ZONE_OVERLAP_M. */
@@ -469,11 +504,14 @@ final class NetworkAssembler {
             }
         }
 
-        /** Правило поворотов: на пути от врезки до точки подключения не больше 3k + 4 поворотов. */
+        /** Правило поворотов: на пути от врезки до точки подключения не больше turnLimit(k) поворотов. */
         void checkTurns() {
             Map<String, Coordinate> tiePoint = new HashMap<>();
             for (List<Tree> unit : units.values()) {
                 tiePoint.put(nodeIds.get(unit.get(0).root.key), unit.get(0).root.point);
+            }
+            for (Map.Entry<Integer, String> entry : tieIdByEdge.entrySet()) {
+                tiePoint.put(entry.getValue(), edges.get(entry.getKey()).source.from.point);
             }
             for (Edge edge : edges) {
                 if (edge.source.to.kind != Tree.Kind.CONNECTION) {
@@ -513,21 +551,33 @@ final class NetworkAssembler {
                 String tieId = nodeIds.get(unit.getKey());
                 // ТП §10.2: required_diameter врезки — диаметр новой сети в точке врезки, то есть участков, которые
                 // в ней начинаются; реконструкция трубы и камеры на него не влияет (пример 10.8: 150 → 200, труба 250).
-                int maxNew = maxDnByNode.get(tieId);
                 if (tie.isChamber()) {
+                    List<String> rayIds = new ArrayList<>();
+                    for (int i = 0; i < edges.size(); i++) {
+                        if (edges.get(i).from().equals(unit.getKey())) {
+                            rayIds.add(tieIdByEdge.get(i));
+                        }
+                    }
+                    int maxNew = rayIds.stream().mapToInt(maxDnByNode::get).max().orElseThrow();
                     int required = recon.chamberRequiredDiameter(tie.getExistingObjectId(), maxNew);
                     if (required > tie.getExistingDiameter()) {
                         chamberReconstructions.add(new ChamberReconstruction(
                                 prefix + "chrecon_" + (chamberReconstructions.size() + 1), variantId, tie.getPoint(),
                                 tie.getExistingObjectId(), tie.getExistingDiameter(), required, costs.chamberCost(required)));
                     }
+                    for (String rayId : rayIds) {
+                        tieIns.add(new TieIn(rayId, variantId, tie.getPoint(), tie.getExistingObjectId(),
+                                tie.getExistingObjectType(), tie.getExistingDiameter(), maxDnByNode.get(rayId),
+                                costs.tieInCost()));
+                    }
                 } else {
+                    int maxNew = maxDnByNode.get(tieId);
                     int dn = Math.max(maxNew, recon.getRequiredDiameterByTieIn().get(unit.getKey()));
                     chambers.add(new NewChamber(prefix + "ch_" + ++chamberNo, variantId, tie.getPoint(), dn,
                             costs.chamberCost(dn)));
+                    tieIns.add(new TieIn(tieId, variantId, tie.getPoint(), tie.getExistingObjectId(),
+                            tie.getExistingObjectType(), tie.getExistingDiameter(), maxNew, costs.tieInCost()));
                 }
-                tieIns.add(new TieIn(tieId, variantId, tie.getPoint(), tie.getExistingObjectId(),
-                        tie.getExistingObjectType(), tie.getExistingDiameter(), maxNew, costs.tieInCost()));
             }
             return recon;
         }
@@ -665,25 +715,45 @@ final class NetworkAssembler {
             }
         }
 
-        /** Объединённые специальные интервалы по рёбрам, расширенные на ZONE_GROW_M; границы у концов ребра прижимаются к узлу. */
+        /**
+         * Специальные интервалы по рёбрам, расширенные на ZONE_GROW_M; границы у концов ребра прижимаются к узлу.
+         * Интервал режется там, где меняется наибольший Kспец покрывающих зон (CONSTRAINTS §5: смена коэффициента —
+         * технический узел), и сливается с соседом только при равном Kспец. При наложении зон коэффициент один,
+         * наибольший, без перемножения (§18).
+         */
         List<List<double[]>> mergedZones() {
             List<List<double[]>> result = new ArrayList<>();
             for (int i = 0; i < edges.size(); i++) {
                 List<double[]> raw = new ArrayList<>();
                 for (Zone zone : zones) {
                     if (zone.edge == i && zone.to > zone.from) {
-                        raw.add(new double[] {Math.max(0, zone.from - ZONE_GROW_M), Math.min(edges.get(i).length, zone.to + ZONE_GROW_M)});
+                        raw.add(new double[] {Math.max(0, zone.from - ZONE_GROW_M),
+                                Math.min(edges.get(i).length, zone.to + ZONE_GROW_M), zone.special.rule.getKSpecial()});
                     }
                 }
-                raw.sort(Comparator.comparingDouble(interval -> interval[0]));
-                List<double[]> merged = new ArrayList<>();
+                TreeSet<Double> bounds = new TreeSet<>();
                 for (double[] interval : raw) {
-                    double[] last = merged.isEmpty() ? null : merged.get(merged.size() - 1);
-                    if (last != null && interval[0] <= last[1] + MERGE_M) {
-                        last[1] = Math.max(last[1], interval[1]);
-                    } else {
-                        merged.add(interval.clone());
+                    bounds.add(interval[0]);
+                    bounds.add(interval[1]);
+                }
+                List<double[]> merged = new ArrayList<>();
+                Double from = null;
+                for (double to : bounds) {
+                    if (from != null) {
+                        double mid = (from + to) / 2;
+                        double k = raw.stream().filter(r -> r[0] <= mid && mid <= r[1]).mapToDouble(r -> r[2]).max().orElse(0);
+                        double[] last = merged.isEmpty() ? null : merged.get(merged.size() - 1);
+                        if (k == 0) {
+                            from = to;
+                            continue;
+                        }
+                        if (last != null && last[2] == k && from <= last[1] + MERGE_M) {
+                            last[1] = to;
+                        } else {
+                            merged.add(new double[] {from, to, k});
+                        }
                     }
+                    from = to;
                 }
                 double length = edges.get(i).length;
                 for (double[] interval : merged) {

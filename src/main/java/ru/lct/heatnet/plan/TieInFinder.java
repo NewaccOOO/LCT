@@ -141,11 +141,18 @@ final class TieInFinder {
 
         ChamberRule rule = rules.chamberRule();
         Chamber best = null;
+        double bestCost = 0;
         for (Chamber chamber : input.getChambers()) {
             double distance = chamber.getGeometry().distance(tie);
-            if (distance <= rule.getMaxDistM() + DIST_MARGIN_M && links(chamber.getId()) + 1 <= rule.getMaxSegments()
-                    && (best == null || distance < best.getGeometry().distance(tie))) {
+            if (distance > rule.getMaxDistM() + DIST_MARGIN_M || links(chamber.getId()) + 1 > rule.getMaxSegments()) {
+                continue;
+            }
+            // протокол 16.09.2026 п. 8: из камер в радиусе 10 м берётся дешёвая — без реконструкции под dn, при
+            // равной стоимости ближняя
+            double cost = dn > chamber.getDiameter() ? rules.chamberCost(dn) : 0;
+            if (best == null || cost < bestCost || cost == bestCost && distance < best.getGeometry().distance(tie)) {
                 best = chamber;
+                bestCost = cost;
             }
         }
         if (best != null) {

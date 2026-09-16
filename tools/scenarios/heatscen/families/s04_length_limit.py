@@ -107,7 +107,7 @@ def two_trees_share_chamber_chain() -> tuple[Scene, Expect]:
     sc.oks("oks-s", cp=(300, -100), flow=3, away=SOUTH)
     dn = diameter_for(rules(), 3)
     return sc, Expect(
-        tie_ins=[chamber_tie("hc-1", 150)],
+        tie_ins=[chamber_tie("hc-1", 150), chamber_tie("hc-1", 150)],  # по врезке на ветку, протокол 16.09.2026 п. 8
         new_chambers=0,
         dn_used={dn, next_diameter(rules(), dn)},
         unconnected=[],

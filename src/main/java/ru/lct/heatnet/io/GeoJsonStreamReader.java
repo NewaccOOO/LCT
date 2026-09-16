@@ -29,6 +29,8 @@ import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.Polygon;
 import org.locationtech.jts.geom.impl.PackedCoordinateSequenceFactory;
 import org.locationtech.jts.index.strtree.STRtree;
+import org.locationtech.jts.operation.valid.IsValidOp;
+import org.locationtech.jts.operation.valid.TopologyValidationError;
 import org.locationtech.proj4j.ProjectionException;
 import ru.lct.heatnet.model.Chamber;
 import ru.lct.heatnet.model.ConnectionPoint;
@@ -80,6 +82,18 @@ public class GeoJsonStreamReader {
     // Упакованная XY-последовательность хранит точку в 16 байтах вместо объекта Coordinate в 40 байт.
     private static final GeometryFactory GEOMETRY = new GeometryFactory(PackedCoordinateSequenceFactory.DOUBLE_FACTORY);
     private static final Rules RULES = Rules.load();
+    private static final Map<Integer, String> INVALID_REASONS = Map.ofEntries(
+            Map.entry(TopologyValidationError.REPEATED_POINT, "повторяющаяся точка"),
+            Map.entry(TopologyValidationError.HOLE_OUTSIDE_SHELL, "дырка вне внешнего контура"),
+            Map.entry(TopologyValidationError.NESTED_HOLES, "дырка внутри дырки"),
+            Map.entry(TopologyValidationError.DISCONNECTED_INTERIOR, "внутренность полигона не связна"),
+            Map.entry(TopologyValidationError.SELF_INTERSECTION, "самопересечение"),
+            Map.entry(TopologyValidationError.RING_SELF_INTERSECTION, "самопересечение контура"),
+            Map.entry(TopologyValidationError.NESTED_SHELLS, "контур внутри другого контура"),
+            Map.entry(TopologyValidationError.DUPLICATE_RINGS, "повторяющиеся контуры"),
+            Map.entry(TopologyValidationError.TOO_FEW_POINTS, "слишком мало точек"),
+            Map.entry(TopologyValidationError.INVALID_COORDINATE, "недопустимая координата"),
+            Map.entry(TopologyValidationError.RING_NOT_CLOSED, "контур не замкнут"));
     private static final Locale RUSSIAN = new Locale("ru");
 
     public static InputData read(Path path) {
@@ -266,7 +280,8 @@ public class GeoJsonStreamReader {
                 }
                 case OKS_FUTURE: {
                     Double flow = flow(props, featureId);
-                    Double heatLoad = number(props, featureId, "heat_load");
+                    // справочный атрибут (CONSTRAINTS §12), в расчёте не участвует
+                    Double heatLoad = present(props, "heat_load") ? number(props, featureId, "heat_load") : null;
                     Geometry geometry = geometry(node, featureId, POLYGONS);
                     if (diagnostics.size() == before) {
                         futureOks.add(new FutureOks(id, geometry, flow, heatLoad));
@@ -611,7 +626,14 @@ public class GeoJsonStreamReader {
                 return null;
             }
             try {
-                return Projector.toUtm(parse(type, raw.path("coordinates")));
+                Geometry parsed = parse(type, raw.path("coordinates"));
+                TopologyValidationError error = new IsValidOp(parsed).getValidationError();
+                if (error != null) {
+                    add(featureId, "geometry", "невалидная геометрия: " + INVALID_REASONS.getOrDefault(
+                            error.getErrorType(), error.getMessage()) + " у точки " + error.getCoordinate());
+                    return null;
+                }
+                return Projector.toUtm(parsed);
             } catch (IllegalArgumentException e) {
                 add(featureId, "geometry", "некорректные координаты " + type + ": " + e.getMessage());
             } catch (ProjectionException e) {

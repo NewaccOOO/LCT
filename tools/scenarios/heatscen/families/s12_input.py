@@ -84,9 +84,11 @@ def oks_without_flow() -> tuple[Scene, Expect]:
     return without("oks-1", "flow_tph")
 
 
-@scenario("S12-05", tz=["TZ-4"], title="у ОКС нет heat_load: код 2 и диагностика oks-1 heat_load")
+@scenario("S12-05", tz=["TZ-4"], title="у ОКС нет heat_load: атрибут справочный, расчёт идёт")
 def oks_without_heat_load() -> tuple[Scene, Expect]:
-    return without("oks-1", "heat_load")
+    sc = valid_scene()
+    props(sc, "oks-1").pop("heat_load")
+    return sc, Expect(unconnected=[])
 
 
 @scenario("S12-06", tz=["TZ-4"], title="у точки подключения нет oks_id: код 2 и диагностика oks-1-cp oks_id")

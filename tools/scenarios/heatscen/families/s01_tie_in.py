@@ -99,30 +99,32 @@ def full_chamber_pipe_nearby() -> tuple[Scene, Expect]:
     )
 
 
-@scenario("S01-06", tz=["TZ-17", "TZ-19", "TZ-53"], title="два ОКС по разные стороны камеры с двумя участками: оба в камеру одной врезкой")
+@scenario("S01-06", tz=["TZ-17", "TZ-19", "TZ-53"], title="два ОКС по разные стороны камеры с двумя участками: оба в камеру, каждая ветка своей врезкой")
 def two_oks_both_sides_of_chamber() -> tuple[Scene, Expect]:
+    # Протокол 16.09.2026 п. 8: несколько новых веток к одной камере — несколько независимых врезок.
     sc = trunk()
     north = sc.oks("oks-n", cp=(300, 40), flow=5, away=NORTH)
     south = sc.oks("oks-s", cp=(300, -40), flow=10, away=SOUTH)
     return sc, Expect(
-        tie_ins=[chamber_tie("hc-1", 150)],
+        tie_ins=[chamber_tie("hc-1", 150), chamber_tie("hc-1", 150)],
         new_chambers=0,
         segment_dn={north: diameter_for(rules(), 5), south: diameter_for(rules(), 10)},
-        summary={"tie_in_cost": rules()["tie_in_cost"]},
+        summary={"tie_in_cost": 2 * rules()["tie_in_cost"]},
         unconnected=[],
     )
 
 
-@scenario("S01-07", tz=["TZ-17"], title="три ОКС у камеры с двумя участками: третий через камеру ветвления")
+@scenario("S01-07", tz=["TZ-17"], title="три ОКС у камеры с двумя участками: врезка в трубу с двумя камерами дешевле трёх врезок в камеру")
 def three_oks_at_chamber_with_two_links() -> tuple[Scene, Expect]:
-    # Врезка в трубу для третьего ОКС стоит 5 + 3 млн, камера ветвления на новом участке — 3 млн.
+    # Три ветки из камеры — три врезки по 5 млн (протокол 16.09.2026 п. 8). Врезка в трубу рядом стоит 5 млн плюс
+    # новая камера 3 млн плюс камера ветвления 3 млн, поэтому дешевле одна врезка в hn-2 с двумя новыми камерами.
     sc = trunk()
     sc.oks("oks-n", cp=(300, 40), flow=5, away=NORTH)
     sc.oks("oks-s", cp=(300, -40), flow=5, away=SOUTH)
     sc.oks("oks-ne", cp=(340, 40), flow=5, away=NORTH)
     return sc, Expect(
-        tie_ins=[chamber_tie("hc-1", 150)],
-        new_chambers=1,
+        tie_ins=[pipe_tie("hn-2", 150)],
+        new_chambers=2,
         unconnected=[],
     )
 

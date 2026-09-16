@@ -30,11 +30,16 @@ public final class Router {
     private static final double PUSH_TURN_DEG = 6;
     private static final double[] PUSH_STEPS_M = {0.5, 1, 2, 4, 8};
     private static final int MAX_PUSHES = 20;
+    /** Отрезок выровнен по сетке, если отклонён от её направления не больше чем на полдопуска угла из rules.json. */
+    private static final double ALIGN_TOL_DEG = 0.5;
+    /** Шаги сдвига соседней вершины вдоль её выровненного отрезка, м. */
+    private static final double[] SLIDES_M = {1, 2, 3, 5, 8, 13, 21};
     // ponytail: точки запроса повторяются десятками раз (одна точка подключения на каждом шаге дерева, одни и те же
     // цели у всех ОКС шага), кэш их весов до узлов графа. 4096 записей по n double; при n в десятки тысяч ужать.
     private static final int WEIGHT_CACHE_SIZE = 4096;
 
     private final ObstacleSet obstacles;
+    private final Rules rules;
     private final GeometryFactory factory = new GeometryFactory();
     private final List<Coordinate> nodes;
     private final int[][] adjacency;
@@ -48,6 +53,7 @@ public final class Router {
 
     public Router(InputData input, Rules rules, Envelope area, int dn) {
         obstacles = new ObstacleSet(input, rules, area, dn);
+        this.rules = rules;
         nodes = obstacles.nodes();
         int n = nodes.size();
         List<List<Integer>> to = new ArrayList<>();
@@ -152,6 +158,8 @@ public final class Router {
         coords.add(0, source);
         coords.add(bestTarget);
         straighten(coords, ignored);
+        octilinearize(coords, ignored);
+        straighten(coords, ignored);
         LineString line = from.getFactory().createLineString(coords.toArray(new Coordinate[0]));
         List<SpecialSpan> spans = obstacles.spans(line, ignored);
         return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), spans), spans);
@@ -201,6 +209,202 @@ public final class Router {
                 at += after;
             }
         }
+    }
+
+    /**
+     * Приводит путь к направлениям сетки через 45° (протокол 16.09.2026 п. 9): тогда каждый излом равен 0°, 45°,
+     * 90° или 135°, и первые три бесплатны. Сетка повёрнута по самому длинному отрезку пути: он и всё, что уже
+     * под 45° или 90° к нему, не меняется, а прямая трасса без изломов остаётся прямой. Невыровненный отрезок
+     * раскладывается на два по соседним направлениям сетки в любом из двух порядков. Чтобы новые отрезки прошли мимо зон, соседняя вершина может скользить по
+     * своему выровненному отрезку: начало назад по входящему, конец вперёд по исходящему, на фиксированные шаги и
+     * ровно до выравнивания отрезка целиком. Из допустимых вариантов берётся тот, где меньше нестандартных изломов,
+     * потом поворотов, потом длины. Отрезок, для которого варианта нет, остаётся как был, и участок платит
+     * k_nonstandard.
+     */
+    private void octilinearize(List<Coordinate> coords, Set<String> ignored) {
+        double[][] frame = frame(coords);
+        for (int i = 0; i + 1 < coords.size(); i++) {
+            Coordinate u = coords.get(i);
+            Coordinate v = coords.get(i + 1);
+            if (u.distance(v) == 0 || frameIndex(frame, u, v) >= 0) {
+                continue;
+            }
+            Coordinate before = i > 0 ? coords.get(i - 1) : null;
+            Coordinate after = i + 2 < coords.size() ? coords.get(i + 2) : null;
+            int inDir = before == null ? -1 : frameIndex(frame, before, u);
+            int outDir = after == null ? -1 : frameIndex(frame, v, after);
+            List<Coordinate[]> options = new ArrayList<>(splits(frame, u, v));
+            if (inDir >= 0) {
+                double[] back = {-frame[inDir][0], -frame[inDir][1]};
+                for (double shift : slides(frame, u, v, back, before.distance(u))) {
+                    options.addAll(splits(frame, new Coordinate(u.x + shift * back[0], u.y + shift * back[1]), v));
+                }
+            }
+            if (outDir >= 0) {
+                for (double shift : slides(frame, u, v, frame[outDir], v.distance(after))) {
+                    options.addAll(splits(frame, u, new Coordinate(v.x + shift * frame[outDir][0], v.y + shift * frame[outDir][1])));
+                }
+            }
+            Coordinate[] best = null;
+            double[] bestScore = null;
+            for (Coordinate[] option : options) {
+                List<Coordinate> trial = new ArrayList<>(coords);
+                trial.set(i, option[0]);
+                trial.set(i + 1, option[2]);
+                if (option[1] != null) {
+                    trial.add(i + 1, option[1]);
+                }
+                int pieces = option[1] == null ? 1 : 2;
+                double weight = feasible(trial, i, pieces, ignored);
+                if (Double.isNaN(weight)) {
+                    continue;
+                }
+                double[] score = score(trial, i, pieces, weight, inDir >= 0, outDir >= 0);
+                if (best == null || Arrays.compare(score, bestScore) < 0) {
+                    best = option;
+                    bestScore = score;
+                }
+            }
+            if (best != null) {
+                coords.set(i, best[0]);
+                coords.set(i + 1, best[2]);
+                if (best[1] != null) {
+                    coords.add(i + 1, best[1]);
+                }
+            }
+        }
+    }
+
+    /** Восемь направлений через 45° от самого длинного отрезка пути; направление 0 — его собственное. */
+    private static double[][] frame(List<Coordinate> coords) {
+        int longest = 0;
+        for (int i = 1; i + 1 < coords.size(); i++) {
+            if (coords.get(i).distance(coords.get(i + 1)) > coords.get(longest).distance(coords.get(longest + 1))) {
+                longest = i;
+            }
+        }
+        double base = Math.atan2(coords.get(longest + 1).y - coords.get(longest).y,
+                coords.get(longest + 1).x - coords.get(longest).x);
+        double[][] frame = new double[8][];
+        for (int k = 0; k < 8; k++) {
+            frame[k] = new double[] {Math.cos(base + Math.toRadians(45 * k)), Math.sin(base + Math.toRadians(45 * k))};
+        }
+        return frame;
+    }
+
+    /** Угол отрезка от направления 0 сетки в градусах, [0, 360). */
+    private static double frameDegrees(double[][] frame, double wx, double wy) {
+        double degrees = Math.toDegrees(Math.atan2(wy, wx) - Math.atan2(frame[0][1], frame[0][0]));
+        return degrees - 360 * Math.floor(degrees / 360);
+    }
+
+    /** Индекс направления сетки, с которым отрезок совпадает с точностью ALIGN_TOL_DEG, или −1. */
+    private static int frameIndex(double[][] frame, Coordinate from, Coordinate to) {
+        double degrees = frameDegrees(frame, to.x - from.x, to.y - from.y);
+        int k = (int) Math.round(degrees / 45);
+        return Math.abs(degrees - 45 * k) <= ALIGN_TOL_DEG ? k % 8 : -1;
+    }
+
+    /** Варианты {начало, вставка или null, конец}: отрезок как есть, если выровнен, иначе две раскладки. */
+    private static List<Coordinate[]> splits(double[][] frame, Coordinate u, Coordinate v) {
+        if (frameIndex(frame, u, v) >= 0) {
+            return List.<Coordinate[]>of(new Coordinate[] {u, null, v});
+        }
+        double wx = v.x - u.x;
+        double wy = v.y - u.y;
+        int k = (int) Math.floor(frameDegrees(frame, wx, wy) / 45) % 8;
+        double[] first = frame[k];
+        double[] second = frame[(k + 1) % 8];
+        double sin45 = first[0] * second[1] - first[1] * second[0];
+        double a = (wx * second[1] - wy * second[0]) / sin45;
+        double b = (first[0] * wy - first[1] * wx) / sin45;
+        if (a < MIN_PIECE_M || b < MIN_PIECE_M) {
+            return List.of();
+        }
+        return List.of(new Coordinate[] {u, new Coordinate(u.x + a * first[0], u.y + a * first[1]), v},
+                new Coordinate[] {u, new Coordinate(u.x + b * second[0], u.y + b * second[1]), v});
+    }
+
+    /**
+     * Сдвиги вершины вдоль направления {@code along}, не короче метра оставляющие её отрезок длиной {@code room}:
+     * фиксированные шаги и точные сдвиги, после которых отрезок u–v ложится на направление сетки.
+     */
+    private static List<Double> slides(double[][] frame, Coordinate u, Coordinate v, double[] along, double room) {
+        List<Double> result = new ArrayList<>();
+        double limit = room - MIN_PIECE_M;
+        for (double shift : SLIDES_M) {
+            if (shift <= limit) {
+                result.add(shift);
+            }
+        }
+        double wx = v.x - u.x;
+        double wy = v.y - u.y;
+        for (double[] direction : frame) {
+            double denominator = along[0] * direction[1] - along[1] * direction[0];
+            if (denominator == 0) {
+                continue;
+            }
+            double shift = -(wx * direction[1] - wy * direction[0]) / denominator;
+            if (shift > 0 && shift <= limit) {
+                result.add(shift);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Вес новых отрезков trial[i..i+pieces] или NaN, если они недопустимы, короче метра, режут остальной путь,
+     * идут по трубе врезки или пересекают её: путь к врезке подходит к трубе один раз, в самой врезке.
+     */
+    private double feasible(List<Coordinate> trial, int i, int pieces, Set<String> ignored) {
+        int last = trial.size() - 2;
+        double weight = 0;
+        for (int p = i; p < i + pieces; p++) {
+            Coordinate a = trial.get(p);
+            Coordinate b = trial.get(p + 1);
+            double pieceWeight = obstacles.edgeWeight(a, b, ignored);
+            if (a.distance(b) < MIN_PIECE_M || Double.isNaN(pieceWeight)
+                    || obstacles.alongIgnored(p == last ? b : a, p == last ? a : b, ignored)) {
+                return Double.NaN;
+            }
+            LineSegment piece = new LineSegment(a, b);
+            for (int j = 0; j <= last; j++) {
+                if (Math.abs(j - p) > 1 && piece.intersection(new LineSegment(trial.get(j), trial.get(j + 1))) != null) {
+                    return Double.NaN;
+                }
+            }
+            weight += pieceWeight;
+        }
+        return weight;
+    }
+
+    /**
+     * Оценка варианта: нестандартные изломы, повороты, вес пути (длина с надбавкой за специальные проходы у новых
+     * отрезков). Изломы считаются в вершинах новых отрезков против выровненных соседей; невыровненный сосед
+     * раскладывается позже и здесь не считается.
+     */
+    private double[] score(List<Coordinate> trial, int i, int pieces, double weight, boolean inAligned, boolean outAligned) {
+        int nonstandard = 0;
+        int turns = 0;
+        for (int k = i; k <= i + pieces; k++) {
+            if (k == 0 || k + 1 >= trial.size() || k == i && !inAligned || k == i + pieces && !outAligned) {
+                continue;
+            }
+            double deflection = 180 - Math.toDegrees(Angle.angleBetween(trial.get(k - 1), trial.get(k), trial.get(k + 1)));
+            if (deflection >= MIN_TURN_DEG) {
+                turns++;
+                if (rules.kTurn(deflection) > 1) {
+                    nonstandard++;
+                }
+            }
+        }
+        double total = weight;
+        for (int k = 0; k + 1 < trial.size(); k++) {
+            if (k < i || k >= i + pieces) {
+                total += trial.get(k).distance(trial.get(k + 1));
+            }
+        }
+        return new double[] {nonstandard, turns, total};
     }
 
     /**

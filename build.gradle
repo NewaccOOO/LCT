@@ -1,0 +1,70 @@
+// Сборка Gradle, эквивалент pom.xml: те же версии Spring Boot 2.6.3, Java 11 и зависимости.
+// Артефакт: build/libs/heatnet.jar. Maven остаётся основной сборкой (Dockerfile, Makefile).
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '2.6.3'
+    id 'io.spring.dependency-management' version '1.0.11.RELEASE'
+}
+
+group = 'ru.lct'
+version = '0.1.0'
+sourceCompatibility = '11'
+
+repositories {
+    mavenCentral()
+}
+
+dependencyManagement {
+    imports {
+        mavenBom 'org.testcontainers:testcontainers-bom:1.21.4'
+    }
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    runtimeOnly 'org.postgresql:postgresql'
+    implementation 'org.springdoc:springdoc-openapi-ui:1.7.0'
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+    implementation 'org.locationtech.jts:jts-core:1.20.0'
+    implementation 'org.locationtech.proj4j:proj4j:1.4.3'
+    implementation 'org.locationtech.proj4j:proj4j-epsg:1.4.3'
+    implementation 'org.jgrapht:jgrapht-core:1.5.3'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
+    testCompileOnly 'org.projectlombok:lombok'
+    testAnnotationProcessor 'org.projectlombok:lombok'
+}
+
+sourceSets {
+    main {
+        resources {
+            srcDirs += 'rules'
+        }
+    }
+}
+
+bootJar {
+    archiveFileName = 'heatnet.jar'
+}
+
+// Юнит-тесты *Test, как surefire; интеграционные *IT отдельной задачей, как failsafe (нужен Docker).
+test {
+    useJUnitPlatform()
+    exclude '**/*IT.class'
+    maxHeapSize = '256m'
+}
+
+tasks.register('integrationTest', Test) {
+    description = 'Интеграционные тесты *IT (Testcontainers, Docker)'
+    group = 'verification'
+    useJUnitPlatform()
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    include '**/*IT.class'
+    shouldRunAfter test
+}

@@ -16,17 +16,18 @@ import ru.lct.heatnet.rules.Rules;
 
 /**
  * Правило geometry валидатора (docs/interpretation.md): на пути от врезки до точки подключения поворотов не больше
- * 3k + 4, где k — число полигонов запрета, дорог и путей, которые пересекает прямая между врезкой и точкой.
+ * turn.limit_per_obstacle × k + turn.limit_base из rules.json, где k — число полигонов запрета, дорог и путей,
+ * которые пересекает прямая между врезкой и точкой.
  */
 final class TurnRule {
     static final double MIN_TURN_DEG = 3;
-    private static final int TURNS_PER_OBSTACLE = 3;
-    private static final int TURNS_BASE = 4;
 
+    private final Rules rules;
     private final STRtree polygons = new STRtree();
     private final GeometryFactory factory = new GeometryFactory();
 
     TurnRule(InputData input, Rules rules) {
+        this.rules = rules;
         for (ExistingOks oks : input.getExistingOks()) {
             add(oks.getGeometry());
         }
@@ -51,7 +52,7 @@ final class TurnRule {
                 crossed++;
             }
         }
-        return TURNS_PER_OBSTACLE * crossed + TURNS_BASE;
+        return rules.turnLimit(crossed);
     }
 
     /** Повороты на ломаной: вершины с отклонением от 3°, вершины между совпадающими точками не считаются. */

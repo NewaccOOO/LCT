@@ -184,11 +184,16 @@ def check_tie_in(inp: Input, out: Output, rules: dict[str, Any]) -> RuleResult:
             if props.get("existing_diameter") != existing.props.get("diameter"):
                 add(f"existing_diameter={props.get('existing_diameter')}, у объекта {existing.props.get('diameter')}")
 
+            group_ties = [t for t in variant.tie_ins if net.group_of.get(t.id) == group]
             if existing.object_type == "heat_chamber":
                 if tie.geom.distance(existing.geom) > NODE_TOL_M:
                     add("врезка в камеру стоит не в точке камеры")
                 if new_chambers:
                     add("при врезке в существующую камеру в узле стоит новая камера")
+                # протокол 16.09.2026 п. 8: каждая новая ветка из существующей камеры — независимая врезка
+                rays = len(net.out_segs.get(group, []))
+                if len(group_ties) != rays:
+                    add(f"в камере {existing.id} врезок {len(group_ties)}, а новых участков из неё {rays}: по одной врезке на участок")
                 after = new_count + len(inp.chamber_links.get(existing.id, []))
                 if after > chamber_rule["max_segments"]:
                     add(f"после подключения к камере примыкает участков {after}")
@@ -197,6 +202,8 @@ def check_tie_in(inp: Input, out: Output, rules: dict[str, Any]) -> RuleResult:
                     add("врезка в трубу стоит не на оси участка")
                 if not new_chambers:
                     add("в точке врезки в трубу нет новой камеры")
+                if len(group_ties) != 1:
+                    add(f"в точке врезки в трубу врезок {len(group_ties)}, нужна одна: ветвится новая камера")
                 for index in chamber_tree.query(tie.geom, predicate="dwithin", distance=chamber_rule["max_dist_m"]):
                     chamber = chambers[index]
                     after = len(inp.chamber_links.get(chamber.id, [])) + taken[chamber.id] + new_count
@@ -206,8 +213,10 @@ def check_tie_in(inp: Input, out: Output, rules: dict[str, Any]) -> RuleResult:
             else:
                 add(f"врезка в объект типа {existing.object_type}")
                 continue
-            # ТП §10.2: диаметр новой сети в точке врезки, то есть участков, которые в ней начинаются.
-            new_dns = [s.props.get("diameter") for s in net.out_segs.get(group, [])]
+            # ТП §10.2: диаметр новой сети в точке врезки, то есть участков, которые в ней начинаются; у врезки в
+            # камеру — участка её луча (start_node_id = id врезки), у врезки в трубу — всех участков узла.
+            own = [s for s in net.out_segs.get(group, []) if str(s.props.get("start_node_id")) == tie.id]
+            new_dns = [s.props.get("diameter") for s in (own if existing.object_type == "heat_chamber" else net.out_segs.get(group, []))]
             required = max((dn for dn in new_dns if isinstance(dn, int)), default=None)
             if props.get("required_diameter") != required:
                 add(f"required_diameter={props.get('required_diameter')}, диаметр новых участков от врезки {required}")
@@ -385,6 +394,7 @@ def check_geometry(inp: Input, out: Output, rules: dict[str, Any]) -> RuleResult
                 root = net.start[path[0].id]
                 chord = LineString([net.points[root], net.node_points[cp_id]])
                 k = len(polygon_tree.query(chord, predicate="intersects"))
-                if turns > 3 * k + 4:
-                    add(cp_id, f"на пути от врезки поворотов {turns}, допустимо {3 * k + 4} при k={k}")
+                limit = rules["turn"]["limit_per_obstacle"] * k + rules["turn"]["limit_base"]
+                if turns > limit:
+                    add(cp_id, f"на пути от врезки поворотов {turns}, допустимо {limit} при k={k}")
     return RuleResult(violations, checked)

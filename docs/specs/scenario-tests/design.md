@@ -49,7 +49,7 @@
   | `chamber_recon` | список `{existing_object_id, required_diameter, cost}` | стоимость 1 руб. |
   | `unconnected`, `penalty` | список ID и штраф | штраф 1 руб. |
   | `variants` | `(min, max)` число вариантов; `distinct_tie_in_sets` — наборы `existing_object_id` попарно различны | — |
-  | `max_new_length` | `new_network_length` варианта 1 не больше | — |
+  | `max_new_length` | `new_network_length` варианта 1 не больше границы × 1,05 (запас на отрезки через 45°, протокол 16.09.2026 п. 9) | — |
   | `summary` | `{поле: значение}` сводки варианта 1 | по C-6 |
   | `costs_by_formula` | `cost` каждого участка равен `length × new_rub_m(dn) × k` с `k` по зонам сцены | 1 руб. (100 руб. для TZ-72) |
   | `exit_code`, `diagnostics`, `stderr_contains`, `no_output` | для сценариев входа: код CLI, пары `(featureId, field)`, подстроки stderr, отсутствие файла | точное |

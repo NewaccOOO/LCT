@@ -50,6 +50,47 @@ class RouterTest {
     }
 
     @Test
+    void detourBendsAreSnappedToStandardAngles() {
+        Geometry park = rect(-50, -20, 50, 20);
+        Router router = router(List.of(new Restriction("park-1", park, "park")), List.of());
+
+        Route route = router.route(point(-70, 0), point(70, 0), Set.of());
+
+        assertNotNull(route);
+        Coordinate[] coords = route.getGeometry().getCoordinates();
+        assertTrue(coords.length >= 4, "обход углов: " + route.getGeometry());
+        for (int i = 1; i + 1 < coords.length; i++) {
+            double deflection = 180 - Math.toDegrees(Angle.angleBetween(coords[i - 1], coords[i], coords[i + 1]));
+            assertEquals(1, rules.kTurn(deflection), EPS, "излом " + deflection + "° в вершине " + i + ": " + route.getGeometry());
+        }
+        double clearance = rules.restriction("park").clearanceM(DN) + halfWidth;
+        assertTrue(route.getGeometry().distance(park) >= clearance, "расстояние " + route.getGeometry().distance(park));
+        assertTrue(route.getLength() < 0.9 * (2 * (20 + clearance) + 140), "длина " + route.getLength());
+    }
+
+    @Test
+    void routeToTieDoesNotRunAlongTiePipe() {
+        // врезка в камеру (0, 0) на трубе вдоль оси x; точка подключения в (-130, 60): прямая под 155° раскладывается
+        // на запад и северо-запад, но идти по трубе от врезки нельзя — сначала диагональ, потом запад
+        NetworkSegment west = new NetworkSegment("hn-1", line(-250, 0, 0, 0), DN, 10, "src");
+        NetworkSegment east = new NetworkSegment("hn-2", line(0, 0, 100, 0), DN, 10, "hn-1");
+        Router router = router(List.of(), List.of(west, east));
+
+        Route route = router.routeToAny(point(-130, 60), List.of(point(0, 0)), Set.of("hn-1", "hn-2"));
+
+        assertNotNull(route);
+        Coordinate[] coords = route.getGeometry().getCoordinates();
+        Coordinate tie = coords[coords.length - 1];
+        Coordinate beforeTie = coords[coords.length - 2];
+        assertEquals(0, tie.distance(new Coordinate(0, 0)), EPS);
+        assertTrue(Math.abs(beforeTie.y) > 1, "отрезок у врезки идёт по трубе: " + route.getGeometry());
+        for (int i = 1; i + 1 < coords.length; i++) {
+            double deflection = 180 - Math.toDegrees(Angle.angleBetween(coords[i - 1], coords[i], coords[i + 1]));
+            assertEquals(1, rules.kTurn(deflection), EPS, "излом " + deflection + "° в вершине " + i + ": " + route.getGeometry());
+        }
+    }
+
+    @Test
     void pointRestrictionsAreBypassedWithTheirClearance() {
         // Точка railway, у которого правило special, тоже обходится: пересечь точку специальным участком нельзя.
         List<Restriction> restrictions = List.of(new Restriction("pls-1", point(0, 0), "power_line_support"),

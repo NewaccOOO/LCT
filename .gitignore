@@ -11,3 +11,5 @@ __pycache__/
 .unlazy-hook-state.json
 .claude/settings.local.json
 .claude/worktrees/
+build/
+.gradle/

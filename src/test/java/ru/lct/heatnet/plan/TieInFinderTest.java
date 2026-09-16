@@ -48,6 +48,29 @@ class TieInFinderTest {
     }
 
     @Test
+    void amongChambersWithinTenMetresCheaperReconstructionWins() {
+        // точка (209, 0) на hn-2: до hc-1 (DN200, без реконструкции под DN100) 9 м, до hc-2 (DN80, реконструкция) 3 м
+        TieInFinder finder = new TieInFinder(PlanFixture.trunk().chamber("hc-2", 206, 0, 80, "hn-1").input(), rules);
+
+        assertEquals("hc-1", chamberNearTwoHundredNine(finder).getExistingObjectId());
+    }
+
+    @Test
+    void amongChambersWithinTenMetresWithoutReconstructionNearestWins() {
+        TieInFinder finder = new TieInFinder(PlanFixture.trunk().chamber("hc-2", 206, 0, 200, "hn-1").input(), rules);
+
+        assertEquals("hc-2", chamberNearTwoHundredNine(finder).getExistingObjectId());
+    }
+
+    /** Кандидат вдоль hn-2 на 91 м от врезки в (300, 0), то есть в (209, 0), где в 10 м две камеры. */
+    private TieCandidate chamberNearTwoHundredNine(TieInFinder finder) {
+        TieCandidate tie = finder.find(List.of(point(300, 60)), DN).stream()
+                .filter(c -> !c.isChamber() && c.getExistingObjectId().equals("hn-2")).findFirst().orElseThrow();
+        List<TieCandidate> along = finder.along(tie, DN, 90);
+        return along.stream().filter(TieCandidate::isChamber).findFirst().orElseThrow();
+    }
+
+    @Test
     void projectionFarFromChambersIsPipeTieInAndNotAtPipeEnd() {
         TieInFinder finder = new TieInFinder(PlanFixture.trunk().input(), rules);
 

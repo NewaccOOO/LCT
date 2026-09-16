@@ -6,3 +6,5 @@ tools
 .claude
 docs
 tests
+build/
+.gradle/

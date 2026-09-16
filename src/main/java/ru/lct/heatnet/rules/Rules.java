@@ -29,6 +29,11 @@ public final class Rules {
     private final double scoreWCost;
     private final double scoreWLength;
     private final double existingFlowShare;
+    private final double turnKNonstandard;
+    private final List<Double> turnStandardDeg;
+    private final double turnToleranceDeg;
+    private final int turnLimitPerObstacle;
+    private final int turnLimitBase;
     private final Map<String, RestrictionRule> restrictions;
     private final RestrictionRule fallback;
 
@@ -68,6 +73,16 @@ public final class Rules {
         scoreWLength = number(score, "w_length");
         // во входе датасета у сети нет текущего расхода: доля между пропускной способностью соседних Ду, docs/interpretation.md
         existingFlowShare = root.path("existing_flow").path("share").asDouble(0.0);
+        JsonNode turn = root.required("turn");
+        turnKNonstandard = number(turn, "k_nonstandard");
+        List<Double> standard = new ArrayList<>();
+        for (JsonNode deg : turn.required("standard_deg")) {
+            standard.add(deg.doubleValue());
+        }
+        turnStandardDeg = List.copyOf(standard);
+        turnToleranceDeg = number(turn, "tolerance_deg");
+        turnLimitPerObstacle = (int) number(turn, "limit_per_obstacle");
+        turnLimitBase = (int) number(turn, "limit_base");
 
         Map<String, RestrictionRule> byType = new HashMap<>();
         JsonNode restrictionsNode = root.required("restrictions");
@@ -147,6 +162,21 @@ public final class Rules {
 
     public double tieInCost() {
         return tieInCost;
+    }
+
+    /** Коэффициент стоимости за излом: 1 у стандартного угла (45° или 90° с допуском), иначе k_nonstandard. */
+    public double kTurn(double deflectionDeg) {
+        for (double standard : turnStandardDeg) {
+            if (Math.abs(deflectionDeg - standard) <= turnToleranceDeg) {
+                return 1;
+            }
+        }
+        return turnKNonstandard;
+    }
+
+    /** Предел поворотов на пути от врезки до точки подключения при k пересечённых хордой полигонах. */
+    public int turnLimit(int crossedPolygons) {
+        return turnLimitPerObstacle * crossedPolygons + turnLimitBase;
     }
 
     public double penalty(double flowTph) {
