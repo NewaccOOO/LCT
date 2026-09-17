@@ -82,4 +82,21 @@ class TieInFinderTest {
                 .filter(c -> c.getExistingObjectId().equals("hn-3") && c.getPoint().getX() > 590).findFirst().orElseThrow();
         assertTrue(end.getPoint().getX() < 600 - 1, "точка врезки у конца участка: " + end.getPoint());
     }
+
+    @Test
+    void candidateAboveReconstructionSitsOnFirstPipeThatHoldsTheFlow() {
+        // hn-3 DN150 с расходом 40: добавка 30 т/ч выводит её за 65,1 т/ч, а hn-2 DN200 с расходом 50 её вмещает
+        TieInFinder finder = new TieInFinder(PlanFixture.trunk().input(), rules);
+        List<TieCandidate> near = finder.find(List.of(point(500, 60)), DN).stream()
+                .filter(c -> c.getExistingObjectId().equals("hn-3")).collect(java.util.stream.Collectors.toList());
+
+        List<TieCandidate> above = finder.aboveReconstruction(near, 30, DN);
+
+        assertTrue(above.stream().noneMatch(c -> c.getExistingObjectId().equals("hn-3")), "врезка на реконструкции: " + above);
+        TieCandidate pipe = above.get(0);
+        assertEquals("hn-2", pipe.getExistingObjectId());
+        assertTrue(pipe.getPoint().getX() > 390 && pipe.getPoint().getX() < 400, "не у нижнего конца hn-2: " + pipe.getPoint());
+        assertTrue(above.stream().anyMatch(c -> c.getExistingObjectId().equals("hc-1")), "нет камеры выше: " + above);
+        assertTrue(finder.aboveReconstruction(near, 10, DN).isEmpty(), "добавка 10 т/ч помещается в hn-3");
+    }
 }

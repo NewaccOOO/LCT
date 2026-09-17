@@ -116,6 +116,57 @@ final class TreeBuilder {
         return new Run(router, dn, area, tie, chamberPenaltyM, tieInPenaltyM).build(connections);
     }
 
+    /**
+     * Пересадка дерева на другую врезку: ребро от старой врезки заменяется маршрутом от {@code tie} до конца этого
+     * ребра, остальные рёбра не меняются. Построение заново от дальней врезки даёт другое дерево, обычно хуже, а
+     * выигрыш врезки выше реконструкции — в одном стволе. null, если у старой врезки не одно ребро, маршрута нет,
+     * он выходит из area, идёт вдоль трубы врезки или касается других рёбер дерева. Отступы, повороты и форму
+     * участков проверяет сборка.
+     */
+    Tree retied(Router router, int dn, Envelope area, Tree tree, TieCandidate tie) {
+        Tree.Edge first = null;
+        for (Tree.Edge edge : tree.edges) {
+            if (edge.from == tree.root) {
+                if (first != null) {
+                    return null;
+                }
+                first = edge;
+            }
+        }
+        if (first == null) {
+            return null;
+        }
+        Route route = router.route(factory.createPoint(first.to.point), tie.getPoint(), tie.getIgnored());
+        if (route == null) {
+            return null;
+        }
+        LineString trunk = (LineString) route.getGeometry().reverse();
+        Coordinate[] coords = trunk.getCoordinates();
+        for (Coordinate c : coords) {
+            if (!area.contains(c)) {
+                return null;
+            }
+        }
+        Run run = new Run(router, dn, area, tie, 0, 0);
+        if (coords.length < 2 || !run.leavesNetwork(new LineSegment(coords[1], coords[0]))) {
+            return null;
+        }
+        LineString clipped = (LineString) new LengthIndexedLine(trunk).extractLine(0, trunk.getLength() - JUNCTION_CLIP_M);
+        Tree result = run.tree;
+        result.edges.add(new Tree.Edge(result.root, first.to, trunk));
+        for (Tree.Edge edge : tree.edges) {
+            if (edge == first) {
+                continue;
+            }
+            if (edge.line.distance(clipped) <= APART_M) {
+                return null;
+            }
+            result.edges.add(edge);
+        }
+        result.unconnected.addAll(tree.unconnected);
+        return result;
+    }
+
     private final class Run {
         final Router router;
         final ObstacleSet obstacles;

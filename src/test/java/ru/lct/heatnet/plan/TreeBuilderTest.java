@@ -68,6 +68,32 @@ class TreeBuilderTest {
     }
 
     @Test
+    void retiedTreeKeepsEdgesBelowTrunkAndStartsAtNewTie() {
+        PlanFixture fixture = PlanFixture.trunk().oks("o-1", 480, 80, 5).oks("o-2", 540, 80, 5);
+        InputData input = fixture.input();
+        TieInFinder finder = new TieInFinder(input, rules);
+        List<TieCandidate> near = finder.find(List.of(point(510, 60)), DN);
+        TieCandidate low = near.stream().filter(c -> c.getExistingObjectId().equals("hn-3")).findFirst().orElseThrow();
+        TieCandidate high = finder.find(List.of(point(300, 60)), DN).stream()
+                .filter(c -> c.getExistingObjectId().equals("hn-2")).findFirst().orElseThrow();
+        TreeBuilder builder = builder(input, finder);
+        Router router = new Router(input, rules, AREA, DN);
+        Tree tree = builder.build(router, DN, AREA, low, fixture.connections);
+
+        Tree retied = builder.retied(router, DN, AREA, tree, high);
+
+        assertTrue(retied != null, "пересадка на hn-2 не удалась");
+        assertEquals(high.nodeKey(), retied.root.key);
+        assertEquals(tree.edges.size(), retied.edges.size());
+        Tree.Edge trunk = retied.edges.stream().filter(e -> e.from == retied.root).findFirst().orElseThrow();
+        assertTrue(trunk.line.getStartPoint().getCoordinate().distance(high.getPoint().getCoordinate()) < 1e-6);
+        for (Tree.Edge edge : tree.edges) {
+            assertTrue(edge.from == tree.root || retied.edges.contains(edge), "ребро ниже ствола изменилось");
+        }
+        assertEquals(tree.connected().size(), retied.connected().size());
+    }
+
+    @Test
     void extraBranchMovesFromFullTieChamberToTrunk() {
         // у hc-1 три существующих участка: в камеру можно подключить только один новый. Ближайшая к o-2 точка
         // дерева после подключения o-1 — сама камера, поэтому ответвление должно уйти на ствол.

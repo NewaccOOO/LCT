@@ -74,6 +74,10 @@ public final class VariantEnumerator {
     private static final int SEARCH_BUDGET = Integer.getInteger("heatnet.search.budget", 300);
     /** Деревья подмножества строятся не на всех кандидатах врезки, а на лучших по грубой оценке стоимости. */
     private static final int CANDIDATE_LIMIT = 6;
+    /** Сверх CANDIDATE_LIMIT строятся столько лучших по оценке кандидатов, которым не нужна реконструкция сети. */
+    private static final int FREE_CANDIDATE_LIMIT = 3;
+    /** Сколько лучших деревьев подмножества пересаживается на врезки выше реконструкции. */
+    private static final int RETIE_OPTIONS = 2;
     /** Слияния и переносы пробуются только между блоками, ближайшими друг к другу по точкам подключения. */
     private static final int NEAREST_BLOCKS = 2;
     private static final double IMPROVE_EPS = 1e-6;
@@ -122,7 +126,7 @@ public final class VariantEnumerator {
             for (Point point : points) {
                 envelope.expandToInclude(point.getCoordinate());
             }
-            for (TieCandidate candidate : finder.find(points, dn)) {
+            for (TieCandidate candidate : candidates(points, flow(connections), dn)) {
                 envelope.expandToInclude(candidate.getPoint().getCoordinate());
             }
             this.wideArea = new Envelope(envelope);
@@ -584,12 +588,22 @@ public final class VariantEnumerator {
             return cached;
         }
         List<Point> points = points(subset);
-        List<Option> options = options(region, region.dn, region.area, subset, false, finder.find(points, region.dn));
+        double flow = flow(subset);
+        // граф по диаметру расхода подмножества со ступенью запаса, как у Region: отступы группы шире нужных ветке
+        Diameter byFlow = rules.diameterFor(flow);
+        Diameter step = rules.nextDiameter(byFlow.getDn());
+        int blockDn = Math.min(region.dn, step != null ? step.getDn() : byFlow.getDn());
+        List<TieCandidate> near = finder.find(points, blockDn);
+        List<TieCandidate> above = finder.aboveReconstruction(near, flow, blockDn);
+        List<TieCandidate> all = new ArrayList<>(near);
+        all.addAll(above);
+        List<Option> options = options(region, blockDn, region.area, subset, false, all);
+        options.addAll(retied(region, blockDn, subset, options, above));
         // ОКС, не вошедшие в общее дерево, draft подключает по одному, поэтому повторы нужны только одиночным
         if (subset.size() == 1) {
             int ownDn = rules.diameterFor(oksById.get(subset.get(0).getOksId()).getFlowTph()).getDn();
-            if (ownDn < region.dn) {
-                List<TieCandidate> own = finder.find(points, ownDn);
+            if (ownDn < blockDn) {
+                List<TieCandidate> own = candidates(points, flow, ownDn);
                 if (detour(options, points.get(0), own)) {
                     // D-7: с запасом по диаметру маршрута нет или он в обход, а отступы для Ду по расходу меньше и
                     // могут пропустить короче: повтор с этим Ду, отступы и предельная длина — по фактическому Ду
@@ -598,19 +612,27 @@ public final class VariantEnumerator {
             }
             if (incomplete(options)) {
                 // обход может не поместиться в область вокруг ОКС и кандидатов: последняя попытка на широкой области
-                options.addAll(options(region, region.dn, region.wideArea, subset, false, finder.find(points, region.dn)));
+                options.addAll(options(region, blockDn, region.wideArea, subset, false,
+                        candidates(points, flow, blockDn)));
             }
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
         if (!options.isEmpty() && alternativeIndex(options) == 0) {
             // все ближайшие кандидаты дают ту же врезку, а вариантов нужно не меньше двух (правило variants):
             // пробуется та же сеть дальше OTHER_TIE_M от лучшей врезки
-            List<TieCandidate> along = finder.along(options.get(0).tree.tie, region.dn, OTHER_TIE_M);
-            options.addAll(options(region, region.dn, region.area, subset, false, along));
+            List<TieCandidate> along = finder.along(options.get(0).tree.tie, blockDn, OTHER_TIE_M);
+            options.addAll(options(region, blockDn, region.area, subset, false, along));
             options.sort(Comparator.comparingDouble(option -> option.score));
         }
         region.options.put(key, options);
         return options;
+    }
+
+    /** Кандидаты врезки у точек и врезки выше реконструкции, которую расход flow вызвал бы у ближайших. */
+    private List<TieCandidate> candidates(List<Point> points, double flow, int dn) {
+        List<TieCandidate> candidates = finder.find(points, dn);
+        candidates.addAll(finder.aboveReconstruction(candidates, flow, dn));
+        return candidates;
     }
 
     private static boolean incomplete(List<Option> options) {
@@ -642,22 +664,53 @@ public final class VariantEnumerator {
                 log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
                 continue;
             }
-            Set<String> ids = new HashSet<>();
-            tree.unconnected.forEach(connection -> ids.add(connection.getOksId()));
-            try {
-                Variant alone = assembler.assemble("0", 0, List.of(tree), unconnected(ids));
-                if (!verify || clearanceHolds(tree, alone, area)) {
-                    options.add(new Option(tree, alone.getSummary().getScore()));
-                }
-                log.debug("options: subset={} tie={} score={} unconnected={}", label, candidate.nodeKey(),
-                        alone.getSummary().getScore(), tree.unconnected.size());
-            } catch (IllegalStateException | IllegalArgumentException e) {
-                // дерево нарушает правила при сборке (предельная длина, отступ участка, число поворотов): кандидат отбрасывается
-                log.debug("options: subset={} tie={} отброшено: {}", label, candidate.nodeKey(), e.getMessage());
+            Option option = option(tree, label, verify, area);
+            if (option != null) {
+                options.add(option);
             }
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
         return options;
+    }
+
+    /** Дерево, собранное отдельным вариантом, со своим score; null, если сборка его отбросила. */
+    private Option option(Tree tree, String label, boolean verify, Envelope area) {
+        Set<String> ids = new HashSet<>();
+        tree.unconnected.forEach(connection -> ids.add(connection.getOksId()));
+        try {
+            Variant alone = assembler.assemble("0", 0, List.of(tree), unconnected(ids));
+            log.debug("options: subset={} tie={} score={} unconnected={}", label, tree.tie.nodeKey(),
+                    alone.getSummary().getScore(), tree.unconnected.size());
+            return !verify || clearanceHolds(tree, alone, area) ? new Option(tree, alone.getSummary().getScore()) : null;
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            // дерево нарушает правила при сборке (предельная длина, отступ участка, число поворотов): кандидат отбрасывается
+            log.debug("options: subset={} tie={} отброшено: {}", label, tree.tie.nodeKey(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Лучшие RETIE_OPTIONS полных деревьев подмножества, пересаженные на врезки выше реконструкции
+     * ({@link TreeBuilder#retied}): дерево то же, меняется только ствол от врезки.
+     */
+    private List<Option> retied(Region region, int dn, List<ConnectionPoint> subset, List<Option> options, List<TieCandidate> above) {
+        List<Option> result = new ArrayList<>();
+        if (above.isEmpty()) {
+            return result;
+        }
+        String label = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(",")) + " пересадка";
+        List<Option> best = options.stream().filter(option -> option.tree.unconnected.isEmpty()).limit(RETIE_OPTIONS)
+                .collect(Collectors.toList());
+        for (Option option : best) {
+            for (TieCandidate tie : above) {
+                Tree tree = builder.retied(region.router(dn, region.area), dn, region.area, option.tree, tie);
+                Option retied = tree == null ? null : option(tree, label, false, region.area);
+                if (retied != null) {
+                    result.add(retied);
+                }
+            }
+        }
+        return result;
     }
 
     /**
@@ -670,6 +723,7 @@ public final class VariantEnumerator {
         int dn = rules.diameterFor(flow).getDn();
         double pricePerM = rules.diameter(dn).getNewRubM();
         Map<TieCandidate, Double> estimate = new HashMap<>();
+        Set<TieCandidate> rebuilds = new HashSet<>();
         for (TieCandidate candidate : candidates) {
             double rub = candidate.isChamber() ? 0 : rules.chamberCost(dn);
             for (ConnectionPoint connection : subset) {
@@ -679,12 +733,18 @@ public final class VariantEnumerator {
                     candidate.getExistingObjectType(), candidate.getPoint(), flow);
             for (ReconPart part : ReconstructionCalculator.calculate(input, rules, List.of(load)).getParts()) {
                 rub += part.getCost();
+                rebuilds.add(candidate);
             }
             estimate.put(candidate, rub);
         }
         List<TieCandidate> sorted = new ArrayList<>(candidates);
         sorted.sort(Comparator.comparingDouble(estimate::get));
-        return sorted.subList(0, Math.min(CANDIDATE_LIMIT, sorted.size()));
+        List<TieCandidate> cheapest = new ArrayList<>(sorted.subList(0, Math.min(CANDIDATE_LIMIT, sorted.size())));
+        // оценка суммирует прямые до каждого ОКС блока, и дальняя врезка без реконструкции проигрывает ближней с ней,
+        // хотя дерево от неё отличается одним стволом: лучшие такие врезки строятся всегда
+        sorted.stream().filter(candidate -> !rebuilds.contains(candidate) && !cheapest.contains(candidate))
+                .limit(FREE_CANDIDATE_LIMIT).forEach(cheapest::add);
+        return cheapest;
     }
 
     /** Отступы дерева, построенного по графу меньшего диаметра, проверяются для наибольшего фактического диаметра. */
