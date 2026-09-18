@@ -62,7 +62,8 @@
 
 ### Прогресс
 
-- (пусто)
+- 2026-09-18: пробы city-scale без city_run — отчёт `docs/testing/city-scale-hypotheses.md`, бенч `CityScaleGroupsBench`, скрипты `scripts/city_scale_*.py`; регрессия организаторов: read.all OK, search.budget=0 REGRESSION S.
+- 2026-09-18: внедрены оптимизации 1–4 из отчёта (extent bbox CP, groups STRtree+метрика, singles/k-means пороги по n); регрессия организаторов S=12.596, GeoJSON идентичен; тесты `GroupsEquivalenceTest`, `OrganizerDatasetRegressionTest`.
 
 ### Отклонения и находки
 

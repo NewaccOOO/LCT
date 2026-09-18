@@ -20,6 +20,7 @@ import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
+import org.locationtech.jts.index.strtree.STRtree;
 import ru.lct.heatnet.graph.ObstacleIndex;
 import ru.lct.heatnet.graph.ObstacleSet;
 import ru.lct.heatnet.graph.RouteCache;
@@ -67,6 +68,10 @@ public final class VariantEnumerator {
      */
     private static final double EXTENT_MARGIN_M = 2500;
     private static final int KMEANS_ITERATIONS = 20;
+    /** Группы больше этого не режутся k-means (O(n²)), а двумя половинами по сетке в UTM. */
+    private static final int KMEANS_MAX = Integer.getInteger("heatnet.scale.kmeans.max", 500);
+    /** При большем числе ОКС partition «каждый отдельно» не строится — только groups и split. */
+    private static final int SINGLES_MAX = Integer.getInteger("heatnet.scale.singles.max", 500);
     /**
      * Локальный поиск по разбиениям ОКС: сколько сборок черновика он может потратить (свойство heatnet.search.budget).
      * Предела по стенным часам нет: результат не зависит от скорости и загрузки машины.
@@ -218,16 +223,24 @@ public final class VariantEnumerator {
     }
 
     /**
-     * Прямоугольник, вне которого здания и ограничения на расчёт не влияют: объединение широких областей всех групп
-     * ОКС, как их строит {@link #run()}, с запасом {@link #EXTENT_MARGIN_M}. Считается по входу без препятствий:
-     * области зависят только от точек подключения, расходов и существующей сети. null — оставить все препятствия.
+     * Прямоугольник, вне которого здания и ограничения на расчёт не влияют: bbox всех точек подключения
+     * перспективных ОКС с запасом {@link #EXTENT_MARGIN_M} (координаты EPSG:32637, метры). null — нет CP или
+     * вход, на котором расчёт упадёт: читаются все препятствия.
      */
     public static Envelope obstacleExtent(InputData input, Rules rules) {
         try {
-            VariantEnumerator enumerator = new VariantEnumerator(input, rules);
+            Set<String> futureOks = new HashSet<>();
+            for (FutureOks oks : input.getFutureOks()) {
+                futureOks.add(oks.getId());
+            }
             Envelope extent = new Envelope();
-            for (List<ConnectionPoint> group : groups(new ArrayList<>(enumerator.connectionByOks.values()))) {
-                extent.expandToInclude(enumerator.new Region(group).wideArea);
+            for (ConnectionPoint connection : input.getConnectionPoints()) {
+                if (futureOks.contains(connection.getOksId())) {
+                    extent.expandToInclude(connection.getGeometry().getCoordinate());
+                }
+            }
+            if (extent.isNull()) {
+                return null;
             }
             extent.expandBy(EXTENT_MARGIN_M);
             return extent;
@@ -257,13 +270,16 @@ public final class VariantEnumerator {
             anyGroup |= group.size() > 1;
             if (group.size() > 2) {
                 anySplit = true;
-                split.addAll(kMeans(group));
+                split.addAll(splitGroup(group));
             } else {
                 split.add(group);
             }
         }
 
-        List<List<List<ConnectionPoint>>> partitions = new ArrayList<>(List.of(singles));
+        List<List<List<ConnectionPoint>>> partitions = new ArrayList<>();
+        if (connectionByOks.size() <= SINGLES_MAX) {
+            partitions.add(singles);
+        }
         if (anyGroup) {
             partitions.add(groups);
         }
@@ -449,7 +465,7 @@ public final class VariantEnumerator {
             if (blocks.get(i).size() < 3) {
                 continue;
             }
-            List<List<ConnectionPoint>> parts = kMeans(blocks.get(i));
+            List<List<ConnectionPoint>> parts = splitGroup(blocks.get(i));
             if (parts.size() == 2) {
                 List<List<ConnectionPoint>> split = copy(blocks);
                 split.remove(i);
@@ -914,22 +930,105 @@ public final class VariantEnumerator {
 
     /** Одиночная связь: ОКС в одной группе, если цепочка точек подключения с шагом не больше GROUP_DISTANCE_M. */
     private static List<List<ConnectionPoint>> groups(List<ConnectionPoint> connections) {
-        int[] root = new int[connections.size()];
-        for (int i = 0; i < root.length; i++) {
+        return groupsFast(connections);
+    }
+
+    /**
+     * Медленная O(n²) кластеризация для проверки эквивалентности ({@link #groupsFast}); координаты в метрах
+     * (EPSG:32637).
+     */
+    static List<List<ConnectionPoint>> groupsNaive(List<ConnectionPoint> connections) {
+        int n = connections.size();
+        int[] root = new int[n];
+        for (int i = 0; i < n; i++) {
             root[i] = i;
         }
-        for (int i = 0; i < connections.size(); i++) {
-            for (int j = i + 1; j < connections.size(); j++) {
-                if (connections.get(i).getGeometry().distance(connections.get(j).getGeometry()) <= GROUP_DISTANCE_M) {
+        for (int i = 0; i < n; i++) {
+            Point pi = connections.get(i).getGeometry();
+            for (int j = i + 1; j < n; j++) {
+                if (pi.distance(connections.get(j).getGeometry()) <= GROUP_DISTANCE_M) {
                     root[find(root, i)] = find(root, j);
                 }
             }
         }
+        return groupsByRoot(connections, root);
+    }
+
+    /** Union-find по соседям в радиусе GROUP_DISTANCE_M через STRtree (метрическое расстояние в UTM). */
+    static List<List<ConnectionPoint>> groupsFast(List<ConnectionPoint> connections) {
+        int n = connections.size();
+        if (n == 0) {
+            return List.of();
+        }
+        int[] root = new int[n];
+        for (int i = 0; i < n; i++) {
+            root[i] = i;
+        }
+        STRtree index = new STRtree();
+        for (int i = 0; i < n; i++) {
+            Envelope env = connections.get(i).getGeometry().getEnvelopeInternal();
+            env = new Envelope(env);
+            env.expandBy(GROUP_DISTANCE_M);
+            index.insert(env, i);
+        }
+        index.build();
+        for (int i = 0; i < n; i++) {
+            Envelope query = connections.get(i).getGeometry().getEnvelopeInternal();
+            query = new Envelope(query);
+            query.expandBy(GROUP_DISTANCE_M);
+            @SuppressWarnings("unchecked")
+            List<Integer> hits = index.query(query);
+            Point pi = connections.get(i).getGeometry();
+            for (Integer j : hits) {
+                if (j <= i) {
+                    continue;
+                }
+                if (pi.distance(connections.get(j).getGeometry()) <= GROUP_DISTANCE_M) {
+                    root[find(root, i)] = find(root, j);
+                }
+            }
+        }
+        return groupsByRoot(connections, root);
+    }
+
+    private static List<List<ConnectionPoint>> groupsByRoot(List<ConnectionPoint> connections, int[] root) {
         Map<Integer, List<ConnectionPoint>> byRoot = new LinkedHashMap<>();
         for (int i = 0; i < connections.size(); i++) {
             byRoot.computeIfAbsent(find(root, i), key -> new ArrayList<>()).add(connections.get(i));
         }
         return new ArrayList<>(byRoot.values());
+    }
+
+    /** k-means для малых групп; для {@code size > KMEANS_MAX} — разрез bbox пополам по длинной оси UTM. */
+    static List<List<ConnectionPoint>> splitGroup(List<ConnectionPoint> connections) {
+        if (connections.size() > KMEANS_MAX) {
+            return spatialGridSplit(connections);
+        }
+        return kMeans(connections);
+    }
+
+    private static List<List<ConnectionPoint>> spatialGridSplit(List<ConnectionPoint> connections) {
+        Envelope envelope = new Envelope();
+        for (ConnectionPoint connection : connections) {
+            envelope.expandToInclude(connection.getGeometry().getCoordinate());
+        }
+        boolean alongX = envelope.getWidth() >= envelope.getHeight();
+        double mid = alongX ? envelope.centre().x : envelope.centre().y;
+        List<ConnectionPoint> first = new ArrayList<>();
+        List<ConnectionPoint> second = new ArrayList<>();
+        for (ConnectionPoint connection : connections) {
+            Coordinate coordinate = connection.getGeometry().getCoordinate();
+            double value = alongX ? coordinate.x : coordinate.y;
+            if (value < mid) {
+                first.add(connection);
+            } else {
+                second.add(connection);
+            }
+        }
+        if (first.isEmpty() || second.isEmpty()) {
+            return kMeans(connections);
+        }
+        return List.of(first, second);
     }
 
     /** k-means с k = 2, старт с двух самых далёких точек. */
