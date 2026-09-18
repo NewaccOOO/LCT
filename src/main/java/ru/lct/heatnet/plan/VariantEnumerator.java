@@ -72,6 +72,10 @@ public final class VariantEnumerator {
      * Предела по стенным часам нет: результат не зависит от скорости и загрузки машины.
      */
     private static final int SEARCH_BUDGET = Integer.getInteger("heatnet.search.budget", 300);
+    /**
+     * Остановка после стольких сборок подряд без улучшения лучшего score (heatnet.search.stall). 0 — только budget.
+     */
+    private static final int SEARCH_STALL = Integer.getInteger("heatnet.search.stall", 50);
     /** Деревья подмножества строятся не на всех кандидатах врезки, а на лучших по грубой оценке стоимости. */
     private static final int CANDIDATE_LIMIT = 6;
     /** Сверх CANDIDATE_LIMIT строятся столько лучших по оценке кандидатов, которым не нужна реконструкция сети. */
@@ -324,6 +328,7 @@ public final class VariantEnumerator {
         visited.add(new Move(blocks, null).key());
         long started = System.nanoTime();
         int spent = 0;
+        int sinceBestImprove = 0;
         while (spent < budget) {
             Move step = null;
             Draft stepDraft = null;
@@ -331,11 +336,15 @@ public final class VariantEnumerator {
                 if (spent >= budget) {
                     break;
                 }
+                if (SEARCH_STALL > 0 && sinceBestImprove >= SEARCH_STALL) {
+                    break;
+                }
                 String key = move.key();
                 if (!visited.add(key)) {
                     continue;
                 }
                 spent++;
+                sinceBestImprove++;
                 Draft draft = move.realize(this);
                 if (draft == null || draft.unconnected.size() > current.unconnected.size()) {
                     continue;
@@ -354,6 +363,9 @@ public final class VariantEnumerator {
                 if (current == best) {
                     break;
                 }
+                if (SEARCH_STALL > 0 && sinceBestImprove >= SEARCH_STALL) {
+                    break;
+                }
                 blocks = bestBlocks;
                 current = best;
                 continue;
@@ -369,8 +381,13 @@ public final class VariantEnumerator {
             if (current.score() < best.score() - IMPROVE_EPS) {
                 best = current;
                 bestBlocks = blocks;
+                sinceBestImprove = 0;
                 log.info("search: score={} trees={} drafts={} elapsed={}s", best.score(), blocks.size(), spent,
                         (System.nanoTime() - started) / 1_000_000_000L);
+            }
+            if (SEARCH_STALL > 0 && sinceBestImprove >= SEARCH_STALL) {
+                log.info("search: stall stop drafts={} sinceBestImprove={}", spent, sinceBestImprove);
+                break;
             }
         }
         long[] tables = new long[2];
