@@ -68,8 +68,12 @@ public class CliRunner implements ApplicationRunner {
             }
             Result result = pipeline.run(input);
             Path output = Path.of(files.get(1));
+            long writing = System.nanoTime();
             GeoJsonStreamWriter.write(result, output);
+            long written = System.nanoTime();
             Path criteria = writeCriteria(result, input, output);
+            System.out.printf(Locale.ROOT, "WRITE geojson=%.1fs criteria=%.1fs%n", (written - writing) / 1e9,
+                    (System.nanoTime() - written) / 1e9);
             double elapsed = (System.nanoTime() - started) / 1e9;
             System.out.printf(Locale.ROOT, "PIPELINE DONE variants=%d elapsed=%.1fs%n", result.getVariants().size(), elapsed);
             System.out.println("CRITERIA " + criteria);

@@ -2,7 +2,8 @@
 """Картинки для README: трассировка на синтетической сцене и динамика качества по версиям.
 
 Запуск из корня: uv run --project tools python scripts/readme_assets.py [IN.geojson OUT.geojson]
-Пишет docs/assets/versions.svg (таблица «Версии и динамика качества» из README, версии с правил 18.09) и, если заданы IN/OUT,
+Пишет docs/assets/versions.svg (таблица «Версии и динамика качества» из README, версии с правил 18.09), docs/assets/city.svg
+(таблица «Город» там же) и, если заданы IN/OUT,
 docs/assets/hero.svg (вариант 1 расчёта на сцене). Для README берётся синтетическая сцена: датасет организаторов
 наружу не показывается.
 """
@@ -186,6 +187,43 @@ def versions():
     open("docs/assets/versions.svg", "w", encoding="utf-8").write(svg)
 
 
+def city():
+    """Столбцы времени расчёта файла «город» по версиям из таблицы «Город» в README; подпись — подключено и память."""
+    text = open("README.md", encoding="utf-8").read()
+    rows = re.findall(r"^\| (v[\d.]+) \| ([\d ]+) \| [\d ]+ \| (\d+) \| ([\d,]+) \|", text, re.MULTILINE)
+    if not rows:
+        sys.exit("в README нет таблицы «Город»")
+    vals = [(v, int(c.replace(" ", "")), int(t), m) for v, c, t, m in reversed(rows)]
+    left, right, top, bottom = 56, 24, 48, 36
+    w, h = 760, 300
+    top_t = 500 * (int(max(v[2] for v in vals) * 1.1 / 500) + 1)
+    bw = min((w - left - right) / len(vals), 120)
+    parts = []
+    for i in range(5):
+        y = top + (h - top - bottom) * i / 4
+        parts.append(f'<line x1="{left}" y1="{y:.1f}" x2="{w - right}" y2="{y:.1f}" stroke="#1e293b"/>')
+        parts.append(f'<text x="{left - 8}" y="{y + 4:.1f}" class="a" text-anchor="end">{top_t * (1 - i / 4):g}</text>')
+    best = min(v[2] for v in vals)
+    for i, (ver, connected, sec, mem) in enumerate(vals):
+        bh = (h - top - bottom) * sec / top_t
+        x = left + i * bw + bw * 0.1
+        y = h - bottom - bh
+        color, ink = ("#38bdf8", "#0b1220") if sec == best else ("#334155", "#cbd5e1")
+        cx = x + bw * 0.4
+        parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bw * 0.8:.1f}" height="{bh:.1f}" rx="6" fill="{color}"/>')
+        parts.append(f'<text x="{cx:.1f}" y="{y - 8:.1f}" class="v" text-anchor="middle">{sec} с</text>')
+        parts.append(f'<text x="{cx:.1f}" y="{h - bottom - 28:.1f}" class="i" fill="{ink}" text-anchor="middle">{connected:,}'.replace(",", " ") + '</text>')
+        parts.append(f'<text x="{cx:.1f}" y="{h - bottom - 12:.1f}" class="i" fill="{ink}" text-anchor="middle">{mem} ГБ</text>')
+        parts.append(f'<text x="{cx:.1f}" y="{h - bottom + 22:.1f}" class="l" text-anchor="middle">{ver}</text>')
+    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}" role="img" aria-label="Время расчёта файла «город» по версиям с правил 18.09.2026">
+<style>.a{{font:12px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#94a3b8}}.l{{font:600 13px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}.v{{font:600 13px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}.i{{font:600 11px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}}.h{{font:600 15px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}</style>
+<rect width="{w}" height="{h}" rx="16" fill="{BG}"/>
+<text x="{left}" y="28" class="h">Файл «город» 3,2 ГБ: время расчёта по версиям, меньше — лучше; в столбце подключено и пиковая память</text>
+{''.join(parts)}
+</svg>
+'''
+    open("docs/assets/city.svg", "w", encoding="utf-8").write(svg)
+
 
 if __name__ == "__main__":
     if len(sys.argv) == 3:
@@ -193,3 +231,5 @@ if __name__ == "__main__":
         print("docs/assets/hero.svg")
     versions()
     print("docs/assets/versions.svg")
+    city()
+    print("docs/assets/city.svg")

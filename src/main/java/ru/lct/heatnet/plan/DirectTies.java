@@ -61,6 +61,8 @@ final class DirectTies {
     private final GeometryFactory factory = new GeometryFactory();
     private final STRtree chambers = new STRtree();
     private final STRtree pipes = new STRtree();
+    /** Рамка сети с запасом REACH_M: точка вне её дальше REACH_M от любой врезки, кандидаты у неё не считаются. */
+    private final Envelope withinReach = new Envelope();
     /** Почему прямые участки отбрасывались, для лога: причина → число. */
     private final Map<String, Integer> rejected = new java.util.TreeMap<>();
 
@@ -85,10 +87,13 @@ final class DirectTies {
         this.buildingByConnection = buildingByConnection;
         for (Chamber chamber : input.getChambers()) {
             chambers.insert(chamber.getGeometry().getEnvelopeInternal(), chamber);
+            withinReach.expandToInclude(chamber.getGeometry().getEnvelopeInternal());
         }
         for (NetworkSegment segment : input.getSegments()) {
             pipes.insert(segment.getGeometry().getEnvelopeInternal(), segment);
+            withinReach.expandToInclude(segment.getGeometry().getEnvelopeInternal());
         }
+        withinReach.expandBy(REACH_M);
         chambers.build();
         pipes.build();
     }
@@ -127,13 +132,19 @@ final class DirectTies {
             // общие для вариантов кандидаты: существующие камеры и трубы; место проверяется по варианту ниже
             List<Option> shared = new ArrayList<>();
             Set<String> seen = new HashSet<>();
-            for (Object item : chambers.size() == 0 ? List.of() : nearest(chambers, point)) {
+            // на городе 98 % точек вне рамки сети с запасом REACH_M: любой кандидат у них дальше REACH_M, и шесть
+            // запросов к индексам ради отказа «далеко» не делаются
+            boolean far = !withinReach.contains(point.getCoordinate());
+            if (far) {
+                reject("далеко");
+            }
+            for (Object item : far || chambers.size() == 0 ? List.of() : nearest(chambers, point)) {
                 TieCandidate tie = finder.chamberCandidate((Chamber) item);
                 if (tie != null && seen.add(tie.nodeKey())) {
                     option(shared, tie, connection, dn, rules.tieInCost());
                 }
             }
-            for (Object item : pipes.size() == 0 ? List.of() : nearest(pipes, point)) {
+            for (Object item : far || pipes.size() == 0 ? List.of() : nearest(pipes, point)) {
                 NetworkSegment segment = (NetworkSegment) item;
                 TieCandidate tie = finder.pipeCandidate(segment, point, dn);
                 if (tie == null || !seen.add(tie.nodeKey())) {
@@ -153,7 +164,7 @@ final class DirectTies {
                 }
                 Envelope around = new Envelope(point.getCoordinate());
                 around.expandBy(REACH_M);
-                for (Object item : ledger.created.query(around)) {
+                for (Object item : far ? List.of() : ledger.created.query(around)) {
                     TieCandidate tie = (TieCandidate) item;
                     if (ledger.used.getOrDefault(tie.nodeKey(), 0) < tie.getCapacity() && !seen.contains(tie.nodeKey())) {
                         option(options, tie, connection, dn, 0);

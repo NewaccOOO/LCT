@@ -150,6 +150,7 @@ public final class VariantEnumerator {
      * граница шумит от загрузки машины: два прогона с 600 с дали 13 178 и 13 177 подключённых; 900 с — запас.
      */
     private static final long CITY_DEADLINE_S = Long.getLong("heatnet.city.deadline", 900);
+
     private static final long CITY_CACHE_MB = 64;
 
     private final InputData input;
@@ -430,12 +431,17 @@ public final class VariantEnumerator {
         // остаётся без маршрута, и граф для неё не строится
         double reach = rules.diameters().get(rules.diameters().size() - 1).getMaxLengthM();
         List<ConnectionPoint> near = new ArrayList<>();
-        Map<String, Double> toNetwork = new HashMap<>();
-        for (ConnectionPoint connection : rest) {
+        // расстояния независимы, индексы сети после build только читаются; в карте только ближние точки
+        Map<String, Double> toNetwork = new java.util.concurrent.ConcurrentHashMap<>();
+        rest.parallelStream().forEach(connection -> {
             double distance = direct.networkDistance(connection.getGeometry());
             if (distance <= reach) {
-                near.add(connection);
                 toNetwork.put(connection.getId(), distance);
+            }
+        });
+        for (ConnectionPoint connection : rest) {
+            if (toNetwork.containsKey(connection.getId())) {
+                near.add(connection);
             }
         }
         List<List<ConnectionPoint>> districts = districts(near);
@@ -587,6 +593,7 @@ public final class VariantEnumerator {
             List<Future<List<Draft>>> futures = new ArrayList<>(Collections.nCopies(districts.size(), null));
             for (int i = 0; i < districts.size(); i++) {
                 List<ConnectionPoint> connections = districts.get(i);
+                int index = i;
                 futures.set(i, pool.submit(() -> {
                     if (System.nanoTime() > deadlineNanos) {
                         skipped.incrementAndGet();
@@ -595,8 +602,9 @@ public final class VariantEnumerator {
                     long districtStarted = System.nanoTime();
                     VariantEnumerator district = district(connections);
                     List<Draft> drafts = district.picked();
-                    log.info("city: district oks={} {} elapsed={}s", connections.size(), district.graphs(),
-                            (System.nanoTime() - districtStarted) / 1_000_000_000L);
+                    int trees = drafts.isEmpty() ? 0 : drafts.get(0).trees.size();
+                    log.info("city: district {} oks={} trees={} {} elapsed={}s", index, connections.size(), trees,
+                            district.graphs(), (System.nanoTime() - districtStarted) / 1_000_000_000L);
                     int count = done.incrementAndGet();
                     if (count % 10 == 0 || count == districts.size()) {
                         log.info("city: districts {}/{} elapsed={}s", count, districts.size(),
