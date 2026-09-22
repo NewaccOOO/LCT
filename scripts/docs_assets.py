@@ -99,19 +99,22 @@ def cross(o, a, b):
     return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
 
 
-def graph_steps(start=(52, 12), dry=False):
-    buildings = [
-        Polygon([(38, 28), (92, 28), (92, 52), (66, 52), (66, 72), (38, 72)]),
-        Polygon([(118, 58), (156, 48), (166, 92), (128, 104)]),
-        Polygon([(20, 96), (54, 92), (58, 124), (24, 128)]),
-    ]
-    park = Polygon([(78, 112), (122, 118), (116, 146), (82, 142)])
-    obstacles = buildings + [park]
+DEFAULT_BUILDINGS = [
+    Polygon([(38, 28), (92, 28), (92, 52), (66, 52), (66, 72), (38, 72)]),
+    Polygon([(118, 58), (156, 48), (166, 92), (128, 104)]),
+    Polygon([(20, 96), (54, 92), (58, 124), (24, 128)]),
+]
+DEFAULT_PARKS = [Polygon([(78, 112), (122, 118), (116, 146), (82, 142)])]
+
+
+def graph_scene(start=(52, 12), buildings=DEFAULT_BUILDINGS, parks=DEFAULT_PARKS, target=(190, 150),
+                pipe=((140, 150), (205, 150))):
+    """Учебная сцена графа видимости: препятствия, зоны, узлы, рёбра, порядок Дейкстры, путь и его раскладка по 45°."""
+    obstacles = list(buildings) + list(parks)
     clearance = 7.0
     zones = unary_union([o.buffer(clearance, join_style=2, mitre_limit=2.0) for o in obstacles])
     zone_list = [orient(z, 1.0) for z in getattr(zones, "geoms", [zones])]
-    target = (190, 150)
-    pipe = [(140, 150), (205, 150)]
+    pipe = list(pipe)
 
     nodes, rings = [start, target], [None, None]
     for z in zone_list:
@@ -144,11 +147,12 @@ def graph_steps(start=(52, 12), dry=False):
         d = math.dist(nodes[i], nodes[j])
         adj[i].append((j, d))
         adj[j].append((i, d))
-    dist, pred, heap = {0: 0.0}, {}, [(0.0, 0)]
+    dist, pred, heap, settled = {0: 0.0}, {}, [(0.0, 0)], []
     while heap:
         d, v = heapq.heappop(heap)
         if d > dist.get(v, math.inf):
             continue
+        settled.append(v)
         for w, wd in adj[v]:
             if d + wd < dist.get(w, math.inf):
                 dist[w], pred[w] = d + wd, v
@@ -198,6 +202,15 @@ def graph_steps(start=(52, 12), dry=False):
         else:
             i += 1
 
+    return dict(buildings=buildings, park=parks[0], parks=parks, zones=zones, zone_list=zone_list, pipe=pipe, start=start, target=target,
+                nodes=nodes, rings=rings, visible=visible, tangent=tangent, edges=edges, settled=settled, pred=pred,
+                path=path, octo=octo)
+
+
+def graph_steps(start=(52, 12), dry=False):
+    sc = graph_scene(start)
+    buildings, park, zones, pipe, target = sc["buildings"], sc["park"], sc["zones"], sc["pipe"], sc["target"]
+    nodes, edges, path, octo = sc["nodes"], sc["edges"], sc["path"], sc["octo"]
     if dry:
         deviation = max(LineString(path).distance(Point(v)) for v in octo)
         return deviation, len(octo)
