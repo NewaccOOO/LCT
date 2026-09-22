@@ -27,6 +27,7 @@
 | [interpretation.md](interpretation.md) | как сервис и валидатор читают спорные места правил |
 | [research/](research/real-dataset.md) | ресёрч алгоритма на датасете организаторов: сравнение методов, ночной журнал экспериментов с числами, промт для его повторения |
 | [research/hypotheses.md](research/hypotheses.md) | журнал гипотез улучшения: что проверили на стенде `scripts/bench.sh`, что дало, что приняли |
+| [research/hypotheses-1809.md](research/hypotheses-1809.md) | брифы гипотез после правил 18.09: семь по времени и семь по качеству, каждая с файлами, мерой и базой, чтобы раздать разным исполнителям |
 | [testing/](testing/) | отчёты о прогонах сценариев и найденные дефекты |
 | [load-limits.md](load-limits.md) | задачи по предельным и нагрузочным тестам под требования организаторов: 3 ГБ, 50 пользователей, 16 ГБ ОЗУ |
 | [assets/](assets/) | картинки для README и ARCHITECTURE; пересобираются скриптами `scripts/readme_assets.py` и `scripts/docs_assets.py` |
