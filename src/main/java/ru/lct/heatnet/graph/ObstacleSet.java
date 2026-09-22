@@ -237,6 +237,15 @@ public final class ObstacleSet {
     }
 
     public ObstacleSet(ObstacleIndex index, Rules rules, Envelope area, int dn) {
+        this(index, rules, area, dn, null);
+    }
+
+    /**
+     * То же, но узлы графа и препятствия берутся только внутри {@code corridor} (полигон в area): у дальней точки
+     * города прямоугольник вокруг точки и врезки накрывает квадратные километры зданий, а трасса идёт полосой.
+     */
+    public ObstacleSet(ObstacleIndex index, Rules rules, Envelope area, int dn, Geometry corridor) {
+        PreparedGeometry inside = corridor == null ? null : PreparedGeometryFactory.prepare(corridor);
         double halfWidth = rules.diameter(dn).getWidthM() / 2;
         List<Zone> forbid = new ArrayList<>();
         List<Geometry> nodeZones = new ArrayList<>();
@@ -247,7 +256,7 @@ public final class ObstacleSet {
         double oksDistance = rules.restriction(OKS_EXISTING).clearanceM(dn) + halfWidth;
         oksClearance = oksDistance;
         for (ExistingOks oks : index.existingOks(area)) {
-            if (near(oks.getGeometry(), oksDistance, area)) {
+            if (near(oks.getGeometry(), oksDistance, area) && (inside == null || inside.intersects(oks.getGeometry()))) {
                 forbid.add(new Zone(oks.getId(), zone(oks.getGeometry(), oksDistance)));
                 nodeZones.add(nodeZone(oks.getGeometry(), oksDistance));
             }
@@ -259,7 +268,7 @@ public final class ObstacleSet {
             if (geometry.getDimension() < 2 && rule.getHalfWidthM() != null) {
                 distance += rule.getHalfWidthM();
             }
-            if (!near(geometry, distance, area)) {
+            if (!near(geometry, distance, area) || inside != null && !inside.intersects(geometry)) {
                 continue;
             }
             nodeZones.add(nodeZone(geometry, distance));
@@ -280,7 +289,7 @@ public final class ObstacleSet {
         RestrictionRule network = rules.restriction(HEAT_NETWORK);
         for (NetworkSegment segment : index.segments(area)) {
             double distance = network.clearanceM(dn) + halfWidth + rules.diameter(segment.getDiameter()).getWidthM() / 2;
-            if (near(segment.getGeometry(), distance, area)) {
+            if (near(segment.getGeometry(), distance, area) && (inside == null || inside.intersects(segment.getGeometry()))) {
                 nodeZones.add(nodeZone(segment.getGeometry(), distance));
                 specialList.add(new Special(segment.getId(), HEAT_NETWORK, network, segment.getGeometry(),
                         zone(segment.getGeometry(), distance)));
@@ -319,7 +328,8 @@ public final class ObstacleSet {
         // узлы только в области: зоны длинных дорог и труб иначе приносят узлы на километры вокруг, а граф O(n²)
         for (Map.Entry<Coordinate, Coordinate[]> candidate : candidates.entrySet()) {
             Coordinate c = candidate.getKey();
-            if (area.contains(c) && !insideAnyZone(c) && !insideAny(margins, c)) {
+            if (area.contains(c) && (inside == null || inside.intersects(factory.createPoint(c)))
+                    && !insideAnyZone(c) && !insideAny(margins, c)) {
                 nodes.add(c);
                 rings.add(candidate.getValue());
             }

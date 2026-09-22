@@ -93,18 +93,27 @@ final class DirectTies {
         pipes.build();
     }
 
+    /** Учёт мест одного варианта: занятые места по узлам врезки и поставленные новые камеры. */
+    private static final class Ledger {
+        final List<Tree> trees = new ArrayList<>();
+        final Map<String, Integer> used = new HashMap<>();
+        final Quadtree created = new Quadtree();
+        final Map<String, TieCandidate> createdByKey = new HashMap<>();
+    }
+
     /**
-     * Деревья прямых подключений в порядке точек; точки без допустимого варианта попадают в {@code rest}.
-     * {@code choice} — какой по стоимости вариант брать у каждой точки (0 — лучший): так получается второй вариант.
-     * Места в камерах считаются по ходу: у существующей камеры не больше четырёх участков, у новой камеры на трубе —
-     * по два участка каждой проходящей трубы и новые в остаток до четырёх.
+     * Деревья прямых подключений {@code variants} вариантов в порядке точек: вариант k берёт у точки k-й по стоимости
+     * вариант (у кого их меньше — последний). Кандидаты и допустимость прямых участков считаются один раз на точку,
+     * места в камерах — отдельно на вариант: у существующей камеры не больше четырёх участков, у новой камеры на
+     * трубе — по два участка каждой проходящей трубы и новые в остаток до четырёх. Точки без допустимого варианта
+     * попадают в {@code rest}.
      */
-    List<Tree> connect(List<ConnectionPoint> connections, Map<String, Double> flowByOks, int choice,
+    List<List<Tree>> connect(List<ConnectionPoint> connections, Map<String, Double> flowByOks, int variants,
             List<ConnectionPoint> rest) {
-        List<Tree> trees = new ArrayList<>();
-        Map<String, Integer> used = new HashMap<>();
-        Quadtree created = new Quadtree();
-        Map<String, TieCandidate> createdByKey = new HashMap<>();
+        List<Ledger> ledgers = new ArrayList<>();
+        for (int k = 0; k < variants; k++) {
+            ledgers.add(new Ledger());
+        }
         long started = System.nanoTime();
         int done = 0;
         for (ConnectionPoint connection : connections) {
@@ -114,21 +123,14 @@ final class DirectTies {
             }
             double flow = flowByOks.getOrDefault(connection.getOksId(), 0.0);
             int dn = rules.diameterFor(flow).getDn();
-            List<Option> options = new ArrayList<>();
             Point point = connection.getGeometry();
+            // общие для вариантов кандидаты: существующие камеры и трубы; место проверяется по варианту ниже
+            List<Option> shared = new ArrayList<>();
             Set<String> seen = new HashSet<>();
             for (Object item : chambers.size() == 0 ? List.of() : nearest(chambers, point)) {
                 TieCandidate tie = finder.chamberCandidate((Chamber) item);
-                if (tie != null && seen.add(tie.nodeKey()) && roomInChamber(tie, used)) {
-                    option(options, tie, connection, dn, rules.tieInCost());
-                }
-            }
-            Envelope around = new Envelope(point.getCoordinate());
-            around.expandBy(REACH_M);
-            for (Object item : created.query(around)) {
-                TieCandidate tie = (TieCandidate) item;
-                if (used.getOrDefault(tie.nodeKey(), 0) < tie.getCapacity() && seen.add(tie.nodeKey())) {
-                    option(options, tie, connection, dn, 0);
+                if (tie != null && seen.add(tie.nodeKey())) {
+                    option(shared, tie, connection, dn, rules.tieInCost());
                 }
             }
             for (Object item : pipes.size() == 0 ? List.of() : nearest(pipes, point)) {
@@ -137,36 +139,56 @@ final class DirectTies {
                 if (tie == null || !seen.add(tie.nodeKey())) {
                     continue;
                 }
-                if (tie.isChamber()) {
-                    if (roomInChamber(tie, used)) {
-                        option(options, tie, connection, dn, rules.tieInCost());
-                    }
-                } else {
-                    option(options, tie, connection, dn, rules.chamberCost(Math.max(dn, segment.getDiameter())));
-                }
+                option(shared, tie, connection, dn, tie.isChamber() ? rules.tieInCost()
+                        : rules.chamberCost(Math.max(dn, segment.getDiameter())));
             }
-            options.sort(Comparator.comparingDouble(option -> option.cost));
-            if (options.isEmpty()) {
+            boolean connected = false;
+            for (int k = 0; k < variants; k++) {
+                Ledger ledger = ledgers.get(k);
+                List<Option> options = new ArrayList<>();
+                for (Option option : shared) {
+                    if (!option.tie.isChamber() || roomInChamber(option.tie, ledger.used)) {
+                        options.add(option);
+                    }
+                }
+                Envelope around = new Envelope(point.getCoordinate());
+                around.expandBy(REACH_M);
+                for (Object item : ledger.created.query(around)) {
+                    TieCandidate tie = (TieCandidate) item;
+                    if (ledger.used.getOrDefault(tie.nodeKey(), 0) < tie.getCapacity() && !seen.contains(tie.nodeKey())) {
+                        option(options, tie, connection, dn, 0);
+                    }
+                }
+                options.sort(Comparator.comparingDouble(option -> option.cost));
+                if (options.isEmpty()) {
+                    continue;
+                }
+                connected = true;
+                Option chosen = options.get(Math.min(k, options.size() - 1));
+                String key = chosen.tie.nodeKey();
+                ledger.used.merge(key, 1, Integer::sum);
+                if (!chosen.tie.isChamber() && ledger.createdByKey.putIfAbsent(key, chosen.tie) == null) {
+                    ledger.created.insert(chosen.tie.getPoint().getEnvelopeInternal(), chosen.tie);
+                }
+                Tree tree = new Tree(chosen.tie);
+                Coordinate[] coords = chosen.line.clone();
+                coords[0] = tree.root.point;
+                tree.edges.add(new Tree.Edge(tree.root, Tree.Node.connection(connection), factory.createLineString(coords)));
+                ledger.trees.add(tree);
+            }
+            if (!connected) {
                 rest.add(connection);
                 if (rest.size() <= 3) {
                     log.info("direct: {} без прямого подключения, отказы {}", connection.getId(), rejected);
                 }
-                continue;
             }
-            Option chosen = options.get(Math.min(choice, options.size() - 1));
-            String key = chosen.tie.nodeKey();
-            used.merge(key, 1, Integer::sum);
-            if (!chosen.tie.isChamber() && createdByKey.putIfAbsent(key, chosen.tie) == null) {
-                created.insert(chosen.tie.getPoint().getEnvelopeInternal(), chosen.tie);
-            }
-            Tree tree = new Tree(chosen.tie);
-            Coordinate[] coords = chosen.line.clone();
-            coords[0] = tree.root.point;
-            tree.edges.add(new Tree.Edge(tree.root, Tree.Node.connection(connection), factory.createLineString(coords)));
-            trees.add(tree);
         }
-        log.info("direct: trees={} rest={} отказы {}", trees.size(), rest.size(), rejected);
-        return trees;
+        List<List<Tree>> result = new ArrayList<>();
+        for (Ledger ledger : ledgers) {
+            result.add(ledger.trees);
+        }
+        log.info("direct: trees={} rest={} отказы {}", result.get(0).size(), rest.size(), rejected);
+        return result;
     }
 
     private boolean reject(String reason) {

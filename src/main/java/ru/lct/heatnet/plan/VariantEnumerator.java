@@ -84,6 +84,15 @@ public final class VariantEnumerator {
      * S 13,492 → 13,019, 4–5 сторон дают ещё −0,04; на сценах «густо» подключаются все точки.
      */
     private static final int PORTAL_SIDES = Integer.getInteger("heatnet.tree.portalsides", 3);
+    /** Деревья кандидатов врезки считаются параллельно (heatnet.search.parallel); false — в одну нить, тот же выход. */
+    private static final boolean PARALLEL = Boolean.parseBoolean(System.getProperty("heatnet.search.parallel", "true"));
+    /**
+     * В районе города граф строится в коридоре (heatnet.city.corridor) — объединении полос вдоль прямых от точек
+     * к кандидатам врезки шириной CORRIDOR_SHARE их длины, но не уже CITY_MARGIN_M с каждой стороны: у дальних
+     * точек прямоугольник накрывал квадратные километры зданий.
+     */
+    private static final boolean CORRIDOR = Boolean.parseBoolean(System.getProperty("heatnet.city.corridor", "true"));
+    private static final double CORRIDOR_SHARE = Double.parseDouble(System.getProperty("heatnet.city.corridor.share", "0.25"));
     /** У скольких самых крупных блоков лучшего черновика пробуются другие врезки и разбиение ради вариантов 2 и 3. */
     private static final int EXTRA_VARIANT_BLOCKS = Integer.getInteger("heatnet.search.variantblocks", 8);
     /**
@@ -136,9 +145,11 @@ public final class VariantEnumerator {
     /**
      * Сколько секунд от начала городского расчёта отводится районам (heatnet.city.deadline): районы идут от ближних
      * к сети к дальним, после срока оставшиеся не считаются, их точки остаются без сети. На синтетическом городе
-     * десятки тысяч точек лежат в километрах от сети, и графы их районов считаются часами.
+     * десятки тысяч точек лежат в километрах от сети, и графы их районов считаются часами; все районы, которые
+     * дают подключения, укладываются в 600 с (при 1800 с подключено столько же, при 300 с — на 5 точек меньше), но
+     * граница шумит от загрузки машины: два прогона с 600 с дали 13 178 и 13 177 подключённых; 900 с — запас.
      */
-    private static final long CITY_DEADLINE_S = Long.getLong("heatnet.city.deadline", 1800);
+    private static final long CITY_DEADLINE_S = Long.getLong("heatnet.city.deadline", 900);
     private static final long CITY_CACHE_MB = 64;
 
     private final InputData input;
@@ -174,7 +185,10 @@ public final class VariantEnumerator {
         final Envelope area;
         final Envelope wideArea;
         final Map<String, List<Option>> options = new HashMap<>();
-        final Map<String, Router> routers = new HashMap<>();
+        final Map<String, Router> routers = new java.util.concurrent.ConcurrentHashMap<>();
+        final Map<String, ObstacleSet> obstacleSets = new java.util.concurrent.ConcurrentHashMap<>();
+        /** Коридор графа района или null — весь прямоугольник. */
+        final Geometry corridor;
 
         Region(List<ConnectionPoint> connections) {
             Diameter byFlow = rules.diameterFor(flow(connections));
@@ -199,6 +213,18 @@ public final class VariantEnumerator {
             for (TieCandidate candidate : candidates) {
                 envelope.expandToInclude(candidate.getPoint().getCoordinate());
             }
+            Geometry lanes = null;
+            if (district && CORRIDOR && !candidates.isEmpty()) {
+                List<Geometry> strips = new ArrayList<>();
+                for (Point point : points) {
+                    for (TieCandidate candidate : candidates) {
+                        LineString straight = factory.createLineString(new Coordinate[] {point.getCoordinate(), candidate.getPoint().getCoordinate()});
+                        strips.add(straight.buffer(Math.max(CITY_MARGIN_M, CORRIDOR_SHARE * straight.getLength())));
+                    }
+                }
+                lanes = factory.createGeometryCollection(strips.toArray(new Geometry[0])).union();
+            }
+            this.corridor = lanes;
             this.wideArea = new Envelope(envelope);
             envelope.expandBy(district ? CITY_MARGIN_M : AREA_MARGIN_M);
             wideArea.expandBy(WIDE_AREA_MARGIN_M);
@@ -207,7 +233,17 @@ public final class VariantEnumerator {
 
         Router router(int routerDn, Envelope routerArea) {
             return routers.computeIfAbsent(routerDn + "@" + routerArea,
-                    key -> new Router(obstacleIndex, rules, routerArea, routerDn, routeCache));
+                    key -> new Router(obstacleIndex, rules, routerArea, routerDn, routeCache, corridor));
+        }
+
+        /** Зоны для проверки отступов при фактическом Ду: буферы зон дороже самой проверки, поэтому по одному на Ду и область. */
+        ObstacleSet obstacles(int obstaclesDn, Envelope obstaclesArea) {
+            Router router = routers.get(obstaclesDn + "@" + obstaclesArea);
+            if (router != null) {
+                return router.obstacles();
+            }
+            return obstacleSets.computeIfAbsent(obstaclesDn + "@" + obstaclesArea,
+                    key -> new ObstacleSet(obstacleIndex, rules, obstaclesArea, obstaclesDn));
         }
     }
 
@@ -332,10 +368,19 @@ public final class VariantEnumerator {
             for (FutureOks oks : input.getFutureOks()) {
                 futureOks.add(oks.getId());
             }
+            // точка дальше предельной длины наибольшего Ду от сети недостижима, её здание на расчёт не влияет;
+            // рамка сети с этим запасом отсекает такие точки без расстояний до каждой
+            Envelope network = new Envelope();
+            input.getSegments().forEach(segment -> network.expandToInclude(segment.getGeometry().getEnvelopeInternal()));
+            input.getChambers().forEach(chamber -> network.expandToInclude(chamber.getGeometry().getCoordinate()));
+            if (!network.isNull()) {
+                network.expandBy(rules.diameters().get(rules.diameters().size() - 1).getMaxLengthM());
+            }
             Envelope extent = new Envelope();
             for (ConnectionPoint connection : input.getConnectionPoints()) {
-                if (futureOks.contains(connection.getOksId())) {
-                    extent.expandToInclude(connection.getGeometry().getCoordinate());
+                Coordinate at = connection.getGeometry().getCoordinate();
+                if (futureOks.contains(connection.getOksId()) && (network.isNull() || network.contains(at))) {
+                    extent.expandToInclude(at);
                 }
             }
             if (extent.isNull()) {
@@ -374,17 +419,10 @@ public final class VariantEnumerator {
         Map<String, Double> flowByOks = new HashMap<>();
         oksById.forEach((id, oks) -> flowByOks.put(id, oks.getFlowTph()));
         DirectTies direct = new DirectTies(input, rules, obstacleIndex, finder, buildingByConnection);
-        List<List<Tree>> directTrees = new ArrayList<>();
         List<ConnectionPoint> rest = new ArrayList<>();
-        for (int k = 0; k < 2; k++) {
-            List<ConnectionPoint> left = new ArrayList<>();
-            directTrees.add(direct.connect(all, flowByOks, k, left));
-            if (k == 0) {
-                rest = left;
-            }
-            log.info("city: direct variant {} trees={} rest={} elapsed={}s", k + 1, directTrees.get(k).size(), left.size(),
-                    (System.nanoTime() - started) / 1_000_000_000L);
-        }
+        List<List<Tree>> directTrees = direct.connect(all, flowByOks, 2, rest);
+        log.info("city: direct trees={} rest={} elapsed={}s", directTrees.get(0).size(), rest.size(),
+                (System.nanoTime() - started) / 1_000_000_000L);
         if (direct.same(directTrees.get(0), directTrees.get(1))) {
             directTrees.remove(1);
         }
@@ -1139,25 +1177,31 @@ public final class VariantEnumerator {
 
     private List<Option> options(Region region, int dn, Envelope area, List<ConnectionPoint> subset, boolean verify,
             List<TieCandidate> candidates) {
-        List<Option> options = new ArrayList<>();
         String label = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(","));
         int sides = subset.size() == 1 && buildingByConnection.containsKey(subset.get(0).getId()) ? PORTAL_SIDES : 1;
-        for (TieCandidate candidate : cheapestCandidates(subset, candidates)) {
-            // метр ветки стоит в S и как стоимость трубы, и как длина: разовый расход переводится в метры по обоим
-            double metreRub = rules.diameter(dn).getNewRubM() + rules.lengthWorthRub();
+        // метр ветки стоит в S и как стоимость трубы, и как длина: разовый расход переводится в метры по обоим
+        double metreRub = rules.diameter(dn).getNewRubM() + rules.lengthWorthRub();
+        Router router = region.router(dn, area);
+        List<int[]> jobs = new ArrayList<>();
+        List<TieCandidate> cheapest = cheapestCandidates(subset, candidates);
+        for (int c = 0; c < cheapest.size(); c++) {
             for (int side = 0; side < sides; side++) {
-                Tree tree = builder.build(region.router(dn, area), dn, area, candidate, subset,
-                        rules.chamberCost(dn) / metreRub, rules.tieInCost() / metreRub, side);
-                if (tree.edges.isEmpty()) {
-                    log.debug("options: subset={} tie={} side={} нет дерева", label, candidate.nodeKey(), side);
-                    continue;
-                }
-                Option option = option(tree, label, verify, area, dn);
-                if (option != null) {
-                    options.add(option);
-                }
+                jobs.add(new int[] {c, side});
             }
         }
+        // деревья кандидатов независимы, граф и кэш общие и потокобезопасны; порядок результатов — порядок
+        // кандидатов, поэтому итог не зависит от расписания нитей. В районе города нити заняты районами.
+        java.util.stream.Stream<int[]> stream = district || !PARALLEL ? jobs.stream() : jobs.parallelStream();
+        List<Option> options = stream.map(job -> {
+            TieCandidate candidate = cheapest.get(job[0]);
+            Tree tree = builder.build(router, dn, area, candidate, subset, rules.chamberCost(dn) / metreRub,
+                    rules.tieInCost() / metreRub, job[1]);
+            if (tree.edges.isEmpty()) {
+                log.debug("options: subset={} tie={} side={} нет дерева", label, candidate.nodeKey(), job[1]);
+                return null;
+            }
+            return option(tree, label, verify, area, dn, region);
+        }).filter(Objects::nonNull).collect(Collectors.toList());
         options.sort(Comparator.comparingDouble(option -> option.score));
         return options;
     }
@@ -1166,7 +1210,7 @@ public final class VariantEnumerator {
      * Дерево, собранное отдельным вариантом, со своим score; null, если сборка его отбросила. Если фактический ДУ
      * участков (по предельной длине пути) больше ДУ графа, отступы проверяются заново для него.
      */
-    private Option option(Tree tree, String label, boolean verify, Envelope area, int graphDn) {
+    private Option option(Tree tree, String label, boolean verify, Envelope area, int graphDn, Region region) {
         Set<String> ids = new HashSet<>();
         tree.unconnected.forEach(connection -> ids.add(connection.getOksId()));
         try {
@@ -1175,7 +1219,7 @@ public final class VariantEnumerator {
                     alone.getSummary().getScore(), tree.unconnected.size());
             int maxDn = alone.getSegments().stream().mapToInt(NewSegment::getDiameter).max().orElse(graphDn);
             boolean check = verify || maxDn > graphDn;
-            return !check || clearanceHolds(tree, alone, area) ? new Option(tree, alone.getSummary().getScore()) : null;
+            return !check || clearanceHolds(tree, alone, area, region) ? new Option(tree, alone.getSummary().getScore()) : null;
         } catch (IllegalStateException | IllegalArgumentException e) {
             // дерево нарушает правила при сборке (предельная длина, отступ участка, число поворотов): кандидат отбрасывается
             log.debug("options: subset={} tie={} отброшено: {}", label, tree.tie.nodeKey(), e.getMessage());
@@ -1208,9 +1252,9 @@ public final class VariantEnumerator {
      * Отступы дерева, построенного по графу другого диаметра, проверяются для наибольшего фактического диаметра;
      * финальный отрезок к точке подключения проверяется без отступа к её полигону.
      */
-    private boolean clearanceHolds(Tree tree, Variant alone, Envelope area) {
+    private boolean clearanceHolds(Tree tree, Variant alone, Envelope area, Region region) {
         int dn = alone.getSegments().stream().mapToInt(NewSegment::getDiameter).max().orElseThrow();
-        ObstacleSet obstacles = new ObstacleSet(obstacleIndex, rules, area, dn);
+        ObstacleSet obstacles = region.obstacles(dn, area);
         for (Tree.Edge edge : tree.edges) {
             Coordinate[] coords = edge.line.getCoordinates();
             Set<String> ignored = tree.tie.getIgnored();

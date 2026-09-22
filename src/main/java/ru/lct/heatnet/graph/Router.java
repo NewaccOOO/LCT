@@ -40,8 +40,8 @@ public final class Router {
     private final double[][] adjacencyWeight;
     // веса точек запроса и таблицы Дейкстры: одни и те же точки запрашиваются десятки и сотни раз за расчёт
     private final RouteCache cache;
-    private long tableRequests;
-    private long tableHits;
+    private final java.util.concurrent.atomic.AtomicLong tableRequests = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong tableHits = new java.util.concurrent.atomic.AtomicLong();
 
     /** Таблица Дейкстры от точки запроса: расстояния до узлов и предшественники. */
     private static final class Table {
@@ -63,8 +63,13 @@ public final class Router {
     }
 
     public Router(ObstacleIndex index, Rules rules, Envelope area, int dn, RouteCache cache) {
+        this(index, rules, area, dn, cache, null);
+    }
+
+    /** С коридором: узлы и препятствия только внутри полигона corridor, см. {@link ObstacleSet}. */
+    public Router(ObstacleIndex index, Rules rules, Envelope area, int dn, RouteCache cache, org.locationtech.jts.geom.Geometry corridor) {
         this.cache = cache;
-        obstacles = new ObstacleSet(index, rules, area, dn);
+        obstacles = new ObstacleSet(index, rules, area, dn, corridor);
         nodes = obstacles.nodes();
         int n = nodes.size();
         List<List<Integer>> to = new ArrayList<>();
@@ -73,8 +78,9 @@ public final class Router {
             to.add(new ArrayList<>());
             weight.add(new ArrayList<>());
         }
-        // перебор O(n²) пар, но геометрия проверяется только у рёбер, касательных к зонам в обоих концах
-        for (int i = 0; i < n; i++) {
+        // перебор O(n²) пар, но геометрия проверяется только у рёбер, касательных к зонам в обоих концах; пары
+        // считаются параллельно по i, каждая нить пишет только свои списки, симметричные рёбра добавляются потом
+        java.util.stream.IntStream.range(0, n).parallel().forEach(i -> {
             for (int j = 0; j < i; j++) {
                 if (!obstacles.tangent(i, nodes.get(j)) || !obstacles.tangent(j, nodes.get(i))) {
                     continue;
@@ -83,9 +89,14 @@ public final class Router {
                 if (!Double.isNaN(w)) {
                     to.get(i).add(j);
                     weight.get(i).add(w);
-                    to.get(j).add(i);
-                    weight.get(j).add(w);
                 }
+            }
+        });
+        for (int i = 0; i < n; i++) {
+            for (int k = 0, count = to.get(i).size(); k < count; k++) {
+                int j = to.get(i).get(k);
+                to.get(j).add(i);
+                weight.get(j).add(weight.get(i).get(k));
             }
         }
         adjacency = new int[n][];
@@ -108,9 +119,11 @@ public final class Router {
     /**
      * Кратчайший маршрут до ближайшей по весу цели или {@code null}, если ни одна цель не достижима. Если в
      * {@code userData} цели лежит {@link Double}, это надбавка к её весу в метрах (например, стоимость камеры,
-     * которую придётся построить в этой точке); вес маршрута возвращается с надбавкой выбранной цели.
+     * которую придётся построить в этой точке); вес маршрута возвращается с надбавкой выбранной цели. Вызывается
+     * из нескольких нитей: зоны только читаются (JTS 1.20 готовит индексы под замком), кэш синхронизирован, а
+     * ленивые веса до узлов при гонке пишутся одинаковыми.
      */
-    public synchronized Route routeToAny(Point from, Collection<Point> targets, Set<String> ignored) {
+    public Route routeToAny(Point from, Collection<Point> targets, Set<String> ignored) {
         int n = nodes.size();
         Coordinate source = from.getCoordinate();
         Table table = table(source, ignored);
@@ -170,11 +183,11 @@ public final class Router {
 
     /** Таблица Дейкстры от точки запроса, из кэша по координате и набору пропускаемых объектов. */
     private Table table(Coordinate source, Set<String> ignored) {
-        tableRequests++;
+        tableRequests.incrementAndGet();
         List<Object> key = List.of(this, "table", source.x, source.y, ignored);
         Table cached = cache.get(key);
         if (cached != null) {
-            tableHits++;
+            tableHits.incrementAndGet();
             return cached;
         }
         int n = nodes.size();
@@ -216,8 +229,8 @@ public final class Router {
     }
 
     /** Сколько таблиц Дейкстры запрошено и сколько из них взято из кэша. */
-    public synchronized long[] tableStats() {
-        return new long[] {tableRequests, tableHits};
+    public long[] tableStats() {
+        return new long[] {tableRequests.get(), tableHits.get()};
     }
 
     /**
