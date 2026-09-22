@@ -326,7 +326,7 @@ final class TreeBuilder {
             }
             Point start = portal == null ? connection.getGeometry() : factory.createPoint(portal[0]);
             Route route = portal == null || !fromPortalDirection ? router.routeToAny(start, targets, ignored)
-                    : router.routeToAny(start, targets, ignored, connection.getGeometry().getCoordinate());
+                    : router.routeExact(start, targets, ignored, connection.getGeometry().getCoordinate());
             if (route == null) {
                 return null;
             }

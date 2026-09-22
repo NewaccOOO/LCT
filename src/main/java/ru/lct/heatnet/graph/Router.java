@@ -3,7 +3,9 @@ package ru.lct.heatnet.graph;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Set;
 import org.locationtech.jts.algorithm.Angle;
@@ -23,6 +25,7 @@ import ru.lct.heatnet.rules.Rules;
  * ломает путь к вершине сильнее, при релаксации пропускается (приложение 18.09, п. 2.1).
  */
 public final class Router {
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(Router.class);
     /** Допустимый поворот 90° с запасом на округление координат выхода до 9 знаков градуса. */
     public static final double MAX_TURN_DEG = 89.9;
     private static final double MIN_TURN_DEG = 3;
@@ -32,6 +35,8 @@ public final class Router {
     private static final double[] PUSH_STEPS_M = {0.5, 1, 2, 4, 8};
     private static final int MAX_PUSHES = 20;
     private static final double UNKNOWN = Double.NEGATIVE_INFINITY;
+    /** Предел состояний точного поиска: дальше перебор считается безнадёжным и маршрут не ищется. */
+    private static final int EXACT_STATES = 100_000;
 
     private final ObstacleSet obstacles;
     private final GeometryFactory factory = new GeometryFactory();
@@ -117,15 +122,6 @@ public final class Router {
     }
 
     /**
-     * То же, но маршрут выходит из {@code from} как продолжение отрезка {@code incoming}–{@code from}: первый отрезок
-     * отклоняется от него не круче {@link #MAX_TURN_DEG}. Так финальный прямой участок из здания и начало маршрута
-     * образуют допустимый поворот (приложение 18.09, п. 2.1), а не отбрасываются при сборке ветки.
-     */
-    public Route routeToAny(Point from, Collection<Point> targets, Set<String> ignored, Coordinate incoming) {
-        return routeToAny(from, targets, ignored, incoming, true);
-    }
-
-    /**
      * Кратчайший маршрут до ближайшей по весу цели или {@code null}, если ни одна цель не достижима. Если в
      * {@code userData} цели лежит {@link Double}, это надбавка к её весу в метрах (например, стоимость камеры,
      * которую придётся построить в этой точке); вес маршрута возвращается с надбавкой выбранной цели. Вызывается
@@ -133,14 +129,9 @@ public final class Router {
      * ленивые веса до узлов при гонке пишутся одинаковыми.
      */
     public Route routeToAny(Point from, Collection<Point> targets, Set<String> ignored) {
-        return routeToAny(from, targets, ignored, null, false);
-    }
-
-    private Route routeToAny(Point from, Collection<Point> targets, Set<String> ignored, Coordinate incoming,
-            boolean limitFirstTurn) {
         int n = nodes.size();
         Coordinate source = from.getCoordinate();
-        Table table = table(source, ignored, limitFirstTurn ? incoming : null);
+        Table table = table(source, ignored);
         double[] dist = table.dist;
         int[] pred = table.pred;
         double bestWeight = Double.POSITIVE_INFINITY;
@@ -155,8 +146,7 @@ public final class Router {
             if (t.distance(source) + extra >= bestWeight) {
                 continue;
             }
-            double direct = limitFirstTurn && incoming != null && deflectionDeg(incoming, source, t) > MAX_TURN_DEG
-                    ? Double.NaN : obstacles.edgeWeight(t, source, ignored, false, false);
+            double direct = obstacles.edgeWeight(t, source, ignored, false, false);
             double weight = Double.isNaN(direct) ? Double.POSITIVE_INFINITY : direct;
             int via = -1;
             double[] toNodes = partialWeights(t, ignored);
@@ -196,11 +186,140 @@ public final class Router {
         return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), spans) + bestExtra, spans);
     }
 
+    /**
+     * Маршрут с точным правилом поворотов: состояние поиска — узел и то, откуда в него пришли. Обычный поиск держит
+     * один предшественник на узел и не находит путь, в который нужно войти с другой стороны. Перебор дороже, поэтому
+     * вызывается только для точки, которая иначе остаётся без сети (п. 2.5). {@code null} — пути нет или перебор
+     * дошёл до предела состояний.
+     */
+    public Route routeExact(Point start, Collection<Point> targets, Set<String> ignored, Coordinate incoming) {
+        Coordinate source = start.getCoordinate();
+        // состояния зависят только от точки выхода и направления, а кандидатов врезки у точки несколько
+        Exact search = cache.computeIfAbsent(List.of(this, "exact", source.x, source.y, ignored, incoming.x, incoming.y),
+                64L * nodes.size(), () -> exactStates(source, ignored, incoming));
+        // даже без состояний цель бывает видна из точки выхода напрямую
+        return exactBest(start, targets, ignored, incoming, search.dist, search.came);
+    }
+
+    /** Состояния точного поиска: вес до каждой пары «узел, предшественник» и путь к ней. */
+    private static final class Exact {
+        final Map<Long, Double> dist;
+        final Map<Long, Long> came;
+
+        Exact(Map<Long, Double> dist, Map<Long, Long> came) {
+            this.dist = dist;
+            this.came = came;
+        }
+    }
+
+    private Exact exactStates(Coordinate source, Set<String> ignored, Coordinate incoming) {
+        int n = nodes.size();
+        double[] toNode = nodeWeights(source, ignored);
+        Map<Long, Double> dist = new HashMap<>();
+        Map<Long, Long> came = new HashMap<>();
+        PriorityQueue<double[]> heap = new PriorityQueue<>((a, b) -> Double.compare(a[0], b[0]));
+        for (int v = 0; v < n; v++) {
+            if (!Double.isNaN(toNode[v]) && deflectionDeg(incoming, source, nodes.get(v)) <= MAX_TURN_DEG) {
+                dist.put(state(v, -1, n), toNode[v]);
+                heap.add(new double[] {toNode[v], v, -1});
+            }
+        }
+        for (int expanded = 0; !heap.isEmpty(); expanded++) {
+            if (expanded > EXACT_STATES) {
+                LOG.debug("routeExact: предел состояний {} при {} узлах", EXACT_STATES, n);
+                return new Exact(Map.of(), Map.of());
+            }
+            double[] top = heap.poll();
+            int v = (int) top[1];
+            int p = (int) top[2];
+            if (top[0] > dist.getOrDefault(state(v, p, n), Double.POSITIVE_INFINITY) + 1e-9) {
+                continue;
+            }
+            Coordinate before = p < 0 ? source : nodes.get(p);
+            for (int k = 0; k < adjacency[v].length; k++) {
+                int w = adjacency[v][k];
+                if (deflectionDeg(before, nodes.get(v), nodes.get(w)) > MAX_TURN_DEG) {
+                    continue;
+                }
+                double weight = top[0] + adjacencyWeight[v][k];
+                long next = state(w, v, n);
+                if (weight < dist.getOrDefault(next, Double.POSITIVE_INFINITY) - 1e-9) {
+                    dist.put(next, weight);
+                    came.put(next, state(v, p, n));
+                    heap.add(new double[] {weight, w, v});
+                }
+            }
+        }
+        LOG.debug("routeExact: узлов {}, состояний {}", n, dist.size());
+        return new Exact(dist, came);
+    }
+
+    /** Лучшая цель по состояниям точного поиска и маршрут до неё. */
+    private Route exactBest(Point start, Collection<Point> targets, Set<String> ignored, Coordinate incoming,
+            Map<Long, Double> dist, Map<Long, Long> came) {
+        int n = nodes.size();
+        Coordinate source = start.getCoordinate();
+        double bestWeight = Double.POSITIVE_INFINITY;
+        Coordinate bestTarget = null;
+        long bestState = -1;
+        double bestExtra = 0;
+        for (Point target : targets) {
+            Coordinate t = target.getCoordinate();
+            double extra = target.getUserData() instanceof Double ? (Double) target.getUserData() : 0;
+            if (deflectionDeg(incoming, source, t) <= MAX_TURN_DEG) {
+                double direct = obstacles.edgeWeight(t, source, ignored, false, false);
+                if (!Double.isNaN(direct) && direct + extra < bestWeight) {
+                    bestWeight = direct + extra;
+                    bestTarget = t;
+                    bestState = -1;
+                    bestExtra = extra;
+                }
+            }
+            double[] toNodes = partialWeights(t, ignored);
+            for (Map.Entry<Long, Double> state : dist.entrySet()) {
+                int v = (int) (state.getKey() / (n + 1));
+                int p = (int) (state.getKey() % (n + 1));
+                Coordinate before = p == n ? source : nodes.get(p);
+                if (state.getValue() + nodes.get(v).distance(t) + extra >= bestWeight
+                        || deflectionDeg(before, nodes.get(v), t) > MAX_TURN_DEG) {
+                    continue;
+                }
+                if (toNodes[v] == UNKNOWN) {
+                    toNodes[v] = obstacles.tangent(v, t) ? obstacles.edgeWeight(t, nodes.get(v), ignored, false, true)
+                            : Double.NaN;
+                }
+                if (!Double.isNaN(toNodes[v]) && state.getValue() + toNodes[v] + extra < bestWeight) {
+                    bestWeight = state.getValue() + toNodes[v] + extra;
+                    bestTarget = t;
+                    bestState = state.getKey();
+                    bestExtra = extra;
+                }
+            }
+        }
+        if (bestTarget == null) {
+            return null;
+        }
+        List<Coordinate> coords = new ArrayList<>();
+        for (long state = bestState; state >= 0; state = came.getOrDefault(state, -1L)) {
+            coords.add(0, nodes.get((int) (state / (n + 1))));
+        }
+        coords.add(0, source);
+        coords.add(bestTarget);
+        straighten(coords, ignored);
+        LineString line = start.getFactory().createLineString(coords.toArray(new Coordinate[0]));
+        List<SpecialSpan> spans = obstacles.spans(line, ignored);
+        return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), spans) + bestExtra, spans);
+    }
+
+    /** Состояние точного поиска: узел и предшественник (n — пришли из точки запроса). */
+    private static long state(int node, int pred, int n) {
+        return (long) node * (n + 1) + (pred < 0 ? n : pred);
+    }
+
     /** Таблица Дейкстры от точки запроса, из кэша по координате и набору пропускаемых объектов. */
-    private Table table(Coordinate source, Set<String> ignored, Coordinate incoming) {
+    private Table table(Coordinate source, Set<String> ignored) {
         tableRequests.incrementAndGet();
-        List<Object> key = incoming == null ? List.of(this, "table", source.x, source.y, ignored)
-                : List.of(this, "table", source.x, source.y, ignored, incoming.x, incoming.y);
+        List<Object> key = List.of(this, "table", source.x, source.y, ignored);
         Table cached = cache.get(key);
         if (cached != null) {
             tableHits.incrementAndGet();
@@ -208,13 +327,6 @@ public final class Router {
         }
         int n = nodes.size();
         double[] dist = nodeWeights(source, ignored).clone();
-        if (incoming != null) {
-            for (int v = 0; v < n; v++) {
-                if (!Double.isNaN(dist[v]) && deflectionDeg(incoming, source, nodes.get(v)) > MAX_TURN_DEG) {
-                    dist[v] = Double.NaN;
-                }
-            }
-        }
         int[] pred = new int[n];
         Arrays.fill(pred, -1);
         boolean[] done = new boolean[n];

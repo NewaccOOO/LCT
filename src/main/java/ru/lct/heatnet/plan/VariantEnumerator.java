@@ -1126,8 +1126,10 @@ public final class VariantEnumerator {
             }
             if (incomplete(options)) {
                 // маршрута нет из-за поворота в точке выхода из здания круче 90°: трасса вдоль финального участка
-                // длиннее, но неподключение при доступном маршруте запрещено (п. 2.5)
-                options.addAll(options(region, blockDn, region.area, subset, false, all, true));
+                // длиннее, но неподключение при доступном маршруте запрещено (п. 2.5). Область широкая: обход
+                // в тесной застройке выходит за прямоугольник вокруг точки и кандидатов
+                Envelope wide = district ? region.area : region.wideArea;
+                options.addAll(options(region, blockDn, wide, subset, false, candidates(points, flow, blockDn), true));
             }
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
