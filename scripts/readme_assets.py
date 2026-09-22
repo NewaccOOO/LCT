@@ -157,8 +157,8 @@ def versions():
     if not rows:
         sys.exit("в README нет таблицы версий")
     vals = [(v, float(s.replace(",", ".")), float(c.replace(",", ".")), int(t)) for v, s, c, t in rows]
-    w, h = 760, 300
-    left, right, top, bottom = 56, 24, 48, 56
+    left, right, top, bottom = 56, 24, 48, 36
+    w, h = max(760, left + right + 72 * len(vals)), 300
     top_s = 5 * (int(max(v[1] for v in vals) * 1.1 / 5) + 1)
     bw = (w - left - right) / len(vals)
     parts = []
@@ -170,15 +170,17 @@ def versions():
     best = min(v[1] for v in vals)
     for i, (ver, s, cost, sec) in enumerate(vals):
         bh = (h - top - bottom) * s / top_s
-        x = left + i * bw + bw * 0.22
+        x = left + i * bw + bw * 0.1
         y = h - bottom - bh
-        color = "#38bdf8" if s == best else "#334155"
-        parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bw * 0.56:.1f}" height="{bh:.1f}" rx="6" fill="{color}"/>')
-        parts.append(f'<text x="{x + bw * 0.28:.1f}" y="{y - 8:.1f}" class="v" text-anchor="middle">{s:.2f}</text>')
-        parts.append(f'<text x="{x + bw * 0.28:.1f}" y="{h - bottom + 20:.1f}" class="l" text-anchor="middle">{ver}</text>')
-        parts.append(f'<text x="{x + bw * 0.28:.1f}" y="{h - bottom + 38:.1f}" class="a" text-anchor="middle">{cost:.0f} млн · {sec} с</text>')
+        color, ink = ("#38bdf8", "#0b1220") if s == best else ("#334155", "#cbd5e1")
+        cx = x + bw * 0.4
+        parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bw * 0.8:.1f}" height="{bh:.1f}" rx="6" fill="{color}"/>')
+        parts.append(f'<text x="{cx:.1f}" y="{y - 8:.1f}" class="v" text-anchor="middle">{s:.2f}</text>')
+        parts.append(f'<text x="{cx:.1f}" y="{h - bottom - 28:.1f}" class="i" fill="{ink}" text-anchor="middle">{cost:.0f} млн</text>')
+        parts.append(f'<text x="{cx:.1f}" y="{h - bottom - 12:.1f}" class="i" fill="{ink}" text-anchor="middle">{sec} с</text>')
+        parts.append(f'<text x="{cx:.1f}" y="{h - bottom + 22:.1f}" class="l" text-anchor="middle">{ver}</text>')
     svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}" role="img" aria-label="S варианта 1 на датасете организаторов по версиям">
-<style>.a{{font:12px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#94a3b8}}.l{{font:600 13px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}.v{{font:600 13px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}.h{{font:600 15px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}</style>
+<style>.a{{font:12px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#94a3b8}}.l{{font:600 13px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}.v{{font:600 13px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}.i{{font:600 11px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}}.h{{font:600 15px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}</style>
 <rect width="{w}" height="{h}" rx="16" fill="{BG}"/>
 <text x="{left}" y="28" class="h">S варианта 1 на датасете организаторов, меньше — лучше</text>
 {''.join(parts)}
