@@ -453,6 +453,9 @@ def check_variant(inp, trees, vid, feats, rep):
         cg = inp["cps"][cp][0]
         own = [og for oid, og in trees["oks_near"](cg, 0.0) if og.buffer(0.01).contains(cg)]
         for og in own:
+            pieces = [g for g in getattr(piece.intersection(og), "geoms", [piece.intersection(og)]) if g.length > 0.05]
+            if len(pieces) > 1:
+                rep.add("B4 финальный участок выходит из своего здания и входит в него снова", f"{sid} куски {[round(g.length, 1) for g in pieces]}")
             shells = [og.exterior] if og.geom_type == "Polygon" else [g.exterior for g in og.geoms]
             to_edge = min(sh.distance(cg) for sh in shells)
             inside = piece.intersection(og).length

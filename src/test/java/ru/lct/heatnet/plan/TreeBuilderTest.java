@@ -15,6 +15,9 @@ import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.LineString;
 import ru.lct.heatnet.graph.Router;
+import ru.lct.heatnet.model.ConnectionPoint;
+import ru.lct.heatnet.model.ExistingOks;
+import ru.lct.heatnet.model.FutureOks;
 import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.NetworkSegment;
 import ru.lct.heatnet.rules.Rules;
@@ -109,12 +112,43 @@ class TreeBuilderTest {
         }
     }
 
+    @Test
+    void finalPieceLeavesOwnBuildingOnceEvenWhenNearestSideFacesCourtyard() {
+        // П-образное здание: точка в левом крыле у стены двора; луч через ближайшую точку контура пересёк бы правое крыло
+        Geometry building = PlanFixture.rect(150, 50, 180, 60)
+                .union(PlanFixture.rect(150, 60, 160, 120)).union(PlanFixture.rect(170, 60, 180, 120));
+        PlanFixture fixture = PlanFixture.trunk();
+        fixture.oks.add(new FutureOks("o-1", building, 5, 1.0));
+        fixture.connections.add(new ConnectionPoint("cp-o-1", point(158, 70), "o-1"));
+        fixture.existing.add(new ExistingOks("b-1", building));
+        InputData input = fixture.input();
+        TieInFinder finder = new TieInFinder(input, rules);
+        TieCandidate tie = finder.find(List.of(point(100, 0)), DN).stream()
+                .filter(c -> c.getExistingObjectId().equals("hn-1")).findFirst().orElseThrow();
+        TreeBuilder builder = builder(input, finder, VariantEnumerator.buildings(input));
+
+        Tree tree = builder.build(new Router(input, rules, AREA, DN), DN, AREA, tie, fixture.connections);
+
+        assertTrue(tree.unconnected.isEmpty(), "не подключены: " + tree.unconnected);
+        Tree.Edge last = tree.edges.get(tree.edges.size() - 1);
+        assertEquals(Tree.Kind.CONNECTION, last.to.kind);
+        Coordinate[] coords = last.line.getCoordinates();
+        LineString piece = PlanFixture.line(coords[coords.length - 2].x, coords[coords.length - 2].y, 158, 70);
+        Geometry inside = piece.intersection(building);
+        assertEquals(1, inside.getNumGeometries(), "финальный участок входит в здание один раз: " + inside);
+        assertTrue(inside.getLength() < 9, "выход через наружную стену x=150, а не сквозь двор: " + inside.getLength());
+    }
+
     private TreeBuilder builder(InputData input, TieInFinder finder) {
+        return builder(input, finder, Map.of());
+    }
+
+    private TreeBuilder builder(InputData input, TieInFinder finder, Map<String, ExistingOks> buildings) {
         Map<String, LineString> networkById = new HashMap<>();
         for (NetworkSegment segment : input.getSegments()) {
             networkById.put(segment.getId(), segment.getGeometry());
         }
-        return new TreeBuilder(finder.nodeLimit(), networkById, new SpecialObjects(input, rules), Map.of());
+        return new TreeBuilder(finder.nodeLimit(), networkById, new SpecialObjects(input, rules), buildings);
     }
 
     private static void assertTouchOnlyAtSharedNode(Tree.Edge a, Tree.Edge b) {

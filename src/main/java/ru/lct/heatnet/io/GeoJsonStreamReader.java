@@ -83,13 +83,10 @@ public class GeoJsonStreamReader {
     private static final List<String> POINT = List.of("Point");
     private static final List<String> LINE = List.of("LineString");
     private static final List<String> POLYGONS = List.of("Polygon", "MultiPolygon");
-    private static final List<String> LINES = List.of("LineString", "MultiLineString");
+    // Приложение 18.09, п. 1.1: ограничение любого типа приходит линией или полигоном; правило дальше применяется
+    // по размерности геометрии.
     private static final List<String> ANY_RESTRICTION = List.of(
             "Point", "LineString", "MultiLineString", "Polygon", "MultiPolygon");
-    // Геометрия по типу задана только для типов из таблицы ТЗ; у новых и неизвестных типов её во входе не угадать.
-    private static final Map<String, List<String>> RESTRICTION_GEOMETRY = Map.of(
-            "park", POLYGONS, "social_area", POLYGONS, "prohibited_site", POLYGONS, "water", POLYGONS,
-            "road", POLYGONS, "tram_tracks", POLYGONS, "gas_pipeline", LINES, "power_cable", LINES);
     private static final List<String> UPSTREAM_TYPES = List.of(HEAT_NETWORK, HEAT_CHAMBER, SOURCE);
 
     private static final Logger log = LoggerFactory.getLogger(GeoJsonStreamReader.class);
@@ -412,16 +409,14 @@ public class GeoJsonStreamReader {
                         }
                         break;
                     }
-                    List<String> allowed = ANY_RESTRICTION;
                     if (restrictionType != null) {
-                        allowed = RESTRICTION_GEOMETRY.getOrDefault(restrictionType, ANY_RESTRICTION);
                         if (RULES.isKnown(restrictionType)) {
                             restrictionType = restrictionType.intern();
                         } else {
                             unknownRestrictionTypes.merge(restrictionType, 1, Integer::sum);
                         }
                     }
-                    Geometry geometry = geometry(node, featureId, allowed);
+                    Geometry geometry = geometry(node, featureId, ANY_RESTRICTION);
                     if (diagnostics.size() == before && keep(id, geometry)) {
                         restrictions.add(new Restriction(id, geometry, restrictionType));
                     }
@@ -984,8 +979,7 @@ public class GeoJsonStreamReader {
                 if (BUILDING.equals(restrictionType)) {
                     return POLYGONS;
                 }
-                return restrictionType == null ? ANY_RESTRICTION
-                        : RESTRICTION_GEOMETRY.getOrDefault(restrictionType, ANY_RESTRICTION);
+                return ANY_RESTRICTION;
             }
             default:
                 return null;

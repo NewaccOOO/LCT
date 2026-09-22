@@ -231,13 +231,10 @@ class GeoJsonStreamReaderTest {
 
     @Test
     void geometryAndTypeProblems() throws IOException {
+        // приложение 18.09, п. 1.1: ограничение любого типа может прийти линией
         ArrayNode features = validFeatures();
         ((ObjectNode) features.get(7)).set("geometry", geometry("LineString", new double[][] {{37.6, 55.7}, {37.7, 55.8}}));
-        assertOnly(features, "R1", "geometry");
-
-        features = validFeatures();
-        ((ObjectNode) features.get(7)).set("geometry", geometry("Point", new double[] {37.66, 55.76}));
-        assertOnly(features, "R1", "geometry");
+        assertTrue(GeoJsonStreamReader.read(write(features)).getDiagnostics().isEmpty());
 
         features = validFeatures();
         props(features, "E1").put("object_type", "tree");

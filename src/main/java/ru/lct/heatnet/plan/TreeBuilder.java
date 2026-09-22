@@ -63,7 +63,8 @@ final class TreeBuilder {
     private final SpecialObjects specials;
     /** Полигон ОКС, в котором лежит точка подключения, по id точки; точки вне полигонов в карте нет. */
     private final Map<String, ExistingOks> buildingByConnection;
-    private final GeometryFactory factory = new GeometryFactory();
+    private static final GeometryFactory GEOMETRY = new GeometryFactory();
+    private final GeometryFactory factory = GEOMETRY;
 
     /** Место присоединения ветки: узел дерева или точка на ребре. */
     private static final class Spot {
@@ -133,18 +134,23 @@ final class TreeBuilder {
      */
     Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
             double chamberPenaltyM, double tieInPenaltyM) {
-        return build(router, dn, area, tie, connections, chamberPenaltyM, tieInPenaltyM, 0);
+        return new Run(router, dn, area, tie, chamberPenaltyM, tieInPenaltyM).build(connections);
     }
 
     /**
-     * То же, но финальный участок из здания идёт через {@code portalSide}-ю по расстоянию допустимую сторону: у
-     * точки в дальнем от сети торце здания выход через другую сторону короче в сумме.
+     * Финальный участок от cp до exit выходит из своего здания один раз и дальше в него не входит (приложение
+     * 18.09, п. 2.2: участок «от ближайшей границы до точки», а полигон ОКС непроходим). Луч через ближайшую
+     * точку контура П-образного здания иначе пересекал бы второе крыло.
      */
-    Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
-            double chamberPenaltyM, double tieInPenaltyM, int portalSide) {
-        Run run = new Run(router, dn, area, tie, chamberPenaltyM, tieInPenaltyM);
-        run.portalSide = portalSide;
-        return run.build(connections);
+    static boolean leavesOnce(Geometry building, Coordinate cp, Coordinate exit) {
+        Geometry inside = building.intersection(GEOMETRY.createLineString(new Coordinate[] {cp, exit}));
+        int pieces = 0;
+        for (int i = 0; i < inside.getNumGeometries(); i++) {
+            if (inside.getGeometryN(i).getLength() > TOUCH_M) {
+                pieces++;
+            }
+        }
+        return pieces == 1;
     }
 
     private final class Run {
@@ -162,8 +168,6 @@ final class TreeBuilder {
         final Map<Tree.Edge, List<Point>> targetsByEdge = new IdentityHashMap<>();
         /** Точка выхода по id точки подключения: {выход}, NO_PORTAL — выхода нет, null — точка не в полигоне. */
         final Map<String, Coordinate[]> portalByConnection = new HashMap<>();
-        /** Сколько допустимых сторон выхода из здания пропустить: 0 — ближайшая допустимая. */
-        int portalSide;
 
         Run(Router router, int dn, Envelope area, TieCandidate tie, double chamberPenaltyM, double tieInPenaltyM) {
             this.router = router;
@@ -203,8 +207,8 @@ final class TreeBuilder {
         /**
          * Точка выхода финального прямого участка из своего ОКС: на луче от точки подключения через ближайшую точку
          * границы полигона, сразу за зоной отступа, дальше, пока выход лежит в чужой зоне запрета. Если участок до
-         * такого выхода недопустим, пробуются ближайшие точки других сторон полигона. NO_PORTAL — выхода нет,
-         * null — точка не в полигоне, маршрут идёт от неё самой.
+         * такого выхода недопустим или снова входит в своё здание, пробуются ближайшие точки других сторон полигона.
+         * NO_PORTAL — выхода нет, null — точка не в полигоне, маршрут идёт от неё самой.
          */
         Coordinate[] portal(ConnectionPoint connection) {
             ExistingOks building = buildingByConnection.get(connection.getId());
@@ -219,7 +223,6 @@ final class TreeBuilder {
                 own.add(building.getId());
                 Coordinate centroid = building.getGeometry().getCentroid().getCoordinate();
                 int tries = 0;
-                int skipped = 0;
                 Coordinate last = null;
                 for (Coordinate anchor : anchors) {
                     if (last != null && anchor.distance(last) < MIN_PIECE_M) {
@@ -249,18 +252,16 @@ final class TreeBuilder {
                     }
                     boolean inForbid = obstacles.insideForbid(exit);
                     boolean inArea = area.contains(exit);
-                    double weight = inForbid || !inArea ? Double.NaN : obstacles.edgeWeight(cp, exit, own);
+                    boolean once = leavesOnce(building.getGeometry(), cp, exit);
+                    double weight = inForbid || !inArea || !once ? Double.NaN : obstacles.edgeWeight(cp, exit, own);
                     if (!Double.isNaN(weight)) {
-                        if (skipped++ < portalSide) {
-                            continue;
-                        }
                         if (tries > 1) {
                             log.debug("portal: {} anchor {} of {}", connection.getId(), tries, anchors.size());
                         }
                         return new Coordinate[] {exit};
                     }
-                    log.debug("portal: {} anchor {} rejected: forbid={} area={} along={}", connection.getId(), tries,
-                            inForbid, inArea, along);
+                    log.debug("portal: {} anchor {} rejected: forbid={} area={} once={} along={}", connection.getId(),
+                            tries, inForbid, inArea, once, along);
                 }
                 return NO_PORTAL;
             });

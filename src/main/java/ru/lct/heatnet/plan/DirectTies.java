@@ -275,6 +275,10 @@ final class DirectTies {
                 reject("короче метра");
                 return null;
             }
+            if (building != null && !TreeBuilder.leavesOnce(building.getGeometry(), cp, tiePoint)) {
+                reject("снова через своё здание");
+                return null;
+            }
             return valid(line, 0, tie, dn, own) ? line : null;
         }
         // ближайшая точка внешнего контура, затем ближайшие точки других сторон: луч через ближайшую может упираться
@@ -292,6 +296,10 @@ final class DirectTies {
             Coordinate exit = exit(cp, anchor, building, clearance);
             if (exit == null) {
                 reject("нет выхода");
+                continue;
+            }
+            if (!TreeBuilder.leavesOnce(building.getGeometry(), cp, exit)) {
+                reject("снова через своё здание");
                 continue;
             }
             Coordinate[] line = {tiePoint, exit, cp};

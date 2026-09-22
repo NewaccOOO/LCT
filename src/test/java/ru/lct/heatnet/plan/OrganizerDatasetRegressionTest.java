@@ -12,10 +12,11 @@ import ru.lct.heatnet.rules.Rules;
 
 /**
  * Эталон S rank=1 на {@code data/real/dataset.geojson} по правилам технического приложения от 18.09.2026
- * (до них было 12.596). Менять константу только при намеренной смене качества.
+ * (до них было 12.596; 13.019 до строгого финального участка в 0.6.0). Менять константу только при намеренной
+ * смене качества.
  */
 class OrganizerDatasetRegressionTest {
-    private static final double ORGANIZER_RANK1_SCORE = 13.019;
+    private static final double ORGANIZER_RANK1_SCORE = 13.729;
 
     @Test
     void rank1ScoreMatchesBaseline() throws Exception {

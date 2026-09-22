@@ -78,12 +78,6 @@ public final class VariantEnumerator {
     private static final double SHARED_ROOT_CLIP_M = 0.15;
     private static final double SHARED_ROOT_APART_M = 0.01;
     private static final int MAX_VARIANTS = 3;
-    /**
-     * У одиночной точки в здании деревья строятся через столько допустимых сторон выхода (heatnet.tree.portalsides):
-     * выход через ближайшую сторону не всегда даёт короткую трассу. На датасете организаторов 1 → 3 стороны:
-     * S 13,492 → 13,019, 4–5 сторон дают ещё −0,04; на сценах «густо» подключаются все точки.
-     */
-    private static final int PORTAL_SIDES = Integer.getInteger("heatnet.tree.portalsides", 3);
     /** Деревья кандидатов врезки считаются параллельно (heatnet.search.parallel); false — в одну нить, тот же выход. */
     private static final boolean PARALLEL = Boolean.parseBoolean(System.getProperty("heatnet.search.parallel", "true"));
     /**
@@ -1186,26 +1180,18 @@ public final class VariantEnumerator {
     private List<Option> options(Region region, int dn, Envelope area, List<ConnectionPoint> subset, boolean verify,
             List<TieCandidate> candidates) {
         String label = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(","));
-        int sides = subset.size() == 1 && buildingByConnection.containsKey(subset.get(0).getId()) ? PORTAL_SIDES : 1;
         // метр ветки стоит в S и как стоимость трубы, и как длина: разовый расход переводится в метры по обоим
         double metreRub = rules.diameter(dn).getNewRubM() + rules.lengthWorthRub();
         Router router = region.router(dn, area);
-        List<int[]> jobs = new ArrayList<>();
         List<TieCandidate> cheapest = cheapestCandidates(subset, candidates);
-        for (int c = 0; c < cheapest.size(); c++) {
-            for (int side = 0; side < sides; side++) {
-                jobs.add(new int[] {c, side});
-            }
-        }
         // деревья кандидатов независимы, граф и кэш общие и потокобезопасны; порядок результатов — порядок
         // кандидатов, поэтому итог не зависит от расписания нитей. В районе города нити заняты районами.
-        java.util.stream.Stream<int[]> stream = district || !PARALLEL ? jobs.stream() : jobs.parallelStream();
-        List<Option> options = stream.map(job -> {
-            TieCandidate candidate = cheapest.get(job[0]);
+        java.util.stream.Stream<TieCandidate> stream = district || !PARALLEL ? cheapest.stream() : cheapest.parallelStream();
+        List<Option> options = stream.map(candidate -> {
             Tree tree = builder.build(router, dn, area, candidate, subset, rules.chamberCost(dn) / metreRub,
-                    rules.tieInCost() / metreRub, job[1]);
+                    rules.tieInCost() / metreRub);
             if (tree.edges.isEmpty()) {
-                log.debug("options: subset={} tie={} side={} нет дерева", label, candidate.nodeKey(), job[1]);
+                log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
                 return null;
             }
             return option(tree, label, verify, area, dn, region);
