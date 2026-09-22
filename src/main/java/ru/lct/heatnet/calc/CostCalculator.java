@@ -2,15 +2,13 @@ package ru.lct.heatnet.calc;
 
 import java.util.ArrayList;
 import java.util.List;
-import ru.lct.heatnet.model.ChamberReconstruction;
 import ru.lct.heatnet.model.FutureOks;
 import ru.lct.heatnet.model.NewChamber;
 import ru.lct.heatnet.model.NewSegment;
-import ru.lct.heatnet.model.Reconstruction;
-import ru.lct.heatnet.model.TieIn;
 import ru.lct.heatnet.model.VariantSummary;
 import ru.lct.heatnet.rules.Rules;
 
+/** Стоимость по разделу 6 технического приложения от 18.09.2026: участки, камеры, врезки, штраф, S. */
 public final class CostCalculator {
     private final Rules rules;
 
@@ -30,6 +28,7 @@ public final class CostCalculator {
         return rules.chamberCost(dn);
     }
 
+    /** Врезка нового участка в существующую камеру. */
     public double tieInCost() {
         return rules.tieInCost();
     }
@@ -42,52 +41,31 @@ public final class CostCalculator {
         return round2(sum);
     }
 
-    /** Сводка варианта, rank = 0 до ранжирования. */
+    /** Сводка варианта, rank = 0 до ранжирования; existingTieIns — число новых участков, заканчивающихся в существующих камерах. */
     public VariantSummary summary(String id, String variantId, List<NewSegment> segments, List<NewChamber> chambers,
-            List<TieIn> tieIns, List<Reconstruction> reconstructions,
-            List<ChamberReconstruction> chamberReconstructions, List<FutureOks> unconnected) {
-        double constructionCost = 0;
+            int existingTieIns, List<FutureOks> unconnected) {
+        double segmentCost = 0;
         double newNetworkLength = 0;
         for (NewSegment segment : segments) {
-            constructionCost += segment.getCost();
+            segmentCost += segment.getCost();
             newNetworkLength += segment.getLength();
         }
         double chamberConstructionCost = 0;
         for (NewChamber chamber : chambers) {
             chamberConstructionCost += chamber.getCost();
         }
-        double tieInCost = 0;
-        for (TieIn tieIn : tieIns) {
-            tieInCost += tieIn.getCost();
-        }
-        double reconstructionCost = 0;
-        double reconstructionLength = 0;
-        for (Reconstruction reconstruction : reconstructions) {
-            reconstructionCost += reconstruction.getCost();
-            reconstructionLength += reconstruction.getLength();
-        }
-        double chamberReconstructionCost = 0;
-        for (ChamberReconstruction chamber : chamberReconstructions) {
-            chamberReconstructionCost += chamber.getCost();
-        }
         List<String> unconnectedIds = new ArrayList<>();
         for (FutureOks oks : unconnected) {
             unconnectedIds.add(oks.getId());
         }
-        constructionCost = round2(constructionCost);
         chamberConstructionCost = round2(chamberConstructionCost);
-        tieInCost = round2(tieInCost);
-        reconstructionCost = round2(reconstructionCost);
-        chamberReconstructionCost = round2(chamberReconstructionCost);
+        double tieInCost = round2(existingTieIns * tieInCost());
+        double constructionCost = round2(segmentCost + chamberConstructionCost + tieInCost);
         double penalty = penalty(unconnected);
-        double calculatedCost = round2(constructionCost + chamberConstructionCost + tieInCost + reconstructionCost
-                + chamberReconstructionCost + penalty);
+        double calculatedCost = round2(constructionCost + penalty);
         newNetworkLength = round2(newNetworkLength);
-        reconstructionLength = round2(reconstructionLength);
-        double length = round2(newNetworkLength + reconstructionLength);
-        double score = Math.round(rules.score(calculatedCost, length) * 1000) / 1000.0;
-        return new VariantSummary(id, variantId, 0, constructionCost, chamberConstructionCost, tieInCost,
-                reconstructionCost, chamberReconstructionCost, penalty, calculatedCost, newNetworkLength,
-                reconstructionLength, length, score, unconnectedIds);
+        double score = Math.round(rules.score(calculatedCost, newNetworkLength) * 1000) / 1000.0;
+        return new VariantSummary(id, variantId, 0, constructionCost, chamberConstructionCost, existingTieIns, tieInCost,
+                penalty, calculatedCost, newNetworkLength, score, unconnectedIds);
     }
 }

@@ -50,22 +50,21 @@ class RouterTest {
     }
 
     @Test
-    void detourBendsAreSnappedToStandardAngles() {
-        Geometry park = rect(-50, -20, 50, 20);
-        Router router = router(List.of(new Restriction("park-1", park, "park")), List.of());
+    void routeAroundThinWallTurnsNoSteeperThanNinetyDegrees() {
+        // тонкая стена между точкой и целью: обход её конца без ограничения дал бы разворот почти на 180°
+        Geometry wall = rect(-1, -60, 1, 60);
+        Router router = router(List.of(new Restriction("park-1", wall, "park")), List.of());
 
-        Route route = router.route(point(-70, 0), point(70, 0), Set.of());
+        Route route = router.route(point(-20, 0), point(20, 0), Set.of());
 
         assertNotNull(route);
         Coordinate[] coords = route.getGeometry().getCoordinates();
-        assertTrue(coords.length >= 4, "обход углов: " + route.getGeometry());
         for (int i = 1; i + 1 < coords.length; i++) {
             double deflection = 180 - Math.toDegrees(Angle.angleBetween(coords[i - 1], coords[i], coords[i + 1]));
-            assertEquals(1, rules.kTurn(deflection), EPS, "излом " + deflection + "° в вершине " + i + ": " + route.getGeometry());
+            assertTrue(deflection <= Router.MAX_TURN_DEG, "излом " + deflection + "° в вершине " + i + ": " + route.getGeometry());
         }
         double clearance = rules.restriction("park").clearanceM(DN) + halfWidth;
-        assertTrue(route.getGeometry().distance(park) >= clearance, "расстояние " + route.getGeometry().distance(park));
-        assertTrue(route.getLength() < 0.9 * (2 * (20 + clearance) + 140), "длина " + route.getLength());
+        assertTrue(route.getGeometry().distance(wall) >= clearance - 1e-6, "расстояние " + route.getGeometry().distance(wall));
     }
 
     @Test
@@ -98,15 +97,11 @@ class RouterTest {
         Coordinate beforeTie = coords[coords.length - 2];
         assertEquals(0, tie.distance(new Coordinate(0, 0)), EPS);
         assertTrue(Math.abs(beforeTie.y) > 1, "отрезок у врезки идёт по трубе: " + route.getGeometry());
-        for (int i = 1; i + 1 < coords.length; i++) {
-            double deflection = 180 - Math.toDegrees(Angle.angleBetween(coords[i - 1], coords[i], coords[i + 1]));
-            assertEquals(1, rules.kTurn(deflection), EPS, "излом " + deflection + "° в вершине " + i + ": " + route.getGeometry());
-        }
     }
 
     @Test
     void pointRestrictionsAreBypassedWithTheirClearance() {
-        // Точка railway, у которого правило special, тоже обходится: пересечь точку специальным участком нельзя.
+        // Точка неизвестного типа и точка railway обходятся с отступом своего правила.
         List<Restriction> restrictions = List.of(new Restriction("pls-1", point(0, 0), "power_line_support"),
                 new Restriction("rw-1", point(40, 1), "railway"), new Restriction("x-1", rect(-45, -3, -41, 3), "depot_xyz"));
         Router router = router(restrictions, List.of());
@@ -205,17 +200,17 @@ class RouterTest {
 
     @Test
     void graphNodeNearLineCrossingCarriesSpecialPartBeforeIt() {
-        // узел в 2 м от оси: отсчёт margin_m 3 м от пересечения продолжается за узел ещё на 1 м
-        Router router = router(List.of(new Restriction("rw-1", line(-100, 0, 100, 0), "railway")), List.of());
-        RestrictionRule rule = rules.restriction("railway");
-        Coordinate node = new Coordinate(0, -2);
+        // узел в 1 м от оси газопровода: отсчёт margin_m 2 м от пересечения продолжается за узел ещё на 1 м
+        Router router = router(List.of(new Restriction("gas-1", line(-100, 0, 100, 0), "gas_pipeline")), List.of());
+        RestrictionRule rule = rules.restriction("gas_pipeline");
+        Coordinate node = new Coordinate(0, -1);
         Coordinate far = new Coordinate(0, 40);
 
         double asPathEnd = router.obstacles().edgeWeight(node, far, Set.of());
         double asNode = router.obstacles().edgeWeight(node, far, Set.of(), true, false);
 
-        assertEquals(42 + (rule.getKSpecial() - 1) * 5, asPathEnd, EPS);
-        assertEquals((rule.getKSpecial() - 1) * (rule.getMarginM() - 2), asNode - asPathEnd, EPS);
+        assertEquals(41 + (rule.getKSpecial() - 1) * 3, asPathEnd, EPS);
+        assertEquals((rule.getKSpecial() - 1) * (rule.getMarginM() - 1), asNode - asPathEnd, EPS);
     }
 
     @Test
@@ -344,7 +339,7 @@ class RouterTest {
     }
 
     private static InputData input(List<Restriction> restrictions, List<NetworkSegment> segments) {
-        return new InputData(null, segments, List.of(), List.of(), List.of(), List.of(), restrictions, List.of(), List.of());
+        return new InputData(null, segments, List.of(), List.of(), List.of(), List.of(), restrictions, List.of(), List.of(), Set.of());
     }
 
     private Geometry rect(double minX, double minY, double maxX, double maxY) {

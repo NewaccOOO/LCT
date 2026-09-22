@@ -40,15 +40,15 @@ public final class ObstacleIndex {
         insert(segments, input.getSegments(), NetworkSegment::getGeometry, reach);
     }
 
-    List<ExistingOks> existingOks(Envelope area) {
+    public List<ExistingOks> existingOks(Envelope area) {
         return near(existingOks, input.getExistingOks(), area);
     }
 
-    List<Restriction> restrictions(Envelope area) {
+    public List<Restriction> restrictions(Envelope area) {
         return near(restrictions, input.getRestrictions(), area);
     }
 
-    List<NetworkSegment> segments(Envelope area) {
+    public List<NetworkSegment> segments(Envelope area) {
         return near(segments, input.getSegments(), area);
     }
 

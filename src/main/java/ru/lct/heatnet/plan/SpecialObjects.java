@@ -223,6 +223,15 @@ final class SpecialObjects {
         };
     }
 
+    /** Объекты, чья рамка пересекает envelope. */
+    List<Special> within(Envelope envelope) {
+        List<Special> result = new ArrayList<>();
+        for (Object item : index.query(envelope)) {
+            result.add((Special) item);
+        }
+        return result;
+    }
+
     /** Объекты, до которых от геометрии может не хватить отступа для диаметра dn. */
     List<Special> around(Geometry geometry, int dn) {
         Envelope envelope = new Envelope(geometry.getEnvelopeInternal());

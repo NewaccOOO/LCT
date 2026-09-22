@@ -35,10 +35,9 @@ import ru.lct.heatnet.rules.RestrictionRule;
 import ru.lct.heatnet.rules.Rules;
 
 /**
- * Дополнительные критерии варианта сверх формулы S: какие объекты пересечены спецпереходами, сколько поворотов
- * и нестандартных углов, сколько стоит надбавка за спецпереходы и углы, удельная стоимость подключения. Идут в
- * сводку API и в файл рядом с выходом CLI; в выходной GeoJSON не пишутся, пока организаторы не ответили, можно ли
- * расширять его атрибуты.
+ * Дополнительные критерии варианта сверх формулы S: какие объекты пересечены спецпереходами, сколько поворотов и
+ * самый крутой из них, сколько стоит надбавка за спецпереходы, удельная стоимость подключения. Идут в сводку API и
+ * в файл рядом с выходом CLI; в выходной GeoJSON не пишутся.
  */
 public final class VariantCriteria {
     private static final double MIN_TURN_DEG = 3;
@@ -47,15 +46,21 @@ public final class VariantCriteria {
     private static final String OKS_EXISTING = "oks_existing";
     // ponytail: замкнутость ищется среди зон в этом радиусе; кольцо шире даст причину no_route вместо enclosed
     private static final double ENCLOSURE_RADIUS_M = 2000;
+    /** Больше стольких причин на вариант не считается: на городе неподключённых десятки тысяч, причина на каждую — секунды. */
+    private static final int MAX_REASONS = 1000;
 
     private final InputData input;
     private final Rules rules;
     private final STRtree crossable = new STRtree();
+    /** Существующая сеть: точка дальше предельной длины наибольшего ДУ от неё недостижима при любом диаметре. */
+    private final STRtree network = new STRtree();
+    private final double reachM;
     private final Map<String, Map<String, Object>> reasons = new HashMap<>();
-    private final Set<String> overCapacity;
     // точка подключения и расход по ОКС: строятся при первой причине, линейный поиск на городе был O(n²)
     private Map<String, ConnectionPoint> connectionByOks;
     private Map<String, Double> flowByOks;
+    /** Зоны запрета по рамке: здания и запретные ограничения; строится при первой причине. */
+    private STRtree forbidIndex;
 
     /** Объект, который новая сеть может пересечь спецпереходом. */
     private static final class Crossable {
@@ -69,14 +74,8 @@ public final class VariantCriteria {
     }
 
     public VariantCriteria(InputData input, Rules rules) {
-        this(input, rules, Set.of());
-    }
-
-    /** overCapacity — ОКС сверх пропускной способности сети: причина у них одна, в критериях только их число. */
-    public VariantCriteria(InputData input, Rules rules, Set<String> overCapacity) {
         this.input = input;
         this.rules = rules;
-        this.overCapacity = overCapacity;
         for (Restriction restriction : input.getRestrictions()) {
             Geometry geometry = restriction.getGeometry();
             if (!rules.restriction(restriction.getType()).forbid() && geometry.getDimension() > 0) {
@@ -85,8 +84,12 @@ public final class VariantCriteria {
         }
         for (NetworkSegment segment : input.getSegments()) {
             crossable.insert(segment.getGeometry().getEnvelopeInternal(), new Crossable(HEAT_NETWORK, segment.getGeometry()));
+            network.insert(segment.getGeometry().getEnvelopeInternal(), segment.getGeometry());
         }
+        input.getChambers().forEach(chamber -> network.insert(chamber.getGeometry().getEnvelopeInternal(), chamber.getGeometry()));
         crossable.build();
+        network.build();
+        reachM = rules.diameters().get(rules.diameters().size() - 1).getMaxLengthM();
     }
 
     /** Критерии варианта в порядке вывода; деньги и длины до копеек и сантиметров. */
@@ -116,7 +119,7 @@ public final class VariantCriteria {
             crossedByType.merge(object.type, 1, Integer::sum);
         }
 
-        int[] turns = turns(variant);
+        double[] turns = turns(variant);
         Set<String> unconnected = new HashSet<>(summary.getUnconnectedOksIds());
         int connected = 0;
         double connectedFlow = 0;
@@ -132,27 +135,34 @@ public final class VariantCriteria {
         result.put("connected_oks", connected);
         result.put("connected_flow_tph", scaled(connectedFlow, 3));
         List<Map<String, Object>> unconnectedReasons = new ArrayList<>();
+        int beyondReach = 0;
+        int withoutReason = 0;
         for (String oksId : summary.getUnconnectedOksIds()) {
-            if (!overCapacity.contains(oksId)) {
+            if (beyondReach(oksId)) {
+                beyondReach++;
+            } else if (unconnectedReasons.size() < MAX_REASONS) {
                 unconnectedReasons.add(reasons.computeIfAbsent(oksId, this::reason));
+            } else {
+                withoutReason++;
             }
         }
         result.put("unconnected_reasons", unconnectedReasons);
-        if (!overCapacity.isEmpty()) {
-            result.put("over_capacity_oks", overCapacity.size());
+        if (beyondReach > 0) {
+            // на городе таких миллионы: причина у них одна, в списке их нет
+            result.put("beyond_reach_oks", beyondReach);
         }
-        result.put("tie_ins", variant.getTieIns().size());
+        if (withoutReason > 0) {
+            result.put("unconnected_without_reason", withoutReason);
+        }
+        result.put("existing_chamber_tie_ins", summary.getExistingChamberTieInCount());
         result.put("new_chambers", variant.getChambers().size());
         result.put("technical_nodes", variant.getNodes().size());
-        result.put("chamber_reconstructions", variant.getChamberReconstructions().size());
         result.put("special_segments", specialSegments);
         result.put("special_length_m", scaled(specialLength, 2));
         result.put("crossed_objects", crossedByType);
-        result.put("turns", turns[0]);
-        result.put("nonstandard_turns", turns[1]);
+        result.put("turns", (int) turns[0]);
+        result.put("max_turn_deg", scaled(turns[1], 1));
         result.put("surcharge_cost", scaled(surcharge, 2));
-        result.put("reconstruction_share", summary.getLength() > 0
-                ? scaled(summary.getReconstructionLength() / summary.getLength(), 3) : scaled(0, 3));
         result.put("cost_per_oks", connected > 0 ? scaled(costWithoutPenalty / connected, 2) : null);
         result.put("cost_per_tph", connectedFlow > 0 ? scaled(costWithoutPenalty / connectedFlow, 2) : null);
         return result;
@@ -160,9 +170,9 @@ public final class VariantCriteria {
 
     /**
      * Повороты новой сети: вершины внутри участков и стыки участков в технических узлах с отклонением от 3°.
-     * В камерах, врезках и точках подключения отвода нет. Второй элемент — сколько из них не 45° и не 90°.
+     * В камерах и точках подключения отвода нет. Второй элемент — самый крутой поворот в градусах.
      */
-    private int[] turns(Variant variant) {
+    private double[] turns(Variant variant) {
         Set<String> technical = new HashSet<>();
         for (TechnicalNode node : variant.getNodes()) {
             technical.add(node.getId());
@@ -172,7 +182,7 @@ public final class VariantCriteria {
             incoming.put(segment.getEndNodeId(), segment);
         }
         int all = 0;
-        int nonstandard = 0;
+        double steepest = 0;
         for (NewSegment segment : variant.getSegments()) {
             Coordinate[] coords = segment.getGeometry().getCoordinates();
             List<Double> bends = new ArrayList<>();
@@ -187,13 +197,29 @@ public final class VariantCriteria {
             for (double bend : bends) {
                 if (bend >= MIN_TURN_DEG) {
                     all++;
-                    if (rules.kTurn(bend) > 1) {
-                        nonstandard++;
-                    }
+                    steepest = Math.max(steepest, bend);
                 }
             }
         }
-        return new int[] {all, nonstandard};
+        return new double[] {all, steepest};
+    }
+
+    /** Точка подключения дальше предельной длины наибольшего ДУ от сети: ни один путь не уложится в предел. */
+    private boolean beyondReach(String oksId) {
+        if (connectionByOks == null) {
+            connectionByOks = new HashMap<>();
+            input.getConnectionPoints().forEach(c -> connectionByOks.putIfAbsent(c.getOksId(), c));
+            flowByOks = new HashMap<>();
+            input.getFutureOks().forEach(o -> flowByOks.putIfAbsent(o.getId(), o.getFlowTph()));
+        }
+        ConnectionPoint connection = connectionByOks.get(oksId);
+        if (connection == null || network.size() == 0) {
+            return false;
+        }
+        Point point = connection.getGeometry();
+        Object nearest = network.nearestNeighbour(point.getEnvelopeInternal(), point,
+                (a, b) -> ((Geometry) a.getItem()).distance((Geometry) b.getItem()));
+        return ((Geometry) nearest).distance(point) > reachM;
     }
 
     /**
@@ -224,21 +250,40 @@ public final class VariantCriteria {
         around.expandBy(ENCLOSURE_RADIUS_M);
         Map<String, Geometry> zones = new LinkedHashMap<>();
         double halfWidth = diameter.getWidthM() / 2;
-        for (ExistingOks oks : input.getExistingOks()) {
-            double distance = rules.restriction(OKS_EXISTING).clearanceM(diameter.getDn()) + halfWidth;
-            addZone(zones, oks.getId(), oks.getGeometry(), distance, around);
+        // своё здание точке не мешает: к ней ведёт финальный прямой участок без отступа (приложение 18.09, п. 2.2)
+        Geometry own = input.getFutureOks().stream().filter(o -> o.getId().equals(oksId)).map(FutureOks::getGeometry)
+                .findFirst().orElse(null);
+        if (forbidIndex == null) {
+            forbidIndex = new STRtree();
+            for (ExistingOks oks : input.getExistingOks()) {
+                forbidIndex.insert(oks.getGeometry().getEnvelopeInternal(), oks);
+            }
+            for (Restriction restriction : input.getRestrictions()) {
+                RestrictionRule rule = rules.restriction(restriction.getType());
+                if (rule.forbid() || restriction.getGeometry().getDimension() == 0) {
+                    forbidIndex.insert(restriction.getGeometry().getEnvelopeInternal(), restriction);
+                }
+            }
+            forbidIndex.build();
         }
-        for (Restriction restriction : input.getRestrictions()) {
-            RestrictionRule rule = rules.restriction(restriction.getType());
-            Geometry geometry = restriction.getGeometry();
-            if (!rule.forbid() && geometry.getDimension() > 0) {
-                continue;
+        for (Object item : forbidIndex.query(around)) {
+            if (item instanceof ExistingOks) {
+                ExistingOks oks = (ExistingOks) item;
+                if (oks.getGeometry() == own) {
+                    continue;
+                }
+                double distance = rules.restriction(OKS_EXISTING).clearanceM(diameter.getDn()) + halfWidth;
+                addZone(zones, oks.getId(), oks.getGeometry(), distance, around);
+            } else {
+                Restriction restriction = (Restriction) item;
+                RestrictionRule rule = rules.restriction(restriction.getType());
+                Geometry geometry = restriction.getGeometry();
+                double distance = rule.clearanceM(diameter.getDn()) + halfWidth;
+                if (geometry.getDimension() == 1 && rule.getHalfWidthM() != null) {
+                    distance += rule.getHalfWidthM();
+                }
+                addZone(zones, restriction.getId(), geometry, distance, around);
             }
-            double distance = rule.clearanceM(diameter.getDn()) + halfWidth;
-            if (geometry.getDimension() == 1 && rule.getHalfWidthM() != null) {
-                distance += rule.getHalfWidthM();
-            }
-            addZone(zones, restriction.getId(), geometry, distance, around);
         }
 
         List<String> inside = new ArrayList<>();
@@ -248,7 +293,8 @@ public final class VariantCriteria {
             }
         });
         if (!inside.isEmpty()) {
-            return reason(oksId, "inside_forbidden_zone", "точка подключения внутри запретной зоны с учётом отступа", inside);
+            return reason(oksId, "inside_forbidden_zone", "точка подключения внутри запретной зоны с учётом отступа: "
+                    + "финальный прямой участок из своего здания упирается в чужую зону", inside);
         }
         if (!zones.isEmpty()) {
             Geometry union = UnaryUnionOp.union(zones.values());

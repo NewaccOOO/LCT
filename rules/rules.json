@@ -26,10 +26,8 @@
     {"dn_min": 1200, "dn_max": 1400, "cost": 12000000}
   ],
   "tie_in_cost": 5000000,
-  "existing_flow": {"share": 0.0, "_comment": "текущий расход участка без flow_tph: cap(Ду-1) + share × (cap(Ду) − cap(Ду-1)), docs/interpretation.md"},
   "chamber_rule": {"max_dist_m": 10, "max_segments": 4, "max_branches": 3},
   "penalty": {"fixed": 100000000, "per_tph": 500000},
-  "turn": {"k_nonstandard": 1.5, "standard_deg": [45, 90], "tolerance_deg": 1.0, "limit_per_obstacle": 3, "limit_base": 6, "_comment": "протокол 16.09.2026 п. 9: участок с изломом не 45° и не 90° дороже в полтора раза; поворотов на пути от врезки до ОКС не больше limit_per_obstacle × k + limit_base, docs/interpretation.md"},
   "score": {"cost_base": 25000000, "length_base_m": 100, "w_cost": 0.7, "w_length": 0.3},
   "restrictions": {
     "oks_existing": {"rule": "forbid", "clearance_m": [{"dn_max": 400, "m": 5}, {"dn_max": 800, "m": 7}, {"dn_max": 1400, "m": 9}], "_comment": "dn_max включительно: DN500 попадает во второй диапазон, 7 м"},
@@ -43,7 +41,7 @@
     "power_cable": {"rule": "special", "clearance_m": 2.0, "margin_m": 2, "k_special": 1.15, "half_width_m": 0.1},
     "heat_network": {"rule": "special", "clearance_m": 1.0, "margin_m": 2, "k_special": 1.05},
     "metro": {"rule": "forbid", "clearance_m": 10.0},
-    "railway": {"rule": "special", "clearance_m": 1.5, "min_angle_deg": 45, "margin_m": 3.0, "k_special": 1.75},
+    "railway": {"rule": "forbid", "clearance_m": 1.0},
     "water_supply": {"rule": "special", "clearance_m": 1.5, "margin_m": 2.0, "k_special": 1.10, "half_width_m": 0.0},
     "sewer": {"rule": "special", "clearance_m": 1.0, "margin_m": 2.0, "k_special": 1.10, "half_width_m": 0.0},
     "power_line_support": {"rule": "forbid", "clearance_m": 2.0},

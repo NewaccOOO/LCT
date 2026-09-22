@@ -2,6 +2,9 @@ package ru.lct.heatnet.plan;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -10,23 +13,32 @@ import java.util.Set;
 import org.locationtech.jts.algorithm.Angle;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
+import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineSegment;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.linearref.LengthIndexedLine;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import ru.lct.heatnet.graph.ObstacleSet;
 import ru.lct.heatnet.graph.Route;
 import ru.lct.heatnet.graph.Router;
 import ru.lct.heatnet.graph.SpecialSpan;
 import ru.lct.heatnet.model.ConnectionPoint;
+import ru.lct.heatnet.model.ExistingOks;
 
 /**
  * Дерево одной врезки эвристикой Такахаши–Мацуямы (D-10): на каждом шаге присоединяется ОКС с самым лёгким
  * маршрутом до уже построенного дерева. Маршрут обрезается в первой точке касания дерева со стороны ОКС, там
  * ставится камера ветвления; если в узле нет места, ответвление переносится на соседнюю точку ствола.
+ *
+ * <p>Точка подключения внутри полигона ОКС достижима только финальным прямым участком от ближайшей границы полигона
+ * (приложение 18.09, п. 2.2): маршрут ищется от точки выхода на луче «точка → ближайшая граница» сразу за зоной
+ * отступа, а сам участок точка–выход проверяется без отступа к своему полигону, см. {@link Run#portal}.
  */
 final class TreeBuilder {
+    private static final Logger log = LoggerFactory.getLogger(TreeBuilder.class);
     /** Подотрезок и расстояние между узлами не короче метра (правило geometry). */
     static final double MIN_PIECE_M = 1.0;
     static final double MIN_TURN_DEG = 3.0;
@@ -37,13 +49,20 @@ final class TreeBuilder {
     private static final double SAMPLE_STEP_M = 10;
     private static final double CONNECTION_GAP_M = 3;
     private static final double[] SHIFTS_M = {3, 6, 12, 24};
-    /** Сколько целей маршрута перебирается, пока путь через дерево не уложится в правило поворотов. */
-    private static final int TURN_RETRIES = 8;
+    /** Точка выхода стоит за зоной отступа своего ОКС на столько, чтобы не лечь на её упрощённую границу. */
+    private static final double PORTAL_EXTRA_M = 0.3;
+    /** Шаг и предел удлинения финального участка, пока выход лежит в чужой зоне запрета. */
+    private static final double PORTAL_STEP_M = 0.5;
+    private static final double PORTAL_MAX_M = 30;
+    /** Сколько точек границы пробуется как начало финального участка: ближайшая, затем ближайшие точки сторон. */
+    private static final int PORTAL_TRIES = 8;
+    private static final Coordinate[] NO_PORTAL = new Coordinate[0];
 
     private final int nodeLimit;
     private final Map<String, LineString> networkById;
     private final SpecialObjects specials;
-    private final TurnRule turnRule;
+    /** Полигон ОКС, в котором лежит точка подключения, по id точки; точки вне полигонов в карте нет. */
+    private final Map<String, ExistingOks> buildingByConnection;
     private final GeometryFactory factory = new GeometryFactory();
 
     /** Место присоединения ветки: узел дерева или точка на ребре. */
@@ -90,11 +109,12 @@ final class TreeBuilder {
         }
     }
 
-    TreeBuilder(int nodeLimit, Map<String, LineString> networkById, SpecialObjects specials, TurnRule turnRule) {
+    TreeBuilder(int nodeLimit, Map<String, LineString> networkById, SpecialObjects specials,
+            Map<String, ExistingOks> buildingByConnection) {
         this.nodeLimit = nodeLimit;
         this.networkById = networkById;
         this.specials = specials;
-        this.turnRule = turnRule;
+        this.buildingByConnection = buildingByConnection;
     }
 
     /**
@@ -116,57 +136,6 @@ final class TreeBuilder {
         return new Run(router, dn, area, tie, chamberPenaltyM, tieInPenaltyM).build(connections);
     }
 
-    /**
-     * Пересадка дерева на другую врезку: ребро от старой врезки заменяется маршрутом от {@code tie} до конца этого
-     * ребра, остальные рёбра не меняются. Построение заново от дальней врезки даёт другое дерево, обычно хуже, а
-     * выигрыш врезки выше реконструкции — в одном стволе. null, если у старой врезки не одно ребро, маршрута нет,
-     * он выходит из area, идёт вдоль трубы врезки или касается других рёбер дерева. Отступы, повороты и форму
-     * участков проверяет сборка.
-     */
-    Tree retied(Router router, int dn, Envelope area, Tree tree, TieCandidate tie) {
-        Tree.Edge first = null;
-        for (Tree.Edge edge : tree.edges) {
-            if (edge.from == tree.root) {
-                if (first != null) {
-                    return null;
-                }
-                first = edge;
-            }
-        }
-        if (first == null) {
-            return null;
-        }
-        Route route = router.route(factory.createPoint(first.to.point), tie.getPoint(), tie.getIgnored());
-        if (route == null) {
-            return null;
-        }
-        LineString trunk = (LineString) route.getGeometry().reverse();
-        Coordinate[] coords = trunk.getCoordinates();
-        for (Coordinate c : coords) {
-            if (!area.contains(c)) {
-                return null;
-            }
-        }
-        Run run = new Run(router, dn, area, tie, 0, 0);
-        if (coords.length < 2 || !run.leavesNetwork(new LineSegment(coords[1], coords[0]))) {
-            return null;
-        }
-        LineString clipped = (LineString) new LengthIndexedLine(trunk).extractLine(0, trunk.getLength() - JUNCTION_CLIP_M);
-        Tree result = run.tree;
-        result.edges.add(new Tree.Edge(result.root, first.to, trunk));
-        for (Tree.Edge edge : tree.edges) {
-            if (edge == first) {
-                continue;
-            }
-            if (edge.line.distance(clipped) <= APART_M) {
-                return null;
-            }
-            result.edges.add(edge);
-        }
-        result.unconnected.addAll(tree.unconnected);
-        return result;
-    }
-
     private final class Run {
         final Router router;
         final ObstacleSet obstacles;
@@ -180,6 +149,8 @@ final class TreeBuilder {
         // для каждого оставшегося ОКС
         final Map<Tree.Edge, List<SpecialSpan>> spansByEdge = new IdentityHashMap<>();
         final Map<Tree.Edge, List<Point>> targetsByEdge = new IdentityHashMap<>();
+        /** Точка выхода по id точки подключения: {выход}, NO_PORTAL — выхода нет, null — точка не в полигоне. */
+        final Map<String, Coordinate[]> portalByConnection = new HashMap<>();
 
         Run(Router router, int dn, Envelope area, TieCandidate tie, double chamberPenaltyM, double tieInPenaltyM) {
             this.router = router;
@@ -212,71 +183,132 @@ final class TreeBuilder {
             return tree;
         }
 
-        /**
-         * Лучшее присоединение по весу маршрута. Если путь от врезки через ствол к ОКС нарушает правило поворотов,
-         * пробуется прямая ветка к врезке: у неё повороты только свои. Иначе остаётся первое присоединение, и сборка
-         * отбросит дерево сама.
-         */
         Attach attach(ConnectionPoint connection) {
-            List<Point> targets = targets();
-            Attach best = attach(connection, targets);
-            Attach first = best;
-            for (int retry = 0; best != null && !turnsOk(best, connection) && retry < TURN_RETRIES; retry++) {
-                // цель, к которой пришёл маршрут, убирается, и маршрут ищется к следующей по весу
-                Coordinate end = best.target;
-                targets.removeIf(target -> target.getCoordinate().distance(end) <= TOUCH_M);
-                best = attach(connection, targets);
+            return attach(connection, targets());
+        }
+
+        /**
+         * Точка выхода финального прямого участка из своего ОКС: на луче от точки подключения через ближайшую точку
+         * границы полигона, сразу за зоной отступа, дальше, пока выход лежит в чужой зоне запрета. Если участок до
+         * такого выхода недопустим, пробуются ближайшие точки других сторон полигона. NO_PORTAL — выхода нет,
+         * null — точка не в полигоне, маршрут идёт от неё самой.
+         */
+        Coordinate[] portal(ConnectionPoint connection) {
+            ExistingOks building = buildingByConnection.get(connection.getId());
+            if (building == null) {
+                return null;
             }
-            return best != null && turnsOk(best, connection) ? best : first;
-        }
-
-        boolean turnsOk(Attach attach, ConnectionPoint connection) {
-            return TurnRule.turns(pathThrough(attach)) <= turnRule.allowed(tree.root.point, connection.getGeometry().getCoordinate());
-        }
-
-        /** Координаты пути от врезки по дереву до места присоединения и дальше по ветке к ОКС. */
-        List<Coordinate> pathThrough(Attach attach) {
-            List<Coordinate> path = new ArrayList<>();
-            Spot spot = attach.spot;
-            Tree.Node node = spot.node != null ? spot.node : spot.edge.from;
-            List<Tree.Edge> chain = new ArrayList<>();
-            while (node != tree.root) {
-                Tree.Edge incoming = null;
-                for (Tree.Edge edge : tree.edges) {
-                    if (edge.to == node) {
-                        incoming = edge;
+            return portalByConnection.computeIfAbsent(connection.getId(), id -> {
+                Coordinate cp = connection.getGeometry().getCoordinate();
+                // сначала внешние контуры: ближайшая граница двора (дырки) ведёт внутрь зоны отступа, выхода там нет
+                List<Coordinate> anchors = anchors(building.getGeometry(), cp);
+                Set<String> own = new HashSet<>(ignored);
+                own.add(building.getId());
+                Coordinate centroid = building.getGeometry().getCentroid().getCoordinate();
+                int tries = 0;
+                Coordinate last = null;
+                for (Coordinate anchor : anchors) {
+                    if (last != null && anchor.distance(last) < MIN_PIECE_M) {
+                        continue;
                     }
+                    last = anchor;
+                    if (tries++ >= PORTAL_TRIES) {
+                        break;
+                    }
+                    double dx = anchor.x - cp.x;
+                    double dy = anchor.y - cp.y;
+                    double length = Math.hypot(dx, dy);
+                    if (length < 1e-6) {
+                        dx = cp.x - centroid.x;
+                        dy = cp.y - centroid.y;
+                        length = Math.hypot(dx, dy);
+                        if (length < 1e-6) {
+                            continue;
+                        }
+                    }
+                    dx /= length;
+                    dy /= length;
+                    double along = cp.distance(anchor) + obstacles.oksClearance() + PORTAL_EXTRA_M;
+                    Coordinate exit = new Coordinate(cp.x + dx * along, cp.y + dy * along);
+                    for (double extra = 0; obstacles.insideForbid(exit) && extra < PORTAL_MAX_M; extra += PORTAL_STEP_M) {
+                        exit = new Coordinate(cp.x + dx * (along + extra), cp.y + dy * (along + extra));
+                    }
+                    boolean inForbid = obstacles.insideForbid(exit);
+                    boolean inArea = area.contains(exit);
+                    double weight = inForbid || !inArea ? Double.NaN : obstacles.edgeWeight(cp, exit, own);
+                    if (!Double.isNaN(weight)) {
+                        if (tries > 1) {
+                            log.debug("portal: {} anchor {} of {}", connection.getId(), tries, anchors.size());
+                        }
+                        return new Coordinate[] {exit};
+                    }
+                    log.debug("portal: {} anchor {} rejected: forbid={} area={} along={}", connection.getId(), tries,
+                            inForbid, inArea, along);
                 }
-                chain.add(0, incoming);
-                node = incoming.from;
+                return NO_PORTAL;
+            });
+        }
+
+        /** Ближайшие к cp точки сторон полигона по возрастанию расстояния: внешние контуры, затем дырки. */
+        List<Coordinate> anchors(Geometry building, Coordinate cp) {
+            List<Coordinate> shells = new ArrayList<>();
+            List<Coordinate> holes = new ArrayList<>();
+            for (int g = 0; g < building.getNumGeometries(); g++) {
+                org.locationtech.jts.geom.Polygon polygon = (org.locationtech.jts.geom.Polygon) building.getGeometryN(g);
+                closest(polygon.getExteriorRing().getCoordinates(), cp, shells);
+                for (int h = 0; h < polygon.getNumInteriorRing(); h++) {
+                    closest(polygon.getInteriorRingN(h).getCoordinates(), cp, holes);
+                }
             }
-            for (Tree.Edge edge : chain) {
-                path.addAll(Arrays.asList(edge.line.getCoordinates()));
+            shells.sort(Comparator.comparingDouble(cp::distance));
+            holes.sort(Comparator.comparingDouble(cp::distance));
+            shells.addAll(holes);
+            return shells;
+        }
+
+        void closest(Coordinate[] ring, Coordinate cp, List<Coordinate> out) {
+            for (int k = 0; k + 1 < ring.length; k++) {
+                out.add(new LineSegment(ring[k], ring[k + 1]).closestPoint(cp));
             }
-            if (spot.edge != null) {
-                path.addAll(Arrays.asList(new LengthIndexedLine(spot.edge.line).extractLine(0, spot.position).getCoordinates()));
-                path.add(spot.point);
+        }
+
+        /** Объекты, которые не проверяются у первого отрезка ветки: у финального участка — ещё и свой полигон ОКС. */
+        Set<String> firstIgnored(ConnectionPoint connection) {
+            ExistingOks building = buildingByConnection.get(connection.getId());
+            if (building == null) {
+                return ignored;
             }
-            for (int i = attach.branch.length - 1; i >= 0; i--) {
-                path.add(attach.branch[i]);
-            }
-            return path;
+            Set<String> own = new HashSet<>(ignored);
+            own.add(building.getId());
+            return own;
         }
 
         Attach attach(ConnectionPoint connection, List<Point> targets) {
             if (targets.isEmpty()) {
                 return null;
             }
-            Route route = router.routeToAny(connection.getGeometry(), targets, ignored);
+            Coordinate[] portal = portal(connection);
+            if (portal == NO_PORTAL) {
+                return null;
+            }
+            Point start = portal == null ? connection.getGeometry() : factory.createPoint(portal[0]);
+            Route route = router.routeToAny(start, targets, ignored);
             if (route == null) {
                 return null;
             }
             Coordinate[] coords = route.getGeometry().getCoordinates();
+            if (portal != null) {
+                Coordinate[] withPortal = new Coordinate[coords.length + 1];
+                withPortal[0] = connection.getGeometry().getCoordinate();
+                System.arraycopy(coords, 0, withPortal, 1, coords.length);
+                coords = withPortal;
+            }
             for (Coordinate c : coords) {
                 if (!area.contains(c)) {
                     return null;
                 }
             }
+            Set<String> firstIgnored = firstIgnored(connection);
             Coordinate target = coords[coords.length - 1];
             List<Piece> pieces = pieces();
             for (int i = 0; i + 1 < coords.length; i++) {
@@ -286,7 +318,7 @@ final class TreeBuilder {
                 }
                 List<Coordinate> head = new ArrayList<>(Arrays.asList(coords).subList(0, i + 1));
                 List<Spot> spots = spots(pieces, touch);
-                Attach direct = attach(connection, head, spots, pieces, route.getWeight(), target);
+                Attach direct = attach(connection, head, spots, pieces, route.getWeight(), target, firstIgnored);
                 double length = coords[i].distance(coords[i + 1]);
                 if (direct != null || length == 0) {
                     // отрезок нулевой длины: точка подключения лежит на дереве, обойти касание не из чего
@@ -300,7 +332,7 @@ final class TreeBuilder {
                     for (int side : new int[] {1, -1}) {
                         List<Coordinate> around = new ArrayList<>(head);
                         around.add(new Coordinate(touch.x + side * shift * nx, touch.y + side * shift * ny));
-                        Attach aside = attach(connection, around, spots, pieces, route.getWeight(), target);
+                        Attach aside = attach(connection, around, spots, pieces, route.getWeight(), target, firstIgnored);
                         if (aside != null) {
                             return aside;
                         }
@@ -312,10 +344,10 @@ final class TreeBuilder {
         }
 
         Attach attach(ConnectionPoint connection, List<Coordinate> head, List<Spot> spots, List<Piece> pieces, double weight,
-                Coordinate target) {
+                Coordinate target, Set<String> firstIgnored) {
             for (Spot spot : spots) {
                 Coordinate[] branch = branch(head, spot.point);
-                if (branch != null && valid(branch, pieces, spot)) {
+                if (branch != null && valid(branch, pieces, spot, firstIgnored)) {
                     return new Attach(connection, branch, spot, weight, target);
                 }
             }
@@ -458,7 +490,7 @@ final class TreeBuilder {
         /**
          * Камера ветвления на ребре: не ближе метра к узлам и вершинам, не в специальной части и не в зоне сближения
          * с объектом специального прохода (узел там лишил бы участок права на отступ через специальный участок),
-         * не у точки подключения.
+         * не у точки подключения и не в зоне запрета (на финальном участке в свой ОКС).
          */
         boolean allowed(Tree.Edge edge, double position, List<SpecialSpan> spans) {
             double length = edge.line.getLength();
@@ -479,7 +511,8 @@ final class TreeBuilder {
                     return false;
                 }
             }
-            return !specials.near(new LengthIndexedLine(edge.line).extractPoint(position), dn);
+            Coordinate at = new LengthIndexedLine(edge.line).extractPoint(position);
+            return !specials.near(at, dn) && !obstacles.insideForbid(at);
         }
 
         Coordinate[] branch(List<Coordinate> head, Coordinate end) {
@@ -495,9 +528,14 @@ final class TreeBuilder {
             return coords.toArray(new Coordinate[0]);
         }
 
-        boolean valid(Coordinate[] branch, List<Piece> pieces, Spot spot) {
+        boolean valid(Coordinate[] branch, List<Piece> pieces, Spot spot, Set<String> firstIgnored) {
             for (int i = 0; i + 1 < branch.length; i++) {
-                if (Double.isNaN(obstacles.edgeWeight(branch[i], branch[i + 1], ignored))) {
+                if (Double.isNaN(obstacles.edgeWeight(branch[i], branch[i + 1], i == 0 ? firstIgnored : ignored))) {
+                    return false;
+                }
+            }
+            for (int i = 1; i + 1 < branch.length; i++) {
+                if (deflectionDeg(branch[i - 1], branch[i], branch[i + 1]) > Router.MAX_TURN_DEG) {
                     return false;
                 }
             }

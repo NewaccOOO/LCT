@@ -137,7 +137,7 @@ class JobApiIT {
         assertEquals("1.946", summary.get(0).get("score").decimalValue().toPlainString());
         assertTrue(summary.get(0).has("unconnected_oks_ids"));
         JsonNode criteria = summary.get(0).get("criteria");
-        assertEquals(0, criteria.get("tie_ins").asInt());
+        assertEquals(1, criteria.get("existing_chamber_tie_ins").asInt());
         assertTrue(criteria.get("crossed_objects").isObject());
         assertTrue(criteria.has("cost_per_oks"));
     }
@@ -309,9 +309,9 @@ class JobApiIT {
     }
 
     private static Result oneVariant() {
-        VariantSummary summary = new VariantSummary("summary_1", "1", 1, 25_000_000, 3_000_000, 5_000_000, 0, 0, 0,
-                33_000_000, 340.5, 0, 340.5, 1.946, List.of());
-        return new Result(List.of(new Variant("1", List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), summary)));
+        VariantSummary summary = new VariantSummary("summary_1", "1", 1, 33_000_000, 3_000_000, 1, 5_000_000, 0,
+                33_000_000, 340.5, 1.946, List.of());
+        return new Result(List.of(new Variant("1", List.of(), List.of(), List.of(), summary)));
     }
 
     private static Path createDataDir() {

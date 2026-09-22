@@ -1,7 +1,6 @@
 package ru.lct.heatnet.plan;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -10,7 +9,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
-import java.util.function.Predicate;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.locationtech.jts.algorithm.Angle;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
@@ -18,67 +17,53 @@ import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineSegment;
 import org.locationtech.jts.geom.LineString;
-import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.index.strtree.STRtree;
 import org.locationtech.jts.linearref.LengthIndexedLine;
 import ru.lct.heatnet.calc.CostCalculator;
 import ru.lct.heatnet.calc.DiameterPlanner;
 import ru.lct.heatnet.calc.FlowCalculator;
-import ru.lct.heatnet.calc.ReconPart;
-import ru.lct.heatnet.calc.ReconstructionCalculator;
-import ru.lct.heatnet.calc.ReconstructionResult;
-import ru.lct.heatnet.calc.SizedPiece;
-import ru.lct.heatnet.calc.TieInLoad;
 import ru.lct.heatnet.calc.TreeEdge;
-import ru.lct.heatnet.model.ChamberReconstruction;
+import ru.lct.heatnet.graph.Router;
 import ru.lct.heatnet.model.ExistingOks;
 import ru.lct.heatnet.model.FutureOks;
 import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.NewChamber;
 import ru.lct.heatnet.model.NewSegment;
-import ru.lct.heatnet.model.Reconstruction;
 import ru.lct.heatnet.model.Restriction;
 import ru.lct.heatnet.model.TechnicalNode;
-import ru.lct.heatnet.model.TieIn;
 import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.model.VariantSummary;
-import ru.lct.heatnet.rules.Diameter;
 import ru.lct.heatnet.rules.Rules;
 
 /**
- * Сборка варианта из деревьев (D-12): расходы, специальные части, диаметры и разрезы, участки с узлами,
- * реконструкция, стоимость и сводка. Специальные части считаются по всей трассе варианта, как в разделе
- * «Уточнения, принятые в валидаторе» docs/interpretation.md: зона линии продолжается через узлы во все ветви,
- * зона дороги — вся связная часть трассы в буфере, пересекающая полигон.
+ * Сборка варианта из деревьев по техническому приложению от 18.09.2026: расходы, специальные части, диаметры,
+ * участки с узлами, камеры врезки, стоимость и сводка. Врезка в трубу — новая камера в точке врезки, врезка в
+ * существующую камеру — участок заканчивается в ней и стоит 5 млн (п. 2.4, 3.2). Специальные части считаются по
+ * всей трассе варианта: зона линии продолжается через узлы во все ветви, зона дороги — вся связная часть трассы в
+ * полосе margin_m, пересекающая полигон.
  */
 final class NetworkAssembler {
     static final String BASE = "base";
     static final String SPECIAL = "special";
-    /** Границы ближе этого сливаются: валидатор считает узлы в 0,05 м одним узлом. */
+    /** Границы ближе этого сливаются: проверка считает узлы в 0,05 м одним узлом. */
     private static final double MERGE_M = 0.08;
-    /** Валидатор расширяет специальную зону на 0,05 м и считает участок в зоне при перекрытии больше 0,1 м. */
+    /** Зона перехода расширяется на 0,05 м, участок считается в зоне при перекрытии больше 0,1 м. */
     private static final double ZONE_TOL_M = 0.05;
     private static final double ZONE_OVERLAP_M = 0.1;
     /**
      * Специальная часть шире зоны на 2 см с каждой стороны: обычный участок между двумя зонами одного объекта иначе
-     * перекрыл бы расширенные зоны ровно на 0,1 м, на границе порога валидатора.
+     * перекрыл бы расширенные зоны ровно на 0,1 м, на границе порога.
      */
     private static final double ZONE_GROW_M = 0.02;
-    /**
-     * Выход округляется до 9 знаков градуса, это около 0,1 мм: подотрезок ровно в метр становится короче метра,
-     * а у подотрезка в доли миллиметра направление, а с ним и излом в вершине, случайны.
-     */
-    private static final double ROUNDING_MARGIN_M = 0.01;
     /** Разрез ближе этого к вершине ребра переносится в вершину; сдвиг вместе с ZONE_GROW_M не выходит за ZONE_TOL_M. */
     private static final double VERTEX_SNAP_M = ZONE_TOL_M - ZONE_GROW_M;
-    private static final double NEAR_STEP_M = 0.5;
     private static final double DIST_EPS_M = 0.001;
     private static final double MIN_TURN_DEG = 3;
-    /** Валидатор склеивает узлы ближе 0,05 м и видит касание участков ближе 0,001 м за вырезом 0,15 м у узла. */
+    /** Узлы ближе 0,05 м считаются одним узлом, касание участков видно ближе 0,001 м за вырезом 0,15 м у узла. */
     private static final double NODE_APART_M = 0.06;
     private static final double TOUCH_APART_M = 0.002;
     private static final double SHARED_CLIP_M = 0.14;
-    /** Валидатор считает участок в зоне при перекрытии больше 0,1 м: специальный кусок короче не распознать. */
+    /** Участок в зоне считается при перекрытии больше 0,1 м: специальный кусок короче не распознать. */
     private static final double MIN_SPECIAL_M = 0.12;
     private static final double MIN_SPLIT_DEG = 30.5;
 
@@ -88,12 +73,17 @@ final class NetworkAssembler {
     private final CostCalculator costs;
     private final DiameterPlanner planner;
     private final Map<String, Double> flowByOks = new HashMap<>();
-    /** ID входа: выходные ID с ними не совпадают (правило schema). */
+    /** ID входа: выходные ID с ними не совпадают. */
     private final Set<String> inputIds = new HashSet<>();
     private final Map<String, Boolean> startsByPrefix = new HashMap<>();
-    /** Полигоны, которые считаются в правиле поворотов: запрещённые, дороги и трамвайные пути. */
-    private final TurnRule turnRule;
     private final GeometryFactory factory = new GeometryFactory();
+
+    /** Счётчики выходных ID; общие на несколько сборок, когда один вариант собирается по частям (город). */
+    static final class Counters {
+        final AtomicInteger segments = new AtomicInteger();
+        final AtomicInteger chambers = new AtomicInteger();
+        final AtomicInteger nodes = new AtomicInteger();
+    }
 
     /** Часть ребра в специальной зоне одного объекта. */
     private static final class Zone {
@@ -109,7 +99,7 @@ final class NetworkAssembler {
             this.special = special;
         }
 
-        /** Перекрытие с частью ребра так, как считает валидатор: зона расширена на ZONE_TOL_M. */
+        /** Перекрытие с частью ребра так, как считает проверка: зона расширена на ZONE_TOL_M. */
         double overlap(double a, double b) {
             return Math.min(b, to + ZONE_TOL_M) - Math.max(a, from - ZONE_TOL_M);
         }
@@ -137,7 +127,7 @@ final class NetworkAssembler {
         }
     }
 
-    NetworkAssembler(InputData input, Rules rules, SpecialObjects specials, TurnRule turnRule) {
+    NetworkAssembler(InputData input, Rules rules, SpecialObjects specials) {
         this.input = input;
         this.rules = rules;
         this.specials = specials;
@@ -157,22 +147,46 @@ final class NetworkAssembler {
         for (Restriction restriction : input.getRestrictions()) {
             inputIds.add(restriction.getId());
         }
-        this.turnRule = turnRule;
     }
 
     private boolean startsInputId(String prefix) {
         // вход города — миллионы ID, а префиксов за расчёт единицы: каждый проверяется один раз
-        return startsByPrefix.computeIfAbsent(prefix, key -> inputIds.stream().anyMatch(id -> id.startsWith(key)));
+        synchronized (startsByPrefix) {
+            return startsByPrefix.computeIfAbsent(prefix, key -> inputIds.stream().anyMatch(id -> id.startsWith(key)));
+        }
     }
 
     /**
-     * Вариант из деревьев; деревья с общей точкой врезки собираются в один узел, у существующей камеры каждое
-     * ребро из неё — своя врезка (протокол 16.09.2026 п. 8). Бросает
-     * {@link IllegalStateException}, если диаметры не разрезаются по предельной длине или собранная сеть нарушает
-     * отступ от объектов специального прохода, число поворотов или форму участков: такое дерево не выдаётся.
+     * Вариант из деревьев; деревья с общей точкой врезки собираются в один узел. Бросает
+     * {@link IllegalStateException}, если диаметры не укладываются в предельную длину или собранная сеть нарушает
+     * отступ от объектов специального прохода, предел поворота или форму участков: такое дерево не выдаётся.
      */
     Variant assemble(String variantId, int rank, List<Tree> trees, List<FutureOks> unconnected) {
-        return new Build(variantId, rank, trees, unconnected).run();
+        return assemble(variantId, rank, trees, unconnected, new Counters());
+    }
+
+    Variant assemble(String variantId, int rank, List<Tree> trees, List<FutureOks> unconnected, Counters counters) {
+        return new Build(variantId, rank, trees, unconnected, counters).run();
+    }
+
+    /** Сводка по частям варианта, собранным отдельно с общими счётчиками. */
+    VariantSummary summary(String variantId, int rank, List<NewSegment> segments, List<NewChamber> chambers,
+            int existingTieIns, List<FutureOks> unconnected) {
+        String summaryId = inputIds.contains("summary_" + variantId) ? prefix(variantId) + "summary" : "summary_" + variantId;
+        VariantSummary draft = costs.summary(summaryId, variantId, segments, chambers, existingTieIns, unconnected);
+        return new VariantSummary(draft.getId(), variantId, rank, draft.getConstructionCost(),
+                draft.getChamberConstructionCost(), draft.getExistingChamberTieInCount(),
+                draft.getExistingChamberTieInCost(), draft.getUnconnectedPenalty(), draft.getCalculatedCost(),
+                draft.getNewNetworkLength(), draft.getScore(), draft.getUnconnectedOksIds());
+    }
+
+    private String prefix(String variantId) {
+        // вход может содержать ID вида v1_seg_1: префикс удлиняется, пока с него не начинается ни один ID входа
+        String free = "v" + variantId + "_";
+        while (startsInputId(free)) {
+            free = "v" + free;
+        }
+        return free;
     }
 
     /** Состояние одной сборки. */
@@ -181,57 +195,58 @@ final class NetworkAssembler {
         final int rank;
         final String prefix;
         final List<FutureOks> unconnected;
+        final Counters counters;
         final Map<String, List<Tree>> units = new LinkedHashMap<>();
         final List<Edge> edges = new ArrayList<>();
+        final Map<String, List<Integer>> edgesByUnit = new HashMap<>();
+        final STRtree edgeIndex = new STRtree();
         final Map<String, List<Integer>> incident = new HashMap<>();
         final Map<String, Double> flowByEdge = new HashMap<>();
-        final Map<String, Double> flowByUnit = new HashMap<>();
-        final Map<String, List<SizedPiece>> piecesByEdge = new HashMap<>();
+        final Map<String, Integer> dnByEdge = new HashMap<>();
         final Map<String, String> nodeIds = new HashMap<>();
-        /** ID врезки по индексу ребра из корня-камеры: каждый луч из существующей камеры — своя врезка. */
-        final Map<Integer, String> tieIdByEdge = new HashMap<>();
+        /** Узлы врезки: новые камеры на трубе и существующие камеры. */
+        final Set<String> tieNodeIds = new HashSet<>();
         final Map<String, Integer> maxDnByNode = new HashMap<>();
         final Map<String, Set<SpecialObjects.Special>> exemptByNode = new HashMap<>();
         final Map<String, NewSegment> incomingByNode = new HashMap<>();
-        final List<TieIn> tieIns = new ArrayList<>();
         final List<NewChamber> chambers = new ArrayList<>();
         final List<TechnicalNode> nodes = new ArrayList<>();
         final List<NewSegment> segments = new ArrayList<>();
-        List<Zone> zones;
+        List<List<Zone>> zonesByEdge;
         List<List<double[]>> specialByEdge;
+        int existingTieIns;
 
-        Build(String variantId, int rank, List<Tree> trees, List<FutureOks> unconnected) {
+        Build(String variantId, int rank, List<Tree> trees, List<FutureOks> unconnected, Counters counters) {
             this.variantId = variantId;
             this.rank = rank;
-            // вход может содержать ID вида v1_seg_1: префикс удлиняется, пока с него не начинается ни один ID входа
-            String free = "v" + variantId + "_";
-            while (startsInputId(free)) {
-                free = "v" + free;
-            }
-            this.prefix = free;
+            this.prefix = prefix(variantId);
             this.unconnected = unconnected;
+            this.counters = counters;
             for (Tree tree : trees) {
                 if (!tree.edges.isEmpty()) {
                     units.computeIfAbsent(tree.root.key, key -> new ArrayList<>()).add(tree);
                 }
             }
-            for (List<Tree> unit : units.values()) {
-                for (Tree tree : unit) {
+            for (Map.Entry<String, List<Tree>> unit : units.entrySet()) {
+                for (Tree tree : unit.getValue()) {
                     for (Tree.Edge source : tree.edges) {
                         Edge edge = new Edge("e" + edges.size(), tree, source);
                         incident.computeIfAbsent(edge.from(), key -> new ArrayList<>()).add(edges.size());
                         incident.computeIfAbsent(edge.to(), key -> new ArrayList<>()).add(edges.size());
+                        edgesByUnit.computeIfAbsent(unit.getKey(), key -> new ArrayList<>()).add(edges.size());
+                        edgeIndex.insert(source.line.getEnvelopeInternal(), edges.size());
                         edges.add(edge);
                     }
                 }
             }
+            edgeIndex.build();
         }
 
         Variant run() {
-            zones = zones();
+            zonesByEdge = zones();
             specialByEdge = mergedZones();
             for (Map.Entry<String, List<Tree>> unit : units.entrySet()) {
-                plan(unit.getKey(), unit.getValue());
+                plan(unit.getKey());
             }
             nameNodes();
             for (int i = 0; i < edges.size(); i++) {
@@ -239,7 +254,6 @@ final class NetworkAssembler {
             }
             checkClearance();
             checkApart();
-            checkTurns();
             checkShape();
             for (Edge edge : edges) {
                 Tree.Node node = edge.source.to;
@@ -249,111 +263,49 @@ final class NetworkAssembler {
                     chambers.add(new NewChamber(id, variantId, factory.createPoint(node.point), dn, costs.chamberCost(dn)));
                 }
             }
-            List<ChamberReconstruction> chamberReconstructions = new ArrayList<>();
-            ReconstructionResult recon = tieIns(chamberReconstructions);
-
-            List<Reconstruction> reconstructions = new ArrayList<>();
-            for (ReconPart part : recon.getParts()) {
-                reconstructions.add(new Reconstruction(prefix + "recon_" + (reconstructions.size() + 1), variantId,
-                        part.getGeometry(), part.getExistingObjectId(), part.getExistingFlowTph(), part.getAddedFlowTph(),
-                        part.getCalculatedFlowTph(), part.getExistingDiameter(), part.getRequiredDiameter(),
-                        part.getLength(), part.getCost()));
+            for (Map.Entry<String, List<Tree>> unit : units.entrySet()) {
+                TieCandidate tie = unit.getValue().get(0).tie;
+                String tieId = nodeIds.get(unit.getKey());
+                if (tie.isChamber()) {
+                    existingTieIns += edgesByUnit.get(unit.getKey()).stream()
+                            .filter(i -> edges.get(i).from().equals(unit.getKey())).count();
+                } else {
+                    // ДУ камеры — наибольший из примыкающих участков, включая обе части разрезанной ею трубы (п. 2.1, 3.2)
+                    int dn = Math.max(maxDnByNode.get(tieId), tie.getExistingDiameter());
+                    chambers.add(new NewChamber(tieId, variantId, tie.getPoint(), dn, costs.chamberCost(dn)));
+                }
             }
-
-            String summaryId = inputIds.contains("summary_" + variantId) ? prefix + "summary" : "summary_" + variantId;
-            VariantSummary draft = costs.summary(summaryId, variantId, segments, chambers, tieIns,
-                    reconstructions, chamberReconstructions, unconnected);
-            VariantSummary summary = new VariantSummary(draft.getId(), variantId, rank, draft.getConstructionCost(),
-                    draft.getChamberConstructionCost(), draft.getTieInCost(), draft.getReconstructionCost(),
-                    draft.getChamberReconstructionCost(), draft.getUnconnectedPenalty(), draft.getCalculatedCost(),
-                    draft.getNewNetworkLength(), draft.getReconstructionLength(), draft.getLength(), draft.getScore(),
-                    draft.getUnconnectedOksIds());
-            return new Variant(variantId, segments, tieIns, reconstructions, chambers, chamberReconstructions, nodes,
-                    summary);
+            VariantSummary summary = summary(variantId, rank, segments, chambers, existingTieIns, unconnected);
+            return new Variant(variantId, segments, chambers, nodes, summary);
         }
 
-        /** Расходы и куски диаметров одного дерева; разрезы запрещены в специальных частях, у вершин и в зонах
-         * сближения, где узел лишил бы соседний участок права на отступ через специальный участок. */
-        void plan(String root, List<Tree> unit) {
+        /** Расходы и диаметры рёбер одного узла врезки. */
+        void plan(String root) {
             List<TreeEdge> treeEdges = new ArrayList<>();
             Map<String, Double> oksFlowByNode = new HashMap<>();
-            for (Edge edge : edges) {
-                if (unit.contains(edge.tree)) {
-                    treeEdges.add(new TreeEdge(edge.id, edge.from(), edge.to(), edge.length));
-                    if (edge.source.to.kind == Tree.Kind.CONNECTION) {
-                        oksFlowByNode.put(edge.to(), flowByOks.getOrDefault(edge.source.to.connection.getOksId(), 0.0));
-                    }
+            for (int i : edgesByUnit.get(root)) {
+                Edge edge = edges.get(i);
+                treeEdges.add(new TreeEdge(edge.id, edge.from(), edge.to(), edge.length));
+                if (edge.source.to.kind == Tree.Kind.CONNECTION) {
+                    oksFlowByNode.put(edge.to(), flowByOks.getOrDefault(edge.source.to.connection.getOksId(), 0.0));
                 }
             }
             Map<String, Double> flows = FlowCalculator.flows(treeEdges, root, oksFlowByNode);
             flowByEdge.putAll(flows);
-            Map<String, List<double[]>> noCut = new HashMap<>();
-            double unitFlow = 0;
-            for (int i = 0; i < edges.size(); i++) {
-                Edge edge = edges.get(i);
-                if (!flows.containsKey(edge.id)) {
-                    continue;
-                }
-                if (edge.from().equals(root)) {
-                    unitFlow += flows.get(edge.id);
-                }
-                List<double[]> intervals = new ArrayList<>(specialByEdge.get(i));
-                for (double vertex : TreeBuilder.vertexPositions(edge.source.line)) {
-                    double gap = TreeBuilder.MIN_PIECE_M + ROUNDING_MARGIN_M;
-                    intervals.add(new double[] {vertex - gap, vertex + gap});
-                }
-                intervals.addAll(nearSpecial(edge, flows.get(edge.id)));
-                noCut.put(edge.id, intervals);
-            }
-            flowByUnit.put(root, unitFlow);
-            for (SizedPiece piece : planner.plan(treeEdges, root, flows, noCut)) {
-                piecesByEdge.computeIfAbsent(piece.getEdgeId(), id -> new ArrayList<>()).add(piece);
-            }
-        }
-
-        /** Интервалы ребра ближе отступа к объектам со специальным проходом для диаметра на ступень выше расхода. */
-        List<double[]> nearSpecial(Edge edge, double flow) {
-            Diameter byFlow = rules.diameterFor(flow);
-            int dn = rules.nextDiameter(byFlow.getDn()) != null ? rules.nextDiameter(byFlow.getDn()).getDn() : byFlow.getDn();
-            LengthIndexedLine indexed = new LengthIndexedLine(edge.source.line);
-            List<double[]> intervals = new ArrayList<>();
-            double[] open = null;
-            Predicate<Coordinate> near = specials.nearAlong(edge.source.line, dn);
-            for (double at = 0; at <= edge.length + NEAR_STEP_M; at += NEAR_STEP_M) {
-                double position = Math.min(at, edge.length);
-                if (near.test(indexed.extractPoint(position))) {
-                    if (open == null) {
-                        open = new double[] {position - NEAR_STEP_M, position + NEAR_STEP_M};
-                        intervals.add(open);
-                    }
-                    open[1] = position + NEAR_STEP_M;
-                } else {
-                    open = null;
-                }
-            }
-            return intervals;
+            dnByEdge.putAll(planner.plan(treeEdges, root, flows));
         }
 
         void nameNodes() {
-            int tieNo = 0;
-            int chamberNo = 0;
             for (Map.Entry<String, List<Tree>> unit : units.entrySet()) {
-                nodeIds.put(unit.getKey(), prefix + "tie_" + ++tieNo);
-                // протокол 16.09.2026 п. 8: несколько новых веток к одной камере — несколько независимых врезок
-                if (unit.getValue().get(0).tie.isChamber()) {
-                    boolean first = true;
-                    for (int i = 0; i < edges.size(); i++) {
-                        if (edges.get(i).from().equals(unit.getKey())) {
-                            tieIdByEdge.put(i, first ? nodeIds.get(unit.getKey()) : prefix + "tie_" + ++tieNo);
-                            first = false;
-                        }
-                    }
-                }
+                TieCandidate tie = unit.getValue().get(0).tie;
+                String id = tie.isChamber() ? tie.getExistingObjectId() : prefix + "ch_" + counters.chambers.incrementAndGet();
+                nodeIds.put(unit.getKey(), id);
+                tieNodeIds.add(id);
             }
             for (Edge edge : edges) {
                 for (Tree.Node node : List.of(edge.source.from, edge.source.to)) {
                     if (node.kind == Tree.Kind.JUNCTION && !nodeIds.containsKey(node.key)) {
-                        nodeIds.put(node.key, prefix + "ch_" + ++chamberNo);
+                        nodeIds.put(node.key, prefix + "ch_" + counters.chambers.incrementAndGet());
                     } else if (node.kind == Tree.Kind.CONNECTION) {
                         nodeIds.put(node.key, node.connection.getId());
                     }
@@ -361,21 +313,18 @@ final class NetworkAssembler {
             }
         }
 
-        /** Режет ребро на участки в границах специальных частей и в точках смены диаметра. */
+        /** Режет ребро на участки в границах специальных частей. */
         void cut(int index) {
             Edge edge = edges.get(index);
             List<double[]> special = specialByEdge.get(index);
-            List<SizedPiece> pieces = piecesByEdge.get(edge.id);
+            int dn = dnByEdge.get(edge.id);
             TreeMap<Double, String> cuts = new TreeMap<>();
-            cuts.put(0.0, tieIdByEdge.getOrDefault(index, nodeIds.get(edge.from())));
+            cuts.put(0.0, nodeIds.get(edge.from()));
             cuts.put(edge.length, nodeIds.get(edge.to()));
             List<Double> candidates = new ArrayList<>();
             for (double[] interval : special) {
                 candidates.add(interval[0]);
                 candidates.add(interval[1]);
-            }
-            for (SizedPiece piece : pieces) {
-                candidates.add(piece.getFromM());
             }
             LengthIndexedLine indexed = new LengthIndexedLine(edge.source.line);
             Map<Double, Coordinate> points = new HashMap<>();
@@ -393,7 +342,7 @@ final class NetworkAssembler {
                 Double ceiling = cuts.ceilingKey(at);
                 if ((floor == null || at - floor > MERGE_M) && (ceiling == null || ceiling - at > MERGE_M)) {
                     Coordinate point = indexed.extractPoint(at);
-                    String id = prefix + "node_" + (nodes.size() + 1);
+                    String id = prefix + "node_" + counters.nodes.incrementAndGet();
                     nodes.add(new TechnicalNode(id, variantId, factory.createPoint(point)));
                     cuts.put(at, id);
                     points.put(at, point);
@@ -403,13 +352,11 @@ final class NetworkAssembler {
             for (double to : cuts.keySet()) {
                 if (from != null) {
                     double mid = (from + to) / 2;
-                    int dn = dnAt(pieces, mid);
                     boolean isSpecial = inside(special, mid);
                     if (!isSpecial) {
-                        for (Zone zone : zones) {
-                            // хвост зоны за разрезом, слитым с соседним ближе MERGE_M: валидатор увидит обычный
-                            // участок в зоне перехода
-                            if (zone.edge == index && zone.overlap(from, to) > ZONE_OVERLAP_M) {
+                        for (Zone zone : zonesByEdge.get(index)) {
+                            // хвост зоны за разрезом, слитым с соседним ближе MERGE_M: обычный участок в зоне перехода
+                            if (zone.overlap(from, to) > ZONE_OVERLAP_M) {
                                 throw new IllegalStateException("Обычный участок ребра " + edge.id + " лежит в зоне "
                                         + "спецперехода больше чем на " + ZONE_OVERLAP_M + " м");
                             }
@@ -418,6 +365,9 @@ final class NetworkAssembler {
                     Coordinate[] coords = indexed.extractLine(from, to).getCoordinates();
                     coords[0] = points.get(from);
                     coords[coords.length - 1] = points.get(to);
+                    if (isSpecial && coords.length > 2) {
+                        throw new IllegalStateException("Специальный участок ребра " + edge.id + " не прямой");
+                    }
                     LineString line = factory.createLineString(coords);
                     double length = CostCalculator.round2(line.getLength());
                     String startId = cuts.get(from);
@@ -429,10 +379,9 @@ final class NetworkAssembler {
                         exemptByNode.computeIfAbsent(endId, id -> new HashSet<>()).addAll(crossed);
                         k = crossed.stream().mapToDouble(s -> s.rule.getKSpecial()).max().orElse(1);
                     }
-                    k *= kTurn(coords, from == 0.0 ? null : incomingByNode.get(startId));
-                    NewSegment segment = new NewSegment(prefix + "seg_" + (segments.size() + 1), variantId, line, startId,
-                            endId, flowByEdge.get(edge.id), dn, length, isSpecial ? SPECIAL : BASE, null, null,
-                            costs.segmentCost(length, dn, k));
+                    NewSegment segment = new NewSegment(prefix + "seg_" + counters.segments.incrementAndGet(), variantId,
+                            line, startId, endId, flowByEdge.get(edge.id), dn, length, isSpecial ? SPECIAL : BASE, null,
+                            null, costs.segmentCost(length, dn, k));
                     segments.add(segment);
                     incomingByNode.put(endId, segment);
                     maxDnByNode.merge(startId, dn, Math::max);
@@ -442,31 +391,11 @@ final class NetworkAssembler {
             }
         }
 
-        /**
-         * Коэффициент за изломы участка (протокол 16.09.2026 п. 9): вершины внутри линии и, если участок начинается
-         * в техническом узле, излом к входящему участку. Изломы в камерах и врезках не считаются.
-         */
-        double kTurn(Coordinate[] coords, NewSegment incoming) {
-            double k = 1;
-            Coordinate[] before = incoming == null ? null : incoming.getGeometry().getCoordinates();
-            for (int i = 0; i + 1 < coords.length; i++) {
-                Coordinate prev = i > 0 ? coords[i - 1] : before == null ? null : before[before.length - 2];
-                if (prev == null) {
-                    continue;
-                }
-                double deflection = TreeBuilder.deflectionDeg(prev, coords[i], coords[i + 1]);
-                if (deflection >= MIN_TURN_DEG) {
-                    k = Math.max(k, rules.kTurn(deflection));
-                }
-            }
-            return k;
-        }
-
-        /** Объекты, чьи зоны валидатор засчитает специальному участку: перекрытие больше ZONE_OVERLAP_M. */
+        /** Объекты, чьи зоны засчитаются специальному участку: перекрытие больше ZONE_OVERLAP_M. */
         List<SpecialObjects.Special> crossed(int edge, double from, double to) {
             List<SpecialObjects.Special> result = new ArrayList<>();
-            for (Zone zone : zones) {
-                if (zone.edge == edge && zone.overlap(from, to) > ZONE_OVERLAP_M && !result.contains(zone.special)) {
+            for (Zone zone : zonesByEdge.get(edge)) {
+                if (zone.overlap(from, to) > ZONE_OVERLAP_M && !result.contains(zone.special)) {
                     result.add(zone.special);
                 }
             }
@@ -474,9 +403,9 @@ final class NetworkAssembler {
         }
 
         /**
-         * Отступ обычного участка от объектов со специальным проходом, как в правиле special валидатора: объекты,
-         * через которые проходит смежный специальный участок, и сеть у врезки, с которой участок начинается,
-         * не проверяются. Маршрут проверен по рёбрам графа целиком, а здесь проверяется каждый участок.
+         * Отступ обычного участка от объектов со специальным проходом: объекты, через которые проходит смежный
+         * специальный участок, и сеть у врезки, с которой участок начинается, не проверяются. Маршрут проверен по
+         * рёбрам графа целиком, а здесь проверяется каждый участок.
          */
         void checkClearance() {
             for (NewSegment segment : segments) {
@@ -485,7 +414,7 @@ final class NetworkAssembler {
                 }
                 Set<SpecialObjects.Special> exempt = new HashSet<>(exemptByNode.getOrDefault(segment.getStartNodeId(), Set.of()));
                 exempt.addAll(exemptByNode.getOrDefault(segment.getEndNodeId(), Set.of()));
-                boolean fromTie = segment.getStartNodeId().startsWith(prefix + "tie_");
+                boolean fromTie = tieNodeIds.contains(segment.getStartNodeId());
                 for (SpecialObjects.Special special : specials.around(segment.getGeometry(), segment.getDiameter())) {
                     if (exempt.contains(special)
                             || fromTie && special.network && special.geometry.isWithinDistance(
@@ -502,14 +431,10 @@ final class NetworkAssembler {
         }
 
         /**
-         * Форма участков: внутри нет вершин с отклонением меньше 3° и подотрезков короче метра, кроме первого
-         * и последнего подотрезка у узла, общего со специальным участком.
-         */
-        /**
-         * Узлы разных участков не ближе NODE_APART_M, а участки не касаются вне общих узлов, как считает валидатор
-         * (узлы в 0,05 м склеиваются, касание — 0,001 м за вырезом 0,15 м у общего узла), с запасом на округление.
-         * Иначе ветка, ушедшая от развилки почти назад вдоль ствола, давала склеенные узлы, цикл и касание.
-         * Несколько врезок в одну существующую камеру стоят в одной точке законно.
+         * Узлы разных участков не ближе NODE_APART_M, а участки не касаются вне общих узлов (узлы в 0,05 м
+         * склеиваются, касание — 0,001 м за вырезом 0,15 м у общего узла), с запасом на округление. Иначе ветка,
+         * ушедшая от развилки почти назад вдоль ствола, давала склеенные узлы, цикл и касание. Несколько участков
+         * в одну существующую камеру начинаются в одной точке законно.
          */
         void checkApart() {
             Map<String, Coordinate> points = new LinkedHashMap<>();
@@ -533,18 +458,15 @@ final class NetworkAssembler {
                     if (other.equals(id) || points.get(id).distance(points.get(other)) > NODE_APART_M) {
                         continue;
                     }
-                    if (!isTie(id) || !isTie(other)) {
-                        throw new IllegalStateException("Узлы " + id + " и " + other + " ближе "
-                                + NODE_APART_M + " м: валидатор считает их одним узлом");
-                    }
-                    group.put(other, group.get(id));
+                    throw new IllegalStateException("Узлы " + id + " и " + other + " ближе "
+                            + NODE_APART_M + " м: проверка считает их одним узлом");
                 }
             }
             for (NewSegment segment : segments) {
                 Coordinate[] coords = segment.getGeometry().getCoordinates();
                 if (SPECIAL.equals(segment.getLayingMethod()) && segment.getGeometry().getLength() <= MIN_SPECIAL_M) {
                     throw new IllegalStateException("Специальный участок " + segment.getId() + " короче " + MIN_SPECIAL_M
-                            + " м: валидатор не видит у него перехода");
+                            + " м: проверка не видит у него перехода");
                 }
                 for (int i = 0; i + 1 < coords.length; i++) {
                     for (int j = i + 2; j + 1 < coords.length; j++) {
@@ -554,7 +476,7 @@ final class NetworkAssembler {
                     }
                 }
             }
-            // обычная и специальная ветки одного узла под острым углом: зона специальной, раздутая валидатором
+            // обычная и специальная ветки одного узла под острым углом: зона специальной, раздутая проверкой
             // на 0,05 м, накрывает обычную на 0,05 / sin угла, больше 0,1 м при угле меньше 30°
             Map<String, List<NewSegment>> byNode = new HashMap<>();
             for (NewSegment segment : segments) {
@@ -590,7 +512,7 @@ final class NetworkAssembler {
                     }
                     Set<String> shared = new HashSet<>(List.of(group.get(a.getStartNodeId()), group.get(a.getEndNodeId())));
                     shared.retainAll(List.of(group.get(b.getStartNodeId()), group.get(b.getEndNodeId())));
-                    // зона спецперехода у валидатора раздута на 0,05 м: обычный участок рядом со специальным другой
+                    // зона спецперехода у проверки раздута на 0,05 м: обычный участок рядом со специальным другой
                     // ветки оказывается в ней
                     if (shared.isEmpty() && !a.getLayingMethod().equals(b.getLayingMethod())) {
                         throw new IllegalStateException("Участки " + a.getId() + " и " + b.getId()
@@ -623,10 +545,11 @@ final class NetworkAssembler {
             return coords[0].distance(at) <= coords[coords.length - 1].distance(at) ? coords[1] : coords[coords.length - 2];
         }
 
-        boolean isTie(String nodeId) {
-            return nodeId.startsWith(prefix + "tie_");
-        }
-
+        /**
+         * Форма участков: внутри нет вершин с отклонением меньше 3° и подотрезков короче метра, кроме первого и
+         * последнего подотрезка у узла, общего со специальным участком; поворот в вершине и в техническом узле не
+         * круче {@link Router#MAX_TURN_DEG} (приложение 18.09, п. 2.1).
+         */
         void checkShape() {
             Set<String> specialNodes = new HashSet<>();
             for (NewSegment segment : segments) {
@@ -634,6 +557,10 @@ final class NetworkAssembler {
                     specialNodes.add(segment.getStartNodeId());
                     specialNodes.add(segment.getEndNodeId());
                 }
+            }
+            Set<String> technical = new HashSet<>();
+            for (TechnicalNode node : nodes) {
+                technical.add(node.getId());
             }
             for (NewSegment segment : segments) {
                 Coordinate[] coords = segment.getGeometry().getCoordinates();
@@ -644,94 +571,32 @@ final class NetworkAssembler {
                     if (coords[i].distance(coords[i + 1]) < TreeBuilder.MIN_PIECE_M && !nearSpecial) {
                         throw new IllegalStateException("Участок " + segment.getId() + ": подотрезок короче метра");
                     }
-                    if (i > 0 && TreeBuilder.deflectionDeg(coords[i - 1], coords[i], coords[i + 1]) < MIN_TURN_DEG) {
-                        throw new IllegalStateException("Участок " + segment.getId() + ": излом меньше 3°");
-                    }
-                }
-            }
-        }
-
-        /** Правило поворотов: на пути от врезки до точки подключения не больше turnLimit(k) поворотов. */
-        void checkTurns() {
-            Map<String, Coordinate> tiePoint = new HashMap<>();
-            for (List<Tree> unit : units.values()) {
-                tiePoint.put(nodeIds.get(unit.get(0).root.key), unit.get(0).root.point);
-            }
-            for (Map.Entry<Integer, String> entry : tieIdByEdge.entrySet()) {
-                tiePoint.put(entry.getValue(), edges.get(entry.getKey()).source.from.point);
-            }
-            for (Edge edge : edges) {
-                if (edge.source.to.kind != Tree.Kind.CONNECTION) {
-                    continue;
-                }
-                List<Coordinate> coords = new ArrayList<>();
-                String node = nodeIds.get(edge.to());
-                while (!tiePoint.containsKey(node)) {
-                    NewSegment segment = incomingByNode.get(node);
-                    Coordinate[] part = segment.getGeometry().getCoordinates();
-                    for (int i = part.length - 1; i >= (tiePoint.containsKey(segment.getStartNodeId()) ? 0 : 1); i--) {
-                        coords.add(part[i]);
-                    }
-                    node = segment.getStartNodeId();
-                }
-                int turns = TurnRule.turns(coords);
-                int allowed = turnRule.allowed(tiePoint.get(node), edge.source.to.point);
-                if (turns > allowed) {
-                    throw new IllegalStateException("На пути к " + edge.source.to.connection.getId() + " поворотов "
-                            + turns + ", допустимо " + allowed);
-                }
-            }
-        }
-
-        /** Врезки, камеры врезок в трубу, реконструкция существующей сети и камер врезки. */
-        ReconstructionResult tieIns(List<ChamberReconstruction> chamberReconstructions) {
-            List<TieInLoad> loads = new ArrayList<>();
-            for (Map.Entry<String, List<Tree>> unit : units.entrySet()) {
-                TieCandidate tie = unit.getValue().get(0).tie;
-                loads.add(new TieInLoad(unit.getKey(), tie.getExistingObjectId(), tie.getExistingObjectType(),
-                        tie.getPoint(), flowByUnit.get(unit.getKey())));
-            }
-            ReconstructionResult recon = ReconstructionCalculator.calculate(input, rules, loads);
-            int chamberNo = chambers.size();
-            for (Map.Entry<String, List<Tree>> unit : units.entrySet()) {
-                TieCandidate tie = unit.getValue().get(0).tie;
-                String tieId = nodeIds.get(unit.getKey());
-                // ТП §10.2: required_diameter врезки — диаметр новой сети в точке врезки, то есть участков, которые
-                // в ней начинаются; реконструкция трубы и камеры на него не влияет (пример 10.8: 150 → 200, труба 250).
-                if (tie.isChamber()) {
-                    List<String> rayIds = new ArrayList<>();
-                    for (int i = 0; i < edges.size(); i++) {
-                        if (edges.get(i).from().equals(unit.getKey())) {
-                            rayIds.add(tieIdByEdge.get(i));
+                    if (i > 0) {
+                        double deflection = TreeBuilder.deflectionDeg(coords[i - 1], coords[i], coords[i + 1]);
+                        if (deflection < MIN_TURN_DEG) {
+                            throw new IllegalStateException("Участок " + segment.getId() + ": излом меньше 3°");
+                        }
+                        if (deflection > Router.MAX_TURN_DEG) {
+                            throw new IllegalStateException("Участок " + segment.getId() + ": поворот круче 90°");
                         }
                     }
-                    int maxNew = rayIds.stream().mapToInt(maxDnByNode::get).max().orElseThrow();
-                    int required = recon.chamberRequiredDiameter(tie.getExistingObjectId(), maxNew);
-                    if (required > tie.getExistingDiameter()) {
-                        chamberReconstructions.add(new ChamberReconstruction(
-                                prefix + "chrecon_" + (chamberReconstructions.size() + 1), variantId, tie.getPoint(),
-                                tie.getExistingObjectId(), tie.getExistingDiameter(), required, costs.chamberCost(required)));
+                }
+                NewSegment before = incomingByNode.get(segment.getStartNodeId());
+                if (before != null && technical.contains(segment.getStartNodeId())) {
+                    Coordinate[] prev = before.getGeometry().getCoordinates();
+                    if (TreeBuilder.deflectionDeg(prev[prev.length - 2], coords[0], coords[1]) > Router.MAX_TURN_DEG) {
+                        throw new IllegalStateException("Участок " + segment.getId() + ": поворот в техническом узле круче 90°");
                     }
-                    for (String rayId : rayIds) {
-                        tieIns.add(new TieIn(rayId, variantId, tie.getPoint(), tie.getExistingObjectId(),
-                                tie.getExistingObjectType(), tie.getExistingDiameter(), maxDnByNode.get(rayId),
-                                costs.tieInCost()));
-                    }
-                } else {
-                    int maxNew = maxDnByNode.get(tieId);
-                    int dn = Math.max(maxNew, recon.getRequiredDiameterByTieIn().get(unit.getKey()));
-                    chambers.add(new NewChamber(prefix + "ch_" + ++chamberNo, variantId, tie.getPoint(), dn,
-                            costs.chamberCost(dn)));
-                    tieIns.add(new TieIn(tieId, variantId, tie.getPoint(), tie.getExistingObjectId(),
-                            tie.getExistingObjectType(), tie.getExistingDiameter(), maxNew, costs.tieInCost()));
                 }
             }
-            return recon;
         }
 
-        /** Специальные зоны всех объектов по трассе варианта. */
-        List<Zone> zones() {
-            List<Zone> result = new ArrayList<>();
+        /** Специальные зоны всех объектов по трассе варианта, по рёбрам. */
+        List<List<Zone>> zones() {
+            List<List<Zone>> result = new ArrayList<>();
+            for (int i = 0; i < edges.size(); i++) {
+                result.add(new ArrayList<>());
+            }
             if (edges.isEmpty()) {
                 return result;
             }
@@ -739,29 +604,39 @@ final class NetworkAssembler {
             for (Edge edge : edges) {
                 trace.expandToInclude(edge.source.line.getEnvelopeInternal());
             }
-            for (SpecialObjects.Special special : specials.all) {
+            List<Zone> zones = new ArrayList<>();
+            for (SpecialObjects.Special special : specials.within(trace)) {
                 Envelope envelope = (special.polygon ? special.buffered : special.geometry).getEnvelopeInternal();
                 if (!envelope.intersects(trace)) {
                     continue;
                 }
                 if (special.polygon) {
-                    polygonZone(special, envelope, result);
+                    polygonZone(special, envelope, zones);
                 } else {
-                    lineZone(special, envelope, result);
+                    lineZone(special, envelope, zones);
                 }
             }
+            for (Zone zone : zones) {
+                result.get(zone.edge).add(zone);
+            }
             return result;
+        }
+
+        /** Рёбра, чья рамка пересекает envelope, по возрастанию индекса. */
+        List<Integer> edgesNear(Envelope envelope) {
+            TreeSet<Integer> result = new TreeSet<>();
+            for (Object item : edgeIndex.query(envelope)) {
+                result.add((Integer) item);
+            }
+            return new ArrayList<>(result);
         }
 
         /** Связные части трассы в буфере полигона, которые пересекают сам полигон. */
         void polygonZone(SpecialObjects.Special special, Envelope envelope, List<Zone> result) {
             List<Zone> pieces = new ArrayList<>();
             List<Geometry> parts = new ArrayList<>();
-            for (int i = 0; i < edges.size(); i++) {
+            for (int i : edgesNear(envelope)) {
                 LineString line = edges.get(i).source.line;
-                if (!line.getEnvelopeInternal().intersects(envelope)) {
-                    continue;
-                }
                 Geometry inside = line.intersection(special.buffered);
                 LengthIndexedLine indexed = new LengthIndexedLine(line);
                 for (int g = 0; g < inside.getNumGeometries(); g++) {
@@ -802,9 +677,9 @@ final class NetworkAssembler {
 
         /** По margin_m в обе стороны от каждого пересечения; пересечение сети в точке врезки не считается. */
         void lineZone(SpecialObjects.Special special, Envelope envelope, List<Zone> result) {
-            for (int i = 0; i < edges.size(); i++) {
+            for (int i : edgesNear(envelope)) {
                 LineString line = edges.get(i).source.line;
-                if (!line.getEnvelopeInternal().intersects(envelope) || !special.crossedBy(line)) {
+                if (!special.crossedBy(line)) {
                     continue;
                 }
                 Geometry hit = line.intersection(special.geometry);
@@ -841,7 +716,7 @@ final class NetworkAssembler {
             }
         }
 
-        /** Зона линии продолжается через узел во все ветви, как в валидаторе. */
+        /** Зона линии продолжается через узел во все ветви. */
         void walk(List<Zone> result, String node, int cameFrom, double remaining, SpecialObjects.Special special) {
             for (int index : incident.get(node)) {
                 if (index == cameFrom) {
@@ -864,16 +739,16 @@ final class NetworkAssembler {
 
         /**
          * Специальные интервалы по рёбрам, расширенные на ZONE_GROW_M; границы у концов ребра прижимаются к узлу.
-         * Интервал режется там, где меняется наибольший Kспец покрывающих зон (CONSTRAINTS §5: смена коэффициента —
-         * технический узел), и сливается с соседом только при равном Kспец. При наложении зон коэффициент один,
-         * наибольший, без перемножения (§18).
+         * Интервал режется там, где меняется наибольший Kспец покрывающих зон (смена набора объектов — новый
+         * участок, п. 4), и сливается с соседом только при равном Kспец. При наложении зон коэффициент один,
+         * наибольший, без перемножения.
          */
         List<List<double[]>> mergedZones() {
             List<List<double[]>> result = new ArrayList<>();
             for (int i = 0; i < edges.size(); i++) {
                 List<double[]> raw = new ArrayList<>();
-                for (Zone zone : zones) {
-                    if (zone.edge == i && zone.to > zone.from) {
+                for (Zone zone : zonesByEdge.get(i)) {
+                    if (zone.to > zone.from) {
                         raw.add(new double[] {Math.max(0, zone.from - ZONE_GROW_M),
                                 Math.min(edges.get(i).length, zone.to + ZONE_GROW_M), zone.special.rule.getKSpecial()});
                     }
@@ -915,15 +790,6 @@ final class NetworkAssembler {
             }
             return result;
         }
-    }
-
-    private static int dnAt(List<SizedPiece> pieces, double at) {
-        for (SizedPiece piece : pieces) {
-            if (piece.getFromM() <= at && at <= piece.getToM()) {
-                return piece.getDn();
-            }
-        }
-        throw new IllegalStateException("Нет диаметра для точки " + at + " м ребра " + pieces.get(0).getEdgeId());
     }
 
     private static boolean inside(List<double[]> intervals, double at) {

@@ -52,6 +52,6 @@ class ObstacleIndexTest {
     }
 
     private static InputData input(List<Restriction> restrictions) {
-        return new InputData(null, List.of(), List.of(), List.of(), List.of(), List.of(), restrictions, List.of(), List.of());
+        return new InputData(null, List.of(), List.of(), List.of(), List.of(), List.of(), restrictions, List.of(), List.of(), java.util.Set.of());
     }
 }

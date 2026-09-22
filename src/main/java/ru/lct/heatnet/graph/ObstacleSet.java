@@ -29,7 +29,6 @@ import org.locationtech.jts.geom.prep.PreparedGeometryFactory;
 import org.locationtech.jts.index.strtree.STRtree;
 import org.locationtech.jts.operation.buffer.BufferOp;
 import org.locationtech.jts.operation.buffer.BufferParameters;
-import org.locationtech.jts.operation.union.UnaryUnionOp;
 import org.locationtech.jts.simplify.TopologyPreservingSimplifier;
 import ru.lct.heatnet.model.ExistingOks;
 import ru.lct.heatnet.model.InputData;
@@ -59,6 +58,8 @@ public final class ObstacleSet {
     // shapely по умолчанию строит буфер с 16 сегментами на четверть круга, валидатор считает так же
     private static final int MARGIN_QUADRANT_SEGMENTS = 16;
     private static final double TANGENT_EPS = 1e-9;
+    /** Насколько узлы пересечения дороги стоят внутри полосы margin_m: сборка прижимает границу спецучастка к узлу ближе 0,08 м. */
+    private static final double MARGIN_NODE_INSET_M = 0.1;
     /** Зоны и полигоны не больше чем в столько вершин проверяются против отрезка напрямую, см. Zone#intersects. */
     private static final int SMALL_POLYGON_POINTS = 64;
     private static final BufferParameters ZONE_BUFFER = new BufferParameters(
@@ -68,11 +69,15 @@ public final class ObstacleSet {
     private final GeometryFactory factory = new GeometryFactory();
     private final STRtree forbidZones = new STRtree();
     private final STRtree specials = new STRtree();
+    /** Отступ оси новой сети от полигона ОКС: отступ правила плюс полуширина пары. */
+    private final double oksClearance;
     private final List<Coordinate> nodes = new ArrayList<>();
     // соседи узла по кольцу его зоны или null у точек вдоль дорог: ребро полезно, только если касается зоны
     private final List<Coordinate[]> rings = new ArrayList<>();
 
     private static final class Zone {
+        /** ID объекта зоны запрета; отрезок с этим ID в ignored зону не проверяет (финальный участок к своему ОКС). */
+        final String id;
         final Geometry geometry;
         final PreparedGeometry prepared;
         // Длинный отрезок задевает рамки многих зон; проверка отрезка против рамки дешевле PreparedGeometry.
@@ -80,7 +85,8 @@ public final class ObstacleSet {
         /** Стороны всех колец маленькой зоны; у большой null, и её проверяет PreparedGeometry. */
         final LineSegment[] rings;
 
-        Zone(Geometry geometry) {
+        Zone(String id, Geometry geometry) {
+            this.id = id;
             this.geometry = geometry;
             this.prepared = PreparedGeometryFactory.prepare(geometry);
             this.box = new RectangleLineIntersector(geometry.getEnvelopeInternal());
@@ -164,7 +170,7 @@ public final class ObstacleSet {
             this.rule = rule;
             this.polygon = geometry.getDimension() == 2;
             this.object = PreparedGeometryFactory.prepare(geometry);
-            this.zone = new Zone(zone);
+            this.zone = new Zone(id, zone);
             this.marginZone = polygon ? geometry.buffer(rule.getMarginM(), MARGIN_QUADRANT_SEGMENTS) : null;
             this.marginSides = polygon ? segments(marginZone.getBoundary()) : null;
             this.sides = segments(polygon ? geometry.getBoundary() : geometry);
@@ -232,15 +238,17 @@ public final class ObstacleSet {
 
     public ObstacleSet(ObstacleIndex index, Rules rules, Envelope area, int dn) {
         double halfWidth = rules.diameter(dn).getWidthM() / 2;
-        List<Geometry> forbid = new ArrayList<>();
+        List<Zone> forbid = new ArrayList<>();
         List<Geometry> nodeZones = new ArrayList<>();
         List<Geometry> crossingNodeZones = new ArrayList<>();
+        List<Geometry> marginZones = new ArrayList<>();
         List<Special> specialList = new ArrayList<>();
 
         double oksDistance = rules.restriction(OKS_EXISTING).clearanceM(dn) + halfWidth;
+        oksClearance = oksDistance;
         for (ExistingOks oks : index.existingOks(area)) {
             if (near(oks.getGeometry(), oksDistance, area)) {
-                forbid.add(zone(oks.getGeometry(), oksDistance));
+                forbid.add(new Zone(oks.getId(), zone(oks.getGeometry(), oksDistance)));
                 nodeZones.add(nodeZone(oks.getGeometry(), oksDistance));
             }
         }
@@ -254,16 +262,19 @@ public final class ObstacleSet {
             if (!near(geometry, distance, area)) {
                 continue;
             }
-            Geometry nodeZone = nodeZone(geometry, distance);
-            nodeZones.add(nodeZone);
-            if (rule.getMinAngleDeg() != null && geometry.getDimension() == 2) {
-                crossingNodeZones.add(nodeZone);
-            }
+            nodeZones.add(nodeZone(geometry, distance));
             // точку нельзя пересечь под углом или пройти через её зону: её обходят с отступом правила, как запрет
             if (rule.forbid() || geometry.getDimension() == 0) {
-                forbid.add(zone(geometry, distance));
+                forbid.add(new Zone(restriction.getId(), zone(geometry, distance)));
             } else {
-                specialList.add(new Special(restriction.getId(), restriction.getType(), rule, geometry, zone(geometry, distance)));
+                Special special = new Special(restriction.getId(), restriction.getType(), rule, geometry, zone(geometry, distance));
+                specialList.add(special);
+                if (special.polygon) {
+                    // спецпроход — один прямой участок с полосой margin_m за полигоном: внутри полосы узлов нет, а
+                    // узлы для пересечения стоят у её внешней границы, чтобы отрезок через дорогу был прямым от узла до узла
+                    marginZones.add(geometry.buffer(rule.getMarginM() - MARGIN_NODE_INSET_M, MARGIN_QUADRANT_SEGMENTS));
+                    crossingNodeZones.add(nodeZone(geometry, Math.max(distance, rule.getMarginM() - 2 * SIMPLIFY_M - NODE_OFFSET_M)));
+                }
             }
         }
         RestrictionRule network = rules.restriction(HEAT_NETWORK);
@@ -276,12 +287,8 @@ public final class ObstacleSet {
             }
         }
 
-        if (!forbid.isEmpty()) {
-            Geometry union = UnaryUnionOp.union(forbid);
-            for (int i = 0; i < union.getNumGeometries(); i++) {
-                Geometry part = union.getGeometryN(i);
-                forbidZones.insert(part.getEnvelopeInternal(), new Zone(part));
-            }
+        for (Zone zone : forbid) {
+            forbidZones.insert(zone.geometry.getEnvelopeInternal(), zone);
         }
         for (Special special : specialList) {
             specials.insert(special.zone.geometry.getEnvelopeInternal(), special);
@@ -305,13 +312,44 @@ public final class ObstacleSet {
                 candidates.putIfAbsent(c, null);
             }
         }
+        List<PreparedGeometry> margins = new ArrayList<>();
+        for (Geometry marginZone : marginZones) {
+            margins.add(PreparedGeometryFactory.prepare(marginZone));
+        }
         // узлы только в области: зоны длинных дорог и труб иначе приносят узлы на километры вокруг, а граф O(n²)
         for (Map.Entry<Coordinate, Coordinate[]> candidate : candidates.entrySet()) {
-            if (area.contains(candidate.getKey()) && !insideAnyZone(candidate.getKey())) {
-                nodes.add(candidate.getKey());
+            Coordinate c = candidate.getKey();
+            if (area.contains(c) && !insideAnyZone(c) && !insideAny(margins, c)) {
+                nodes.add(c);
                 rings.add(candidate.getValue());
             }
         }
+    }
+
+    private boolean insideAny(List<PreparedGeometry> polygons, Coordinate c) {
+        Geometry point = factory.createPoint(c);
+        for (PreparedGeometry polygon : polygons) {
+            if (polygon.getGeometry().getEnvelopeInternal().contains(c) && polygon.intersects(point)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Отступ оси новой сети от полигона ОКС для диаметра набора. */
+    public double oksClearance() {
+        return oksClearance;
+    }
+
+    /** Точка в зоне запрета (с отступом): камера ветвления там не ставится. */
+    public boolean insideForbid(Coordinate c) {
+        Geometry point = factory.createPoint(c);
+        for (Object item : forbidZones.query(new Envelope(c))) {
+            if (((Zone) item).prepared.intersects(point)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Узлы visibility graph: выпуклые снаружи вершины зон и точки вдоль сторон дорог, не лежащие ни в одной зоне. */
@@ -339,7 +377,8 @@ public final class ObstacleSet {
 
     /**
      * Вес отрезка a–b с учётом специальных частей или {@code Double.NaN}, если отрезок недопустим. Объект из
-     * {@code ignored} не проверяется, если a или b лежит на нём.
+     * {@code ignored} не проверяется, если a или b лежит на нём; зона запрета из {@code ignored} не проверяется
+     * вовсе: так финальный прямой участок к точке подключения проходит зону своего ОКС (приложение 18.09, п. 2.2).
      */
     public double edgeWeight(Coordinate a, Coordinate b, Set<String> ignored) {
         return edgeWeight(a, b, ignored, false, false);
@@ -356,7 +395,7 @@ public final class ObstacleSet {
         Envelope envelope = edge.getEnvelopeInternal();
         for (Object item : forbidZones.query(envelope)) {
             Zone zone = (Zone) item;
-            if (zone.box.intersects(a, b) && zone.intersects(a, b, edge)) {
+            if (!ignored.contains(zone.id) && zone.box.intersects(a, b) && zone.intersects(a, b, edge)) {
                 return Double.NaN;
             }
         }

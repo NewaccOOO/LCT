@@ -74,7 +74,7 @@ class RulesMatchConstraintsTest {
     @Test
     void restrictionTableMatches() {
         List<List<String>> rows = table("## 7. Пространственные ограничения");
-        assertEquals(10, rows.size(), "число типов ограничений");
+        assertEquals(11, rows.size(), "число типов ограничений");
         for (List<String> row : rows) {
             String type = find("`(\\w+)`", row.get(0));
             RestrictionRule rule = RULES.restriction(type);

@@ -110,11 +110,11 @@ class RulesTest {
         assertNull(bridge.getHalfWidthM());
         assertEquals(bridge, rules.restriction("_comment"));
 
+        // приложение 18.09, таблица 2: железная дорога — запрет с отступом 1 м
         RestrictionRule railway = rules.restriction("railway");
-        assertFalse(railway.forbid());
-        assertEquals(45, railway.getMinAngleDeg(), EPS);
-        assertEquals(3, railway.getMarginM(), EPS);
-        assertEquals(1.75, railway.getKSpecial(), EPS);
+        assertTrue(railway.forbid());
+        assertEquals(1.0, railway.clearanceM(1400), EPS);
+        assertNull(railway.getKSpecial());
         assertEquals(0.0, rules.restriction("sewer").getHalfWidthM(), EPS);
     }
 
@@ -126,16 +126,6 @@ class RulesTest {
         assertEquals(10, rules.chamberRule().getMaxDistM(), EPS);
         assertEquals(4, rules.chamberRule().getMaxSegments());
         assertEquals(3, rules.chamberRule().getMaxBranches());
-    }
-
-    @Test
-    void kTurnIsOneOnlyNearStandardAngles() {
-        assertEquals(1, rules.kTurn(45), EPS);
-        assertEquals(1, rules.kTurn(90.9), EPS);
-        assertEquals(1, rules.kTurn(44.1), EPS);
-        assertEquals(1.5, rules.kTurn(30), EPS);
-        assertEquals(1.5, rules.kTurn(46.1), EPS);
-        assertEquals(1.5, rules.kTurn(135), EPS);
     }
 
     @Test

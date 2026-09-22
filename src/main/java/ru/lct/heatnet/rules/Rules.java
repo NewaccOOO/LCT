@@ -33,12 +33,6 @@ public final class Rules {
     private final double scoreLengthBaseM;
     private final double scoreWCost;
     private final double scoreWLength;
-    private final double existingFlowShare;
-    private final double turnKNonstandard;
-    private final List<Double> turnStandardDeg;
-    private final double turnToleranceDeg;
-    private final int turnLimitPerObstacle;
-    private final int turnLimitBase;
     private final Map<String, RestrictionRule> restrictions;
     private final RestrictionRule fallback;
 
@@ -76,18 +70,6 @@ public final class Rules {
         scoreLengthBaseM = number(score, "length_base_m");
         scoreWCost = number(score, "w_cost");
         scoreWLength = number(score, "w_length");
-        // во входе датасета у сети нет текущего расхода: доля между пропускной способностью соседних Ду, docs/interpretation.md
-        existingFlowShare = root.path("existing_flow").path("share").asDouble(0.0);
-        JsonNode turn = root.required("turn");
-        turnKNonstandard = number(turn, "k_nonstandard");
-        List<Double> standard = new ArrayList<>();
-        for (JsonNode deg : turn.required("standard_deg")) {
-            standard.add(deg.doubleValue());
-        }
-        turnStandardDeg = List.copyOf(standard);
-        turnToleranceDeg = number(turn, "tolerance_deg");
-        turnLimitPerObstacle = (int) number(turn, "limit_per_obstacle");
-        turnLimitBase = (int) number(turn, "limit_base");
 
         Map<String, RestrictionRule> byType = new HashMap<>();
         JsonNode restrictionsNode = root.required("restrictions");
@@ -133,6 +115,16 @@ public final class Rules {
         throw new IllegalArgumentException("Расход " + flowTph + " т/ч больше пропускной способности наибольшего диаметра");
     }
 
+    /** Наименьший диаметр, предельная длина которого не меньше lengthM; null — таких нет. */
+    public Diameter diameterForLength(double lengthM) {
+        for (Diameter diameter : diameters) {
+            if (diameter.getMaxLengthM() >= lengthM) {
+                return diameter;
+            }
+        }
+        return null;
+    }
+
     public Diameter diameter(int dn) {
         for (Diameter diameter : diameters) {
             if (diameter.getDn() == dn) {
@@ -164,35 +156,8 @@ public final class Rules {
         throw new IllegalArgumentException("Стоимость камеры для DN" + dn + " не задана");
     }
 
-    /** Текущий расход участка без flow_tph: cap(Ду-1) + share × (cap(Ду) − cap(Ду-1)). */
-    public double defaultExistingFlow(int dn) {
-        double previous = 0;
-        for (Diameter diameter : diameters) {
-            if (diameter.getDn() == dn) {
-                return previous + existingFlowShare * (diameter.getCapacityTph() - previous);
-            }
-            previous = diameter.getCapacityTph();
-        }
-        throw new IllegalArgumentException("Диаметра DN" + dn + " нет в таблице");
-    }
-
     public double tieInCost() {
         return tieInCost;
-    }
-
-    /** Коэффициент стоимости за излом: 1 у стандартного угла (45° или 90° с допуском), иначе k_nonstandard. */
-    public double kTurn(double deflectionDeg) {
-        for (double standard : turnStandardDeg) {
-            if (Math.abs(deflectionDeg - standard) <= turnToleranceDeg) {
-                return 1;
-            }
-        }
-        return turnKNonstandard;
-    }
-
-    /** Предел поворотов на пути от врезки до точки подключения при k пересечённых хордой полигонах. */
-    public int turnLimit(int crossedPolygons) {
-        return turnLimitPerObstacle * crossedPolygons + turnLimitBase;
     }
 
     public double penalty(double flowTph) {

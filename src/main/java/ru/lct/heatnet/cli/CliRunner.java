@@ -85,7 +85,7 @@ public class CliRunner implements ApplicationRunner {
     private static Path writeCriteria(Result result, InputData input, Path output) {
         String name = output.getFileName().toString().replaceFirst("\\.geojson$", "");
         Path path = output.resolveSibling(name + ".criteria.json");
-        VariantCriteria criteria = new VariantCriteria(input, Rules.load(), result.getOverCapacityOksIds());
+        VariantCriteria criteria = new VariantCriteria(input, Rules.load());
         List<Map<String, Object>> rows = new ArrayList<>();
         for (Variant variant : result.getVariants()) {
             Map<String, Object> row = new LinkedHashMap<>();

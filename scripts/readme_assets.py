@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Картинки для README: трассировка на синтетической сцене и динамика S по версиям.
+"""Картинки для README: трассировка на синтетической сцене и динамика качества по версиям.
 
-Запуск из корня: uv run --project tools python scripts/readme_assets.py IN.geojson OUT.geojson
-Пишет docs/assets/hero.svg (вариант 1 расчёта на сцене IN/OUT) и docs/assets/versions.svg (таблица «Версии» из README).
-Для README берётся синтетическая сцена: датасет организаторов наружу не показывается.
+Запуск из корня: uv run --project tools python scripts/readme_assets.py [IN.geojson OUT.geojson]
+Пишет docs/assets/progress.svg (таблица «Версии и динамика качества» из README) и, если заданы IN/OUT,
+docs/assets/hero.svg (вариант 1 расчёта на сцене). Для README берётся синтетическая сцена: датасет организаторов
+наружу не показывается.
 """
 import html
 import json
@@ -79,11 +80,6 @@ def hero(inp_path, out_path):
                 g.append(f'<path d="{path(part)}" fill="none" stroke="#b45309" stroke-width="2.6" stroke-linecap="round" opacity="0.9"/>')
     for f in out:
         pr, geom = f["properties"], f["geometry"]
-        if pr["object_type"] == "heat_network_reconstruction":
-            for part in coords(geom):
-                g.append(f'<path d="{path(part)}" fill="none" stroke="#f43f5e" stroke-width="7" stroke-linecap="round" opacity="0.55"/>')
-    for f in out:
-        pr, geom = f["properties"], f["geometry"]
         if pr["object_type"] == "heat_network":
             w = 2.2 + min(pr["diameter"], 400) / 110
             color = "#fb923c" if pr["laying_method"] == "special" else "#38bdf8"
@@ -99,16 +95,13 @@ def hero(inp_path, out_path):
             g.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4.5" fill="#f8fafc" stroke="#0b1220" stroke-width="1.5"/>')
     for f in out:
         pr, geom = f["properties"], f["geometry"]
-        if pr["object_type"] in ("tie_in", "heat_chamber") and geom:
+        if pr["object_type"] == "heat_chamber" and geom:
             x, y = map(float, p(*coords(geom)[0][0]).split(","))
-            if pr["object_type"] == "tie_in":
-                g.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="8" fill="none" stroke="#38bdf8" stroke-width="3"/>')
-            else:
-                g.append(f'<rect x="{x - 3.5:.1f}" y="{y - 3.5:.1f}" width="7" height="7" rx="1.5" fill="#e0f2fe"/>')
+            g.append(f'<rect x="{x - 3.5:.1f}" y="{y - 3.5:.1f}" width="7" height="7" rx="1.5" fill="#e0f2fe"/>')
     summary = next(f["properties"] for f in out if f["properties"]["object_type"] == "variant_summary")
     legend = [("#38bdf8", "новая сеть, толщина по Ду", "line"), ("#fb923c", "спецпереход", "line"),
-              ("#f43f5e", "реконструкция", "wide"), ("#b45309", "существующая сеть", "line"),
-              ("#f8fafc", "точка подключения", "dot"), ("#38bdf8", "врезка", "ring"), ("#e0f2fe", "камера", "sq")]
+              ("#b45309", "существующая сеть", "line"),
+              ("#f8fafc", "точка подключения", "dot"), ("#e0f2fe", "камера", "sq")]
     lx, ly = PAD + 6, H - 24
     items = []
     for color, label, kind in legend:
@@ -150,46 +143,65 @@ def hero(inp_path, out_path):
     open("docs/assets/hero.svg", "w", encoding="utf-8").write(svg)
 
 
-def versions():
+def progress():
+    """Четыре панели по строкам таблицы «Версии и динамика качества»: столбцы по версиям, версии слева направо от старой к новой."""
     text = open("README.md", encoding="utf-8").read()
-    rows = re.findall(r"^\| (v[\d.]+) \| [^|]+ \| ([\d,]+) \| ([\d,]+) \| (\d+) \|", text, re.MULTILINE)
-    rows = list(reversed(rows))
+    pattern = (r"^\| (v[\d.]+\*?) \| [^|]+ \| ([\d,]+) \| (\d+)/(\d+) \| (\d+)/(\d+)/(\d+) \| "
+               r"([\d,]+)/([\d,]+)/([\d,]+) \| ([\d \u00a0]+) \| (\d+) с \|")
+    rows = list(reversed(re.findall(pattern, text, re.MULTILINE)))
     if not rows:
-        sys.exit("в README нет таблицы версий")
-    vals = [(v, float(s.replace(",", ".")), float(c.replace(",", ".")), int(t)) for v, s, c, t in rows]
-    left, right, top, bottom = 56, 24, 48, 36
-    w, h = max(760, left + right + 72 * len(vals)), 300
-    top_s = 5 * (int(max(v[1] for v in vals) * 1.1 / 5) + 1)
-    bw = (w - left - right) / len(vals)
+        sys.exit("в README нет таблицы «Версии и динамика качества»")
+    num = lambda v: float(v.replace(",", ".").replace(" ", "").replace("\u00a0", ""))
+    versions = [r[0] for r in rows]
+    panels = [
+        ("S на датасете организаторов, меньше — лучше", ["S"], [[num(r[1])] for r in rows], "{:.3f}", True),
+        ("«Густо»: подключено", ["50", "100", "200"], [[num(r[4]), num(r[5]), num(r[6])] for r in rows], "{:.0f}", False),
+        ("«Густо»: S, меньше — лучше", ["50", "100", "200"], [[num(r[7]), num(r[8]), num(r[9])] for r in rows], "{:.0f}", True),
+        ("Подключено на городе из 3,14 млн точек", ["город"], [[num(r[10])] for r in rows], "{:.0f}", False),
+    ]
+    pw, ph, gap = 400, 250, 20
+    w, h = 2 * pw + 3 * gap, 2 * ph + 3 * gap + 32
+    palette = ["#38bdf8", "#818cf8", "#f472b6"]
     parts = []
-    for i in range(5):
-        y = top + (h - top - bottom) * i / 4
-        val = top_s * (1 - i / 4)
-        parts.append(f'<line x1="{left}" y1="{y:.1f}" x2="{w - right}" y2="{y:.1f}" stroke="#1e293b"/>')
-        parts.append(f'<text x="{left - 8}" y="{y + 4:.1f}" class="a" text-anchor="end">{val:g}</text>')
-    best = min(v[1] for v in vals)
-    for i, (ver, s, cost, sec) in enumerate(vals):
-        bh = (h - top - bottom) * s / top_s
-        x = left + i * bw + bw * 0.1
-        y = h - bottom - bh
-        color, ink = ("#38bdf8", "#0b1220") if s == best else ("#334155", "#cbd5e1")
-        cx = x + bw * 0.4
-        parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bw * 0.8:.1f}" height="{bh:.1f}" rx="6" fill="{color}"/>')
-        parts.append(f'<text x="{cx:.1f}" y="{y - 8:.1f}" class="v" text-anchor="middle">{s:.2f}</text>')
-        parts.append(f'<text x="{cx:.1f}" y="{h - bottom - 28:.1f}" class="i" fill="{ink}" text-anchor="middle">{cost:.0f} млн</text>')
-        parts.append(f'<text x="{cx:.1f}" y="{h - bottom - 12:.1f}" class="i" fill="{ink}" text-anchor="middle">{sec} с</text>')
-        parts.append(f'<text x="{cx:.1f}" y="{h - bottom + 22:.1f}" class="l" text-anchor="middle">{ver}</text>')
-    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}" role="img" aria-label="S варианта 1 на датасете организаторов по версиям">
-<style>.a{{font:12px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#94a3b8}}.l{{font:600 13px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}.v{{font:600 13px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}.i{{font:600 11px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}}.h{{font:600 15px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}</style>
+    for k, (title, series, values, fmt, lower_better) in enumerate(panels):
+        px = gap + (k % 2) * (pw + gap)
+        py = 32 + gap + (k // 2) * (ph + gap)
+        parts.append(f'<rect x="{px}" y="{py}" width="{pw}" height="{ph}" rx="12" fill="{CARD}"/>')
+        parts.append(f'<text x="{px + 14}" y="{py + 22}" class="h">{html.escape(title)}</text>')
+        top = max(v for row in values for v in row) * 1.25 or 1
+        left, bottom, ptop = px + 14, py + ph - 30, py + 40
+        area_h = bottom - ptop
+        group_w = (pw - 28) / len(versions)
+        bar_w = group_w * 0.7 / len(series)
+        for i, ver in enumerate(versions):
+            gx = left + i * group_w + group_w * 0.15
+            parts.append(f'<text x="{gx + group_w * 0.35:.1f}" y="{bottom + 18}" class="l" text-anchor="middle">{html.escape(ver)}</text>')
+            for j, name in enumerate(series):
+                val = values[i][j]
+                bh = area_h * val / top
+                x = gx + j * bar_w
+                y = bottom - bh
+                best = (val == min(values[m][j] for m in range(len(versions)))) if lower_better else (val == max(values[m][j] for m in range(len(versions))))
+                parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w - 4:.1f}" height="{bh:.1f}" rx="4" fill="{palette[j]}" opacity="{1 if best else 0.45}"/>')
+                parts.append(f'<text x="{x + (bar_w - 4) / 2:.1f}" y="{y - 5:.1f}" class="v" text-anchor="middle">{fmt.format(val)}</text>')
+        if len(series) > 1:
+            lx = px + pw - 14 - 44 * len(series)
+            for j, name in enumerate(series):
+                parts.append(f'<rect x="{lx + j * 44}" y="{py + 12}" width="10" height="10" rx="2" fill="{palette[j]}"/>')
+                parts.append(f'<text x="{lx + j * 44 + 14}" y="{py + 21}" class="a">{html.escape(name)}</text>')
+    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}" role="img" aria-label="Качество по версиям с правил 18.09">
+<style>.a{{font:12px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#94a3b8}}.l{{font:600 13px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}.v{{font:600 12px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}.h{{font:600 14px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}.t{{font:600 16px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}</style>
 <rect width="{w}" height="{h}" rx="16" fill="{BG}"/>
-<text x="{left}" y="28" class="h">S варианта 1 на датасете организаторов, меньше — лучше</text>
+<text x="{gap}" y="30" class="t">Качество по версиям с правил 18.09.2026; ярче — лучший результат в серии</text>
 {''.join(parts)}
 </svg>
 '''
-    open("docs/assets/versions.svg", "w", encoding="utf-8").write(svg)
+    open("docs/assets/progress.svg", "w", encoding="utf-8").write(svg)
 
 
 if __name__ == "__main__":
-    hero(sys.argv[1], sys.argv[2])
-    versions()
-    print("docs/assets/hero.svg, docs/assets/versions.svg")
+    if len(sys.argv) == 3:
+        hero(sys.argv[1], sys.argv[2])
+        print("docs/assets/hero.svg")
+    progress()
+    print("docs/assets/progress.svg")

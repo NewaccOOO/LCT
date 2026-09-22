@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.LinearRing;
 import org.locationtech.jts.geom.Polygon;
@@ -21,7 +22,6 @@ import ru.lct.heatnet.model.ConnectionPoint;
 import ru.lct.heatnet.model.ExistingOks;
 import ru.lct.heatnet.model.NewSegment;
 import ru.lct.heatnet.model.Result;
-import ru.lct.heatnet.model.TieIn;
 import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.rules.Rules;
 
@@ -66,8 +66,8 @@ class VariantEnumeratorTest {
         for (int i = 0; i < first.getVariants().size(); i++) {
             assertEquals(first.getVariants().get(i).getSummary().getCalculatedCost(),
                     second.getVariants().get(i).getSummary().getCalculatedCost(), 1e-9);
-            assertEquals(first.getVariants().get(i).getSummary().getLength(),
-                    second.getVariants().get(i).getSummary().getLength(), 1e-9);
+            assertEquals(first.getVariants().get(i).getSummary().getNewNetworkLength(),
+                    second.getVariants().get(i).getSummary().getNewNetworkLength(), 1e-9);
         }
     }
 
@@ -158,11 +158,8 @@ class VariantEnumeratorTest {
         List<String> outputIds = new ArrayList<>();
         for (Variant variant : new VariantEnumerator(fixture.input(), rules).run().getVariants()) {
             variant.getSegments().forEach(o -> outputIds.add(o.getId()));
-            variant.getTieIns().forEach(o -> outputIds.add(o.getId()));
             variant.getChambers().forEach(o -> outputIds.add(o.getId()));
             variant.getNodes().forEach(o -> outputIds.add(o.getId()));
-            variant.getReconstructions().forEach(o -> outputIds.add(o.getId()));
-            variant.getChamberReconstructions().forEach(o -> outputIds.add(o.getId()));
             outputIds.add(variant.getSummary().getId());
         }
 
@@ -191,16 +188,25 @@ class VariantEnumeratorTest {
     }
 
     private static boolean differ(Variant a, Variant b) {
-        Set<String> idsA = new HashSet<>();
-        Set<String> idsB = new HashSet<>();
-        a.getTieIns().forEach(t -> idsA.add(t.getExistingObjectId()));
-        b.getTieIns().forEach(t -> idsB.add(t.getExistingObjectId()));
-        return !idsA.equals(idsB) || farTie(a, b) || farTie(b, a) || !partition(a).equals(partition(b));
+        return farTie(a, b) || farTie(b, a) || !partition(a).equals(partition(b));
+    }
+
+    /** Узлы врезки: начала участков, в которые не входит ни один участок, с их точками. */
+    private static Map<String, Coordinate> ties(Variant variant) {
+        Set<String> ends = new HashSet<>();
+        variant.getSegments().forEach(s -> ends.add(s.getEndNodeId()));
+        Map<String, Coordinate> ties = new HashMap<>();
+        for (NewSegment segment : variant.getSegments()) {
+            if (!ends.contains(segment.getStartNodeId())) {
+                ties.put(segment.getStartNodeId(), segment.getGeometry().getCoordinateN(0));
+            }
+        }
+        return ties;
     }
 
     private static boolean farTie(Variant mine, Variant other) {
-        for (TieIn tie : mine.getTieIns()) {
-            if (other.getTieIns().stream().allMatch(t -> t.getGeometry().distance(tie.getGeometry()) > OTHER_TIE_M)) {
+        for (Coordinate tie : ties(mine).values()) {
+            if (ties(other).values().stream().allMatch(t -> t.distance(tie) > OTHER_TIE_M)) {
                 return true;
             }
         }
@@ -212,9 +218,9 @@ class VariantEnumeratorTest {
         Map<String, List<NewSegment>> outgoing = new HashMap<>();
         variant.getSegments().forEach(s -> outgoing.computeIfAbsent(s.getStartNodeId(), k -> new ArrayList<>()).add(s));
         Set<Set<String>> result = new HashSet<>();
-        for (TieIn tie : variant.getTieIns()) {
+        for (String tie : ties(variant).keySet()) {
             Set<String> reached = new HashSet<>();
-            List<String> queue = new ArrayList<>(List.of(tie.getId()));
+            List<String> queue = new ArrayList<>(List.of(tie));
             for (int i = 0; i < queue.size(); i++) {
                 for (NewSegment segment : outgoing.getOrDefault(queue.get(i), List.of())) {
                     queue.add(segment.getEndNodeId());

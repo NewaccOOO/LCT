@@ -11,11 +11,11 @@ import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.rules.Rules;
 
 /**
- * Эталон S rank=1 на {@code data/real/dataset.geojson} с коммита до city-scale оптимизаций (baseline 12.596).
- * Менять константу только при намеренной смене качества (версия Y).
+ * Эталон S rank=1 на {@code data/real/dataset.geojson} по правилам технического приложения от 18.09.2026
+ * (до них было 12.596). Менять константу только при намеренной смене качества.
  */
 class OrganizerDatasetRegressionTest {
-    private static final double ORGANIZER_RANK1_SCORE = 12.596;
+    private static final double ORGANIZER_RANK1_SCORE = 13.492;
 
     @Test
     void rank1ScoreMatchesBaseline() throws Exception {

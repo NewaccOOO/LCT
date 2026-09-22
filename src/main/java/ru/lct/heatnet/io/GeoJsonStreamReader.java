@@ -160,7 +160,7 @@ public class GeoJsonStreamReader {
             JsonLocation at = e.getLocation();
             String where = at == null ? "" : ", строка " + at.getLineNr() + ", столбец " + at.getColumnNr();
             List<Diagnostic> broken = List.of(new Diagnostic(FILE_ID, "json", "файл не разбирается как JSON" + where));
-            return new InputData(null, List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), broken, List.of());
+            return new InputData(null, List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), broken, List.of(), Set.of());
         } catch (IOException e) {
             throw new UncheckedIOException("Не удалось прочитать входной файл " + path, e);
         }
@@ -235,6 +235,8 @@ public class GeoJsonStreamReader {
         final List<Restriction> restrictions = new ArrayList<>();
         final List<Diagnostic> diagnostics = new ArrayList<>();
         final Map<String, String> typeById = new HashMap<>();
+        /** Числовые id точек подключения и камер: в выходе ссылки на них пишутся числом. */
+        final Set<String> numericIds = new HashSet<>();
         final Map<String, String> upstreamById = new LinkedHashMap<>();
         final Map<String, Integer> unknownRestrictionTypes = new LinkedHashMap<>();
         final List<Ref> refs = new ArrayList<>();
@@ -310,6 +312,7 @@ public class GeoJsonStreamReader {
             int before = diagnostics.size();
             String id = identifier(props, ordinalId, "id");
             String featureId = id == null ? ordinalId : id;
+            boolean numericId = id != null && props.get("id").isIntegralNumber();
             if (!"Feature".equals(node.path("type").textValue())) {
                 add(featureId, "type", "ожидается type = Feature");
             }
@@ -352,6 +355,9 @@ public class GeoJsonStreamReader {
                     Geometry geometry = geometry(node, featureId, POINT);
                     if (diagnostics.size() == before) {
                         rawChambers.add(new RawChamber(id, (Point) geometry, diameter, upstream));
+                        if (numericId) {
+                            numericIds.add(id);
+                        }
                     }
                     break;
                 }
@@ -371,6 +377,9 @@ public class GeoJsonStreamReader {
                         Geometry geometry = geometry(node, featureId, POINT);
                         if (diagnostics.size() == before) {
                             consumers.add(new Consumer(id, (Point) geometry, flow));
+                            if (numericId) {
+                                numericIds.add(id);
+                            }
                         }
                         break;
                     }
@@ -381,6 +390,9 @@ public class GeoJsonStreamReader {
                     Geometry geometry = geometry(node, featureId, POINT);
                     if (diagnostics.size() == before) {
                         connectionPoints.add(new ConnectionPoint(id, (Point) geometry, oksId));
+                        if (numericId) {
+                            numericIds.add(id);
+                        }
                     }
                     break;
                 }
@@ -441,7 +453,7 @@ public class GeoJsonStreamReader {
             List<String> warnings = new ArrayList<>();
             unknownRestrictionTypes.forEach((type, count) -> warnings.add(unknownTypeWarning(type, count)));
             return new InputData(source, segments, chambers, futureOks, connectionPoints, existingOks, restrictions,
-                    diagnostics, warnings);
+                    diagnostics, warnings, numericIds);
         }
 
         /** Направление сети обходом от источника, диаметры камер и текущий расход там, где их нет во входе. */
@@ -455,7 +467,8 @@ public class GeoJsonStreamReader {
                     add(raw.id, "upstream_object_id", "нет upstream_object_id, и обход сети от источника по стыкам до участка не дошёл");
                     continue;
                 }
-                double flow = raw.flow != null ? raw.flow : RULES.defaultExistingFlow(raw.diameter);
+                // текущий расход существующей сети в расчёте не участвует (приложение 18.09, п. 2.4)
+                double flow = raw.flow != null ? raw.flow : 0.0;
                 segments.add(new NetworkSegment(raw.id, raw.geometry, raw.diameter, flow, raw.upstream));
             }
             STRtree ends = endIndex();
@@ -554,7 +567,11 @@ public class GeoJsonStreamReader {
             return best;
         }
 
-        /** Точки подключения датасета становятся перспективными ОКС, здание с точкой внутри — их геометрией. */
+        /**
+         * Точки подключения датасета становятся перспективными ОКС. Здание с точкой внутри — геометрия такого ОКС
+         * (по ней строится финальный прямой участок), и оно же остаётся препятствием, как все полигоны ОКС
+         * (приложение 18.09, п. 2.2).
+         */
         void consumers() {
             long started = System.nanoTime();
             STRtree index = new STRtree();
@@ -577,22 +594,13 @@ public class GeoJsonStreamReader {
                 }
                 buildingOf[k] = building;
             });
-            boolean[] future = new boolean[buildings.size()];
             for (int k = 0; k < consumers.size(); k++) {
                 Consumer consumer = consumers.get(k);
-                Geometry geometry = consumer.geometry;
-                if (buildingOf[k] >= 0) {
-                    future[buildingOf[k]] = true;
-                    geometry = buildings.get(buildingOf[k]).getGeometry();
-                }
+                Geometry geometry = buildingOf[k] >= 0 ? buildings.get(buildingOf[k]).getGeometry() : consumer.geometry;
                 futureOks.add(new FutureOks(consumer.id, geometry, consumer.flow, null));
                 connectionPoints.add(new ConnectionPoint(consumer.id, consumer.geometry, consumer.id));
             }
-            for (int i = 0; i < buildings.size(); i++) {
-                if (!future[i]) {
-                    existingOks.add(buildings.get(i));
-                }
-            }
+            existingOks.addAll(buildings);
             if (!consumers.isEmpty()) {
                 log.info("read: {} connection points to buildings {}s", consumers.size(), (System.nanoTime() - started) / 1_000_000_000L);
             }

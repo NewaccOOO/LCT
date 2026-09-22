@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
@@ -143,8 +144,7 @@ class GeoJsonStreamReaderTest {
         assertEquals("1", segments.get("10").getUpstreamId(), "первый участок идёт от источника");
         assertEquals("20", segments.get("11").getUpstreamId(), "за камерой следующий к источнику объект — камера");
         assertEquals("11", segments.get("12").getUpstreamId(), "стык без камеры — предыдущий участок");
-        assertEquals(RULES.defaultExistingFlow(300), segments.get("10").getFlowTph());
-        assertEquals(274.9, RULES.defaultExistingFlow(300), 1e-9, "при share = 0 расход — пропускная способность Ду 250");
+        assertEquals(0.0, segments.get("10").getFlowTph(), "текущий расход сети в расчёте не участвует");
         Chamber chamber = data.getChambers().get(0);
         assertEquals("10", chamber.getUpstreamId());
         assertEquals(300, chamber.getDiameter(), "наибольший Ду примыкающих участков");
@@ -154,7 +154,9 @@ class GeoJsonStreamReaderTest {
         assertEquals(data.getFutureOks().get(1).getGeometry(), data.getFutureOks().get(2).getGeometry(),
                 "два ввода одного здания — два ОКС с общей геометрией");
         assertEquals("30", data.getConnectionPoints().get(0).getOksId());
-        assertEquals(List.of("42"), data.getExistingOks().stream().map(ExistingOks::getId).collect(Collectors.toList()));
+        assertEquals(List.of("40", "41", "42"), data.getExistingOks().stream().map(ExistingOks::getId).collect(Collectors.toList()),
+                "все полигоны ОКС — препятствия, и с точками подключения тоже");
+        assertEquals(Set.of("30", "31", "32", "20"), data.getNumericIds());
         assertEquals(List.of("railway"), data.getRestrictions().stream().map(Restriction::getType).collect(Collectors.toList()));
     }
 

@@ -17,6 +17,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -25,13 +26,10 @@ import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
-import ru.lct.heatnet.model.ChamberReconstruction;
 import ru.lct.heatnet.model.NewChamber;
 import ru.lct.heatnet.model.NewSegment;
-import ru.lct.heatnet.model.Reconstruction;
 import ru.lct.heatnet.model.Result;
 import ru.lct.heatnet.model.TechnicalNode;
-import ru.lct.heatnet.model.TieIn;
 import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.model.VariantSummary;
 
@@ -43,15 +41,10 @@ class GeoJsonStreamWriterTest {
     private static final String HEAD = "id object_type variant_id ";
     private static final Map<String, String> KEYS = Map.of(
             "heat_network", HEAD + "start_node_id end_node_id flow_tph diameter length laying_method depth_start depth_end cost",
-            "tie_in", HEAD + "existing_object_id existing_object_type existing_diameter required_diameter cost",
-            "heat_network_reconstruction", HEAD + "existing_object_id existing_flow_tph added_flow_tph calculated_flow_tph "
-                    + "existing_diameter required_diameter length cost",
             "heat_chamber", HEAD + "diameter cost",
-            "heat_chamber_reconstruction", HEAD + "existing_object_id existing_diameter required_diameter cost",
             "technical_node", HEAD.trim(),
-            "variant_summary", HEAD + "rank construction_cost chamber_construction_cost tie_in_cost reconstruction_cost "
-                    + "chamber_reconstruction_cost unconnected_penalty calculated_cost new_network_length reconstruction_length "
-                    + "length score unconnected_oks_ids");
+            "variant_summary", HEAD + "rank construction_cost chamber_construction_cost existing_chamber_tie_in_count "
+                    + "existing_chamber_tie_in_cost unconnected_penalty calculated_cost new_network_length score unconnected_oks_ids");
 
     @TempDir
     Path dir;
@@ -91,10 +84,31 @@ class GeoJsonStreamWriterTest {
         JsonNode summary = byType.get("variant_summary");
         assertTrue(summary.get("geometry").isNull());
         assertDecimal("1.235", summary.get("properties").get("score"));
-        assertDecimal("0.01", summary.get("properties").get("length"));
+        assertDecimal("0.01", summary.get("properties").get("new_network_length"));
+        assertTrue(summary.get("properties").get("existing_chamber_tie_in_count").isInt());
         assertEquals("O7", summary.get("properties").get("unconnected_oks_ids").get(0).textValue());
-        assertDecimal("0.500", byType.get("heat_network_reconstruction").get("properties").get("added_flow_tph"));
-        assertEquals("Point", byType.get("tie_in").get("geometry").get("type").textValue());
+        assertEquals("Point", byType.get("heat_chamber").get("geometry").get("type").textValue());
+    }
+
+    @Test
+    void numericInputIdsStayNumbersInReferences() throws IOException {
+        Path out = dir.resolve("result.geojson");
+        Variant variant = variant("1", 1);
+        NewSegment segment = variant.getSegments().get(0);
+        Variant numeric = new Variant("1", List.of(new NewSegment(segment.getId(), "1", segment.getGeometry(), "42", "c1",
+                1, 100, 10, "base", null, null, 1)), variant.getChambers(), variant.getNodes(),
+                new VariantSummary("summary_1", "1", 1, 1, 2, 1, 5, 6, 21, 0.005, 1.2345, List.of("7", "O7")));
+        GeoJsonStreamWriter.write(new Result(List.of(numeric), Set.of("42", "7")), out);
+
+        Map<String, JsonNode> byType = new HashMap<>();
+        for (JsonNode feature : MAPPER.readTree(out.toFile()).get("features")) {
+            byType.put(feature.get("properties").get("object_type").textValue(), feature.get("properties"));
+        }
+        assertEquals(42, byType.get("heat_network").get("start_node_id").intValue(), "числовой id узла остаётся числом");
+        assertEquals("c1", byType.get("heat_network").get("end_node_id").textValue());
+        JsonNode unconnected = byType.get("variant_summary").get("unconnected_oks_ids");
+        assertEquals(7, unconnected.get(0).intValue());
+        assertEquals("O7", unconnected.get(1).textValue());
     }
 
     @Test
@@ -108,7 +122,7 @@ class GeoJsonStreamWriterTest {
         for (JsonNode feature : MAPPER.readTree(out.toFile()).get("features")) {
             variantIds.add(feature.get("properties").get("variant_id").textValue());
         }
-        assertEquals(Stream.concat(Stream.generate(() -> "2").limit(7), Stream.generate(() -> "1").limit(7))
+        assertEquals(Stream.concat(Stream.generate(() -> "2").limit(4), Stream.generate(() -> "1").limit(4))
                 .collect(Collectors.toList()), variantIds);
         try (Stream<Path> files = Files.list(dir)) {
             assertEquals(List.of(out), files.collect(Collectors.toList()), "временный файл не остался");
@@ -121,13 +135,9 @@ class GeoJsonStreamWriterTest {
                 new Coordinate[] {new Coordinate(37.62, 55.75), new Coordinate(37.621, 55.751)}));
         return new Variant(variantId,
                 List.of(new NewSegment("s1", variantId, line, "t1", "c1", 12.3456, 100, 123.455, "base", null, null, 14_860_000.005)),
-                List.of(new TieIn("t1", variantId, tie, "N1", "heat_network", 150, 200, 5_000_000)),
-                List.of(new Reconstruction("r1", variantId, line, "N1", 60.0004, 0.4996, 60.5, 150, 200, 88.8, 16_141_000.8)),
                 List.of(new NewChamber("c1", variantId, tie, 200, 3_000_000)),
-                List.of(new ChamberReconstruction("cr1", variantId, tie, "K1", 150, 200, 3_000_000)),
                 List.of(new TechnicalNode("n1", variantId, tie)),
-                new VariantSummary("summary-" + variantId, variantId, rank, 1, 2, 3, 4, 5, 6, 21, 0.004, 0.005, 0.009,
-                        1.2345, List.of("O7")));
+                new VariantSummary("summary-" + variantId, variantId, rank, 1, 2, 1, 5, 6, 21, 0.005, 1.2345, List.of("O7")));
     }
 
     private static List<String> names(JsonNode node) {

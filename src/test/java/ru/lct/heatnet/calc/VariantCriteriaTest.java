@@ -18,7 +18,6 @@ import ru.lct.heatnet.model.NewChamber;
 import ru.lct.heatnet.model.NewSegment;
 import ru.lct.heatnet.model.Restriction;
 import ru.lct.heatnet.model.TechnicalNode;
-import ru.lct.heatnet.model.TieIn;
 import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.model.VariantSummary;
 import ru.lct.heatnet.rules.Rules;
@@ -37,19 +36,18 @@ class VariantCriteriaTest {
         NetworkSegment pipe = new NetworkSegment("hn-1", line(-50, 0, 0, 0), 100, 10.0, "src");
         FutureOks oks = new FutureOks("oks-1", factory.createPoint(new Coordinate(120, 40)), 5, null);
         InputData input = new InputData(null, List.of(pipe), List.of(), List.of(oks), List.of(), List.of(),
-                List.of(road, gas), List.of(), List.of());
+                List.of(road, gas), List.of(), List.of(), java.util.Set.of());
 
         NewSegment toRoad = segment("s1", "tie-1", "n-1", line(0, 0, 37, 0), 37, "base", 1);
         NewSegment crossing = segment("s2", "n-1", "n-2", line(37, 0, 63, 0), 26, "special", 1.6);
         NewSegment toOks = segment("s3", "n-2", "cp-1", factory.createLineString(new Coordinate[] {
                 new Coordinate(63, 0), new Coordinate(90, 0), new Coordinate(120, 40)}), 77, "base", 1.5);
         double construction = toRoad.getCost() + crossing.getCost() + toOks.getCost();
-        VariantSummary summary = new VariantSummary("summary_1", "1", 1, construction, 3_000_000, 5_000_000, 0, 0, 0,
-                construction + 8_000_000, 140, 0, 140, 1.0, List.of());
+        VariantSummary summary = new VariantSummary("summary_1", "1", 1, construction + 8_000_000, 3_000_000, 1, 5_000_000, 0,
+                construction + 8_000_000, 140, 1.0, List.of());
         Variant variant = new Variant("1", List.of(toRoad, crossing, toOks),
-                List.of(new TieIn("tie-1", "1", factory.createPoint(new Coordinate(0, 0)), "hn-1", "heat_network", 100, DN, 5_000_000)),
-                List.of(), List.of(new NewChamber("ch-1", "1", factory.createPoint(new Coordinate(0, 0)), 100, 3_000_000)),
-                List.of(), List.of(new TechnicalNode("n-1", "1", factory.createPoint(new Coordinate(37, 0))),
+                List.of(new NewChamber("ch-1", "1", factory.createPoint(new Coordinate(0, 0)), 100, 3_000_000)),
+                List.of(new TechnicalNode("n-1", "1", factory.createPoint(new Coordinate(37, 0))),
                         new TechnicalNode("n-2", "1", factory.createPoint(new Coordinate(63, 0)))),
                 summary);
 
@@ -57,18 +55,17 @@ class VariantCriteriaTest {
 
         assertEquals(1, criteria.get("connected_oks"));
         assertEquals(new BigDecimal("5.000"), criteria.get("connected_flow_tph"));
-        assertEquals(1, criteria.get("tie_ins"));
+        assertEquals(1, criteria.get("existing_chamber_tie_ins"));
         assertEquals(1, criteria.get("new_chambers"));
         assertEquals(2, criteria.get("technical_nodes"));
         assertEquals(1, criteria.get("special_segments"));
         assertEquals(new BigDecimal("26.00"), criteria.get("special_length_m"));
         assertEquals(Map.of("road", 1), criteria.get("crossed_objects"));
         assertEquals(1, criteria.get("turns"));
-        assertEquals(1, criteria.get("nonstandard_turns"));
-        // надбавка: 26 м × 0,6 за спецпереход и 77 м × 0,5 за нестандартный угол
+        assertEquals(new BigDecimal("53.1"), criteria.get("max_turn_deg"));
+        // надбавка: 26 м × 0,6 за спецпереход и 77 м × 0,5 у последнего участка, посчитанного с коэффициентом 1,5
         assertEquals(BigDecimal.valueOf(26 * rub * 0.6 + 77 * rub * 0.5).setScale(2, java.math.RoundingMode.HALF_UP),
                 criteria.get("surcharge_cost"));
-        assertEquals(new BigDecimal("0.000"), criteria.get("reconstruction_share"));
         assertEquals(BigDecimal.valueOf(construction + 8_000_000).setScale(2, java.math.RoundingMode.HALF_UP),
                 criteria.get("cost_per_oks"));
     }
@@ -82,10 +79,10 @@ class VariantCriteriaTest {
         List<FutureOks> oks = List.of(oks("oks-a"), oks("oks-b"), oks("oks-c"), oks("oks-d"));
         List<ConnectionPoint> points = List.of(point("oks-a", 0, 0), point("oks-b", 230, 0), point("oks-d", 600, 0));
         InputData input = new InputData(null, List.of(), List.of(), oks, points, List.of(), List.of(water, park),
-                List.of(), List.of());
-        VariantSummary summary = new VariantSummary("summary_1", "1", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                List.of(), List.of(), java.util.Set.of());
+        VariantSummary summary = new VariantSummary("summary_1", "1", 1, 0, 0, 0, 0, 0, 0, 0, 0,
                 List.of("oks-a", "oks-b", "oks-c", "oks-d"));
-        Variant variant = new Variant("1", List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), summary);
+        Variant variant = new Variant("1", List.of(), List.of(), List.of(), summary);
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> reasons = (List<Map<String, Object>>) new VariantCriteria(input, rules).of(variant)

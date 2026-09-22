@@ -4,12 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
-import ru.lct.heatnet.model.ChamberReconstruction;
 import ru.lct.heatnet.model.FutureOks;
 import ru.lct.heatnet.model.NewChamber;
 import ru.lct.heatnet.model.NewSegment;
-import ru.lct.heatnet.model.Reconstruction;
-import ru.lct.heatnet.model.TieIn;
 import ru.lct.heatnet.model.VariantSummary;
 import ru.lct.heatnet.rules.Rules;
 
@@ -53,31 +50,22 @@ class CostCalculatorTest {
                 new NewSegment("s1", "1", null, "t", "c", 3, 50, 120.5, "special", null, null, 14_271_634.4),
                 new NewSegment("s2", "1", null, "c", "o", 7, 65, 100, "base", null, null, 7_863_100));
         List<NewChamber> chambers = List.of(new NewChamber("ch", "1", null, 65, 3_000_000));
-        List<TieIn> tieIns = List.of(new TieIn("t", "1", null, "n1", "heat_network", 80, 100, 5_000_000));
-        List<Reconstruction> recons = List.of(
-                new Reconstruction("r", "1", null, "n1", 12, 3, 15, 80, 100, 100, 13_369_400));
-        List<ChamberReconstruction> chamberRecons = List.of(
-                new ChamberReconstruction("cr", "1", null, "k1", 80, 100, 3_000_000));
 
-        VariantSummary summary = cost.summary("summary_1", "1", segments, chambers, tieIns, recons, chamberRecons,
-                List.of(oks("o9", 2.5)));
+        VariantSummary summary = cost.summary("summary_1", "1", segments, chambers, 2, List.of(oks("o9", 2.5)));
 
         assertEquals("summary_1", summary.getId());
         assertEquals("1", summary.getVariantId());
         assertEquals(0, summary.getRank());
-        assertEquals(22_134_734.4, summary.getConstructionCost(), EPS); // 14 271 634,4 + 7 863 100
+        // 14 271 634,4 + 7 863 100 + камера 3 000 000 + две врезки по 5 000 000
+        assertEquals(35_134_734.4, summary.getConstructionCost(), EPS);
         assertEquals(3_000_000, summary.getChamberConstructionCost(), EPS);
-        assertEquals(5_000_000, summary.getTieInCost(), EPS);
-        assertEquals(13_369_400, summary.getReconstructionCost(), EPS);
-        assertEquals(3_000_000, summary.getChamberReconstructionCost(), EPS);
+        assertEquals(2, summary.getExistingChamberTieInCount());
+        assertEquals(10_000_000, summary.getExistingChamberTieInCost(), EPS);
         assertEquals(101_250_000, summary.getUnconnectedPenalty(), EPS); // 100 000 000 + 500 000 × 2,5
-        // 22 134 734,4 + 3 000 000 + 5 000 000 + 13 369 400 + 3 000 000 + 101 250 000
-        assertEquals(147_754_134.4, summary.getCalculatedCost(), EPS);
+        assertEquals(136_384_734.4, summary.getCalculatedCost(), EPS);
         assertEquals(220.5, summary.getNewNetworkLength(), EPS);
-        assertEquals(100, summary.getReconstructionLength(), EPS);
-        assertEquals(320.5, summary.getLength(), EPS);
-        // 0,7 × 147 754 134,4 / 25 000 000 + 0,3 × 320,5 / 100 = 4,1371157632 + 0,9615 = 5,0986… -> 5,099
-        assertEquals(5.099, summary.getScore(), EPS);
+        // 0,7 × 136 384 734,4 / 25 000 000 + 0,3 × 220,5 / 100 = 3,8187725632 + 0,6615 = 4,4802… -> 4,480
+        assertEquals(4.48, summary.getScore(), EPS);
         assertEquals(List.of("o9"), summary.getUnconnectedOksIds());
     }
 
@@ -90,7 +78,7 @@ class CostCalculatorTest {
     }
 
     private static VariantSummary summary(double score, double calculatedCost) {
-        return new VariantSummary("s", "v", 0, 0, 0, 0, 0, 0, 0, calculatedCost, 0, 0, 0, score, List.of());
+        return new VariantSummary("s", "v", 0, 0, 0, 0, 0, 0, calculatedCost, 0, score, List.of());
     }
 
     private static FutureOks oks(String id, double flow) {

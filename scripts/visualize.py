@@ -5,7 +5,7 @@
     python3 scripts/visualize.py IN.geojson OUT.geojson [--criteria OUT.criteria.json] [--html OUT.html]
 
 Показывает вход (здания и ограничения, существующую сеть, камеры, источник, точки подключения) и каждый вариант
-результата: новые участки с диаметром и расходом, спецпереходы, врезки, камеры, технические узлы, реконструкцию.
+результата: новые участки с диаметром и расходом, спецпереходы, камеры, технические узлы.
 Справа — сводка варианта, дополнительные критерии из файла CLI и свойства объекта, по которому щёлкнули.
 Колёсико — масштаб, перетаскивание — сдвиг. Файл читается целиком, поэтому скрипт для наборов размером с район,
 а не для файла на 3 ГБ.
@@ -141,16 +141,15 @@ const NAMES = {oks_existing:"существующий ОКС", park:"парк", 
   power_line_support:"опора ЛЭП", source:"источник", heat_chamber:"тепловая камера", oks_future:"перспективный ОКС",
   oks_connection_point:"точка подключения", restriction:"ограничение"};
 const name = k => NAMES[k] || k;
-const SUMMARY = [["calculated_cost","Итоговая стоимость, руб."],["construction_cost","Новые участки"],
-  ["chamber_construction_cost","Новые камеры"],["tie_in_cost","Врезки"],["reconstruction_cost","Реконструкция участков"],
-  ["chamber_reconstruction_cost","Реконструкция камер"],["unconnected_penalty","Штраф за неподключённые"],
-  ["new_network_length","Новая сеть, м"],["reconstruction_length","Реконструкция, м"],["length","Длина всего, м"],
-  ["score","S, меньше — лучше"],["unconnected_oks_ids","Неподключённые ОКС"]];
-const CRITERIA = [["connected_oks","Подключено ОКС"],["connected_flow_tph","Подключённый расход, т/ч"],["tie_ins","Врезок"],
-  ["new_chambers","Новых камер"],["technical_nodes","Технических узлов"],["chamber_reconstructions","Реконструкций камер"],
+const SUMMARY = [["calculated_cost","Итоговая стоимость, руб."],["construction_cost","Стоимость строительства"],
+  ["chamber_construction_cost","Новые камеры"],["existing_chamber_tie_in_count","Врезок в существующие камеры"],
+  ["existing_chamber_tie_in_cost","Стоимость врезок"],["unconnected_penalty","Штраф за неподключённые"],
+  ["new_network_length","Новая сеть, м"],["score","S, меньше — лучше"],["unconnected_oks_ids","Неподключённые ОКС"]];
+const CRITERIA = [["connected_oks","Подключено ОКС"],["connected_flow_tph","Подключённый расход, т/ч"],
+  ["existing_chamber_tie_ins","Врезок в существующие камеры"],["new_chambers","Новых камер"],["technical_nodes","Технических узлов"],
   ["special_segments","Спецучастков"],["special_length_m","Длина спецпереходов, м"],["crossed_objects","Пересечено объектов"],
-  ["turns","Поворотов"],["nonstandard_turns","Нестандартных углов"],["surcharge_cost","Надбавка за спецпереходы и углы, руб."],
-  ["reconstruction_share","Доля реконструкции в длине"],["cost_per_oks","Стоимость на один ОКС, руб."],
+  ["turns","Поворотов"],["max_turn_deg","Самый крутой поворот, °"],["surcharge_cost","Надбавка за спецпереходы, руб."],
+  ["beyond_reach_oks","Точек дальше предельной длины от сети"],["cost_per_oks","Стоимость на один ОКС, руб."],
   ["cost_per_tph","Стоимость на 1 т/ч, руб."]];
 const fmt = v => Array.isArray(v) ? (v.length ? v.join(", ") : "нет")
   : (v && typeof v === "object") ? (Object.keys(v).length ? Object.entries(v).map(([k,n]) => name(k) + ": " + n).join("<br>") : "нет")
