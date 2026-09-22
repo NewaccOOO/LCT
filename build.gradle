@@ -7,7 +7,7 @@ plugins {
 }
 
 group = 'ru.lct'
-version = '0.4.1'
+version = '0.4.2'
 sourceCompatibility = '11'
 
 repositories {
