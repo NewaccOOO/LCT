@@ -10,12 +10,16 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.function.Predicate;
+import org.locationtech.jts.algorithm.Angle;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.LineSegment;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
+import org.locationtech.jts.index.strtree.STRtree;
 import org.locationtech.jts.linearref.LengthIndexedLine;
 import ru.lct.heatnet.calc.CostCalculator;
 import ru.lct.heatnet.calc.DiameterPlanner;
@@ -70,6 +74,13 @@ final class NetworkAssembler {
     private static final double NEAR_STEP_M = 0.5;
     private static final double DIST_EPS_M = 0.001;
     private static final double MIN_TURN_DEG = 3;
+    /** Валидатор склеивает узлы ближе 0,05 м и видит касание участков ближе 0,001 м за вырезом 0,15 м у узла. */
+    private static final double NODE_APART_M = 0.06;
+    private static final double TOUCH_APART_M = 0.002;
+    private static final double SHARED_CLIP_M = 0.14;
+    /** Валидатор считает участок в зоне при перекрытии больше 0,1 м: специальный кусок короче не распознать. */
+    private static final double MIN_SPECIAL_M = 0.12;
+    private static final double MIN_SPLIT_DEG = 30.5;
 
     private final InputData input;
     private final Rules rules;
@@ -79,6 +90,7 @@ final class NetworkAssembler {
     private final Map<String, Double> flowByOks = new HashMap<>();
     /** ID входа: выходные ID с ними не совпадают (правило schema). */
     private final Set<String> inputIds = new HashSet<>();
+    private final Map<String, Boolean> startsByPrefix = new HashMap<>();
     /** Полигоны, которые считаются в правиле поворотов: запрещённые, дороги и трамвайные пути. */
     private final TurnRule turnRule;
     private final GeometryFactory factory = new GeometryFactory();
@@ -149,7 +161,8 @@ final class NetworkAssembler {
     }
 
     private boolean startsInputId(String prefix) {
-        return inputIds.stream().anyMatch(id -> id.startsWith(prefix));
+        // вход города — миллионы ID, а префиксов за расчёт единицы: каждый проверяется один раз
+        return startsByPrefix.computeIfAbsent(prefix, key -> inputIds.stream().anyMatch(id -> id.startsWith(key)));
     }
 
     /**
@@ -225,6 +238,7 @@ final class NetworkAssembler {
                 cut(i);
             }
             checkClearance();
+            checkApart();
             checkTurns();
             checkShape();
             for (Edge edge : edges) {
@@ -304,9 +318,10 @@ final class NetworkAssembler {
             LengthIndexedLine indexed = new LengthIndexedLine(edge.source.line);
             List<double[]> intervals = new ArrayList<>();
             double[] open = null;
+            Predicate<Coordinate> near = specials.nearAlong(edge.source.line, dn);
             for (double at = 0; at <= edge.length + NEAR_STEP_M; at += NEAR_STEP_M) {
                 double position = Math.min(at, edge.length);
-                if (specials.near(indexed.extractPoint(position), dn)) {
+                if (near.test(indexed.extractPoint(position))) {
                     if (open == null) {
                         open = new double[] {position - NEAR_STEP_M, position + NEAR_STEP_M};
                         intervals.add(open);
@@ -390,6 +405,16 @@ final class NetworkAssembler {
                     double mid = (from + to) / 2;
                     int dn = dnAt(pieces, mid);
                     boolean isSpecial = inside(special, mid);
+                    if (!isSpecial) {
+                        for (Zone zone : zones) {
+                            // хвост зоны за разрезом, слитым с соседним ближе MERGE_M: валидатор увидит обычный
+                            // участок в зоне перехода
+                            if (zone.edge == index && zone.overlap(from, to) > ZONE_OVERLAP_M) {
+                                throw new IllegalStateException("Обычный участок ребра " + edge.id + " лежит в зоне "
+                                        + "спецперехода больше чем на " + ZONE_OVERLAP_M + " м");
+                            }
+                        }
+                    }
                     Coordinate[] coords = indexed.extractLine(from, to).getCoordinates();
                     coords[0] = points.get(from);
                     coords[coords.length - 1] = points.get(to);
@@ -468,7 +493,7 @@ final class NetworkAssembler {
                         continue;
                     }
                     double need = specials.clearance(special, segment.getDiameter());
-                    if (segment.getGeometry().distance(special.geometry) < need - DIST_EPS_M) {
+                    if (special.closer(segment.getGeometry(), need - DIST_EPS_M)) {
                         throw new IllegalStateException("Участок " + segment.getId() + " ближе отступа к объекту "
                                 + "со специальным проходом вне специального участка");
                     }
@@ -480,6 +505,128 @@ final class NetworkAssembler {
          * Форма участков: внутри нет вершин с отклонением меньше 3° и подотрезков короче метра, кроме первого
          * и последнего подотрезка у узла, общего со специальным участком.
          */
+        /**
+         * Узлы разных участков не ближе NODE_APART_M, а участки не касаются вне общих узлов, как считает валидатор
+         * (узлы в 0,05 м склеиваются, касание — 0,001 м за вырезом 0,15 м у общего узла), с запасом на округление.
+         * Иначе ветка, ушедшая от развилки почти назад вдоль ствола, давала склеенные узлы, цикл и касание.
+         * Несколько врезок в одну существующую камеру стоят в одной точке законно.
+         */
+        void checkApart() {
+            Map<String, Coordinate> points = new LinkedHashMap<>();
+            for (NewSegment segment : segments) {
+                Coordinate[] coords = segment.getGeometry().getCoordinates();
+                points.putIfAbsent(segment.getStartNodeId(), coords[0]);
+                points.putIfAbsent(segment.getEndNodeId(), coords[coords.length - 1]);
+            }
+            List<String> ids = new ArrayList<>(points.keySet());
+            Map<String, String> group = new HashMap<>();
+            ids.forEach(id -> group.put(id, id));
+            STRtree index = new STRtree();
+            for (String id : ids) {
+                index.insert(new Envelope(points.get(id)), id);
+            }
+            for (String id : ids) {
+                Envelope near = new Envelope(points.get(id));
+                near.expandBy(NODE_APART_M);
+                for (Object item : index.query(near)) {
+                    String other = (String) item;
+                    if (other.equals(id) || points.get(id).distance(points.get(other)) > NODE_APART_M) {
+                        continue;
+                    }
+                    if (!isTie(id) || !isTie(other)) {
+                        throw new IllegalStateException("Узлы " + id + " и " + other + " ближе "
+                                + NODE_APART_M + " м: валидатор считает их одним узлом");
+                    }
+                    group.put(other, group.get(id));
+                }
+            }
+            for (NewSegment segment : segments) {
+                Coordinate[] coords = segment.getGeometry().getCoordinates();
+                if (SPECIAL.equals(segment.getLayingMethod()) && segment.getGeometry().getLength() <= MIN_SPECIAL_M) {
+                    throw new IllegalStateException("Специальный участок " + segment.getId() + " короче " + MIN_SPECIAL_M
+                            + " м: валидатор не видит у него перехода");
+                }
+                for (int i = 0; i + 1 < coords.length; i++) {
+                    for (int j = i + 2; j + 1 < coords.length; j++) {
+                        if (new LineSegment(coords[i], coords[i + 1]).distance(new LineSegment(coords[j], coords[j + 1])) <= TOUCH_APART_M) {
+                            throw new IllegalStateException("Участок " + segment.getId() + " касается сам себя");
+                        }
+                    }
+                }
+            }
+            // обычная и специальная ветки одного узла под острым углом: зона специальной, раздутая валидатором
+            // на 0,05 м, накрывает обычную на 0,05 / sin угла, больше 0,1 м при угле меньше 30°
+            Map<String, List<NewSegment>> byNode = new HashMap<>();
+            for (NewSegment segment : segments) {
+                byNode.computeIfAbsent(group.get(segment.getStartNodeId()), key -> new ArrayList<>()).add(segment);
+                byNode.computeIfAbsent(group.get(segment.getEndNodeId()), key -> new ArrayList<>()).add(segment);
+            }
+            for (Map.Entry<String, List<NewSegment>> node : byNode.entrySet()) {
+                Coordinate at = points.get(node.getKey());
+                for (NewSegment base : node.getValue()) {
+                    if (SPECIAL.equals(base.getLayingMethod())) {
+                        continue;
+                    }
+                    for (NewSegment special : node.getValue()) {
+                        if (SPECIAL.equals(special.getLayingMethod())
+                                && Angle.toDegrees(Angle.angleBetween(awayFrom(base, at), at, awayFrom(special, at))) < MIN_SPLIT_DEG) {
+                            throw new IllegalStateException("Обычный " + base.getId() + " и специальный " + special.getId()
+                                    + " расходятся из узла под углом меньше " + MIN_SPLIT_DEG + "°");
+                        }
+                    }
+                }
+            }
+            STRtree lines = new STRtree();
+            for (NewSegment segment : segments) {
+                lines.insert(segment.getGeometry().getEnvelopeInternal(), segment);
+            }
+            for (NewSegment a : segments) {
+                Envelope around = new Envelope(a.getGeometry().getEnvelopeInternal());
+                around.expandBy(NODE_APART_M);
+                for (Object item : lines.query(around)) {
+                    NewSegment b = (NewSegment) item;
+                    if (a.getId().compareTo(b.getId()) >= 0 || a.getGeometry().distance(b.getGeometry()) > NODE_APART_M) {
+                        continue;
+                    }
+                    Set<String> shared = new HashSet<>(List.of(group.get(a.getStartNodeId()), group.get(a.getEndNodeId())));
+                    shared.retainAll(List.of(group.get(b.getStartNodeId()), group.get(b.getEndNodeId())));
+                    // зона спецперехода у валидатора раздута на 0,05 м: обычный участок рядом со специальным другой
+                    // ветки оказывается в ней
+                    if (shared.isEmpty() && !a.getLayingMethod().equals(b.getLayingMethod())) {
+                        throw new IllegalStateException("Участки " + a.getId() + " и " + b.getId()
+                                + " ближе " + NODE_APART_M + " м, один из них специальный");
+                    }
+                    if (a.getGeometry().distance(b.getGeometry()) > TOUCH_APART_M) {
+                        continue;
+                    }
+                    LineString restA = rest(a, shared, group);
+                    LineString restB = rest(b, shared, group);
+                    if (restA != null && restB != null && restA.distance(restB) <= TOUCH_APART_M) {
+                        throw new IllegalStateException("Участки " + a.getId() + " и " + b.getId()
+                                + " касаются вне общего узла");
+                    }
+                }
+            }
+        }
+
+        /** Участок без SHARED_CLIP_M у концов в общих узлах; null — от него ничего не осталось. */
+        LineString rest(NewSegment segment, Set<String> shared, Map<String, String> group) {
+            double length = segment.getGeometry().getLength();
+            double from = shared.contains(group.get(segment.getStartNodeId())) ? SHARED_CLIP_M : 0;
+            double to = shared.contains(group.get(segment.getEndNodeId())) ? length - SHARED_CLIP_M : length;
+            return to - from <= 0 ? null : (LineString) new LengthIndexedLine(segment.getGeometry()).extractLine(from, to);
+        }
+
+        /** Вторая точка участка от конца в узле at: направление, в котором участок уходит из узла. */
+        Coordinate awayFrom(NewSegment segment, Coordinate at) {
+            Coordinate[] coords = segment.getGeometry().getCoordinates();
+            return coords[0].distance(at) <= coords[coords.length - 1].distance(at) ? coords[1] : coords[coords.length - 2];
+        }
+
+        boolean isTie(String nodeId) {
+            return nodeId.startsWith(prefix + "tie_");
+        }
+
         void checkShape() {
             Set<String> specialNodes = new HashSet<>();
             for (NewSegment segment : segments) {
@@ -657,7 +804,7 @@ final class NetworkAssembler {
         void lineZone(SpecialObjects.Special special, Envelope envelope, List<Zone> result) {
             for (int i = 0; i < edges.size(); i++) {
                 LineString line = edges.get(i).source.line;
-                if (!line.getEnvelopeInternal().intersects(envelope)) {
+                if (!line.getEnvelopeInternal().intersects(envelope) || !special.crossedBy(line)) {
                     continue;
                 }
                 Geometry hit = line.intersection(special.geometry);

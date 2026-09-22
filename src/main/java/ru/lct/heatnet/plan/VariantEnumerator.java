@@ -2,16 +2,24 @@ package ru.lct.heatnet.plan;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.locationtech.jts.geom.Coordinate;
@@ -20,6 +28,7 @@ import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
+import org.locationtech.jts.index.quadtree.Quadtree;
 import org.locationtech.jts.index.strtree.STRtree;
 import ru.lct.heatnet.graph.ObstacleIndex;
 import ru.lct.heatnet.graph.ObstacleSet;
@@ -27,6 +36,7 @@ import ru.lct.heatnet.graph.RouteCache;
 import ru.lct.heatnet.graph.Router;
 import ru.lct.heatnet.calc.ReconPart;
 import ru.lct.heatnet.calc.ReconstructionCalculator;
+import ru.lct.heatnet.calc.Scorer;
 import ru.lct.heatnet.calc.TieInLoad;
 import ru.lct.heatnet.io.GeoJsonStreamReader;
 import ru.lct.heatnet.model.ConnectionPoint;
@@ -92,12 +102,34 @@ public final class VariantEnumerator {
     private static final double IMPROVE_EPS = 1e-6;
     /** Из локального оптимума спуск продолжается с наименее плохого соседа, если он хуже не больше чем на столько S. */
     private static final double WALK_THRESHOLD = 0.5;
+    /**
+     * Больше стольких ОКС расчёт идёт по районам (свойство heatnet.city.min): ОКС отбираются под пропускную способность
+     * сети ({@link NetworkCapacity}), режутся на районы до CITY_BLOCK ОКС, районы считаются прежним перебором
+     * параллельно, их деревья собираются в общий вариант. Перебор на всех ОКС сразу растёт быстрее n².
+     */
+    private static final int CITY_MIN = Integer.getInteger("heatnet.city.min", 500);
+    private static final int CITY_BLOCK = Integer.getInteger("heatnet.city.block", 16);
+    private static final int CITY_THREADS = Integer.getInteger("heatnet.city.threads", Runtime.getRuntime().availableProcessors());
+    /**
+     * В районе кандидаты врезки дальше ближайшего больше чем на столько отбрасываются. Три ближайшие камеры и врезки
+     * выше реконструкции в городе лежат за километры, а граф области растёт с её площадью: у одного ОКС выходило
+     * 5–14 тысяч узлов и минуты на граф. Остальные упрощения района — тоже ради числа и размера графов, замеры
+     * в docs/testing/city-scale-run.md: запас области CITY_MARGIN_M вместо AREA_MARGIN_M, один диаметр графа на
+     * район вместо диаметра по расходу каждого подмножества, без последней попытки на широкой области, поиск
+     * на CITY_BUDGET черновиков.
+     */
+    private static final double CITY_REACH_M = 150;
+    private static final double CITY_MARGIN_M = 60;
+    private static final int CITY_BUDGET = Integer.getInteger("heatnet.city.budget", 60);
+    private static final long CITY_CACHE_MB = 64;
 
     private final InputData input;
     private final Rules rules;
     private final TieInFinder finder;
     private final ObstacleIndex obstacleIndex;
-    private final RouteCache routeCache = new RouteCache(RouteCache.DEFAULT_MB);
+    private final RouteCache routeCache;
+    /** Расчёт одного района города: кандидаты врезки только в радиусе CITY_REACH_M. */
+    private final boolean district;
     private final SpecialObjects specials;
     private final TurnRule turnRule;
     private final TreeBuilder builder;
@@ -139,7 +171,7 @@ public final class VariantEnumerator {
                 envelope.expandToInclude(candidate.getPoint().getCoordinate());
             }
             this.wideArea = new Envelope(envelope);
-            envelope.expandBy(AREA_MARGIN_M);
+            envelope.expandBy(district ? CITY_MARGIN_M : AREA_MARGIN_M);
             wideArea.expandBy(WIDE_AREA_MARGIN_M);
             this.area = envelope;
         }
@@ -192,16 +224,24 @@ public final class VariantEnumerator {
     }
 
     public VariantEnumerator(InputData input, Rules rules) {
+        this(input, rules, new TieInFinder(input, rules), new ObstacleIndex(input, rules), new SpecialObjects(input, rules),
+                new TurnRule(input, rules), RouteCache.DEFAULT_MB, false);
+    }
+
+    private VariantEnumerator(InputData input, Rules rules, TieInFinder finder, ObstacleIndex obstacleIndex,
+            SpecialObjects specials, TurnRule turnRule, long cacheMb, boolean district) {
         this.input = input;
         this.rules = rules;
-        this.finder = new TieInFinder(input, rules);
-        this.obstacleIndex = new ObstacleIndex(input, rules);
+        this.finder = finder;
+        this.obstacleIndex = obstacleIndex;
         Map<String, LineString> networkById = new HashMap<>();
         for (NetworkSegment segment : input.getSegments()) {
             networkById.put(segment.getId(), segment.getGeometry());
         }
-        this.specials = new SpecialObjects(input, rules);
-        this.turnRule = new TurnRule(input, rules);
+        this.specials = specials;
+        this.turnRule = turnRule;
+        this.routeCache = new RouteCache(cacheMb);
+        this.district = district;
         this.builder = new TreeBuilder(finder.nodeLimit(), networkById, specials, turnRule);
         for (FutureOks oks : input.getFutureOks()) {
             oksById.put(oks.getId(), oks);
@@ -218,8 +258,12 @@ public final class VariantEnumerator {
      * {@code heatnet.read.all=true} читает все препятствия, как раньше.
      */
     public static InputData read(Path path, Rules rules) {
-        return Boolean.getBoolean("heatnet.read.all") ? GeoJsonStreamReader.read(path)
+        long started = System.nanoTime();
+        InputData input = Boolean.getBoolean("heatnet.read.all") ? GeoJsonStreamReader.read(path)
                 : GeoJsonStreamReader.read(path, partial -> obstacleExtent(partial, rules));
+        log.info("read: oks={} restrictions={} existing={} elapsed={}s", input.getFutureOks().size(),
+                input.getRestrictions().size(), input.getExistingOks().size(), (System.nanoTime() - started) / 1_000_000_000L);
+        return input;
     }
 
     /**
@@ -251,6 +295,203 @@ public final class VariantEnumerator {
     }
 
     public Result run() {
+        if (connectionByOks.size() > CITY_MIN) {
+            return city();
+        }
+        List<Draft> picked = picked();
+        List<Variant> variants = new ArrayList<>();
+        for (int i = 0; i < picked.size(); i++) {
+            Draft draft = picked.get(i);
+            variants.add(assembler.assemble(String.valueOf(i + 1), i + 1, draft.trees, draft.unconnected));
+        }
+        return new Result(variants);
+    }
+
+    /**
+     * Город: ОКС под пропускную способность сети, районы по CITY_BLOCK ОКС параллельно, вариант k — k-й черновик
+     * каждого района (или последний, если их меньше). Дерево района, которое задевает уже принятое дерево соседа,
+     * не берётся, его ОКС остаются неподключёнными. ОКС сверх пропускной способности — тоже.
+     */
+    private Result city() {
+        long started = System.nanoTime();
+        List<ConnectionPoint> all = new ArrayList<>(connectionByOks.values());
+        double[] flows = new double[all.size()];
+        for (int i = 0; i < all.size(); i++) {
+            flows[i] = oksById.get(all.get(i).getOksId()).getFlowTph();
+        }
+        List<ConnectionPoint> planned = new NetworkCapacity(input, rules).select(all, flows);
+        List<List<ConnectionPoint>> districts = districts(planned);
+        log.info("city: oks={} planned={} districts={} elapsed={}s", all.size(), planned.size(), districts.size(),
+                (System.nanoTime() - started) / 1_000_000_000L);
+        List<List<Draft>> results = solve(districts);
+        assembler = new NetworkAssembler(input, rules, specials, turnRule);
+        int most = results.stream().mapToInt(List::size).max().orElse(0);
+        List<List<Tree>> candidates = new ArrayList<>();
+        List<List<FutureOks>> unconnected = new ArrayList<>();
+        List<Variant> variants = new ArrayList<>();
+        for (int k = 0; k < Math.min(MAX_VARIANTS, Math.max(most, 1)); k++) {
+            List<Tree> trees = joined(results, k);
+            candidates.add(trees);
+            unconnected.add(missing(trees));
+            variants.add(assembler.assemble(String.valueOf(k + 1), k + 1, trees, unconnected.get(k)));
+            log.info("city: candidate {} trees={} score={} elapsed={}s", k + 1, trees.size(),
+                    variants.get(k).getSummary().getScore(), (System.nanoTime() - started) / 1_000_000_000L);
+        }
+        // score района считается без соседей, а реконструкция общая: ранг даёт только score всего варианта
+        List<Integer> order = Scorer.rank(variants.stream().map(Variant::getSummary).collect(Collectors.toList()));
+        if (!order.equals(IntStream.range(0, order.size()).boxed().collect(Collectors.toList()))) {
+            List<Variant> ranked = new ArrayList<>();
+            for (int i = 0; i < order.size(); i++) {
+                int k = order.get(i);
+                ranked.add(assembler.assemble(String.valueOf(i + 1), i + 1, candidates.get(k), unconnected.get(k)));
+            }
+            variants = ranked;
+        }
+        Set<String> overCapacity = new HashSet<>(connectionByOks.keySet());
+        planned.forEach(connection -> overCapacity.remove(connection.getOksId()));
+        return new Result(variants, overCapacity);
+    }
+
+    /** ОКС входа, которых нет в деревьях. */
+    private List<FutureOks> missing(List<Tree> trees) {
+        Set<String> connected = new HashSet<>();
+        trees.forEach(tree -> tree.connected().forEach(connection -> connected.add(connection.getOksId())));
+        List<FutureOks> result = new ArrayList<>();
+        for (FutureOks oks : input.getFutureOks()) {
+            if (!connected.contains(oks.getId())) {
+                result.add(oks);
+            }
+        }
+        return result;
+    }
+
+    /** Районы: группы близких ОКС, крупные группы режутся пополам, пока не станут не больше CITY_BLOCK. */
+    static List<List<ConnectionPoint>> districts(List<ConnectionPoint> connections) {
+        List<List<ConnectionPoint>> result = new ArrayList<>();
+        List<List<ConnectionPoint>> queue = new ArrayList<>(groupsFast(connections));
+        for (int next = 0; next < queue.size(); next++) {
+            List<ConnectionPoint> group = queue.get(next);
+            List<List<ConnectionPoint>> parts = group.size() > CITY_BLOCK ? splitGroup(group) : List.of(group);
+            if (parts.size() < 2) {
+                result.add(group);
+            } else {
+                queue.addAll(parts);
+            }
+        }
+        return result;
+    }
+
+    /** Черновики районов по возрастанию score; район, расчёт которого упал, остаётся без черновиков. */
+    private List<List<Draft>> solve(List<List<ConnectionPoint>> districts) {
+        ExecutorService pool = Executors.newFixedThreadPool(CITY_THREADS);
+        long started = System.nanoTime();
+        AtomicInteger done = new AtomicInteger();
+        try {
+            // крупные районы первыми: иначе самый долгий район начинается последним и держит конец расчёта
+            List<Integer> order = new ArrayList<>();
+            for (int i = 0; i < districts.size(); i++) {
+                order.add(i);
+            }
+            order.sort(Comparator.comparingInt((Integer i) -> -districts.get(i).size()));
+            List<Future<List<Draft>>> futures = new ArrayList<>(Collections.nCopies(districts.size(), null));
+            for (int i : order) {
+                List<ConnectionPoint> connections = districts.get(i);
+                futures.set(i, pool.submit(() -> {
+                    long districtStarted = System.nanoTime();
+                    VariantEnumerator district = district(connections);
+                    List<Draft> drafts = district.picked();
+                    log.info("city: district oks={} {} elapsed={}s", connections.size(), district.graphs(),
+                            (System.nanoTime() - districtStarted) / 1_000_000_000L);
+                    int count = done.incrementAndGet();
+                    if (count % 10 == 0 || count == districts.size()) {
+                        log.info("city: districts {}/{} elapsed={}s", count, districts.size(),
+                                (System.nanoTime() - started) / 1_000_000_000L);
+                    }
+                    return drafts;
+                }));
+            }
+            List<List<Draft>> results = new ArrayList<>();
+            for (int i = 0; i < futures.size(); i++) {
+                try {
+                    results.add(futures.get(i).get());
+                } catch (ExecutionException e) {
+                    log.warn("city: район {} не посчитан: {}", i, e.getCause().toString());
+                    results.add(List.of());
+                }
+            }
+            return results;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Расчёт районов прерван", e);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /** Графы областей расчёта: сколько построено, самый большой по узлам и его область. */
+    private String graphs() {
+        int routers = 0;
+        int nodes = 0;
+        Envelope largest = new Envelope();
+        for (Region region : new HashSet<>(regionByConnection.values())) {
+            for (Router router : region.routers.values()) {
+                routers++;
+                if (router.obstacles().nodes().size() > nodes) {
+                    nodes = router.obstacles().nodes().size();
+                    largest = region.area;
+                }
+            }
+        }
+        return String.format(Locale.ROOT, "routers=%d nodes=%d area=%.0fx%.0f", routers, nodes, largest.getWidth(),
+                largest.getHeight());
+    }
+
+    /** Расчёт района: те же сеть, препятствия и индексы, свои ОКС и кэш маршрутов. */
+    private VariantEnumerator district(List<ConnectionPoint> connections) {
+        List<FutureOks> oks = new ArrayList<>();
+        connections.forEach(connection -> oks.add(oksById.get(connection.getOksId())));
+        // препятствия району дают общие индексы; в самом входе района они нужны были бы только сборщику для ID входа,
+        // а их сотни тысяч, и сборка каждого черновика перебирала их все
+        InputData part = new InputData(input.getSource(), input.getSegments(), input.getChambers(), oks, connections,
+                List.of(), List.of(), List.of(), List.of());
+        return new VariantEnumerator(part, rules, finder, obstacleIndex, specials, turnRule, CITY_CACHE_MB, true);
+    }
+
+    /** Деревья k-х черновиков районов, кроме задевающих уже принятые деревья соседних районов. */
+    private List<Tree> joined(List<List<Draft>> results, int k) {
+        List<Tree> accepted = new ArrayList<>();
+        Quadtree index = new Quadtree();
+        int dropped = 0;
+        for (List<Draft> drafts : results) {
+            if (drafts.isEmpty()) {
+                continue;
+            }
+            for (Tree tree : drafts.get(Math.min(k, drafts.size() - 1)).trees) {
+                Envelope envelope = geometry(tree).getEnvelopeInternal();
+                Envelope around = new Envelope(envelope);
+                around.expandBy(TREES_APART_M + 1);
+                List<Tree> near = new ArrayList<>();
+                for (Object item : index.query(around)) {
+                    if (geometry((Tree) item).getEnvelopeInternal().intersects(around)) {
+                        near.add((Tree) item);
+                    }
+                }
+                if (compatible(tree, near)) {
+                    accepted.add(tree);
+                    index.insert(envelope, tree);
+                } else {
+                    dropped++;
+                }
+            }
+        }
+        if (dropped > 0) {
+            log.info("city: variant {} dropped {} trees touching other districts", k + 1, dropped);
+        }
+        return accepted;
+    }
+
+    /** До трёх различных черновиков по возрастанию score; перед вызовом assembler не нужен, он создаётся здесь. */
+    private List<Draft> picked() {
         List<List<ConnectionPoint>> groups = groups(new ArrayList<>(connectionByOks.values()));
         for (List<ConnectionPoint> group : groups) {
             Region region = new Region(group);
@@ -295,7 +536,7 @@ public final class VariantEnumerator {
         drafts.sort(Comparator.comparingDouble(Draft::score));
         // локальный поиск от лучшего черновика: слияния деревьев дают одну врезку и одну реконструкцию вместо нескольких
         if (!drafts.isEmpty()) {
-            drafts.add(search(drafts.get(0), SEARCH_BUDGET));
+            drafts.add(search(drafts.get(0), district ? CITY_BUDGET : SEARCH_BUDGET));
         }
         List<Draft> picked = pick(drafts);
         if (picked.size() < 2) {
@@ -310,13 +551,7 @@ public final class VariantEnumerator {
             }
             picked = pick(drafts);
         }
-
-        List<Variant> variants = new ArrayList<>();
-        for (int i = 0; i < picked.size(); i++) {
-            Draft draft = picked.get(i);
-            variants.add(assembler.assemble(String.valueOf(i + 1), i + 1, draft.trees, draft.unconnected));
-        }
-        return new Result(variants);
+        return picked;
     }
 
     /**
@@ -625,11 +860,13 @@ public final class VariantEnumerator {
         // граф по диаметру расхода подмножества со ступенью запаса, как у Region: отступы группы шире нужных ветке
         Diameter byFlow = rules.diameterFor(flow);
         Diameter step = rules.nextDiameter(byFlow.getDn());
-        int blockDn = Math.min(region.dn, step != null ? step.getDn() : byFlow.getDn());
+        int blockDn = district ? region.dn : Math.min(region.dn, step != null ? step.getDn() : byFlow.getDn());
         List<TieCandidate> near = finder.find(points, blockDn);
         List<TieCandidate> above = finder.aboveReconstruction(near, flow, blockDn);
         List<TieCandidate> all = new ArrayList<>(near);
         all.addAll(above);
+        all = reach(all, points);
+        above.retainAll(all);
         List<Option> options = options(region, blockDn, region.area, subset, false, all);
         options.addAll(retied(region, blockDn, subset, options, above));
         // ОКС, не вошедшие в общее дерево, draft подключает по одному, поэтому повторы нужны только одиночным
@@ -643,7 +880,7 @@ public final class VariantEnumerator {
                     options.addAll(options(region, ownDn, region.area, subset, true, own));
                 }
             }
-            if (incomplete(options)) {
+            if (incomplete(options) && !district) {
                 // обход может не поместиться в область вокруг ОКС и кандидатов: последняя попытка на широкой области
                 options.addAll(options(region, blockDn, region.wideArea, subset, false,
                         candidates(points, flow, blockDn)));
@@ -665,7 +902,26 @@ public final class VariantEnumerator {
     private List<TieCandidate> candidates(List<Point> points, double flow, int dn) {
         List<TieCandidate> candidates = finder.find(points, dn);
         candidates.addAll(finder.aboveReconstruction(candidates, flow, dn));
-        return candidates;
+        return reach(candidates, points);
+    }
+
+    /** В районе города — кандидаты не дальше ближайшего к точкам больше чем на CITY_REACH_M; иначе все. */
+    private List<TieCandidate> reach(List<TieCandidate> candidates, List<Point> points) {
+        if (!district || candidates.isEmpty()) {
+            return candidates;
+        }
+        Map<TieCandidate, Double> distance = new HashMap<>();
+        for (TieCandidate candidate : candidates) {
+            distance.put(candidate, points.stream().mapToDouble(p -> p.distance(candidate.getPoint())).min().orElseThrow());
+        }
+        double limit = distance.values().stream().mapToDouble(Double::doubleValue).min().orElseThrow() + CITY_REACH_M;
+        List<TieCandidate> result = new ArrayList<>();
+        for (TieCandidate candidate : candidates) {
+            if (distance.get(candidate) <= limit) {
+                result.add(candidate);
+            }
+        }
+        return result;
     }
 
     private static boolean incomplete(List<Option> options) {

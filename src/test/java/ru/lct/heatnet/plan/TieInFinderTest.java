@@ -48,6 +48,18 @@ class TieInFinderTest {
     }
 
     @Test
+    void pointAtPipeGetsTieInFartherThanMetre() {
+        // точка в 1 м от hn-3 (400..600, 0): врезка по перпендикуляру дала бы отрезок короче метра с округлением
+        TieInFinder finder = new TieInFinder(PlanFixture.trunk().input(), rules);
+
+        TieCandidate pipe = finder.find(List.of(point(450, 1)), DN).stream()
+                .filter(c -> c.getExistingObjectId().equals("hn-3")).findFirst().orElseThrow();
+
+        assertEquals(0, pipe.getPoint().getY(), 1e-6);
+        assertEquals(1.2, pipe.getPoint().distance(point(450, 1)), 1e-6);
+    }
+
+    @Test
     void amongChambersWithinTenMetresCheaperReconstructionWins() {
         // точка (209, 0) на hn-2: до hc-1 (DN200, без реконструкции под DN100) 9 м, до hc-2 (DN80, реконструкция) 3 м
         TieInFinder finder = new TieInFinder(PlanFixture.trunk().chamber("hc-2", 206, 0, 80, "hn-1").input(), rules);

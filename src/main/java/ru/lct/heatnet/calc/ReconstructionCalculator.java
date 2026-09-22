@@ -151,7 +151,7 @@ public final class ReconstructionCalculator {
     }
 
     /** Конец участка к источнику — ближайший к геометрии объекта upstream_object_id (A-9). */
-    private static boolean upstreamAtStart(NetworkSegment segment, InputData input,
+    public static boolean upstreamAtStart(NetworkSegment segment, InputData input,
             Map<String, NetworkSegment> segments, Map<String, Chamber> chambers) {
         String upstreamId = segment.getUpstreamId();
         Geometry upstream;

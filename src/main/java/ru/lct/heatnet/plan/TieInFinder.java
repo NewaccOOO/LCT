@@ -1,6 +1,7 @@
 package ru.lct.heatnet.plan;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -8,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.TreeSet;
 import java.util.function.ToDoubleFunction;
 import org.locationtech.jts.geom.Coordinate;
@@ -39,6 +41,8 @@ final class TieInFinder {
     /** Запас к max_dist_m: валидатор считает расстояние по координатам, округлённым до 9 знаков. */
     private static final double DIST_MARGIN_M = 0.1;
     private static final double SAME_POINT_M = 1.0;
+    /** Врезка в трубу не ближе этого к точке, от которой она ищется: метр подотрезка и запас на округление. */
+    private static final double MIN_TIE_M = 1.2;
     private static final double END_GAP_EXTRA_M = 1.0;
     /** Запас к otherTieM у сдвинутой врезки: ось участка может быть не прямой. */
     private static final double ALONG_EXTRA_M = 1.0;
@@ -51,6 +55,7 @@ final class TieInFinder {
     private final Map<String, Integer> linksByChamber = new HashMap<>();
     private final Map<String, NetworkSegment> segmentById = new HashMap<>();
     private final Map<String, Chamber> chamberById = new HashMap<>();
+    private final Map<String, Coordinate> nearestAbove = new ConcurrentHashMap<>();
 
     TieInFinder(InputData input, Rules rules) {
         this.input = input;
@@ -68,13 +73,15 @@ final class TieInFinder {
     List<TieCandidate> find(List<Point> points, int dn) {
         Map<String, TieCandidate> byKey = new LinkedHashMap<>();
         for (Point point : points) {
-            for (Chamber chamber : nearest(input.getChambers(), c -> c.getGeometry().distance(point))) {
+            for (Chamber chamber : nearest(input.getChambers(), c -> c.getGeometry().distance(point),
+                    c -> c.getGeometry().getEnvelopeInternal().distance(point.getEnvelopeInternal()))) {
                 TieCandidate candidate = chamberCandidate(chamber);
                 if (candidate != null) {
                     byKey.putIfAbsent(candidate.nodeKey(), candidate);
                 }
             }
-            for (NetworkSegment segment : nearest(input.getSegments(), s -> s.getGeometry().distance(point))) {
+            for (NetworkSegment segment : nearest(input.getSegments(), s -> s.getGeometry().distance(point),
+                    s -> s.getGeometry().getEnvelopeInternal().distance(point.getEnvelopeInternal()))) {
                 TieCandidate candidate = pipeCandidate(segment, point, dn);
                 if (candidate != null && byKey.values().stream().noneMatch(c -> same(c, candidate))) {
                     byKey.put(candidate.nodeKey(), candidate);
@@ -154,19 +161,22 @@ final class TieInFinder {
         if (top < 0) {
             return result;
         }
-        Geometry below = geometry(chain.get(top));
+        String below = chain.get(top);
         for (int k = top + 1; k < chain.size() && result.size() < ABOVE_OBJECTS; k++) {
             Chamber chamber = chamberById.get(chain.get(k));
             TieCandidate candidate;
             if (chamber != null) {
                 candidate = chamberCandidate(chamber);
-                below = chamber.getGeometry();
             } else {
                 LineString line = segmentById.get(chain.get(k)).getGeometry();
-                Coordinate near = DistanceOp.nearestPoints(line, below)[0];
+                // сеть не меняется за расчёт, а пара «участок — объект под ним» повторяется у сотен кандидатов;
+                // у магистрали сотни вершин, и DistanceOp перебирает все пары отрезков
+                String lower = below;
+                Coordinate near = nearestAbove.computeIfAbsent(chain.get(k) + "|" + lower,
+                        key -> DistanceOp.nearestPoints(line, geometry(lower))[0]);
                 candidate = pipeCandidate(segmentById.get(chain.get(k)), new LengthIndexedLine(line).project(near), dn);
-                below = line;
             }
+            below = chain.get(k);
             if (candidate != null && result.stream().noneMatch(c -> c.nodeKey().equals(candidate.nodeKey()))) {
                 result.add(candidate);
             }
@@ -218,7 +228,16 @@ final class TieInFinder {
     }
 
     private TieCandidate pipeCandidate(NetworkSegment segment, Point point, int dn) {
-        return pipeCandidate(segment, new LengthIndexedLine(segment.getGeometry()).project(point.getCoordinate()), dn);
+        LengthIndexedLine indexed = new LengthIndexedLine(segment.getGeometry());
+        double at = indexed.project(point.getCoordinate());
+        // точка у самой трубы: отрезок от перпендикуляра короче метра, его не пропускает правило длины подотрезка,
+        // и трасса уходит петлёй по зоне трубы; врезка сдвигается вдоль оси к середине участка
+        double across = point.getCoordinate().distance(indexed.extractPoint(at));
+        if (across < MIN_TIE_M) {
+            double shift = Math.sqrt(MIN_TIE_M * MIN_TIE_M - across * across);
+            at += at < segment.getGeometry().getLength() / 2 ? shift : -shift;
+        }
+        return pipeCandidate(segment, at, dn);
     }
 
     /** Врезка в участок в точке {@code at} м от начала оси, прижатой к отступу от концов. */
@@ -283,9 +302,36 @@ final class TieInFinder {
         return result;
     }
 
-    private static <T> List<T> nearest(List<T> items, ToDoubleFunction<T> distance) {
-        List<T> sorted = new ArrayList<>(items);
-        sorted.sort(Comparator.comparingDouble(distance));
-        return sorted.subList(0, Math.min(NEAREST, sorted.size()));
+    /**
+     * NEAREST ближайших по distance, при равенстве — в порядке входа. Расстояние до рамки не больше расстояния до
+     * геометрии, поэтому точное считается только у объектов, чья рамка не дальше NEAREST-го найденного: на городе
+     * в тысячи участков по сотни вершин полный перебор с сортировкой занимал десятую часть расчёта.
+     */
+    private static <T> List<T> nearest(List<T> items, ToDoubleFunction<T> distance, ToDoubleFunction<T> bound) {
+        Integer[] byBound = new Integer[items.size()];
+        double[] bounds = new double[items.size()];
+        for (int i = 0; i < items.size(); i++) {
+            byBound[i] = i;
+            bounds[i] = bound.applyAsDouble(items.get(i));
+        }
+        Arrays.sort(byBound, Comparator.comparingDouble(i -> bounds[i]));
+        List<double[]> found = new ArrayList<>();
+        double worst = Double.POSITIVE_INFINITY;
+        for (int i : byBound) {
+            if (bounds[i] > worst) {
+                break;
+            }
+            found.add(new double[] {distance.applyAsDouble(items.get(i)), i});
+            if (found.size() >= NEAREST) {
+                found.sort(Comparator.comparingDouble((double[] d) -> d[0]).thenComparingDouble(d -> d[1]));
+                worst = found.get(NEAREST - 1)[0];
+            }
+        }
+        found.sort(Comparator.comparingDouble((double[] d) -> d[0]).thenComparingDouble(d -> d[1]));
+        List<T> result = new ArrayList<>();
+        for (int k = 0; k < Math.min(NEAREST, found.size()); k++) {
+            result.add(items.get((int) found.get(k)[1]));
+        }
+        return result;
     }
 }

@@ -1,13 +1,17 @@
 package ru.lct.heatnet.graph;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
+import org.locationtech.jts.algorithm.Distance;
 import org.locationtech.jts.algorithm.LineIntersector;
 import org.locationtech.jts.algorithm.Orientation;
+import org.locationtech.jts.algorithm.RayCrossingCounter;
 import org.locationtech.jts.algorithm.RectangleLineIntersector;
 import org.locationtech.jts.algorithm.RobustLineIntersector;
 import org.locationtech.jts.densify.Densifier;
@@ -18,6 +22,7 @@ import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineSegment;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.LinearRing;
+import org.locationtech.jts.geom.Location;
 import org.locationtech.jts.geom.Polygon;
 import org.locationtech.jts.geom.prep.PreparedGeometry;
 import org.locationtech.jts.geom.prep.PreparedGeometryFactory;
@@ -54,6 +59,8 @@ public final class ObstacleSet {
     // shapely по умолчанию строит буфер с 16 сегментами на четверть круга, валидатор считает так же
     private static final int MARGIN_QUADRANT_SEGMENTS = 16;
     private static final double TANGENT_EPS = 1e-9;
+    /** Зоны и полигоны не больше чем в столько вершин проверяются против отрезка напрямую, см. Zone#intersects. */
+    private static final int SMALL_POLYGON_POINTS = 64;
     private static final BufferParameters ZONE_BUFFER = new BufferParameters(
             BufferParameters.DEFAULT_QUADRANT_SEGMENTS, BufferParameters.CAP_SQUARE,
             BufferParameters.JOIN_MITRE, BufferParameters.DEFAULT_MITRE_LIMIT);
@@ -70,12 +77,72 @@ public final class ObstacleSet {
         final PreparedGeometry prepared;
         // Длинный отрезок задевает рамки многих зон; проверка отрезка против рамки дешевле PreparedGeometry.
         final RectangleLineIntersector box;
+        /** Стороны всех колец маленькой зоны; у большой null, и её проверяет PreparedGeometry. */
+        final LineSegment[] rings;
 
         Zone(Geometry geometry) {
             this.geometry = geometry;
             this.prepared = PreparedGeometryFactory.prepare(geometry);
             this.box = new RectangleLineIntersector(geometry.getEnvelopeInternal());
+            this.rings = geometry.getNumPoints() <= SMALL_POLYGON_POINTS ? segments(geometry.getBoundary()) : null;
         }
+
+        /**
+         * То же, что prepared.intersects(edge) для отрезка a–b: начало внутри или на границе, либо отрезок задевает
+         * сторону; предикаты те же, что у PreparedPolygonIntersects. У зоны в несколько вершин подготовка JTS на
+         * каждый вызов дороже самой проверки, а ребро графа проверяется против зон сотни тысяч раз.
+         */
+        boolean intersects(Coordinate a, Coordinate b, LineString edge) {
+            return rings == null ? prepared.intersects(edge) : crosses(Arrays.asList(rings), a, b, true);
+        }
+    }
+
+    /** Отрезок a–b задевает стороны или, если area, его начало внутри колец из этих сторон. */
+    private static boolean crosses(List<LineSegment> sides, Coordinate a, Coordinate b, boolean area) {
+        if (area) {
+            RayCrossingCounter counter = new RayCrossingCounter(a);
+            for (LineSegment side : sides) {
+                counter.countSegment(side.p0, side.p1);
+                if (counter.isOnSegment()) {
+                    return true;
+                }
+            }
+            if (counter.getLocation() != Location.EXTERIOR) {
+                return true;
+            }
+        }
+        for (LineSegment side : sides) {
+            if (meet(a, b, side.p0, side.p1)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * У отрезков p и q есть общая точка — то же, что RobustLineIntersector.hasIntersection (JTS 1.20), но без
+     * вычисления самой точки: рамки, затем знаки ориентации концов, коллинеарный случай — через сам LineIntersector.
+     */
+    public static boolean meet(Coordinate p1, Coordinate p2, Coordinate q1, Coordinate q2) {
+        if (!Envelope.intersects(p1, p2, q1, q2)) {
+            return false;
+        }
+        int pq1 = Orientation.index(p1, p2, q1);
+        int pq2 = Orientation.index(p1, p2, q2);
+        if (pq1 > 0 && pq2 > 0 || pq1 < 0 && pq2 < 0) {
+            return false;
+        }
+        int qp1 = Orientation.index(q1, q2, p1);
+        int qp2 = Orientation.index(q1, q2, p2);
+        if (qp1 > 0 && qp2 > 0 || qp1 < 0 && qp2 < 0) {
+            return false;
+        }
+        if (pq1 == 0 && pq2 == 0 && qp1 == 0 && qp2 == 0) {
+            LineIntersector intersector = new RobustLineIntersector();
+            intersector.computeIntersection(p1, p2, q1, q2);
+            return intersector.hasIntersection();
+        }
+        return true;
     }
 
     private static final class Special {
@@ -86,7 +153,10 @@ public final class ObstacleSet {
         final PreparedGeometry object;
         final Zone zone;
         final Geometry marginZone;
+        /** Стороны колец marginZone; у линии null. */
+        final LineSegment[] marginSides;
         final LineSegment[] sides;
+        final boolean small;
 
         Special(String id, String type, RestrictionRule rule, Geometry geometry, Geometry zone) {
             this.id = id;
@@ -96,7 +166,63 @@ public final class ObstacleSet {
             this.object = PreparedGeometryFactory.prepare(geometry);
             this.zone = new Zone(zone);
             this.marginZone = polygon ? geometry.buffer(rule.getMarginM(), MARGIN_QUADRANT_SEGMENTS) : null;
+            this.marginSides = polygon ? segments(marginZone.getBoundary()) : null;
             this.sides = segments(polygon ? geometry.getBoundary() : geometry);
+            this.small = polygon && geometry.getNumPoints() <= SMALL_POLYGON_POINTS;
+        }
+
+        /**
+         * То же, что object.getGeometry().isWithinDistance(отрезок a–b, distance), a и b могут совпадать: начало
+         * внутри полигона — ноль, как у DistanceOp, иначе ближайшая из сторон, чья рамка не дальше distance.
+         */
+        boolean near(Coordinate a, Coordinate b, double distance) {
+            Envelope envelope = new Envelope(a, b);
+            if (object.getGeometry().getEnvelopeInternal().distance(envelope) > distance) {
+                return false;
+            }
+            if (polygon) {
+                RayCrossingCounter counter = new RayCrossingCounter(a);
+                for (LineSegment side : sides) {
+                    counter.countSegment(side.p0, side.p1);
+                }
+                if (counter.getLocation() != Location.EXTERIOR) {
+                    return true;
+                }
+            }
+            for (LineSegment side : sides) {
+                if (new Envelope(side.p0, side.p1).distance(envelope) <= distance
+                        && Distance.segmentToSegment(a, b, side.p0, side.p1) <= distance) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /** То же, что object.intersects(edge) для отрезка a–b, без подготовки JTS у линий и маленьких полигонов. */
+        boolean crossedBy(Coordinate a, Coordinate b, LineString edge) {
+            if (polygon && !small) {
+                return object.intersects(edge);
+            }
+            return polygon ? crosses(Arrays.asList(sides), a, b, true) : crosses(sidesNear(a, b), a, b, false);
+        }
+
+        /**
+         * Стороны, чья рамка пересекает рамку отрезка a–b: с остальными у него нет общих точек, и LineIntersector
+         * их всё равно отбросил бы. У магистрали города сторон сотни, и перебор всех был главной ценой ребра графа.
+         */
+        List<LineSegment> sidesNear(Coordinate a, Coordinate b) {
+            double minX = Math.min(a.x, b.x);
+            double maxX = Math.max(a.x, b.x);
+            double minY = Math.min(a.y, b.y);
+            double maxY = Math.max(a.y, b.y);
+            List<LineSegment> result = new ArrayList<>();
+            for (LineSegment side : sides) {
+                if (Math.max(side.p0.x, side.p1.x) >= minX && Math.min(side.p0.x, side.p1.x) <= maxX
+                        && Math.max(side.p0.y, side.p1.y) >= minY && Math.min(side.p0.y, side.p1.y) <= maxY) {
+                    result.add(side);
+                }
+            }
+            return result;
         }
     }
 
@@ -179,8 +305,9 @@ public final class ObstacleSet {
                 candidates.putIfAbsent(c, null);
             }
         }
+        // узлы только в области: зоны длинных дорог и труб иначе приносят узлы на километры вокруг, а граф O(n²)
         for (Map.Entry<Coordinate, Coordinate[]> candidate : candidates.entrySet()) {
-            if (!insideAnyZone(candidate.getKey())) {
+            if (area.contains(candidate.getKey()) && !insideAnyZone(candidate.getKey())) {
                 nodes.add(candidate.getKey());
                 rings.add(candidate.getValue());
             }
@@ -229,7 +356,7 @@ public final class ObstacleSet {
         Envelope envelope = edge.getEnvelopeInternal();
         for (Object item : forbidZones.query(envelope)) {
             Zone zone = (Zone) item;
-            if (zone.box.intersects(a, b) && zone.prepared.intersects(edge)) {
+            if (zone.box.intersects(a, b) && zone.intersects(a, b, edge)) {
                 return Double.NaN;
             }
         }
@@ -239,8 +366,8 @@ public final class ObstacleSet {
             if (!special.zone.box.intersects(a, b) || ignored.contains(special.id) && touches(special, a, b)) {
                 continue;
             }
-            if (!special.object.intersects(edge)) {
-                if (special.zone.prepared.intersects(edge)) {
+            if (!special.crossedBy(a, b, edge)) {
+                if (special.zone.intersects(a, b, edge)) {
                     return Double.NaN;
                 }
                 continue;
@@ -275,7 +402,7 @@ public final class ObstacleSet {
             nearest = special.object.getGeometry().distance(factory.createPoint(end));
         } else {
             LineIntersector intersector = new RobustLineIntersector();
-            for (LineSegment side : special.sides) {
+            for (LineSegment side : special.sidesNear(end, other)) {
                 intersector.computeIntersection(end, other, side.p0, side.p1);
                 for (int k = 0; k < intersector.getIntersectionNum(); k++) {
                     nearest = Math.min(nearest, end.distance(intersector.getIntersection(k)));
@@ -299,7 +426,7 @@ public final class ObstacleSet {
         for (Object item : specials.query(away.getEnvelopeInternal())) {
             Special special = (Special) item;
             // по расстоянию, а не intersects: у отрезка, разложенного по сетке, координаты с шумом 1e-15
-            if (ignored.contains(special.id) && special.object.getGeometry().isWithinDistance(away, ALONG_TOL_M)) {
+            if (ignored.contains(special.id) && special.near(away.getCoordinateN(0), b, ALONG_TOL_M)) {
                 return true;
             }
         }
@@ -349,18 +476,11 @@ public final class ObstacleSet {
                     continue;
                 }
                 if (special.polygon) {
-                    Geometry pieces = factory.createLineString(new Coordinate[] {p0, p1}).intersection(special.marginZone);
-                    for (int g = 0; g < pieces.getNumGeometries(); g++) {
-                        Coordinate[] piece = pieces.getGeometryN(g).getCoordinates();
-                        if (piece.length < 2) {
-                            continue;
-                        }
-                        double d0 = p0.distance(piece[0]);
-                        double d1 = p0.distance(piece[piece.length - 1]);
-                        raw.add(span(start + Math.min(d0, d1), start + Math.max(d0, d1), special));
+                    for (double[] piece : inside(p0, p1, special.marginSides, intersector)) {
+                        raw.add(span(start + piece[0], start + piece[1], special));
                     }
                 } else {
-                    for (LineSegment side : special.sides) {
+                    for (LineSegment side : special.sidesNear(p0, p1)) {
                         intersector.computeIntersection(p0, p1, side.p0, side.p1);
                         for (int k = 0; k < intersector.getIntersectionNum(); k++) {
                             double at = start + p0.distance(intersector.getIntersection(k));
@@ -375,6 +495,46 @@ public final class ObstacleSet {
             }
         }
         return merge(raw);
+    }
+
+    /**
+     * Части отрезка p0–p1 внутри полигона со сторонами sides: пары расстояний от p0 до входа и выхода. Отрезок
+     * режется в точках пересечения со сторонами, кусок берётся, если его середина внутри. Замена наложения JTS
+     * {@code intersection}: оно на каждый отрезок графа строило планарный граф.
+     */
+    private static List<double[]> inside(Coordinate p0, Coordinate p1, LineSegment[] sides, LineIntersector intersector) {
+        TreeSet<Double> cuts = new TreeSet<>(List.of(0.0, p0.distance(p1)));
+        for (LineSegment side : sides) {
+            if (!meet(p0, p1, side.p0, side.p1)) {
+                continue;
+            }
+            intersector.computeIntersection(p0, p1, side.p0, side.p1);
+            for (int k = 0; k < intersector.getIntersectionNum(); k++) {
+                cuts.add(p0.distance(intersector.getIntersection(k)));
+            }
+        }
+        List<double[]> result = new ArrayList<>();
+        double length = p0.distance(p1);
+        Double from = null;
+        for (double to : cuts) {
+            if (from != null && to > from) {
+                double mid = (from + to) / 2 / length;
+                Coordinate middle = new Coordinate(p0.x + (p1.x - p0.x) * mid, p0.y + (p1.y - p0.y) * mid);
+                RayCrossingCounter counter = new RayCrossingCounter(middle);
+                for (LineSegment side : sides) {
+                    counter.countSegment(side.p0, side.p1);
+                }
+                if (counter.getLocation() != Location.EXTERIOR) {
+                    if (!result.isEmpty() && result.get(result.size() - 1)[1] == from) {
+                        result.get(result.size() - 1)[1] = to;
+                    } else {
+                        result.add(new double[] {from, to});
+                    }
+                }
+            }
+            from = to;
+        }
+        return result;
     }
 
     private static SpecialSpan span(double fromM, double toM, Special special) {
@@ -407,7 +567,7 @@ public final class ObstacleSet {
         Double minAngleDeg = special.rule.getMinAngleDeg();
         LineIntersector intersector = new RobustLineIntersector();
         boolean sideCrossed = false;
-        for (LineSegment side : special.sides) {
+        for (LineSegment side : special.sidesNear(a, b)) {
             intersector.computeIntersection(a, b, side.p0, side.p1);
             if (!intersector.hasIntersection()) {
                 continue;
@@ -434,9 +594,7 @@ public final class ObstacleSet {
     }
 
     private boolean touches(Special special, Coordinate a, Coordinate b) {
-        Geometry object = special.object.getGeometry();
-        return object.isWithinDistance(factory.createPoint(a), TIE_IN_TOUCH_M)
-                || object.isWithinDistance(factory.createPoint(b), TIE_IN_TOUCH_M);
+        return special.near(a, a, TIE_IN_TOUCH_M) || special.near(b, b, TIE_IN_TOUCH_M);
     }
 
     private boolean insideAnyZone(Coordinate c) {

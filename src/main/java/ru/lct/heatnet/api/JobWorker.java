@@ -134,7 +134,7 @@ public class JobWorker {
     }
 
     private static Map<String, Map<String, Object>> criteria(Result result, InputData data) {
-        VariantCriteria criteria = new VariantCriteria(data, RULES);
+        VariantCriteria criteria = new VariantCriteria(data, RULES, result.getOverCapacityOksIds());
         Map<String, Map<String, Object>> byVariant = new HashMap<>();
         for (Variant variant : result.getVariants()) {
             byVariant.put(variant.getId(), criteria.of(variant));

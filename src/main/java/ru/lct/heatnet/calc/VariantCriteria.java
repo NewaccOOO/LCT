@@ -52,6 +52,10 @@ public final class VariantCriteria {
     private final Rules rules;
     private final STRtree crossable = new STRtree();
     private final Map<String, Map<String, Object>> reasons = new HashMap<>();
+    private final Set<String> overCapacity;
+    // точка подключения и расход по ОКС: строятся при первой причине, линейный поиск на городе был O(n²)
+    private Map<String, ConnectionPoint> connectionByOks;
+    private Map<String, Double> flowByOks;
 
     /** Объект, который новая сеть может пересечь спецпереходом. */
     private static final class Crossable {
@@ -65,8 +69,14 @@ public final class VariantCriteria {
     }
 
     public VariantCriteria(InputData input, Rules rules) {
+        this(input, rules, Set.of());
+    }
+
+    /** overCapacity — ОКС сверх пропускной способности сети: причина у них одна, в критериях только их число. */
+    public VariantCriteria(InputData input, Rules rules, Set<String> overCapacity) {
         this.input = input;
         this.rules = rules;
+        this.overCapacity = overCapacity;
         for (Restriction restriction : input.getRestrictions()) {
             Geometry geometry = restriction.getGeometry();
             if (!rules.restriction(restriction.getType()).forbid() && geometry.getDimension() > 0) {
@@ -123,9 +133,14 @@ public final class VariantCriteria {
         result.put("connected_flow_tph", scaled(connectedFlow, 3));
         List<Map<String, Object>> unconnectedReasons = new ArrayList<>();
         for (String oksId : summary.getUnconnectedOksIds()) {
-            unconnectedReasons.add(reasons.computeIfAbsent(oksId, this::reason));
+            if (!overCapacity.contains(oksId)) {
+                unconnectedReasons.add(reasons.computeIfAbsent(oksId, this::reason));
+            }
         }
         result.put("unconnected_reasons", unconnectedReasons);
+        if (!overCapacity.isEmpty()) {
+            result.put("over_capacity_oks", overCapacity.size());
+        }
         result.put("tie_ins", variant.getTieIns().size());
         result.put("new_chambers", variant.getChambers().size());
         result.put("technical_nodes", variant.getNodes().size());
@@ -187,13 +202,17 @@ public final class VariantCriteria {
      * трассу не дали предельная длина, правило поворотов, углы пересечения или соседние деревья.
      */
     private Map<String, Object> reason(String oksId) {
-        ConnectionPoint connection = input.getConnectionPoints().stream()
-                .filter(c -> oksId.equals(c.getOksId())).findFirst().orElse(null);
+        if (connectionByOks == null) {
+            connectionByOks = new HashMap<>();
+            input.getConnectionPoints().forEach(c -> connectionByOks.putIfAbsent(c.getOksId(), c));
+            flowByOks = new HashMap<>();
+            input.getFutureOks().forEach(o -> flowByOks.putIfAbsent(o.getId(), o.getFlowTph()));
+        }
+        ConnectionPoint connection = connectionByOks.get(oksId);
         if (connection == null) {
             return reason(oksId, "no_connection_point", "у ОКС нет точки подключения", List.of());
         }
-        double flow = input.getFutureOks().stream().filter(o -> oksId.equals(o.getId()))
-                .mapToDouble(FutureOks::getFlowTph).findFirst().orElse(0);
+        double flow = flowByOks.getOrDefault(oksId, 0.0);
         List<Diameter> diameters = rules.diameters();
         if (flow > diameters.get(diameters.size() - 1).getCapacityTph()) {
             return reason(oksId, "flow_exceeds_capacity", "расход больше пропускной способности наибольшего диаметра",

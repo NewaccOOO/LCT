@@ -8,7 +8,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -18,7 +21,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.function.Function;
+import java.util.function.Supplier;
+import java.util.stream.IntStream;
+import org.locationtech.jts.algorithm.RayCrossingCounter;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.CoordinateXY;
 import org.locationtech.jts.geom.Envelope;
@@ -26,6 +36,7 @@ import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.LinearRing;
+import org.locationtech.jts.geom.Location;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.Polygon;
 import org.locationtech.jts.geom.impl.PackedCoordinateSequenceFactory;
@@ -33,6 +44,8 @@ import org.locationtech.jts.index.strtree.STRtree;
 import org.locationtech.jts.operation.valid.IsValidOp;
 import org.locationtech.jts.operation.valid.TopologyValidationError;
 import org.locationtech.proj4j.ProjectionException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import ru.lct.heatnet.model.Chamber;
 import ru.lct.heatnet.model.ConnectionPoint;
 import ru.lct.heatnet.model.Diagnostic;
@@ -79,6 +92,7 @@ public class GeoJsonStreamReader {
             "road", POLYGONS, "tram_tracks", POLYGONS, "gas_pipeline", LINES, "power_cable", LINES);
     private static final List<String> UPSTREAM_TYPES = List.of(HEAT_NETWORK, HEAT_CHAMBER, SOURCE);
 
+    private static final Logger log = LoggerFactory.getLogger(GeoJsonStreamReader.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
     // Упакованная XY-последовательность хранит точку в 16 байтах вместо объекта Coordinate в 40 байт.
     private static final GeometryFactory GEOMETRY = new GeometryFactory(PackedCoordinateSequenceFactory.DOUBLE_FACTORY);
@@ -96,9 +110,18 @@ public class GeoJsonStreamReader {
             Map.entry(TopologyValidationError.INVALID_COORDINATE, "недопустимая координата"),
             Map.entry(TopologyValidationError.RING_NOT_CLOSED, "контур не замкнут"));
     private static final Locale RUSSIAN = new Locale("ru");
+    /** Фич в пачке чтения и в задаче пула, см. Scan.features. */
+    private static final int BATCH = 8192;
+    private static final int CHUNK = 512;
+    private static final ExecutorService POOL = Executors.newFixedThreadPool(
+            Math.max(1, Runtime.getRuntime().availableProcessors() - 1), task -> {
+                Thread thread = new Thread(task, "geojson-geometry");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     public static InputData read(Path path) {
-        return scan(path, new Scan(false, null));
+        return scan(path, () -> new Scan(false, null));
     }
 
     /**
@@ -108,13 +131,30 @@ public class GeoJsonStreamReader {
      * пересекающие прямоугольник. На городе, где ОКС в одном районе, куча не растёт с числом зданий.
      */
     public static InputData read(Path path, Function<InputData, Envelope> obstacleExtent) {
-        InputData partial = scan(path, new Scan(true, null));
+        long started = System.nanoTime();
+        InputData partial = scan(path, () -> new Scan(true, null));
+        long first = System.nanoTime();
         Envelope extent = partial.getDiagnostics().isEmpty() ? obstacleExtent.apply(partial) : null;
-        return scan(path, new Scan(false, extent));
+        InputData input = scan(path, () -> new Scan(false, extent));
+        log.info("read: first pass {}s, second pass {}s", (first - started) / 1_000_000_000L,
+                (System.nanoTime() - first) / 1_000_000_000L);
+        return input;
     }
 
-    private static InputData scan(Path path, Scan scan) {
-        try (JsonParser parser = MAPPER.getFactory().createParser(path.toFile())) {
+    /** Чтение срезами (см. Scan.sliced); если срез не совпал с фичей, файл читается заново без срезов. */
+    private static InputData scan(Path path, Supplier<Scan> scans) {
+        try {
+            return scan(path, scans.get(), true);
+        } catch (SliceMismatch e) {
+            log.warn("read: срезы фич не совпали с разбором, файл читается без них: {}", e.getMessage());
+            return scan(path, scans.get(), false);
+        }
+    }
+
+    private static InputData scan(Path path, Scan scan, boolean sliced) {
+        try (JsonParser parser = MAPPER.getFactory().createParser(path.toFile());
+                FileChannel channel = sliced ? FileChannel.open(path, StandardOpenOption.READ) : null) {
+            scan.channel = channel;
             scan.read(parser);
         } catch (JsonProcessingException e) {
             JsonLocation at = e.getLocation();
@@ -200,6 +240,10 @@ public class GeoJsonStreamReader {
         final List<Ref> refs = new ArrayList<>();
         final boolean skipObstacles;
         final Envelope extent;
+        /** Геометрия текущей фичи, построенная в пуле, см. features; null — строится на месте. */
+        Parsed prepared;
+        /** Файл для чтения срезов, см. sliced; null — чтение деревьями на главном потоке. */
+        FileChannel channel;
         Source source;
         int sources;
         int ordinal;
@@ -229,8 +273,10 @@ public class GeoJsonStreamReader {
                 JsonToken value = parser.nextToken();
                 if (name.equals("features") && value == JsonToken.START_ARRAY) {
                     hasFeatures = true;
-                    while (parser.nextToken() != JsonToken.END_ARRAY) {
-                        feature(MAPPER.readTree(parser));
+                    if (channel != null) {
+                        sliced(parser);
+                    } else {
+                        features(parser);
                     }
                 } else if (name.equals("type") && value == JsonToken.VALUE_STRING) {
                     type = parser.getText();
@@ -510,32 +556,72 @@ public class GeoJsonStreamReader {
 
         /** Точки подключения датасета становятся перспективными ОКС, здание с точкой внутри — их геометрией. */
         void consumers() {
+            long started = System.nanoTime();
             STRtree index = new STRtree();
             for (int i = 0; i < buildings.size(); i++) {
                 index.insert(buildings.get(i).getGeometry().getEnvelopeInternal(), i);
             }
-            Set<Integer> future = new HashSet<>();
-            for (Consumer consumer : consumers) {
-                Integer building = null;
+            // дерево строится до параллельных запросов: ленивая сборка при первом запросе не потокобезопасна
+            index.build();
+            // здание каждой точки ищется параллельно: точки друг от друга не зависят, а их на городе миллионы
+            int[] buildingOf = new int[consumers.size()];
+            IntStream.range(0, consumers.size()).parallel().forEach(k -> {
+                Consumer consumer = consumers.get(k);
+                int building = -1;
                 for (Object item : index.query(consumer.geometry.getEnvelopeInternal())) {
                     int i = (Integer) item;
-                    if ((building == null || i < building) && buildings.get(i).getGeometry().covers(consumer.geometry)) {
+                    if ((building < 0 || i < building)
+                            && covers(buildings.get(i).getGeometry(), consumer.geometry.getCoordinate())) {
                         building = i;
                     }
                 }
+                buildingOf[k] = building;
+            });
+            boolean[] future = new boolean[buildings.size()];
+            for (int k = 0; k < consumers.size(); k++) {
+                Consumer consumer = consumers.get(k);
                 Geometry geometry = consumer.geometry;
-                if (building != null) {
-                    future.add(building);
-                    geometry = buildings.get(building).getGeometry();
+                if (buildingOf[k] >= 0) {
+                    future[buildingOf[k]] = true;
+                    geometry = buildings.get(buildingOf[k]).getGeometry();
                 }
                 futureOks.add(new FutureOks(consumer.id, geometry, consumer.flow, null));
                 connectionPoints.add(new ConnectionPoint(consumer.id, consumer.geometry, consumer.id));
             }
             for (int i = 0; i < buildings.size(); i++) {
-                if (!future.contains(i)) {
+                if (!future[i]) {
                     existingOks.add(buildings.get(i));
                 }
             }
+            if (!consumers.isEmpty()) {
+                log.info("read: {} connection points to buildings {}s", consumers.size(), (System.nanoTime() - started) / 1_000_000_000L);
+            }
+        }
+
+        /**
+         * Точка внутри полигона здания или на его границе, как Geometry.covers. covers идёт через RelateOp, а
+         * SimplePointInAreaLocator копирует упакованные координаты в кэш: на городе в миллионы зданий первое занимало
+         * минуты, второе — гигабайты кучи.
+         */
+        static boolean covers(Geometry area, Coordinate point) {
+            for (int i = 0; i < area.getNumGeometries(); i++) {
+                Polygon polygon = (Polygon) area.getGeometryN(i);
+                int shell = RayCrossingCounter.locatePointInRing(point, polygon.getExteriorRing().getCoordinateSequence());
+                if (shell == Location.BOUNDARY) {
+                    return true;
+                }
+                if (shell == Location.EXTERIOR) {
+                    continue;
+                }
+                int inHole = Location.EXTERIOR;
+                for (int h = 0; h < polygon.getNumInteriorRing() && inHole == Location.EXTERIOR; h++) {
+                    inHole = RayCrossingCounter.locatePointInRing(point, polygon.getInteriorRingN(h).getCoordinateSequence());
+                }
+                if (inHole != Location.INTERIOR) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         // Расчёт реконструкции идёт по upstream_object_id до source, на цикле он зациклится.
@@ -646,35 +732,255 @@ public class GeoJsonStreamReader {
         }
 
         Geometry geometry(JsonNode feature, String featureId, List<String> allowed) {
-            JsonNode raw = feature.get("geometry");
-            if (raw == null || raw.isNull()) {
-                add(featureId, "geometry", "нет геометрии");
-                return null;
+            Parsed parsed = prepared != null && prepared.allowed == allowed ? prepared : parseGeometry(feature, allowed);
+            if (parsed.problem != null) {
+                add(featureId, "geometry", parsed.problem);
             }
-            String type = raw.path("type").textValue();
-            if (type == null || !allowed.contains(type)) {
-                add(featureId, "geometry", "ожидается геометрия " + String.join(" или ", allowed) + ", получено " + type);
-                return null;
-            }
-            try {
-                Geometry parsed = parse(type, raw.path("coordinates"));
-                TopologyValidationError error = new IsValidOp(parsed).getValidationError();
-                if (error != null) {
-                    add(featureId, "geometry", "невалидная геометрия: " + INVALID_REASONS.getOrDefault(
-                            error.getErrorType(), error.getMessage()) + " у точки " + error.getCoordinate());
-                    return null;
+            return parsed.geometry;
+        }
+
+        /**
+         * Фичи массива features пачками: главный поток разбирает JSON и применяет фичи по порядку, а пул заранее
+         * строит их геометрию (разбор координат, проверка валидности, перевод в UTM), пока разбирается следующая
+         * пачка. Геометрия не зависит от состояния чтения, поэтому диагностики и порядок объектов те же.
+         */
+        void features(JsonParser parser) throws IOException {
+            List<JsonNode> batch = new ArrayList<>();
+            List<JsonNode> pendingNodes = List.of();
+            List<Future<Parsed[]>> pending = List.of();
+            while (parser.nextToken() != JsonToken.END_ARRAY) {
+                batch.add(MAPPER.readTree(parser));
+                if (batch.size() == BATCH) {
+                    List<Future<Parsed[]>> submitted = prepare(batch);
+                    apply(pendingNodes, pending);
+                    pendingNodes = batch;
+                    pending = submitted;
+                    batch = new ArrayList<>();
                 }
-                return Projector.toUtm(parsed);
-            } catch (IllegalArgumentException e) {
-                add(featureId, "geometry", "некорректные координаты " + type + ": " + e.getMessage());
-            } catch (ProjectionException e) {
-                add(featureId, "geometry", "координаты не переводятся в EPSG:32637");
             }
-            return null;
+            apply(pendingNodes, pending);
+            apply(batch, prepare(batch));
+        }
+
+        /**
+         * Фичи массива features срезами файла: главный поток только пропускает фичу, запоминая её байты, а пул
+         * читает байты пачки одним чтением, разбирает фичи в деревья и строит их геометрию. Применяются фичи
+         * главным потоком по порядку, как в features. Главный поток проверяет синтаксис при пропуске, поэтому
+         * ошибки JSON и их место в файле те же.
+         */
+        void sliced(JsonParser parser) throws IOException {
+            List<Slice> batch = new ArrayList<>();
+            List<Slice> pendingSlices = List.of();
+            List<Future<?>> pending = List.of();
+            while (parser.nextToken() != JsonToken.END_ARRAY) {
+                long start = parser.getTokenLocation().getByteOffset();
+                Slice slice;
+                if (parser.currentToken() == JsonToken.START_OBJECT && start >= 0) {
+                    parser.skipChildren();
+                    slice = new Slice(start, parser.getTokenLocation().getByteOffset() + 1);
+                } else {
+                    slice = new Slice(-1, -1);
+                    slice.node = MAPPER.readTree(parser);
+                }
+                batch.add(slice);
+                if (batch.size() == BATCH) {
+                    List<Future<?>> submitted = parse(batch);
+                    applySlices(pendingSlices, pending);
+                    pendingSlices = batch;
+                    pending = submitted;
+                    batch = new ArrayList<>();
+                }
+            }
+            applySlices(pendingSlices, pending);
+            applySlices(batch, parse(batch));
+        }
+
+        List<Future<?>> parse(List<Slice> batch) {
+            List<Future<?>> parts = new ArrayList<>();
+            for (int from = 0; from < batch.size(); from += CHUNK) {
+                List<Slice> chunk = batch.subList(from, Math.min(batch.size(), from + CHUNK));
+                parts.add(POOL.submit(() -> {
+                    long first = chunk.stream().filter(c -> c.start >= 0).mapToLong(c -> c.start).min().orElse(0);
+                    long last = chunk.stream().filter(c -> c.start >= 0).mapToLong(c -> c.end).max().orElse(0);
+                    ByteBuffer bytes = ByteBuffer.allocate((int) (last - first));
+                    while (bytes.hasRemaining()) {
+                        if (channel.read(bytes, first + bytes.position()) < 0) {
+                            throw new SliceMismatch("файл короче среза");
+                        }
+                    }
+                    byte[] content = bytes.array();
+                    for (Slice slice : chunk) {
+                        if (slice.start >= 0) {
+                            int offset = (int) (slice.start - first);
+                            int length = (int) (slice.end - slice.start);
+                            if (content[offset] != '{' || content[offset + length - 1] != '}') {
+                                throw new SliceMismatch("срез с байта " + slice.start + " не фича");
+                            }
+                            slice.node = MAPPER.readTree(content, offset, length);
+                        }
+                        List<String> allowed = expectedGeometry(slice.node, skipObstacles);
+                        slice.parsed = allowed == null ? null : parseGeometry(slice.node, allowed);
+                    }
+                    return null;
+                }));
+            }
+            return parts;
+        }
+
+        void applySlices(List<Slice> slices, List<Future<?>> parts) throws IOException {
+            for (int i = 0; i < parts.size(); i++) {
+                try {
+                    parts.get(i).get();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Чтение прервано", e);
+                } catch (ExecutionException e) {
+                    throw new SliceMismatch(String.valueOf(e.getCause()));
+                }
+                for (Slice slice : slices.subList(i * CHUNK, Math.min(slices.size(), (i + 1) * CHUNK))) {
+                    prepared = slice.parsed;
+                    feature(slice.node);
+                }
+            }
+            prepared = null;
+        }
+
+        List<Future<Parsed[]>> prepare(List<JsonNode> batch) {
+            List<Future<Parsed[]>> parts = new ArrayList<>();
+            for (int from = 0; from < batch.size(); from += CHUNK) {
+                List<JsonNode> chunk = batch.subList(from, Math.min(batch.size(), from + CHUNK));
+                parts.add(POOL.submit(() -> {
+                    Parsed[] result = new Parsed[chunk.size()];
+                    for (int i = 0; i < result.length; i++) {
+                        List<String> allowed = expectedGeometry(chunk.get(i), skipObstacles);
+                        result[i] = allowed == null ? null : parseGeometry(chunk.get(i), allowed);
+                    }
+                    return result;
+                }));
+            }
+            return parts;
+        }
+
+        void apply(List<JsonNode> nodes, List<Future<Parsed[]>> parts) throws IOException {
+            int next = 0;
+            for (Future<Parsed[]> part : parts) {
+                Parsed[] parsed;
+                try {
+                    parsed = part.get();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Чтение прервано", e);
+                } catch (ExecutionException e) {
+                    // геометрия этой пачки посчитается на месте, как без пула
+                    parsed = new Parsed[Math.min(CHUNK, nodes.size() - next)];
+                }
+                for (Parsed one : parsed) {
+                    prepared = one;
+                    feature(nodes.get(next++));
+                }
+            }
+            prepared = null;
         }
 
         void add(String featureId, String field, String problem) {
             diagnostics.add(new Diagnostic(featureId, field, problem));
+        }
+    }
+
+    /** Фича в файле: байты [start, end); node и parsed заполняет пул. start = -1 — элемент уже разобран главным потоком. */
+    private static final class Slice {
+        final long start;
+        final long end;
+        JsonNode node;
+        Parsed parsed;
+
+        Slice(long start, long end) {
+            this.start = start;
+            this.end = end;
+        }
+    }
+
+    /** Срез файла не совпал с фичей: кодировка или BOM сдвинули байтовые смещения разбора. */
+    private static final class SliceMismatch extends RuntimeException {
+        SliceMismatch(String message) {
+            super(message);
+        }
+    }
+
+    /** Геометрия фичи или текст ошибки для диагностики поля geometry. */
+    private static final class Parsed {
+        final List<String> allowed;
+        final Geometry geometry;
+        final String problem;
+
+        Parsed(List<String> allowed, Geometry geometry, String problem) {
+            this.allowed = allowed;
+            this.geometry = geometry;
+            this.problem = problem;
+        }
+    }
+
+    private static Parsed parseGeometry(JsonNode feature, List<String> allowed) {
+        JsonNode raw = feature.get("geometry");
+        if (raw == null || raw.isNull()) {
+            return new Parsed(allowed, null, "нет геометрии");
+        }
+        String type = raw.path("type").textValue();
+        if (type == null || !allowed.contains(type)) {
+            return new Parsed(allowed, null, "ожидается геометрия " + String.join(" или ", allowed) + ", получено " + type);
+        }
+        try {
+            Geometry parsed = parse(type, raw.path("coordinates"));
+            TopologyValidationError error = new IsValidOp(parsed).getValidationError();
+            if (error != null) {
+                return new Parsed(allowed, null, "невалидная геометрия: " + INVALID_REASONS.getOrDefault(
+                        error.getErrorType(), error.getMessage()) + " у точки " + error.getCoordinate());
+            }
+            return new Parsed(allowed, Projector.toUtm(parsed), null);
+        } catch (IllegalArgumentException e) {
+            return new Parsed(allowed, null, "некорректные координаты " + type + ": " + e.getMessage());
+        } catch (ProjectionException e) {
+            return new Parsed(allowed, null, "координаты не переводятся в EPSG:32637");
+        }
+    }
+
+    /**
+     * Какую геометрию запросит Scan.feature у этой фичи, по тем же полям; null — никакую. Если догадка разойдётся
+     * с feature, геометрия просто построится на месте: Scan.geometry сверяет список допустимых типов.
+     */
+    private static List<String> expectedGeometry(JsonNode node, boolean skipObstacles) {
+        JsonNode props = node.get("properties");
+        if (props == null || !props.isObject()) {
+            return null;
+        }
+        String objectType = props.path("object_type").textValue();
+        if (objectType == null) {
+            return null;
+        }
+        switch (objectType) {
+            case SOURCE:
+            case HEAT_CHAMBER:
+            case CONNECTION_POINT:
+                return POINT;
+            case HEAT_NETWORK:
+                return LINE;
+            case OKS_FUTURE:
+                return POLYGONS;
+            case OKS_EXISTING:
+                return skipObstacles ? null : POLYGONS;
+            case RESTRICTION: {
+                if (skipObstacles) {
+                    return null;
+                }
+                String restrictionType = props.path("restriction_type").textValue();
+                if (BUILDING.equals(restrictionType)) {
+                    return POLYGONS;
+                }
+                return restrictionType == null ? ANY_RESTRICTION
+                        : RESTRICTION_GEOMETRY.getOrDefault(restrictionType, ANY_RESTRICTION);
+            }
+            default:
+                return null;
         }
     }
 
