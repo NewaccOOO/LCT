@@ -117,6 +117,15 @@ public final class Router {
     }
 
     /**
+     * То же, но маршрут выходит из {@code from} как продолжение отрезка {@code incoming}–{@code from}: первый отрезок
+     * отклоняется от него не круче {@link #MAX_TURN_DEG}. Так финальный прямой участок из здания и начало маршрута
+     * образуют допустимый поворот (приложение 18.09, п. 2.1), а не отбрасываются при сборке ветки.
+     */
+    public Route routeToAny(Point from, Collection<Point> targets, Set<String> ignored, Coordinate incoming) {
+        return routeToAny(from, targets, ignored, incoming, true);
+    }
+
+    /**
      * Кратчайший маршрут до ближайшей по весу цели или {@code null}, если ни одна цель не достижима. Если в
      * {@code userData} цели лежит {@link Double}, это надбавка к её весу в метрах (например, стоимость камеры,
      * которую придётся построить в этой точке); вес маршрута возвращается с надбавкой выбранной цели. Вызывается
@@ -124,9 +133,14 @@ public final class Router {
      * ленивые веса до узлов при гонке пишутся одинаковыми.
      */
     public Route routeToAny(Point from, Collection<Point> targets, Set<String> ignored) {
+        return routeToAny(from, targets, ignored, null, false);
+    }
+
+    private Route routeToAny(Point from, Collection<Point> targets, Set<String> ignored, Coordinate incoming,
+            boolean limitFirstTurn) {
         int n = nodes.size();
         Coordinate source = from.getCoordinate();
-        Table table = table(source, ignored);
+        Table table = table(source, ignored, limitFirstTurn ? incoming : null);
         double[] dist = table.dist;
         int[] pred = table.pred;
         double bestWeight = Double.POSITIVE_INFINITY;
@@ -141,7 +155,8 @@ public final class Router {
             if (t.distance(source) + extra >= bestWeight) {
                 continue;
             }
-            double direct = obstacles.edgeWeight(t, source, ignored, false, false);
+            double direct = limitFirstTurn && incoming != null && deflectionDeg(incoming, source, t) > MAX_TURN_DEG
+                    ? Double.NaN : obstacles.edgeWeight(t, source, ignored, false, false);
             double weight = Double.isNaN(direct) ? Double.POSITIVE_INFINITY : direct;
             int via = -1;
             double[] toNodes = partialWeights(t, ignored);
@@ -182,9 +197,10 @@ public final class Router {
     }
 
     /** Таблица Дейкстры от точки запроса, из кэша по координате и набору пропускаемых объектов. */
-    private Table table(Coordinate source, Set<String> ignored) {
+    private Table table(Coordinate source, Set<String> ignored, Coordinate incoming) {
         tableRequests.incrementAndGet();
-        List<Object> key = List.of(this, "table", source.x, source.y, ignored);
+        List<Object> key = incoming == null ? List.of(this, "table", source.x, source.y, ignored)
+                : List.of(this, "table", source.x, source.y, ignored, incoming.x, incoming.y);
         Table cached = cache.get(key);
         if (cached != null) {
             tableHits.incrementAndGet();
@@ -192,6 +208,13 @@ public final class Router {
         }
         int n = nodes.size();
         double[] dist = nodeWeights(source, ignored).clone();
+        if (incoming != null) {
+            for (int v = 0; v < n; v++) {
+                if (!Double.isNaN(dist[v]) && deflectionDeg(incoming, source, nodes.get(v)) > MAX_TURN_DEG) {
+                    dist[v] = Double.NaN;
+                }
+            }
+        }
         int[] pred = new int[n];
         Arrays.fill(pred, -1);
         boolean[] done = new boolean[n];

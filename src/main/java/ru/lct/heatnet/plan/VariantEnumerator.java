@@ -1124,6 +1124,11 @@ public final class VariantEnumerator {
                 options.addAll(options(region, blockDn, region.wideArea, subset, false,
                         candidates(points, flow, blockDn)));
             }
+            if (incomplete(options)) {
+                // маршрута нет из-за поворота в точке выхода из здания круче 90°: трасса вдоль финального участка
+                // длиннее, но неподключение при доступном маршруте запрещено (п. 2.5)
+                options.addAll(options(region, blockDn, region.area, subset, false, all, true));
+            }
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
         if (!options.isEmpty() && alternativeIndex(options) == 0) {
@@ -1179,6 +1184,11 @@ public final class VariantEnumerator {
 
     private List<Option> options(Region region, int dn, Envelope area, List<ConnectionPoint> subset, boolean verify,
             List<TieCandidate> candidates) {
+        return options(region, dn, area, subset, verify, candidates, false);
+    }
+
+    private List<Option> options(Region region, int dn, Envelope area, List<ConnectionPoint> subset, boolean verify,
+            List<TieCandidate> candidates, boolean fromPortalDirection) {
         String label = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(","));
         // метр ветки стоит в S и как стоимость трубы, и как длина: разовый расход переводится в метры по обоим
         double metreRub = rules.diameter(dn).getNewRubM() + rules.lengthWorthRub();
@@ -1189,7 +1199,7 @@ public final class VariantEnumerator {
         java.util.stream.Stream<TieCandidate> stream = district || !PARALLEL ? cheapest.stream() : cheapest.parallelStream();
         List<Option> options = stream.map(candidate -> {
             Tree tree = builder.build(router, dn, area, candidate, subset, rules.chamberCost(dn) / metreRub,
-                    rules.tieInCost() / metreRub);
+                    rules.tieInCost() / metreRub, fromPortalDirection);
             if (tree.edges.isEmpty()) {
                 log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
                 return null;

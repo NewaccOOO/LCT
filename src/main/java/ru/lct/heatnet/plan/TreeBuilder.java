@@ -134,7 +134,19 @@ final class TreeBuilder {
      */
     Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
             double chamberPenaltyM, double tieInPenaltyM) {
-        return new Run(router, dn, area, tie, chamberPenaltyM, tieInPenaltyM).build(connections);
+        return build(router, dn, area, tie, connections, chamberPenaltyM, tieInPenaltyM, false);
+    }
+
+    /**
+     * То же, но маршрут выходит из здания как продолжение финального прямого участка: поворот в точке выхода не
+     * круче 90° (п. 2.1). Такая трасса длиннее, поэтому строится только для точки, которая иначе остаётся без сети:
+     * неподключение при доступном маршруте запрещено (п. 2.5).
+     */
+    Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
+            double chamberPenaltyM, double tieInPenaltyM, boolean fromPortalDirection) {
+        Run run = new Run(router, dn, area, tie, chamberPenaltyM, tieInPenaltyM);
+        run.fromPortalDirection = fromPortalDirection;
+        return run.build(connections);
     }
 
     /**
@@ -168,6 +180,8 @@ final class TreeBuilder {
         final Map<Tree.Edge, List<Point>> targetsByEdge = new IdentityHashMap<>();
         /** Точка выхода по id точки подключения: {выход}, NO_PORTAL — выхода нет, null — точка не в полигоне. */
         final Map<String, Coordinate[]> portalByConnection = new HashMap<>();
+        /** Маршрут выходит из здания вдоль финального прямого участка, см. {@link #build}. */
+        boolean fromPortalDirection;
 
         Run(Router router, int dn, Envelope area, TieCandidate tie, double chamberPenaltyM, double tieInPenaltyM) {
             this.router = router;
@@ -185,7 +199,7 @@ final class TreeBuilder {
             while (!remaining.isEmpty()) {
                 Attach best = null;
                 for (ConnectionPoint connection : remaining) {
-                    Attach attach = attach(connection);
+                    Attach attach = attach(connection, targets(), fromPortalDirection);
                     if (attach != null && (best == null || attach.weight < best.weight)) {
                         best = attach;
                     }
@@ -198,10 +212,6 @@ final class TreeBuilder {
                 remaining.remove(best.connection);
             }
             return tree;
-        }
-
-        Attach attach(ConnectionPoint connection) {
-            return attach(connection, targets());
         }
 
         /**
@@ -301,7 +311,12 @@ final class TreeBuilder {
             return own;
         }
 
-        Attach attach(ConnectionPoint connection, List<Point> targets) {
+        /**
+         * Присоединение точки к дереву кратчайшим маршрутом от точки выхода из её здания. При
+         * {@code fromPortalDirection} маршрут выходит как продолжение финального прямого участка: так поворот в точке
+         * выхода не круче 90°, иначе собранную ветку отбраковала бы проверка формы (п. 2.1).
+         */
+        Attach attach(ConnectionPoint connection, List<Point> targets, boolean fromPortalDirection) {
             if (targets.isEmpty()) {
                 return null;
             }
@@ -310,7 +325,8 @@ final class TreeBuilder {
                 return null;
             }
             Point start = portal == null ? connection.getGeometry() : factory.createPoint(portal[0]);
-            Route route = router.routeToAny(start, targets, ignored);
+            Route route = portal == null || !fromPortalDirection ? router.routeToAny(start, targets, ignored)
+                    : router.routeToAny(start, targets, ignored, connection.getGeometry().getCoordinate());
             if (route == null) {
                 return null;
             }

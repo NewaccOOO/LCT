@@ -68,6 +68,26 @@ class RouterTest {
     }
 
     @Test
+    void routeFromPortalKeepsTurnAtExitWithinLimit() {
+        // точка выхода из здания в (0, 0), финальный участок пришёл с юга: цель за спиной ближе, но поворот к ней
+        // круче 90°, поэтому маршрут с направлением входа идёт к дальней цели впереди
+        Router router = router(List.of(), List.of());
+        Point exit = point(0, 0);
+        Point behind = point(-20, -5);
+        Point ahead = point(40, 10);
+
+        Route free = router.routeToAny(exit, List.of(behind, ahead), Set.of());
+        Route limited = router.routeToAny(exit, List.of(behind, ahead), Set.of(), new Coordinate(0, -30));
+
+        assertEquals(behind.getCoordinate(), free.getGeometry().getCoordinateN(1));
+        assertNotNull(limited);
+        Coordinate first = limited.getGeometry().getCoordinateN(1);
+        assertEquals(ahead.getCoordinate(), first);
+        double deflection = Router.deflectionDeg(new Coordinate(0, -30), exit.getCoordinate(), first);
+        assertTrue(deflection <= Router.MAX_TURN_DEG, "поворот в точке выхода " + deflection + "°");
+    }
+
+    @Test
     void repeatedQueryUsesCachedDijkstraTableAndGivesSameRoute() {
         Geometry park = rect(-50, -20, 50, 20);
         Router router = router(List.of(new Restriction("park-1", park, "park")), List.of());
