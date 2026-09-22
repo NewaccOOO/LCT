@@ -66,7 +66,11 @@ public final class VariantEnumerator {
     /** Врезка дальше этого от всех врезок другого варианта делает варианты разными (правило variants). */
     private static final double OTHER_TIE_M = 20;
     /** R-11: варианты одинаковы, если больше этой доли длины меньшего лежит в полосе SAME_ROUTE_M от другого. */
-    private static final double SAME_ROUTE_SHARE = 0.8;
+    /**
+     * 0,8 отсекало варианты с другой врезкой у одного из блоков (S 13,59 против 14,41 у следующего принятого),
+     * а это по разделу 10 CONSTRAINTS.md другой вариант; при 0,9 остаётся только смещение той же трассы.
+     */
+    private static final double SAME_ROUTE_SHARE = 0.9;
     private static final double SAME_ROUTE_M = 1.0;
     /** Дерево ОКС идёт в обход, если оно длиннее прямой до ближайшего кандидата врезки больше чем во столько раз. */
     private static final double DETOUR_RATIO = 1.1;
@@ -74,6 +78,14 @@ public final class VariantEnumerator {
     private static final double SHARED_ROOT_CLIP_M = 0.15;
     private static final double SHARED_ROOT_APART_M = 0.01;
     private static final int MAX_VARIANTS = 3;
+    /**
+     * У одиночной точки в здании деревья строятся через столько допустимых сторон выхода (heatnet.tree.portalsides):
+     * выход через ближайшую сторону не всегда даёт короткую трассу. На датасете организаторов 1 → 3 стороны:
+     * S 13,492 → 13,019, 4–5 сторон дают ещё −0,04; на сценах «густо» подключаются все точки.
+     */
+    private static final int PORTAL_SIDES = Integer.getInteger("heatnet.tree.portalsides", 3);
+    /** У скольких самых крупных блоков лучшего черновика пробуются другие врезки и разбиение ради вариантов 2 и 3. */
+    private static final int EXTRA_VARIANT_BLOCKS = Integer.getInteger("heatnet.search.variantblocks", 8);
     /**
      * Запас вокруг областей групп при отборе препятствий на чтении: отступы ObstacleSet — десятки метров, а причины
      * неподключения ищут кольцо зон в 2 км от точки подключения (VariantCriteria).
@@ -203,14 +215,21 @@ public final class VariantEnumerator {
     private static final class Move {
         final List<List<ConnectionPoint>> blocks;
         final List<ConnectionPoint> alternative;
+        /** Какая по счёту отличная врезка берётся у блока alternative: 1 — первая отличная от лучшей. */
+        final int rank;
 
         Move(List<List<ConnectionPoint>> blocks, List<ConnectionPoint> alternative) {
+            this(blocks, alternative, 1);
+        }
+
+        Move(List<List<ConnectionPoint>> blocks, List<ConnectionPoint> alternative, int rank) {
             this.blocks = blocks;
             this.alternative = alternative;
+            this.rank = rank;
         }
 
         Draft realize(VariantEnumerator enumerator) {
-            return enumerator.draft(blocks, subset -> subset == alternative);
+            return enumerator.draft(blocks, subset -> subset == alternative ? rank : 0);
         }
 
         String key() {
@@ -219,7 +238,7 @@ public final class VariantEnumerator {
                 parts.add(block.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(",")));
             }
             parts.sort(Comparator.naturalOrder());
-            return String.join("|", parts) + (alternative == null ? "" : "#" + alternative.get(0).getId());
+            return String.join("|", parts) + (alternative == null ? "" : "#" + alternative.get(0).getId() + "/" + rank);
         }
     }
 
@@ -278,7 +297,6 @@ public final class VariantEnumerator {
         this.buildingByConnection = buildingByConnection;
         this.routeCache = new RouteCache(cacheMb);
         this.district = district;
-        this.builder = new TreeBuilder(finder.nodeLimit(), networkById, specials, buildingByConnection);
         for (FutureOks oks : input.getFutureOks()) {
             oksById.put(oks.getId(), oks);
         }
@@ -287,6 +305,7 @@ public final class VariantEnumerator {
                 connectionByOks.putIfAbsent(connection.getOksId(), connection);
             }
         }
+        this.builder = new TreeBuilder(finder.nodeLimit(), networkById, specials, buildingByConnection);
     }
 
     /**
@@ -668,11 +687,11 @@ public final class VariantEnumerator {
         }
         List<Draft> drafts = new ArrayList<>();
         for (List<List<ConnectionPoint>> partition : partitions) {
-            drafts.add(draft(partition, subset -> false));
-            drafts.add(draft(partition, subset -> true));
+            drafts.add(draft(partition, subset -> 0));
+            drafts.add(draft(partition, subset -> 1));
         }
         if (anySplit) {
-            drafts.add(draft(split, subset -> false));
+            drafts.add(draft(split, subset -> 0));
         }
         drafts.removeIf(Objects::isNull);
         drafts.sort(Comparator.comparingDouble(Draft::score));
@@ -687,13 +706,51 @@ public final class VariantEnumerator {
             for (List<List<ConnectionPoint>> partition : partitions) {
                 if (partition.size() > 1) {
                     for (List<ConnectionPoint> one : partition) {
-                        drafts.add(draft(partition, subset -> subset == one));
+                        drafts.add(draft(partition, subset -> subset == one ? 1 : 0));
+                    }
+                }
+            }
+            picked = pick(drafts);
+        }
+        if (!picked.isEmpty()) {
+            // содержательно другие сети от лучшего черновика для вариантов 2 и 3: другая врезка у каждого блока
+            // (до трёх отличных) и разбиение больших блоков пополам двумя врезками
+            List<List<ConnectionPoint>> blocks = blocksOf(picked.get(0));
+            // крупные блоки первыми: их врезка меняет больше трассы; на сотнях блоков перебор всех утраивал время
+            blocks.sort(Comparator.comparingInt((List<ConnectionPoint> block) -> -block.size()));
+            for (int i = 0; i < Math.min(blocks.size(), EXTRA_VARIANT_BLOCKS); i++) {
+                for (int rank = 1; rank <= 3; rank++) {
+                    List<List<ConnectionPoint>> same = copy(blocks);
+                    drafts.add(new Move(same, same.get(i), rank).realize(this));
+                }
+                if (blocks.get(i).size() >= 3) {
+                    List<List<ConnectionPoint>> parts = splitGroup(blocks.get(i));
+                    if (parts.size() == 2) {
+                        List<List<ConnectionPoint>> halves = copy(blocks);
+                        halves.remove(i);
+                        halves.addAll(parts);
+                        drafts.add(new Move(halves, null).realize(this));
                     }
                 }
             }
             picked = pick(drafts);
         }
         return picked;
+    }
+
+    /** Блоки черновика: точки каждого дерева и по блоку на неподключённую точку. */
+    private List<List<ConnectionPoint>> blocksOf(Draft draft) {
+        List<List<ConnectionPoint>> blocks = new ArrayList<>();
+        for (Tree tree : draft.trees) {
+            blocks.add(new ArrayList<>(tree.connected()));
+        }
+        for (FutureOks oks : draft.unconnected) {
+            ConnectionPoint connection = connectionByOks.get(oks.getId());
+            if (connection != null) {
+                blocks.add(new ArrayList<>(List.of(connection)));
+            }
+        }
+        return blocks;
     }
 
     /**
@@ -921,7 +978,7 @@ public final class VariantEnumerator {
      * {@code alternative}, — первое с другой врезкой. ОКС, которые не вошли в общее дерево, подключаются отдельными
      * врезками; без маршрута — в штраф.
      */
-    private Draft draft(List<List<ConnectionPoint>> partition, Predicate<List<ConnectionPoint>> alternative) {
+    private Draft draft(List<List<ConnectionPoint>> partition, java.util.function.ToIntFunction<List<ConnectionPoint>> alternative) {
         List<List<ConnectionPoint>> queue = new ArrayList<>(partition);
         queue.sort(Comparator.comparingInt((List<ConnectionPoint> subset) -> -subset.size())
                 .thenComparing(subset -> subset.get(0).getId()));
@@ -930,7 +987,8 @@ public final class VariantEnumerator {
         for (int next = 0; next < queue.size(); next++) {
             List<ConnectionPoint> subset = queue.get(next);
             List<Option> options = options(subset);
-            int start = alternative.test(subset) ? alternativeIndex(options) : 0;
+            int rank = alternative.applyAsInt(subset);
+            int start = rank > 0 ? alternativeIndex(options, rank) : 0;
             Tree chosen = null;
             // с другой врезкой ищем от первого отличного дерева, а если все дальше несовместимы — с начала списка
             for (int k = 0; k < options.size() && chosen == null; k++) {
@@ -1083,18 +1141,21 @@ public final class VariantEnumerator {
             List<TieCandidate> candidates) {
         List<Option> options = new ArrayList<>();
         String label = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(","));
+        int sides = subset.size() == 1 && buildingByConnection.containsKey(subset.get(0).getId()) ? PORTAL_SIDES : 1;
         for (TieCandidate candidate : cheapestCandidates(subset, candidates)) {
             // метр ветки стоит в S и как стоимость трубы, и как длина: разовый расход переводится в метры по обоим
             double metreRub = rules.diameter(dn).getNewRubM() + rules.lengthWorthRub();
-            Tree tree = builder.build(region.router(dn, area), dn, area, candidate, subset,
-                    rules.chamberCost(dn) / metreRub, rules.tieInCost() / metreRub);
-            if (tree.edges.isEmpty()) {
-                log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
-                continue;
-            }
-            Option option = option(tree, label, verify, area, dn);
-            if (option != null) {
-                options.add(option);
+            for (int side = 0; side < sides; side++) {
+                Tree tree = builder.build(region.router(dn, area), dn, area, candidate, subset,
+                        rules.chamberCost(dn) / metreRub, rules.tieInCost() / metreRub, side);
+                if (tree.edges.isEmpty()) {
+                    log.debug("options: subset={} tie={} side={} нет дерева", label, candidate.nodeKey(), side);
+                    continue;
+                }
+                Option option = option(tree, label, verify, area, dn);
+                if (option != null) {
+                    options.add(option);
+                }
             }
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
@@ -1170,12 +1231,24 @@ public final class VariantEnumerator {
 
     /** Первый вариант дерева с другой врезкой: другой объект или точка дальше OTHER_TIE_M. */
     private static int alternativeIndex(List<Option> options) {
+        return alternativeIndex(options, 1);
+    }
+
+    /** Индекс rank-го варианта дерева с врезкой, отличной от всех предыдущих отличных; 0, если столько нет. */
+    private static int alternativeIndex(List<Option> options, int rank) {
+        List<TieCandidate> seen = new ArrayList<>();
+        if (!options.isEmpty()) {
+            seen.add(options.get(0).tree.tie);
+        }
         for (int i = 1; i < options.size(); i++) {
-            TieCandidate best = options.get(0).tree.tie;
             TieCandidate other = options.get(i).tree.tie;
-            if (!best.getExistingObjectId().equals(other.getExistingObjectId())
-                    || best.getPoint().distance(other.getPoint()) > OTHER_TIE_M) {
-                return i;
+            boolean distinct = seen.stream().allMatch(tie -> !tie.getExistingObjectId().equals(other.getExistingObjectId())
+                    || tie.getPoint().distance(other.getPoint()) > OTHER_TIE_M);
+            if (distinct) {
+                seen.add(other);
+                if (seen.size() - 1 == rank) {
+                    return i;
+                }
             }
         }
         return 0;

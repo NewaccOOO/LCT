@@ -133,7 +133,18 @@ final class TreeBuilder {
      */
     Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
             double chamberPenaltyM, double tieInPenaltyM) {
-        return new Run(router, dn, area, tie, chamberPenaltyM, tieInPenaltyM).build(connections);
+        return build(router, dn, area, tie, connections, chamberPenaltyM, tieInPenaltyM, 0);
+    }
+
+    /**
+     * То же, но финальный участок из здания идёт через {@code portalSide}-ю по расстоянию допустимую сторону: у
+     * точки в дальнем от сети торце здания выход через другую сторону короче в сумме.
+     */
+    Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
+            double chamberPenaltyM, double tieInPenaltyM, int portalSide) {
+        Run run = new Run(router, dn, area, tie, chamberPenaltyM, tieInPenaltyM);
+        run.portalSide = portalSide;
+        return run.build(connections);
     }
 
     private final class Run {
@@ -151,6 +162,8 @@ final class TreeBuilder {
         final Map<Tree.Edge, List<Point>> targetsByEdge = new IdentityHashMap<>();
         /** Точка выхода по id точки подключения: {выход}, NO_PORTAL — выхода нет, null — точка не в полигоне. */
         final Map<String, Coordinate[]> portalByConnection = new HashMap<>();
+        /** Сколько допустимых сторон выхода из здания пропустить: 0 — ближайшая допустимая. */
+        int portalSide;
 
         Run(Router router, int dn, Envelope area, TieCandidate tie, double chamberPenaltyM, double tieInPenaltyM) {
             this.router = router;
@@ -206,6 +219,7 @@ final class TreeBuilder {
                 own.add(building.getId());
                 Coordinate centroid = building.getGeometry().getCentroid().getCoordinate();
                 int tries = 0;
+                int skipped = 0;
                 Coordinate last = null;
                 for (Coordinate anchor : anchors) {
                     if (last != null && anchor.distance(last) < MIN_PIECE_M) {
@@ -237,6 +251,9 @@ final class TreeBuilder {
                     boolean inArea = area.contains(exit);
                     double weight = inForbid || !inArea ? Double.NaN : obstacles.edgeWeight(cp, exit, own);
                     if (!Double.isNaN(weight)) {
+                        if (skipped++ < portalSide) {
+                            continue;
+                        }
                         if (tries > 1) {
                             log.debug("portal: {} anchor {} of {}", connection.getId(), tries, anchors.size());
                         }
