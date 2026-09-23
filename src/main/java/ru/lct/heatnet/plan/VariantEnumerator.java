@@ -103,7 +103,9 @@ public final class VariantEnumerator {
      * Локальный поиск по разбиениям ОКС: сколько сборок черновика он может потратить (свойство heatnet.search.budget).
      * Предела по стенным часам нет: результат не зависит от скорости и загрузки машины.
      */
-    private static final int SEARCH_BUDGET = Integer.getInteger("heatnet.search.budget", 300);
+    // 300 обрывали поиск на плотных сценах: «густо» 100 и 200 останавливаются по застою на ~440 сборках и дают S ниже
+    // на 0,5 и 0,9; датасет организаторов останавливается на 81, ему запас ничего не стоит
+    private static final int SEARCH_BUDGET = Integer.getInteger("heatnet.search.budget", 600);
     /**
      * Остановка после стольких сборок подряд без улучшения лучшего score (heatnet.search.stall). 0 — только budget.
      */
@@ -278,6 +280,9 @@ public final class VariantEnumerator {
         final List<Tree> trees;
         final List<FutureOks> unconnected;
         final Variant variant;
+        /** Линии и их полоса SAME_ROUTE_M для сравнения трасс, строятся по требованию. */
+        Geometry lines;
+        Geometry buffered;
 
         Draft(List<Tree> trees, List<FutureOks> unconnected, Variant variant) {
             this.trees = trees;
@@ -1327,7 +1332,9 @@ public final class VariantEnumerator {
                     return false;
                 }
                 sharing.add(other);
-            } else if (geometry.distance(geometry(other)) <= TREES_APART_M) {
+            } else if (near(geometry.getEnvelopeInternal(), other.envelope())
+                    && geometry.distance(geometry(other)) <= TREES_APART_M) {
+                // рамки дальше порога — геометрии тем более: точное расстояние JTS не считается
                 return false;
             }
         }
@@ -1382,14 +1389,33 @@ public final class VariantEnumerator {
         if (shorter == 0) {
             return lineA.getLength() == lineB.getLength();
         }
-        double common = Math.min(lineA.intersection(lineB.buffer(SAME_ROUTE_M)).getLength(),
-                lineB.intersection(lineA.buffer(SAME_ROUTE_M)).getLength());
-        return common > SAME_ROUTE_SHARE * shorter;
+        if (lineA.getEnvelopeInternal().distance(lineB.getEnvelopeInternal()) > SAME_ROUTE_M) {
+            return false;
+        }
+        // буфер черновика строится один раз: отобранный вариант (a) сравнивается со всеми следующими. Его полоса уже
+        // готова, поэтому она считается первой, а буфер кандидата — только если первая доля выше порога
+        double limit = SAME_ROUTE_SHARE * shorter;
+        return lineB.intersection(buffered(a)).getLength() > limit && lineA.intersection(buffered(b)).getLength() > limit;
+    }
+
+    private Geometry buffered(Draft draft) {
+        if (draft.buffered == null) {
+            draft.buffered = lines(draft).buffer(SAME_ROUTE_M);
+        }
+        return draft.buffered;
     }
 
     private Geometry lines(Draft draft) {
-        return factory.createMultiLineString(draft.trees.stream().flatMap(tree -> tree.edges.stream())
-                .map(edge -> edge.line).toArray(LineString[]::new));
+        if (draft.lines == null) {
+            draft.lines = factory.createMultiLineString(draft.trees.stream().flatMap(tree -> tree.edges.stream())
+                    .map(edge -> edge.line).toArray(LineString[]::new));
+        }
+        return draft.lines;
+    }
+
+    /** Рамки не дальше TREES_APART_M; пустая рамка — не известно, считать точно. */
+    private static boolean near(Envelope a, Envelope b) {
+        return a.isNull() || b.isNull() || a.distance(b) <= TREES_APART_M;
     }
 
     private Geometry geometry(Tree tree) {

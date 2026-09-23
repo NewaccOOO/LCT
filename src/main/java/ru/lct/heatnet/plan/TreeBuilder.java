@@ -63,6 +63,8 @@ final class TreeBuilder {
     private final SpecialObjects specials;
     /** Полигон ОКС, в котором лежит точка подключения, по id точки; точки вне полигонов в карте нет. */
     private final Map<String, ExistingOks> buildingByConnection;
+    /** leavesOnce по зданию и концам отрезка: те же точки выхода проверяются в каждом дереве перебора. */
+    private final Map<List<Object>, Boolean> leavesOnceCache = new java.util.concurrent.ConcurrentHashMap<>();
     private static final GeometryFactory GEOMETRY = new GeometryFactory();
     private final GeometryFactory factory = GEOMETRY;
 
@@ -154,6 +156,11 @@ final class TreeBuilder {
      * 18.09, п. 2.2: участок «от ближайшей границы до точки», а полигон ОКС непроходим). Луч через ближайшую
      * точку контура П-образного здания иначе пересекал бы второе крыло.
      */
+    private boolean leavesOnce(ExistingOks building, Coordinate cp, Coordinate exit) {
+        return leavesOnceCache.computeIfAbsent(List.of(building.getId(), cp.x, cp.y, exit.x, exit.y),
+                key -> leavesOnce(building.getGeometry(), cp, exit));
+    }
+
     static boolean leavesOnce(Geometry building, Coordinate cp, Coordinate exit) {
         Geometry inside = building.intersection(GEOMETRY.createLineString(new Coordinate[] {cp, exit}));
         int pieces = 0;
@@ -262,8 +269,9 @@ final class TreeBuilder {
                     }
                     boolean inForbid = obstacles.insideForbid(exit);
                     boolean inArea = area.contains(exit);
-                    boolean once = leavesOnce(building.getGeometry(), cp, exit);
-                    double weight = inForbid || !inArea || !once ? Double.NaN : obstacles.edgeWeight(cp, exit, own);
+                    // пересечение с полигоном здания дорогое (у квартала сотни вершин): только после дешёвых проверок
+                    boolean once = !inForbid && inArea && leavesOnce(building, cp, exit);
+                    double weight = !once ? Double.NaN : obstacles.edgeWeight(cp, exit, own);
                     if (!Double.isNaN(weight)) {
                         if (tries > 1) {
                             log.debug("portal: {} anchor {} of {}", connection.getId(), tries, anchors.size());

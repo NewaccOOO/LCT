@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.LineString;
 import ru.lct.heatnet.model.ConnectionPoint;
 
@@ -64,6 +65,15 @@ final class Tree {
             }
         }
         return degree;
+    }
+
+    /** Рамка всех рёбер; у дерева без рёбер пустая. */
+    Envelope envelope() {
+        Envelope envelope = new Envelope();
+        for (Edge edge : edges) {
+            envelope.expandToInclude(edge.line.getEnvelopeInternal());
+        }
+        return envelope;
     }
 
     List<ConnectionPoint> connected() {
