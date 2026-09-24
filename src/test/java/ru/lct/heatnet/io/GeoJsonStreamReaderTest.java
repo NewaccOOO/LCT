@@ -446,10 +446,10 @@ class GeoJsonStreamReaderTest {
         }
     }
 
-    // Чтение срезами и потоком (UTF-8) и чтение деревьями на главном потоке (UTF-16, без байтовых смещений)
-    // дают один и тот же вход и те же диагностики, в том числе там, где поток отдаёт фичу дереву.
+    // Чтение строками в пуле (UTF-8, с BOM и без) и чтение деревьями на главном потоке (UTF-16, без байтовых
+    // смещений) дают один и тот же вход и те же диагностики, в том числе там, где быстрый разбор отдаёт фичу Jackson.
     @Test
-    void streamedReadMatchesTreeRead() throws IOException {
+    void pooledReadMatchesTreeRead() throws IOException {
         ArrayNode features = validFeatures();
         features.add(feature("Point", new int[] {37, 55}, "id", "I1", "object_type", "restriction", "restriction_type", "park"));
         features.add(feature("LineString", new double[][] {{37.6, 55.7, 120.5}, {3.77e1, 5.58e1}},
@@ -531,17 +531,17 @@ class GeoJsonStreamReaderTest {
     }
 
     private void assertSameRead(String json, int diagnostics) throws IOException {
-        Path streamed = dir.resolve("utf8.geojson");
+        Path utf8 = dir.resolve("utf8.geojson");
         Path tree = dir.resolve("utf16.geojson");
         Path bom = dir.resolve("bom.geojson");
-        Files.writeString(streamed, json, StandardCharsets.UTF_8);
+        Files.writeString(utf8, json, StandardCharsets.UTF_8);
         Files.writeString(tree, json, StandardCharsets.UTF_16LE);
-        Files.writeString(bom, "﻿" + json, StandardCharsets.UTF_8);
+        Files.writeString(bom, "\uFEFF" + json, StandardCharsets.UTF_8);
         InputData expected = GeoJsonStreamReader.read(tree);
         assertEquals(diagnostics, expected.getDiagnostics().size(), expected.getDiagnostics().toString());
         InputData expectedTwoPass = GeoJsonStreamReader.read(tree, GeoJsonStreamReaderTest::nearConnections);
         assertEquals(expected.getDiagnostics(), expectedTwoPass.getDiagnostics(), "второй проход проверяет всё, как один");
-        for (Path file : List.of(streamed, bom)) {
+        for (Path file : List.of(utf8, bom)) {
             assertSameInput(expected, GeoJsonStreamReader.read(file));
             assertSameInput(expectedTwoPass, GeoJsonStreamReader.read(file, GeoJsonStreamReaderTest::nearConnections));
         }
