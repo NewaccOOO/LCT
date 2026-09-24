@@ -21,6 +21,7 @@ import org.locationtech.jts.index.quadtree.Quadtree;
 import org.locationtech.jts.index.strtree.ItemBoundable;
 import org.locationtech.jts.index.strtree.ItemDistance;
 import org.locationtech.jts.index.strtree.STRtree;
+import org.locationtech.jts.linearref.LengthIndexedLine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.lct.heatnet.graph.ObstacleIndex;
@@ -57,12 +58,17 @@ final class DirectTies {
     private static final double PORTAL_MAX_M = 30;
     private static final double DIST_EPS_M = 0.001;
     private static final double ANGLE_EPS_DEG = 0.01;
+    /** Точка ближе этого к трубе стоит у самой трубы: без допустимого участка от проекции врезка сдвигается вдоль. */
+    private static final double NEAR_PIPE_M = 3;
+    /** Сдвиги врезки от проекции вдоль оси: частые рядом, реже дальше. */
+    private static final double[] SHIFTS_M = {0.5, 1, 1.5, 2, 3, 4, 6, 8, 11, 15};
     private static final String OKS_EXISTING = "oks_existing";
     private static final String HEAT_NETWORK = "heat_network";
 
     private final Rules rules;
     private final ObstacleIndex index;
     private final TieInFinder finder;
+    private final NetworkAssembler assembler;
     private final Map<String, ExistingOks> buildingByConnection;
     private final GeometryFactory factory = new GeometryFactory();
     private final STRtree chambers = new STRtree();
@@ -88,10 +94,11 @@ final class DirectTies {
     }
 
     DirectTies(InputData input, Rules rules, ObstacleIndex index, TieInFinder finder,
-            Map<String, ExistingOks> buildingByConnection) {
+            Map<String, ExistingOks> buildingByConnection, NetworkAssembler assembler) {
         this.rules = rules;
         this.index = index;
         this.finder = finder;
+        this.assembler = assembler;
         this.buildingByConnection = buildingByConnection;
         for (Chamber chamber : input.getChambers()) {
             chambers.insert(chamber.getGeometry().getEnvelopeInternal(), chamber);
@@ -237,25 +244,93 @@ final class DirectTies {
         return result;
     }
 
-    /** Общие кандидаты точки у сети: ближайшие существующие камеры и врезки в ближайшие трубы. */
+    /**
+     * Общие кандидаты точки у сети: ближайшие существующие камеры и врезки в ближайшие трубы; если ни одного нет,
+     * врезки, сдвинутые вдоль ближайших труб ({@link #along}). От учёта мест они не зависят и тоже общие.
+     */
     private void shared(ConnectionPoint connection, Shared shared) {
         int dn = shared.dn;
         Point point = connection.getGeometry();
         for (Object item : chambers.isEmpty() ? List.of() : nearest(chambers, point)) {
             TieCandidate tie = finder.chamberCandidate((Chamber) item);
             if (tie != null && shared.seen.add(tie.nodeKey())) {
-                add(shared.options, option(tie, connection, shared, rules.tieInCost(), shared.rejected));
+                add(shared.options, option(tie, connection, shared, rules.tieInCost(), false, shared.rejected));
             }
         }
-        for (Object item : pipes.isEmpty() ? List.of() : nearest(pipes, point)) {
+        List<Object> nearPipes = pipes.isEmpty() ? List.of() : nearest(pipes, point);
+        for (Object item : nearPipes) {
             NetworkSegment segment = (NetworkSegment) item;
             TieCandidate tie = finder.pipeCandidate(segment, point, dn);
             if (tie == null || !shared.seen.add(tie.nodeKey())) {
                 continue;
             }
-            add(shared.options, option(tie, connection, shared, tie.isChamber() ? rules.tieInCost()
-                    : rules.chamberCost(Math.max(dn, segment.getDiameter())), shared.rejected));
+            add(shared.options, option(tie, connection, shared, nodeCost(tie, segment, dn), false, shared.rejected));
         }
+        if (shared.options.isEmpty()) {
+            for (Object item : nearPipes) {
+                along(shared, (NetworkSegment) item, connection);
+            }
+        }
+    }
+
+    /**
+     * Точка у самой трубы, у которой прямой участок от проекции недопустим: короче метра, упирается в дорогу, соседнюю
+     * трубу или чужое здание. Врезка сдвигается вдоль оси в обе стороны на SHIFTS_M, пока остаётся в своём
+     * здании или его зоне отступа (участок от неё один прямой, CONSTRAINTS.md раздел 19); в каждую сторону берётся
+     * ближайшая, от которой прямой участок допустим. Участок может пересечь чужую трубу специальным проходом, поэтому
+     * дерево ещё и собирается пробно.
+     */
+    private void along(Shared shared, NetworkSegment segment, ConnectionPoint connection) {
+        int dn = shared.dn;
+        LineString axis = segment.getGeometry();
+        Point point = connection.getGeometry();
+        if (!axis.isWithinDistance(point, NEAR_PIPE_M)) {
+            return;
+        }
+        ExistingOks building = buildingByConnection.get(connection.getId());
+        double clearance = rules.restriction(OKS_EXISTING).clearanceM(dn) + rules.diameter(dn).getWidthM() / 2;
+        double at = new LengthIndexedLine(axis).project(point.getCoordinate());
+        for (int sign : new int[] {-1, 1}) {
+            for (double shift : SHIFTS_M) {
+                TieCandidate tie = finder.pipeCandidate(segment, at + sign * shift, dn);
+                if (tie == null || !shared.seen.add(tie.nodeKey())
+                        || building != null && !building.getGeometry().isWithinDistance(tie.getPoint(), clearance)) {
+                    continue;
+                }
+                Option option = option(tie, connection, shared, nodeCost(tie, segment, dn), true, shared.rejected);
+                if (option != null && assembles(tree(option, connection), shared.rejected)) {
+                    shared.options.add(option);
+                    break;
+                }
+            }
+        }
+    }
+
+    /**
+     * Дерево собирается само по себе: зоны спецпроходов, отступы и форма участков как у итоговой сборки. Зоны
+     * пересечения трубы и соседней дороги могут оставить между собой обычный кусок у трубы врезки, а он начинается не
+     * во врезке, и отступ от её трубы для него не снимается.
+     */
+    private boolean assembles(Tree tree, Map<String, Integer> reasons) {
+        try {
+            assembler.assemble("0", 0, List.of(tree), List.of());
+            return true;
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            return reject(reasons, "сборка");
+        }
+    }
+
+    private Tree tree(Option option, ConnectionPoint connection) {
+        Tree tree = new Tree(option.tie);
+        Coordinate[] coords = option.line.clone();
+        coords[0] = tree.root.point;
+        tree.edges.add(new Tree.Edge(tree.root, Tree.Node.connection(connection), factory.createLineString(coords)));
+        return tree;
+    }
+
+    /** Цена узла врезки: врезка в существующую камеру или новая камера на трубе. */
+    private double nodeCost(TieCandidate tie, NetworkSegment segment, int dn) {
+        return tie.isChamber() ? rules.tieInCost() : rules.chamberCost(Math.max(dn, segment.getDiameter()));
     }
 
     /**
@@ -333,11 +408,7 @@ final class DirectTies {
             if (!chosen.tie.isChamber() && ledger.createdByKey.putIfAbsent(key, chosen.tie) == null) {
                 ledger.created.insert(chosen.tie.getPoint().getEnvelopeInternal(), Map.entry(key, chosen.tie));
             }
-            Tree tree = new Tree(chosen.tie);
-            Coordinate[] coords = chosen.line.clone();
-            coords[0] = tree.root.point;
-            tree.edges.add(new Tree.Edge(tree.root, Tree.Node.connection(connection), factory.createLineString(coords)));
-            ledger.trees.add(tree);
+            ledger.trees.add(tree(chosen, connection));
         }
         shared.tried.clear();
         return connected;
@@ -362,7 +433,7 @@ final class DirectTies {
 
     private Tried tried(TieCandidate tie, ConnectionPoint connection, Shared shared) {
         Map<String, Integer> reasons = new HashMap<>();
-        return new Tried(option(tie, connection, shared, 0, reasons), reasons);
+        return new Tried(option(tie, connection, shared, 0, false, reasons), reasons);
     }
 
     private static boolean reject(Map<String, Integer> reasons, String reason) {
@@ -414,11 +485,14 @@ final class DirectTies {
         return true;
     }
 
-    /** Вариант подключения к врезке; null — прямой участок недопустим, причина в {@code reasons}. */
+    /**
+     * Вариант подключения к врезке; null — прямой участок недопустим, причина в {@code reasons}. {@code crossPipes} —
+     * участок может пересечь чужую трубу специальным проходом.
+     */
     private Option option(TieCandidate tie, ConnectionPoint connection, Shared shared, double nodeCost,
-            Map<String, Integer> reasons) {
+            boolean crossPipes, Map<String, Integer> reasons) {
         int dn = shared.dn;
-        Coordinate[] line = line(tie, connection, shared, reasons);
+        Coordinate[] line = line(tie, connection, shared, crossPipes, reasons);
         if (line == null) {
             return null;
         }
@@ -436,7 +510,8 @@ final class DirectTies {
      * финальный), иначе через точку выхода на луче «точка → ближайшая граница» (приложение 18.09, п. 2.2). null —
      * участок нарушает отступы или идёт вдоль трубы врезки.
      */
-    private Coordinate[] line(TieCandidate tie, ConnectionPoint connection, Shared shared, Map<String, Integer> reasons) {
+    private Coordinate[] line(TieCandidate tie, ConnectionPoint connection, Shared shared, boolean crossPipes,
+            Map<String, Integer> reasons) {
         int dn = shared.dn;
         Coordinate cp = connection.getGeometry().getCoordinate();
         Coordinate tiePoint = tie.getPoint().getCoordinate();
@@ -457,7 +532,7 @@ final class DirectTies {
                 reject(reasons, "снова через своё здание");
                 return null;
             }
-            return valid(line, 0, tie, dn, own, reasons) ? line : null;
+            return valid(line, 0, tie, dn, own, crossPipes, reasons) ? line : null;
         }
         for (Portal portal : portals(cp, shared, building, clearance)) {
             if (portal.exit == null) {
@@ -474,7 +549,7 @@ final class DirectTies {
                 reject(reasons, "поворот у выхода");
                 continue;
             }
-            if (valid(line, 1, tie, dn, own, reasons)) {
+            if (valid(line, 1, tie, dn, own, crossPipes, reasons)) {
                 return line;
             }
         }
@@ -562,9 +637,9 @@ final class DirectTies {
     /**
      * Отрезки линии не ближе отступа к полигонам ОКС (кроме своего у финального отрезка {@code finalPiece} и дальше),
      * запретным ограничениям и существующей сети, не пересекают объекты со специальным проходом и не идут вдоль
-     * труб врезки.
+     * труб врезки. С {@code crossPipes} чужую трубу можно пересечь специальным проходом.
      */
-    private boolean valid(Coordinate[] line, int finalPiece, TieCandidate tie, int dn, String ownId,
+    private boolean valid(Coordinate[] line, int finalPiece, TieCandidate tie, int dn, String ownId, boolean crossPipes,
             Map<String, Integer> reasons) {
         double halfWidth = rules.diameter(dn).getWidthM() / 2;
         double oksClearance = rules.restriction(OKS_EXISTING).clearanceM(dn) + halfWidth;
@@ -610,7 +685,9 @@ final class DirectTies {
                     if (segment.getGeometry().intersects(away)) {
                         return reject(reasons, "вдоль трубы врезки");
                     }
-                } else if (segment.getGeometry().distance(piece) < distance - DIST_EPS_M) {
+                } else if (segment.getGeometry().distance(piece) < distance - DIST_EPS_M
+                        && !(crossPipes && segment.getGeometry().intersects(piece)
+                                && crossingAllowed(piece, segment.getGeometry(), network))) {
                     return reject(reasons, "чужая труба");
                 }
             }

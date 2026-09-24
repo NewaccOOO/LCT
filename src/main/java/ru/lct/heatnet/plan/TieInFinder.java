@@ -156,7 +156,7 @@ final class TieInFinder {
     }
 
     /** Врезка в участок в точке {@code at} м от начала оси, прижатой к отступу от концов. */
-    private TieCandidate pipeCandidate(NetworkSegment segment, double at, int dn) {
+    TieCandidate pipeCandidate(NetworkSegment segment, double at, int dn) {
         LineString line = segment.getGeometry();
         LengthIndexedLine indexed = new LengthIndexedLine(line);
         double length = line.getLength();
