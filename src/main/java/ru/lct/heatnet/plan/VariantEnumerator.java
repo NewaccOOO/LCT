@@ -1231,7 +1231,7 @@ public final class VariantEnumerator {
             }
             // углы трассы срезаются по точному отступу, врезка сдвигается к стволу; из того, что соберётся,
             // берётся лучшее по score, вплоть до дерева как построено
-            Tree slid = slide ? slid(tree, router, dn) : tree;
+            Tree slid = slide ? slid(tree, router, dn, metreRub) : tree;
             Option best = null;
             for (Tree shape : new java.util.LinkedHashSet<>(List.of(builder.cut(slid, router), slid, builder.cut(tree, router), tree))) {
                 Option option = option(shape, label, verify, area, dn, region);
@@ -1246,14 +1246,15 @@ public final class VariantEnumerator {
     }
 
     /**
-     * Дерево с врезкой в трубу, сдвинутой вдоль неё к проекции вершины ствола: кандидаты врезки — проекции точек
-     * подключения, и ствол подходит к трубе наискось (гипотеза Q12). Берётся вершина, от которой прямая до трубы
-     * вместе с остатком ствола короче всего и хотя бы на SLIDE_MIN_M короче прежнего ствола; прямая допустима, без
-     * спецпрохода, не идёт вдоль трубы, не ближе TREES_APART_M к другим отрезкам дерева, а поворот в вершине не круче
-     * 90°. Сдвигается только врезка с одним ребром; иначе дерево прежнее.
+     * Дерево с врезкой, перенесённой к вершине ствола: кандидаты врезки — проекции точек подключения, и ствол
+     * подходит к сети наискось или тянется к дальней врезке мимо ближней трубы (гипотеза Q12). У каждой вершины
+     * ствола пробуются проекция на трубу прежней врезки и кандидаты врезки самой вершины; берётся врезка, у которой
+     * прямая до вершины вместе с остатком ствола и ценой узла врезки короче всего и хотя бы на SLIDE_MIN_M короче
+     * прежнего. Прямая допустима, без спецпрохода, не идёт вдоль трубы, не ближе TREES_APART_M к другим отрезкам
+     * дерева, а поворот в вершине не круче 90°. Переносится только врезка с одним ребром; иначе дерево прежнее.
      */
-    private Tree slid(Tree tree, Router router, int dn) {
-        if (tree.tie.isChamber() || tree.degree(tree.root) != 1) {
+    private Tree slid(Tree tree, Router router, int dn, double metreRub) {
+        if (tree.degree(tree.root) != 1) {
             return tree;
         }
         Tree.Edge trunk = tree.edges.stream().filter(edge -> edge.from == tree.root).findFirst().orElseThrow();
@@ -1267,38 +1268,44 @@ public final class VariantEnumerator {
         Coordinate[] coords = trunk.line.getCoordinates();
         ObstacleSet obstacles = router.obstacles();
         double rest = trunk.line.getLength();
-        double best = rest - SLIDE_MIN_M;
+        double best = rest + tiePenalty(tree.tie, dn, metreRub) - SLIDE_MIN_M;
         TieCandidate tie = null;
         int from = 0;
         // проекция точки подключения на трубу и так среди кандидатов врезки
         int last = trunk.to.kind == Tree.Kind.CONNECTION ? coords.length - 1 : coords.length;
         for (int k = 1; k < last; k++) {
             rest -= coords[k - 1].distance(coords[k]);
-            TieCandidate candidate = finder.onSamePipe(tree.tie, factory.createPoint(coords[k]), dn);
-            if (candidate == null) {
-                continue;
+            Point vertex = factory.createPoint(coords[k]);
+            // врезки у самой вершины: ближайшие камеры и проекции на ближайшие участки; в районе города поиск по
+            // всем камерам на каждую вершину дорог, там только своя труба
+            List<TieCandidate> candidates = new ArrayList<>(district ? List.of() : finder.find(List.of(vertex), dn));
+            TieCandidate same = tree.tie.isChamber() ? null : finder.onSamePipe(tree.tie, vertex, dn);
+            if (same != null) {
+                candidates.add(same);
             }
-            Coordinate at = candidate.getPoint().getCoordinate();
-            double straight = at.distance(coords[k]);
-            if (straight + rest >= best || straight < TreeBuilder.MIN_PIECE_M
-                    || k + 1 < coords.length && Router.deflectionDeg(at, coords[k], coords[k + 1]) > Router.MAX_TURN_DEG
-                    || !(obstacles.edgeWeight(at, coords[k], candidate.getIgnored()) <= straight + 1e-9)
-                    || obstacles.alongIgnored(at, coords[k], candidate.getIgnored())) {
-                continue;
-            }
-            LineSegment segment = new LineSegment(at, coords[k]);
-            boolean apart = true;
-            for (LineSegment other : others) {
-                apart &= segment.distance(other) >= TREES_APART_M;
-            }
-            // отрезки ствола до вершины k уходят вместе с прежней врезкой, отрезок из k смежный
-            for (int i = k + 1; i + 1 < coords.length; i++) {
-                apart &= segment.distance(new LineSegment(coords[i], coords[i + 1])) >= TREES_APART_M;
-            }
-            if (apart) {
-                best = straight + rest;
-                tie = candidate;
-                from = k;
+            for (TieCandidate candidate : candidates) {
+                Coordinate at = candidate.getPoint().getCoordinate();
+                double straight = at.distance(coords[k]);
+                if (straight + rest + tiePenalty(candidate, dn, metreRub) >= best || straight < TreeBuilder.MIN_PIECE_M
+                        || k + 1 < coords.length && Router.deflectionDeg(at, coords[k], coords[k + 1]) > Router.MAX_TURN_DEG
+                        || !(obstacles.edgeWeight(at, coords[k], candidate.getIgnored()) <= straight + 1e-9)
+                        || obstacles.alongIgnored(at, coords[k], candidate.getIgnored())) {
+                    continue;
+                }
+                LineSegment segment = new LineSegment(at, coords[k]);
+                boolean apart = true;
+                for (LineSegment other : others) {
+                    apart &= segment.distance(other) >= TREES_APART_M;
+                }
+                // отрезки ствола до вершины k уходят вместе с прежней врезкой, отрезок из k смежный
+                for (int i = k + 1; i + 1 < coords.length; i++) {
+                    apart &= segment.distance(new LineSegment(coords[i], coords[i + 1])) >= TREES_APART_M;
+                }
+                if (apart) {
+                    best = straight + rest + tiePenalty(candidate, dn, metreRub);
+                    tie = candidate;
+                    from = k;
+                }
             }
         }
         if (tie == null) {
@@ -1313,6 +1320,11 @@ public final class VariantEnumerator {
             result.edges.add(edge == trunk ? new Tree.Edge(result.root, trunk.to, factory.createLineString(line)) : edge);
         }
         return result;
+    }
+
+    /** Цена узла врезки в метрах ветки: врезка в камеру или новая камера на трубе. */
+    private double tiePenalty(TieCandidate tie, int dn, double metreRub) {
+        return (tie.isChamber() ? rules.tieInCost() : rules.chamberCost(dn)) / metreRub;
     }
 
     /**
