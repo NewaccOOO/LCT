@@ -141,11 +141,17 @@ public final class ObstacleSet {
          * расстояние, отступ не меньше метра.
          */
         boolean intersects(Coordinate a, Coordinate b) {
-            double minX = Math.min(a.x, b.x) - distance;
-            double maxX = Math.max(a.x, b.x) + distance;
-            double minY = Math.min(a.y, b.y) - distance;
-            double maxY = Math.max(a.y, b.y) + distance;
-            double limit = distance * distance;
+            return intersects(a, b, 0);
+        }
+
+        /** То же с отступом шире на extra. */
+        boolean intersects(Coordinate a, Coordinate b, double extra) {
+            double reach = distance + extra;
+            double minX = Math.min(a.x, b.x) - reach;
+            double maxX = Math.max(a.x, b.x) + reach;
+            double minY = Math.min(a.y, b.y) - reach;
+            double maxY = Math.max(a.y, b.y) + reach;
+            double limit = reach * reach;
             double dx = b.x - a.x;
             double dy = b.y - a.y;
             double length2 = dx * dx + dy * dy;
@@ -630,6 +636,33 @@ public final class ObstacleSet {
             }
         }
         return weight(edge.getLength(), spans(edge, crossed, Set.of())) + beforeA + beforeB;
+    }
+
+    /**
+     * Отрезок a–b обычный: не пересекает объектов специального прохода и держит отступы с запасом margin. Так
+     * проверяется хорда срезки угла: трасса у самой зоны графа не прошла бы проверку отступов, когда сборка
+     * поднимает Ду по длине на ступень, а запас как у узлов графа эту ступень покрывает.
+     */
+    public boolean plain(Coordinate a, Coordinate b, Set<String> ignored, double margin) {
+        LineString edge = factory.createLineString(new Coordinate[] {a, b});
+        Envelope envelope = new Envelope(a, b);
+        envelope.expandBy(margin);
+        for (Object item : forbidZones.query(envelope)) {
+            Zone zone = (Zone) item;
+            if (!ignored.contains(zone.id) && zone.intersects(a, b, margin)) {
+                return false;
+            }
+        }
+        for (Object item : specials.query(envelope)) {
+            Special special = (Special) item;
+            if (ignored.contains(special.id) && touches(special, a, b)) {
+                continue;
+            }
+            if (special.crossedBy(a, b, edge) || special.zone.intersects(a, b, margin)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

@@ -1223,30 +1223,23 @@ public final class VariantEnumerator {
         // кандидатов, поэтому итог не зависит от расписания нитей. В районе города нити заняты районами.
         java.util.stream.Stream<TieCandidate> stream = district || !PARALLEL ? cheapest.stream() : cheapest.parallelStream();
         List<Option> options = stream.map(candidate -> {
-            // ветки идут маршрутами со срезанными углами; если сборка или отступы по фактическому Ду такое дерево не
-            // принимают (срезанная трасса прижата к зоне Ду графа), дерево строится заново без срезки
-            for (boolean cutRoutes : new boolean[] {true, false}) {
-                Tree tree = builder.build(router, dn, area, candidate, subset, rules.chamberCost(dn) / metreRub,
-                        rules.tieInCost() / metreRub, fromPortalDirection, cutRoutes);
-                if (tree.edges.isEmpty()) {
-                    log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
-                    return null;
-                }
-                // углы трассы срезаются по точному отступу, врезка сдвигается к стволу; из того, что соберётся,
-                // берётся лучшее по score, вплоть до дерева как построено
-                Tree slid = slide ? slid(tree, router, dn) : tree;
-                Option best = null;
-                for (Tree shape : new java.util.LinkedHashSet<>(List.of(builder.cut(slid, router), slid, builder.cut(tree, router), tree))) {
-                    Option option = option(shape, label, verify, area, dn, region);
-                    if (option != null && (best == null || option.score < best.score)) {
-                        best = option;
-                    }
-                }
-                if (best != null) {
-                    return best;
+            Tree tree = builder.build(router, dn, area, candidate, subset, rules.chamberCost(dn) / metreRub,
+                    rules.tieInCost() / metreRub, fromPortalDirection);
+            if (tree.edges.isEmpty()) {
+                log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
+                return null;
+            }
+            // углы трассы срезаются по точному отступу, врезка сдвигается к стволу; из того, что соберётся,
+            // берётся лучшее по score, вплоть до дерева как построено
+            Tree slid = slide ? slid(tree, router, dn) : tree;
+            Option best = null;
+            for (Tree shape : new java.util.LinkedHashSet<>(List.of(builder.cut(slid, router), slid, builder.cut(tree, router), tree))) {
+                Option option = option(shape, label, verify, area, dn, region);
+                if (option != null && (best == null || option.score < best.score)) {
+                    best = option;
                 }
             }
-            return null;
+            return best;
         }).filter(Objects::nonNull).collect(Collectors.toList());
         options.sort(Comparator.comparingDouble(option -> option.score));
         return options;

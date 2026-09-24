@@ -38,6 +38,8 @@ public final class Router {
     private static final int CUT_PASSES = 2;
     private static final int CUT_STEPS = 6;
     private static final double CUT_APART_M = 0.5;
+    /** Запас хорды к отступу, как у узлов графа: сборка может поднять Ду по длине на ступень, см. ObstacleSet#plain. */
+    private static final double CUT_MARGIN_M = 0.15;
     /** Подотрезок после срезки не короче метра с запасом: check18 видит 1,00 м после округления координат как 0,999. */
     private static final double CUT_PIECE_M = 1.05;
     private static final double UNKNOWN = Double.NEGATIVE_INFINITY;
@@ -528,11 +530,14 @@ public final class Router {
         return low;
     }
 
-    /** Хорда среза cut у вершины cur допустима, обычная (без спецпрохода) и не ближе CUT_APART_M к отрезкам apart. */
+    /**
+     * Хорда среза cut у вершины cur обычная (без спецпрохода), держит отступы с запасом CUT_MARGIN_M и не ближе
+     * CUT_APART_M к отрезкам apart.
+     */
     private boolean chord(Coordinate cur, Coordinate prev, Coordinate next, double cut, Set<String> ignored, List<LineSegment> apart) {
         Coordinate a = toward(cur, prev, cut);
         Coordinate b = toward(cur, next, cut);
-        if (!(obstacles.edgeWeight(a, b, ignored) <= a.distance(b) + 1e-9)) {
+        if (!obstacles.plain(a, b, ignored, CUT_MARGIN_M)) {
             return false;
         }
         LineSegment chord = new LineSegment(a, b);

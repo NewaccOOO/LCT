@@ -148,15 +148,8 @@ final class TreeBuilder {
      */
     Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
             double chamberPenaltyM, double tieInPenaltyM, boolean fromPortalDirection) {
-        return build(router, dn, area, tie, connections, chamberPenaltyM, tieInPenaltyM, fromPortalDirection, false);
-    }
-
-    /** То же; {@code cut} — маршруты веток со срезанными углами у вершин зон, см. {@link Router#routeToAny}. */
-    Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
-            double chamberPenaltyM, double tieInPenaltyM, boolean fromPortalDirection, boolean cut) {
         Run run = new Run(router, dn, area, tie, chamberPenaltyM, tieInPenaltyM);
         run.fromPortalDirection = fromPortalDirection;
-        run.cut = cut;
         return run.build(connections);
     }
 
@@ -198,8 +191,6 @@ final class TreeBuilder {
         final Map<String, Coordinate[]> portalByConnection = new HashMap<>();
         /** Маршрут выходит из здания вдоль финального прямого участка, см. {@link #build}. */
         boolean fromPortalDirection;
-        /** Маршруты со срезанными углами, см. {@link #build}. */
-        boolean cut;
 
         Run(Router router, int dn, Envelope area, TieCandidate tie, double chamberPenaltyM, double tieInPenaltyM) {
             this.router = router;
@@ -344,8 +335,9 @@ final class TreeBuilder {
                 return null;
             }
             Point start = portal == null ? connection.getGeometry() : factory.createPoint(portal[0]);
-            Route route = portal == null || !fromPortalDirection ? router.routeToAny(start, targets, ignored, cut)
-                    : router.routeExact(start, targets, ignored, connection.getGeometry().getCoordinate(), cut);
+            // маршруты со срезанными углами у вершин зон, см. Router#cutPass
+            Route route = portal == null || !fromPortalDirection ? router.routeToAny(start, targets, ignored, true)
+                    : router.routeExact(start, targets, ignored, connection.getGeometry().getCoordinate(), true);
             if (route == null) {
                 return null;
             }
