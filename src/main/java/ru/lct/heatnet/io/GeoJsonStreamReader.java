@@ -1304,12 +1304,12 @@ public class GeoJsonStreamReader {
         }
     }
 
-    /** Узел фичи из байтов быстрым разбором, как в первом проходе; null — не в быстром виде. Для тестов. */
+    /** Узел фичи из байтов быстрым разбором, как в чтении за один проход; null — не в быстром виде. Для тестов. */
     static JsonNode fastFeature(byte[] bytes) {
         int from = space(bytes, 0, bytes.length);
         int to = objectEnd(bytes, from, bytes.length);
         return to < 0 || space(bytes, to, bytes.length) != bytes.length ? null
-                : fast(new Scan(true, null, 0), bytes, from, to);
+                : fast(new Scan(false, null, 0), bytes, from, to);
     }
 
     /** Геометрия из байтов значения geometry быстрым разбором; null — пусть разберёт дерево. */
@@ -1344,7 +1344,7 @@ public class GeoJsonStreamReader {
      * Фича в частом виде без Jackson: ключи и строки ASCII без экранирования, числа по грамматике JSON, в properties
      * и других ключах фичи — скаляры, geometry — объект с type до coordinates из чисел, разбор которого по дереву
      * удался бы. Принимает только корректный JSON и строит те же узлы и геометрию, что readTree и parse с
-     * настройками MAPPER; на остальном бросает NOT_FAST.
+     * настройками MAPPER; на остальном бросает NOT_FAST. Исключение — отложенная геометрия первого прохода, см. feature.
      */
     private static final class Fast {
         final byte[] bytes;
@@ -1382,7 +1382,16 @@ public class GeoJsonStreamReader {
                         at = start;
                     }
                 }
-                skip();
+                if (part.skipObstacles && at < end && (bytes[at] == '{' || bytes[at] == '[')) {
+                    // первому проходу хватает конца геометрии по скобкам: синтаксис той, что он не разберёт,
+                    // проверит второй проход, он читает каждую фичу целиком
+                    at = objectEnd(bytes, at, end);
+                    if (at < 0) {
+                        throw NOT_FAST;
+                    }
+                } else {
+                    skip();
+                }
                 part.geometryBytes = bytes;
                 part.geometryFrom = start;
                 part.geometryTo = at;

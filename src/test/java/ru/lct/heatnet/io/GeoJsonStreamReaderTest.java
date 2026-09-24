@@ -491,6 +491,13 @@ class GeoJsonStreamReaderTest {
         assertSameRead(json, 8);
         assertSameRead("{\"type\":\"FeatureCollection\",\"features\":[1," + json.substring(json.indexOf('[') + 1), 9);
         assertSameRead("{\"features\":[]}", 2);
+        // сломанный JSON в геометрии ограничения: первый проход её не разбирает, ту же ошибку даёт второй
+        Path broken = dir.resolve("broken-geometry.geojson");
+        Files.writeString(broken, json.replace("[37.66,55.76],[37.67,55.76]", "[37.66,55.76],,[37.67,55.76]"));
+        List<Diagnostic> once = GeoJsonStreamReader.read(broken).getDiagnostics();
+        assertEquals(1, once.size());
+        assertTrue(once.get(0).getProblem().startsWith("файл не разбирается как JSON"), once.toString());
+        assertEquals(once, GeoJsonStreamReader.read(broken, GeoJsonStreamReaderTest::nearConnections).getDiagnostics());
         features.add(features.get(1).deepCopy());
         assertSameRead(MAPPER.writeValueAsString(collection(features)), 9);
         ObjectNode second = features.get(0).deepCopy();
