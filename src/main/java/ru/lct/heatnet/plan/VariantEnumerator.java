@@ -34,6 +34,7 @@ import org.locationtech.jts.index.quadtree.Quadtree;
 import org.locationtech.jts.index.strtree.STRtree;
 import ru.lct.heatnet.graph.ObstacleIndex;
 import ru.lct.heatnet.graph.ObstacleSet;
+import ru.lct.heatnet.graph.Route;
 import ru.lct.heatnet.graph.RouteCache;
 import ru.lct.heatnet.graph.Router;
 import ru.lct.heatnet.calc.Scorer;
@@ -1211,7 +1212,7 @@ public final class VariantEnumerator {
         return options(region, dn, area, subset, verify, candidates, false, true);
     }
 
-    /** {@code slide} — сдвигать врезку к стволу, см. {@link #slid}. */
+    /** {@code slide} — переносить врезку к стволу, см. {@link #slid} и {@link #rerooted}. */
     private List<Option> options(Region region, int dn, Envelope area, List<ConnectionPoint> subset, boolean verify,
             List<TieCandidate> candidates, boolean fromPortalDirection, boolean slide) {
         String label = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(","));
@@ -1229,11 +1230,13 @@ public final class VariantEnumerator {
                 log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
                 return null;
             }
-            // углы трассы срезаются по точному отступу, врезка сдвигается к стволу; из того, что соберётся,
-            // берётся лучшее по score, вплоть до дерева как построено
+            // углы трассы срезаются по точному отступу, врезка переносится к стволу или ствол прокладывается к
+            // врезке у первой камеры; из того, что соберётся, берётся лучшее по score, вплоть до дерева как построено
             Tree slid = slide ? slid(tree, router, dn, metreRub) : tree;
+            Tree rerooted = slide ? rerooted(tree, router, dn, metreRub) : tree;
             Option best = null;
-            for (Tree shape : new java.util.LinkedHashSet<>(List.of(builder.cut(slid, router), slid, builder.cut(tree, router), tree))) {
+            for (Tree shape : new java.util.LinkedHashSet<>(List.of(builder.cut(slid, router), slid, builder.cut(rerooted, router),
+                    rerooted, builder.cut(tree, router), tree))) {
                 Option option = option(shape, label, verify, area, dn, region);
                 if (option != null && (best == null || option.score < best.score)) {
                     best = option;
@@ -1316,6 +1319,57 @@ public final class VariantEnumerator {
         Coordinate[] line = new Coordinate[coords.length - from + 1];
         line[0] = tie.getPoint().getCoordinate();
         System.arraycopy(coords, from, line, 1, coords.length - from);
+        for (Tree.Edge edge : tree.edges) {
+            result.edges.add(edge == trunk ? new Tree.Edge(result.root, trunk.to, factory.createLineString(line)) : edge);
+        }
+        return result;
+    }
+
+    /**
+     * Дерево со стволом, проложенным заново от первой камеры ветвления к лучшей из врезок у неё: ближайших камер
+     * и проекций на ближайшие участки. Кандидаты врезки дерева — проекции точек подключения, а ствол от камеры
+     * ветвления до них бывает длиннее пути к трубе рядом с самой камерой. Маршрут берётся по графу, если с ценой
+     * узла врезки он хотя бы на SLIDE_MIN_M короче прежнего ствола; остальное проверяет сборка.
+     */
+    private Tree rerooted(Tree tree, Router router, int dn, double metreRub) {
+        if (district || tree.degree(tree.root) != 1) {
+            return tree;
+        }
+        Tree.Edge trunk = tree.edges.stream().filter(edge -> edge.from == tree.root).findFirst().orElseThrow();
+        if (trunk.to.kind != Tree.Kind.JUNCTION) {
+            return tree;
+        }
+        Point junction = factory.createPoint(trunk.to.point);
+        double best = trunk.line.getLength() + tiePenalty(tree.tie, dn, metreRub) - SLIDE_MIN_M;
+        TieCandidate tie = null;
+        Coordinate[] line = null;
+        for (TieCandidate candidate : finder.find(List.of(junction), dn)) {
+            if (candidate.nodeKey().equals(tree.tie.nodeKey())) {
+                continue;
+            }
+            Route route = router.routeToAny(junction, List.of(candidate.getPoint()), candidate.getIgnored(), true);
+            if (route == null || route.getWeight() + tiePenalty(candidate, dn, metreRub) >= best) {
+                continue;
+            }
+            Coordinate[] coords = route.getGeometry().getCoordinates();
+            Coordinate[] reversed = new Coordinate[coords.length];
+            for (int i = 0; i < coords.length; i++) {
+                reversed[i] = coords[coords.length - 1 - i];
+            }
+            if (router.obstacles().alongIgnored(reversed[0], reversed[1], candidate.getIgnored())) {
+                continue;
+            }
+            best = route.getWeight() + tiePenalty(candidate, dn, metreRub);
+            tie = candidate;
+            line = reversed;
+        }
+        if (tie == null) {
+            return tree;
+        }
+        line[0] = tie.getPoint().getCoordinate();
+        line[line.length - 1] = trunk.to.point;
+        Tree result = new Tree(tie);
+        result.unconnected.addAll(tree.unconnected);
         for (Tree.Edge edge : tree.edges) {
             result.edges.add(edge == trunk ? new Tree.Edge(result.root, trunk.to, factory.createLineString(line)) : edge);
         }
