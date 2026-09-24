@@ -42,23 +42,41 @@ final class TieInFinder {
     private static final double END_GAP_EXTRA_M = 1.0;
     /** Запас к otherTieM у сдвинутой врезки: ось участка может быть не прямой. */
     private static final double ALONG_EXTRA_M = 1.0;
+    /** Первое окно поиска ближайших, м; дальше оно растёт вчетверо, см. {@link #nearest}. */
+    private static final double FIRST_REACH_M = 64;
+    /** Запас окна запроса к индексу: объект на самом краю не должен выпасть из-за округления. */
+    private static final double WINDOW_EXTRA_M = 1.0;
 
     private final InputData input;
     private final Rules rules;
     private final GeometryFactory factory = new GeometryFactory();
     private final Map<String, Integer> linksByChamber = new HashMap<>();
-    /** Участки сети по рамке: город — сотни тысяч участков, и перебор всех на каждую врезку был главной ценой. */
+    /**
+     * Участки и камеры сети по рамке, элемент — номер во входе: город — сотни тысяч участков, и перебор всех на
+     * каждую врезку был главной ценой.
+     */
     private final STRtree segmentIndex = new STRtree();
+    private final STRtree chamberIndex = new STRtree();
+    private final Envelope segmentExtent = new Envelope();
+    private final Envelope chamberExtent = new Envelope();
     private final Map<String, NetworkSegment> segmentById = new HashMap<>();
 
     TieInFinder(InputData input, Rules rules) {
         this.input = input;
         this.rules = rules;
-        for (NetworkSegment segment : input.getSegments()) {
-            segmentIndex.insert(segment.getGeometry().getEnvelopeInternal(), segment);
+        for (int i = 0; i < input.getSegments().size(); i++) {
+            NetworkSegment segment = input.getSegments().get(i);
+            segmentIndex.insert(segment.getGeometry().getEnvelopeInternal(), i);
+            segmentExtent.expandToInclude(segment.getGeometry().getEnvelopeInternal());
             segmentById.put(segment.getId(), segment);
         }
+        for (int i = 0; i < input.getChambers().size(); i++) {
+            Envelope envelope = input.getChambers().get(i).getGeometry().getEnvelopeInternal();
+            chamberIndex.insert(envelope, i);
+            chamberExtent.expandToInclude(envelope);
+        }
         segmentIndex.build();
+        chamberIndex.build();
         for (Chamber chamber : input.getChambers()) {
             linksByChamber.put(chamber.getId(), links(chamber).size());
         }
@@ -70,7 +88,7 @@ final class TieInFinder {
         envelope.expandBy(TOUCH_M);
         Set<String> result = new TreeSet<>();
         for (Object item : segmentIndex.query(envelope)) {
-            NetworkSegment segment = (NetworkSegment) item;
+            NetworkSegment segment = input.getSegments().get((Integer) item);
             if (within(segment.getGeometry(), point.getCoordinate(), TOUCH_M)) {
                 result.add(segment.getId());
             }
@@ -96,14 +114,15 @@ final class TieInFinder {
     List<TieCandidate> find(List<Point> points, int dn) {
         Map<String, TieCandidate> byKey = new LinkedHashMap<>();
         for (Point point : points) {
-            for (Chamber chamber : nearest(input.getChambers(), c -> c.getGeometry().distance(point),
-                    c -> c.getGeometry().getEnvelopeInternal().distance(point.getEnvelopeInternal()))) {
+            for (Chamber chamber : nearest(input.getChambers(), chamberIndex, chamberExtent, point,
+                    c -> c.getGeometry().distance(point), c -> c.getGeometry().getEnvelopeInternal().distance(point.getEnvelopeInternal()))) {
                 TieCandidate candidate = chamberCandidate(chamber);
                 if (candidate != null) {
                     byKey.putIfAbsent(candidate.nodeKey(), candidate);
                 }
             }
-            for (NetworkSegment segment : nearest(input.getSegments(), s -> s.getGeometry().distance(point),
+            for (NetworkSegment segment : nearest(input.getSegments(), segmentIndex, segmentExtent, point,
+                    s -> s.getGeometry().distance(point),
                     s -> s.getGeometry().getEnvelopeInternal().distance(point.getEnvelopeInternal()))) {
                 TieCandidate candidate = pipeCandidate(segment, point, dn);
                 if (candidate != null && byKey.values().stream().noneMatch(c -> same(c, candidate))) {
@@ -121,7 +140,10 @@ final class TieInFinder {
      */
     List<TieCandidate> along(TieCandidate tie, int dn, double otherTieM) {
         List<TieCandidate> result = new ArrayList<>();
-        for (NetworkSegment segment : input.getSegments()) {
+        Envelope window = new Envelope(tie.getPoint().getCoordinate());
+        window.expandBy(TOUCH_M + WINDOW_EXTRA_M);
+        for (int i : sorted(segmentIndex.query(window))) {
+            NetworkSegment segment = input.getSegments().get(i);
             if (!segment.getGeometry().isWithinDistance(tie.getPoint(), TOUCH_M)) {
                 continue;
             }
@@ -194,7 +216,11 @@ final class TieInFinder {
 
         ChamberRule rule = rules.chamberRule();
         Chamber best = null;
-        for (Chamber chamber : input.getChambers()) {
+        // камеры дальше max_dist_m отбрасываются и при переборе всех; окно с запасом, обход — в порядке входа
+        Envelope window = new Envelope(tie.getCoordinate());
+        window.expandBy(rule.getMaxDistM() + DIST_MARGIN_M + WINDOW_EXTRA_M);
+        for (int i : sorted(chamberIndex.query(window))) {
+            Chamber chamber = input.getChambers().get(i);
             double distance = chamber.getGeometry().distance(tie);
             if (distance > rule.getMaxDistM() + DIST_MARGIN_M || links(chamber.getId()) + 1 > rule.getMaxSegments()) {
                 continue;
@@ -228,7 +254,7 @@ final class TieInFinder {
         Envelope envelope = new Envelope(at);
         envelope.expandBy(TOUCH_M);
         for (Object item : segmentIndex.query(envelope)) {
-            NetworkSegment segment = (NetworkSegment) item;
+            NetworkSegment segment = input.getSegments().get((Integer) item);
             LineString line = segment.getGeometry();
             if (line.getCoordinateN(0).distance(at) <= TOUCH_M
                     || line.getCoordinateN(line.getNumPoints() - 1).distance(at) <= TOUCH_M) {
@@ -239,35 +265,64 @@ final class TieInFinder {
     }
 
     /**
-     * NEAREST ближайших по distance, при равенстве — в порядке входа. Расстояние до рамки не больше расстояния до
-     * геометрии, поэтому точное считается только у объектов, чья рамка не дальше NEAREST-го найденного: на городе
-     * в тысячи участков по сотни вершин полный перебор с сортировкой занимал десятую часть расчёта.
+     * NEAREST ближайших к point по distance, при равенстве — в порядке входа. Объекты берутся из index окнами вокруг
+     * точки, окно растёт вчетверо, пока NEAREST-й найденный не окажется ближе края окна: за окном рамки, а значит и
+     * геометрии дальше. Внутри окна расстояние до рамки не больше расстояния до геометрии, поэтому точное считается
+     * только у объектов, чья рамка не дальше NEAREST-го найденного. Прежний перебор с сортировкой всех объектов
+     * города по рамке на каждую точку занимал пятую часть расчёта района.
      */
-    private static <T> List<T> nearest(List<T> items, ToDoubleFunction<T> distance, ToDoubleFunction<T> bound) {
-        Integer[] byBound = new Integer[items.size()];
-        double[] bounds = new double[items.size()];
-        for (int i = 0; i < items.size(); i++) {
-            byBound[i] = i;
-            bounds[i] = bound.applyAsDouble(items.get(i));
+    static <T> List<T> nearest(List<T> items, STRtree index, Envelope extent, Point point,
+            ToDoubleFunction<T> distance, ToDoubleFunction<T> bound) {
+        if (items.isEmpty()) {
+            return List.of();
         }
-        Arrays.sort(byBound, Comparator.comparingDouble(i -> bounds[i]));
+        for (double reach = FIRST_REACH_M; ; reach *= 4) {
+            Envelope window = new Envelope(point.getCoordinate());
+            window.expandBy(reach);
+            List<double[]> found = nearest(items, sorted(index.query(window)), distance, bound);
+            boolean all = window.covers(extent);
+            if (all || found.size() >= NEAREST && found.get(NEAREST - 1)[0] < reach) {
+                List<T> result = new ArrayList<>();
+                for (int k = 0; k < Math.min(NEAREST, found.size()); k++) {
+                    result.add(items.get((int) found.get(k)[1]));
+                }
+                return result;
+            }
+        }
+    }
+
+    /** Прежний отбор среди объектов с номерами ids по возрастанию: расстояние и номер NEAREST ближайших по порядку. */
+    private static <T> List<double[]> nearest(List<T> items, int[] ids, ToDoubleFunction<T> distance, ToDoubleFunction<T> bound) {
+        Integer[] byBound = new Integer[ids.length];
+        double[] bounds = new double[ids.length];
+        for (int k = 0; k < ids.length; k++) {
+            byBound[k] = k;
+            bounds[k] = bound.applyAsDouble(items.get(ids[k]));
+        }
+        Arrays.sort(byBound, Comparator.comparingDouble(k -> bounds[k]));
         List<double[]> found = new ArrayList<>();
         double worst = Double.POSITIVE_INFINITY;
-        for (int i : byBound) {
-            if (bounds[i] > worst) {
+        for (int k : byBound) {
+            if (bounds[k] > worst) {
                 break;
             }
-            found.add(new double[] {distance.applyAsDouble(items.get(i)), i});
+            found.add(new double[] {distance.applyAsDouble(items.get(ids[k])), ids[k]});
             if (found.size() >= NEAREST) {
                 found.sort(Comparator.comparingDouble((double[] d) -> d[0]).thenComparingDouble(d -> d[1]));
                 worst = found.get(NEAREST - 1)[0];
             }
         }
         found.sort(Comparator.comparingDouble((double[] d) -> d[0]).thenComparingDouble(d -> d[1]));
-        List<T> result = new ArrayList<>();
-        for (int k = 0; k < Math.min(NEAREST, found.size()); k++) {
-            result.add(items.get((int) found.get(k)[1]));
+        return found;
+    }
+
+    /** Номера из запроса к индексу по возрастанию. */
+    private static int[] sorted(List<?> items) {
+        int[] ids = new int[items.size()];
+        for (int k = 0; k < ids.length; k++) {
+            ids[k] = (Integer) items.get(k);
         }
-        return result;
+        Arrays.sort(ids);
+        return ids;
     }
 }

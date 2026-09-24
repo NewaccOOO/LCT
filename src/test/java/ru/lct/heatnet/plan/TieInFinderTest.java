@@ -4,8 +4,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static ru.lct.heatnet.plan.PlanFixture.point;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Random;
 import org.junit.jupiter.api.Test;
+import org.locationtech.jts.geom.Envelope;
+import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.Point;
+import org.locationtech.jts.index.strtree.STRtree;
 import ru.lct.heatnet.rules.Rules;
 
 class TieInFinderTest {
@@ -85,5 +92,48 @@ class TieInFinderTest {
         TieCandidate end = candidates.stream()
                 .filter(c -> c.getExistingObjectId().equals("hn-3") && c.getPoint().getX() > 590).findFirst().orElseThrow();
         assertTrue(end.getPoint().getX() < 600 - 1, "точка врезки у конца участка: " + end.getPoint());
+    }
+
+    @Test
+    void nearestByWindowMatchesFullSort() {
+        // решётка даёт равные расстояния, их порядок — порядок входа; точки и линии вперемешку, далеко и близко
+        Random random = new Random(11);
+        for (int round = 0; round < 200; round++) {
+            List<Geometry> items = new ArrayList<>();
+            int count = random.nextInt(40);
+            for (int i = 0; i < count; i++) {
+                double x = random.nextInt(30) * 50.0;
+                double y = random.nextInt(30) * 50.0;
+                double dx = random.nextInt(5) * 50.0;
+                double dy = random.nextInt(5) * 50.0;
+                items.add(i % 2 == 0 ? point(x, y) : PlanFixture.line(x, y, x + dx, y + dy));
+            }
+            STRtree index = new STRtree();
+            Envelope extent = new Envelope();
+            for (int i = 0; i < items.size(); i++) {
+                index.insert(items.get(i).getEnvelopeInternal(), i);
+                extent.expandToInclude(items.get(i).getEnvelopeInternal());
+            }
+            index.build();
+            for (int k = 0; k < 50; k++) {
+                Point at = point(random.nextInt(80) * 25.0 - 250, random.nextInt(80) * 25.0 - 250);
+                // номера, а не сами геометрии: на решётке бывают одинаковые объекты с разными номерами
+                List<Integer> order = new ArrayList<>();
+                for (int i = 0; i < items.size(); i++) {
+                    order.add(i);
+                }
+                order.sort(Comparator.comparingDouble((Integer i) -> items.get(i).distance(at)).thenComparingInt(i -> i));
+                List<Integer> found = new ArrayList<>();
+                for (Geometry g : TieInFinder.nearest(items, index, extent, at, g -> g.distance(at),
+                        g -> g.getEnvelopeInternal().distance(at.getEnvelopeInternal()))) {
+                    int n = 0;
+                    while (items.get(n) != g) {
+                        n++;
+                    }
+                    found.add(n);
+                }
+                assertEquals(order.subList(0, Math.min(TieInFinder.NEAREST, order.size())), found, at.toString());
+            }
+        }
     }
 }
