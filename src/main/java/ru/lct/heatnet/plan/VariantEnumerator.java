@@ -243,7 +243,7 @@ public final class VariantEnumerator {
                 return router.obstacles();
             }
             return obstacleSets.computeIfAbsent(obstaclesDn + "@" + obstaclesArea,
-                    key -> new ObstacleSet(obstacleIndex, rules, obstaclesArea, obstaclesDn));
+                    key -> new ObstacleSet(obstacleIndex, rules, obstaclesArea, obstaclesDn, null, routeCache));
         }
     }
 

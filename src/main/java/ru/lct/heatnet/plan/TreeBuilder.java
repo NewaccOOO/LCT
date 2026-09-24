@@ -571,13 +571,20 @@ final class TreeBuilder {
         }
 
         boolean valid(Coordinate[] branch, List<Piece> pieces, Spot spot, Set<String> firstIgnored) {
-            for (int i = 0; i + 1 < branch.length; i++) {
-                if (Double.isNaN(obstacles.edgeWeight(branch[i], branch[i + 1], i == 0 ? firstIgnored : ignored))) {
+            // сначала дешёвые проверки: почти все отвергнутые ветки отпадают на изломах, а вес отрезка дорогой
+            for (int i = 1; i + 1 < branch.length; i++) {
+                double deflection = deflectionDeg(branch[i - 1], branch[i], branch[i + 1]);
+                if (deflection > Router.MAX_TURN_DEG || deflection < MIN_TURN_DEG) {
                     return false;
                 }
             }
-            for (int i = 1; i + 1 < branch.length; i++) {
-                if (deflectionDeg(branch[i - 1], branch[i], branch[i + 1]) > Router.MAX_TURN_DEG) {
+            int last = branch.length - 1;
+            LineSegment tail = new LineSegment(branch[last - 1], branch[last]);
+            if (tail.getLength() <= JUNCTION_CLIP_M) {
+                return false;
+            }
+            for (int i = 0; i + 1 < branch.length; i++) {
+                if (Double.isNaN(obstacles.edgeWeight(branch[i], branch[i + 1], i == 0 ? firstIgnored : ignored))) {
                     return false;
                 }
             }
@@ -589,16 +596,6 @@ final class TreeBuilder {
                     return false;
                 }
                 at += length;
-            }
-            for (int i = 1; i + 1 < branch.length; i++) {
-                if (deflectionDeg(branch[i - 1], branch[i], branch[i + 1]) < MIN_TURN_DEG) {
-                    return false;
-                }
-            }
-            int last = branch.length - 1;
-            LineSegment tail = new LineSegment(branch[last - 1], branch[last]);
-            if (tail.getLength() <= JUNCTION_CLIP_M) {
-                return false;
             }
             Coordinate[] clipped = branch.clone();
             clipped[last] = tail.pointAlong(1 - JUNCTION_CLIP_M / tail.getLength());

@@ -8,11 +8,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import org.locationtech.jts.algorithm.CGAlgorithmsDD;
 import org.locationtech.jts.algorithm.Distance;
 import org.locationtech.jts.algorithm.LineIntersector;
 import org.locationtech.jts.algorithm.Orientation;
 import org.locationtech.jts.algorithm.RayCrossingCounter;
-import org.locationtech.jts.algorithm.RectangleLineIntersector;
 import org.locationtech.jts.algorithm.RobustLineIntersector;
 import org.locationtech.jts.densify.Densifier;
 import org.locationtech.jts.geom.Coordinate;
@@ -60,46 +60,306 @@ public final class ObstacleSet {
     private static final double TANGENT_EPS = 1e-9;
     /** Насколько узлы пересечения дороги стоят внутри полосы margin_m: сборка прижимает границу спецучастка к узлу ближе 0,08 м. */
     private static final double MARGIN_NODE_INSET_M = 0.1;
-    /** Зоны и полигоны не больше чем в столько вершин проверяются против отрезка напрямую, см. Zone#intersects. */
+    /** Полигоны спецобъектов не больше чем в столько вершин проверяются против отрезка напрямую, см. Special#crossedBy. */
     private static final int SMALL_POLYGON_POINTS = 64;
+    private static final String ZONE_KEY = "zone";
+    /** Сторон зоны в куске с общей рамкой, см. Zone#chunks. */
+    private static final int CHUNK = 8;
+    /** Оценка памяти буфера на вершину исходной геометрии: Coordinate и ссылка на неё. */
+    private static final long ZONE_BYTES = 48;
     private static final BufferParameters ZONE_BUFFER = new BufferParameters(
             BufferParameters.DEFAULT_QUADRANT_SEGMENTS, BufferParameters.CAP_SQUARE,
             BufferParameters.JOIN_MITRE, BufferParameters.DEFAULT_MITRE_LIMIT);
 
     private final GeometryFactory factory = new GeometryFactory();
     private final STRtree forbidZones = new STRtree();
+    private final ZoneGrid forbidGrid;
+    private final RouteCache cache;
     private final STRtree specials = new STRtree();
     /** Отступ оси новой сети от полигона ОКС: отступ правила плюс полуширина пары. */
     private final double oksClearance;
     private final List<Coordinate> nodes = new ArrayList<>();
-    // соседи узла по кольцу его зоны или null у точек вдоль дорог: ребро полезно, только если касается зоны
-    private final List<Coordinate[]> rings = new ArrayList<>();
+    /**
+     * По шесть чисел на узел: сам узел и его соседи по кольцу зоны (x, y узла, предыдущего и следующего), у точек
+     * вдоль дорог соседей нет (NaN): ребро полезно, только если касается зоны. Массив вместо объектов: касание
+     * проверяется для каждой пары узлов графа.
+     */
+    private final double[] around;
 
-    private static final class Zone {
+    static final class Zone {
         /** ID объекта зоны запрета; отрезок с этим ID в ignored зону не проверяет (финальный участок к своему ОКС). */
         final String id;
         final Geometry geometry;
-        final PreparedGeometry prepared;
-        // Длинный отрезок задевает рамки многих зон; проверка отрезка против рамки дешевле PreparedGeometry.
-        final RectangleLineIntersector box;
-        /** Стороны всех колец маленькой зоны; у большой null, и её проверяет PreparedGeometry. */
-        final LineSegment[] rings;
+        // Длинный отрезок задевает рамки многих зон; проверка отрезка против рамки дешевле проверки сторон.
+        final Envelope box;
+        /** Стороны всех колец зоны подряд: x0, y0, x1, y1. */
+        final double[] sides;
+        /**
+         * Рамки кусков по CHUNK сторон подряд: minX, minY, maxX, maxY. Соседние стороны кольца лежат рядом, и рамка
+         * куска отбрасывает разом все его стороны вдали от отрезка и от луча из его начала.
+         */
+        final double[] chunks;
 
         Zone(String id, Geometry geometry) {
             this.id = id;
             this.geometry = geometry;
-            this.prepared = PreparedGeometryFactory.prepare(geometry);
-            this.box = new RectangleLineIntersector(geometry.getEnvelopeInternal());
-            this.rings = geometry.getNumPoints() <= SMALL_POLYGON_POINTS ? segments(geometry.getBoundary()) : null;
+            this.box = geometry.getEnvelopeInternal();
+            LineSegment[] segments = segments(geometry.getBoundary());
+            this.sides = new double[4 * segments.length];
+            for (int k = 0; k < segments.length; k++) {
+                sides[4 * k] = segments[k].p0.x;
+                sides[4 * k + 1] = segments[k].p0.y;
+                sides[4 * k + 2] = segments[k].p1.x;
+                sides[4 * k + 3] = segments[k].p1.y;
+            }
+            this.chunks = new double[4 * ((segments.length + CHUNK - 1) / CHUNK)];
+            for (int k = 0; k < segments.length; k++) {
+                int c = k / CHUNK * 4;
+                Envelope side = new Envelope(segments[k].p0, segments[k].p1);
+                boolean first = k % CHUNK == 0;
+                chunks[c] = first ? side.getMinX() : Math.min(chunks[c], side.getMinX());
+                chunks[c + 1] = first ? side.getMinY() : Math.min(chunks[c + 1], side.getMinY());
+                chunks[c + 2] = first ? side.getMaxX() : Math.max(chunks[c + 2], side.getMaxX());
+                chunks[c + 3] = first ? side.getMaxY() : Math.max(chunks[c + 3], side.getMaxY());
+            }
+        }
+
+        /** Отрезок a–b задевает рамку зоны, см. {@link ObstacleSet#hitsBox}. */
+        boolean hitsBox(Coordinate a, Coordinate b) {
+            return ObstacleSet.hitsBox(box, a, b);
+        }
+
+        /** То же, что PreparedGeometry.intersects(точка): точка внутри зоны или на её границе. */
+        boolean contains(Coordinate p) {
+            return intersects(p, null);
         }
 
         /**
-         * То же, что prepared.intersects(edge) для отрезка a–b: начало внутри или на границе, либо отрезок задевает
-         * сторону; предикаты те же, что у PreparedPolygonIntersects. У зоны в несколько вершин подготовка JTS на
-         * каждый вызов дороже самой проверки, а ребро графа проверяется против зон сотни тысяч раз.
+         * То же, что PreparedGeometry.intersects(отрезок a–b), b == null — точка a: a внутри или на границе, либо
+         * отрезок задевает сторону. Предикаты те же, что у PreparedPolygonIntersects: луч вправо от a считается как
+         * в RayCrossingCounter, касание сторон — как в {@link #meet}. Подготовка JTS на каждый вызов дороже перебора
+         * сторон на массиве, а ребро графа проверяется против зон миллионы раз.
          */
-        boolean intersects(Coordinate a, Coordinate b, LineString edge) {
-            return rings == null ? prepared.intersects(edge) : crosses(Arrays.asList(rings), a, b, true);
+        boolean intersects(Coordinate a, Coordinate b) {
+            double minX = b == null ? a.x : Math.min(a.x, b.x);
+            double maxX = b == null ? a.x : Math.max(a.x, b.x);
+            double minY = b == null ? a.y : Math.min(a.y, b.y);
+            double maxY = b == null ? a.y : Math.max(a.y, b.y);
+            int crossings = 0;
+            for (int c = 0; c < chunks.length; c += 4) {
+                // куску без стороны у рамки отрезка и без стороны через луч из a нечего проверять
+                boolean touch = b != null && chunks[c] <= maxX && chunks[c + 2] >= minX && chunks[c + 1] <= maxY
+                        && chunks[c + 3] >= minY;
+                boolean ray = chunks[c + 1] <= a.y && chunks[c + 3] >= a.y && chunks[c + 2] >= a.x;
+                if (!touch && !ray) {
+                    continue;
+                }
+                for (int k = c * CHUNK, end = Math.min(sides.length, k + 4 * CHUNK); k < end; k += 4) {
+                    double x1 = sides[k];
+                    double y1 = sides[k + 1];
+                    double x2 = sides[k + 2];
+                    double y2 = sides[k + 3];
+                    if (touch && meet(a, b, x1, y1, x2, y2)) {
+                        return true;
+                    }
+                    if (!ray || x1 < a.x && x2 < a.x) {
+                        continue;
+                    }
+                    if (a.x == x2 && a.y == y2) {
+                        return true;
+                    }
+                    if (y1 == a.y && y2 == a.y) {
+                        if (a.x >= Math.min(x1, x2) && a.x <= Math.max(x1, x2)) {
+                            return true;
+                        }
+                        continue;
+                    }
+                    if (y1 > a.y && y2 <= a.y || y2 > a.y && y1 <= a.y) {
+                        int orient = CGAlgorithmsDD.orientationIndex(x1, y1, x2, y2, a.x, a.y);
+                        if (orient == Orientation.COLLINEAR) {
+                            return true;
+                        }
+                        if ((y2 < y1 ? -orient : orient) == Orientation.LEFT) {
+                            crossings++;
+                        }
+                    }
+                }
+            }
+            return crossings % 2 == 1;
+        }
+    }
+
+    /** {@link #meet} для стороны, заданной числами, без объектов на каждую сторону. */
+    private static boolean meet(Coordinate a, Coordinate b, double x1, double y1, double x2, double y2) {
+        if (Math.max(a.x, b.x) < Math.min(x1, x2) || Math.min(a.x, b.x) > Math.max(x1, x2)
+                || Math.max(a.y, b.y) < Math.min(y1, y2) || Math.min(a.y, b.y) > Math.max(y1, y2)) {
+            return false;
+        }
+        int pq1 = CGAlgorithmsDD.orientationIndex(a.x, a.y, b.x, b.y, x1, y1);
+        int pq2 = CGAlgorithmsDD.orientationIndex(a.x, a.y, b.x, b.y, x2, y2);
+        if (pq1 > 0 && pq2 > 0 || pq1 < 0 && pq2 < 0) {
+            return false;
+        }
+        int qp1 = CGAlgorithmsDD.orientationIndex(x1, y1, x2, y2, a.x, a.y);
+        int qp2 = CGAlgorithmsDD.orientationIndex(x1, y1, x2, y2, b.x, b.y);
+        if (qp1 > 0 && qp2 > 0 || qp1 < 0 && qp2 < 0) {
+            return false;
+        }
+        return pq1 != 0 || pq2 != 0 || qp1 != 0 || qp2 != 0 || meet(a, b, new Coordinate(x1, y1), new Coordinate(x2, y2));
+    }
+
+    /**
+     * Отрезок a–b задевает замкнутую рамку box: то же, что RectangleLineIntersector.intersects, но без общего на
+     * все нити LineIntersector (он хранит результат в полях) и без вычисления точки пересечения. Рамки отрезка и
+     * box пересекаются, а два угла box, самые дальние от прямой a–b в обе стороны, не лежат строго по одну сторону
+     * от неё; знаки ориентации точные, поэтому ответ тот же.
+     */
+    static boolean hitsBox(Envelope box, Coordinate a, Coordinate b) {
+        if (Math.max(a.x, b.x) < box.getMinX() || Math.min(a.x, b.x) > box.getMaxX()
+                || Math.max(a.y, b.y) < box.getMinY() || Math.min(a.y, b.y) > box.getMaxY()) {
+            return false;
+        }
+        double dx = b.x - a.x;
+        double dy = b.y - a.y;
+        if (dx == 0 || dy == 0) {
+            return true;
+        }
+        boolean rising = dx > 0 == dy > 0;
+        int first = CGAlgorithmsDD.orientationIndex(a.x, a.y, b.x, b.y, box.getMinX(), rising ? box.getMaxY() : box.getMinY());
+        int second = CGAlgorithmsDD.orientationIndex(a.x, a.y, b.x, b.y, box.getMaxX(), rising ? box.getMinY() : box.getMaxY());
+        return first * second <= 0;
+    }
+
+    /**
+     * Равномерная сетка зон запрета: в клетке номера зон, чья рамка её задевает. Отрезок проходит клетки от a к b и
+     * останавливается на первой задетой зоне. STRtree отдавал все зоны в рамке отрезка, у длинного ребра графа
+     * дальнего района это тысячи зон, хотя ребро обычно упирается в здание у своего начала.
+     */
+    static final class ZoneGrid {
+        /** Запас по поперечной оси на округление: клетка лишняя не страшна, пропущенная меняет ответ. */
+        private static final double EDGE_EPS_M = 1e-6;
+        private static final int MAX_CELLS = 1 << 22;
+        /** Отметки проверенных зон, у каждой нити свои: зона лежит в нескольких клетках, проверяется один раз. */
+        private static final ThreadLocal<Marks> MARKS = ThreadLocal.withInitial(Marks::new);
+
+        final Zone[] zones;
+        final double x0;
+        final double y0;
+        final double cell;
+        final int cols;
+        final int rows;
+        /** Зоны клетки c — items[start[c]..start[c + 1]). */
+        final int[] start;
+        final int[] items;
+
+        ZoneGrid(List<Zone> list) {
+            zones = list.toArray(new Zone[0]);
+            Envelope bounds = new Envelope();
+            for (Zone zone : zones) {
+                bounds.expandToInclude(zone.box);
+            }
+            x0 = bounds.isNull() ? 0 : bounds.getMinX();
+            y0 = bounds.isNull() ? 0 : bounds.getMinY();
+            // клетка примерно на одну зону, но не больше MAX_CELLS клеток
+            double side = Math.sqrt(Math.max(bounds.getArea(), 1) / Math.max(zones.length, 1));
+            side = Math.max(side, Math.sqrt(Math.max(bounds.getArea(), 1) / MAX_CELLS));
+            cell = Math.max(side, 1);
+            cols = bounds.isNull() ? 1 : index(bounds.getMaxX(), x0) + 1;
+            rows = bounds.isNull() ? 1 : index(bounds.getMaxY(), y0) + 1;
+            start = new int[cols * rows + 1];
+            for (Zone zone : zones) {
+                forCells(zone.box, c -> start[c + 1]++);
+            }
+            for (int c = 0; c < cols * rows; c++) {
+                start[c + 1] += start[c];
+            }
+            items = new int[start[cols * rows]];
+            int[] fill = Arrays.copyOf(start, cols * rows);
+            for (int k = 0; k < zones.length; k++) {
+                int zone = k;
+                forCells(zones[k].box, c -> items[fill[c]++] = zone);
+            }
+        }
+
+        private void forCells(Envelope box, java.util.function.IntConsumer action) {
+            for (int j = index(box.getMinY(), y0); j <= index(box.getMaxY(), y0); j++) {
+                for (int i = index(box.getMinX(), x0); i <= index(box.getMaxX(), x0); i++) {
+                    action.accept(j * cols + i);
+                }
+            }
+        }
+
+        private int index(double value, double origin) {
+            return (int) Math.floor((value - origin) / cell);
+        }
+
+        /**
+         * Отрезок a–b задевает зону не из ignored. Клетки идут полосами поперёк длинной оси отрезка от a к b; в полосе
+         * отрезок занимает отрезок поперечной оси между его значениями на краях полосы, с запасом EDGE_EPS_M.
+         */
+        boolean hit(Coordinate a, Coordinate b, Set<String> ignored) {
+            boolean alongX = Math.abs(b.x - a.x) >= Math.abs(b.y - a.y);
+            double au = alongX ? a.x : a.y;
+            double av = alongX ? a.y : a.x;
+            double bu = alongX ? b.x : b.y;
+            double bv = alongX ? b.y : b.x;
+            double u0 = alongX ? x0 : y0;
+            double v0 = alongX ? y0 : x0;
+            int nu = alongX ? cols : rows;
+            int nv = alongX ? rows : cols;
+            int strideU = alongX ? 1 : cols;
+            int strideV = alongX ? cols : 1;
+            double uMin = Math.min(au, bu);
+            double uMax = Math.max(au, bu);
+            int first = index(uMin, u0);
+            int last = index(uMax, u0);
+            if (last < 0 || first >= nu || zones.length == 0) {
+                return false;
+            }
+            first = Math.max(first, 0);
+            last = Math.min(last, nu - 1);
+            double slope = bu == au ? 0 : (bv - av) / (bu - au);
+            Marks seen = MARKS.get();
+            if (seen.zones.length < zones.length) {
+                seen.zones = new int[zones.length];
+            }
+            int[] marks = seen.zones;
+            if (++seen.round == Integer.MAX_VALUE) {
+                Arrays.fill(marks, 0);
+                seen.round = 1;
+            }
+            int round = seen.round;
+            boolean forward = bu >= au;
+            for (int step = 0; step <= last - first; step++) {
+                int i = forward ? first + step : last - step;
+                double from = Math.max(uMin, u0 + i * cell);
+                double to = Math.min(uMax, u0 + (i + 1) * cell);
+                double vFrom = av + (from - au) * slope;
+                double vTo = av + (to - au) * slope;
+                int low = Math.max(index(Math.min(vFrom, vTo) - EDGE_EPS_M, v0), 0);
+                int high = Math.min(index(Math.max(vFrom, vTo) + EDGE_EPS_M, v0), nv - 1);
+                for (int k = 0; k <= high - low; k++) {
+                    int c = i * strideU + (bv >= av ? low + k : high - k) * strideV;
+                    for (int p = start[c]; p < start[c + 1]; p++) {
+                        int z = items[p];
+                        if (marks[z] == round) {
+                            continue;
+                        }
+                        marks[z] = round;
+                        Zone zone = zones[z];
+                        if (zone.hitsBox(a, b) && !ignored.contains(zone.id) && zone.intersects(a, b)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        /** Зона z проверена в текущем отрезке, если zones[z] == round; номер отрезка растёт с каждым запросом нити. */
+        private static final class Marks {
+            int[] zones = new int[0];
+            int round;
         }
     }
 
@@ -127,28 +387,37 @@ public final class ObstacleSet {
 
     /**
      * У отрезков p и q есть общая точка — то же, что RobustLineIntersector.hasIntersection (JTS 1.20), но без
-     * вычисления самой точки: рамки, затем знаки ориентации концов, коллинеарный случай — через сам LineIntersector.
+     * вычисления самой точки, см. {@link #intersectionNum}.
      */
     public static boolean meet(Coordinate p1, Coordinate p2, Coordinate q1, Coordinate q2) {
+        return intersectionNum(p1, p2, q1, q2) != LineIntersector.NO_INTERSECTION;
+    }
+
+    /**
+     * Тип пересечения отрезков p и q, как RobustLineIntersector.getIntersectionNum (JTS 1.20): рамки, затем знаки
+     * ориентации концов; коллинеарный случай — через сам LineIntersector. Точку пересечения не считает: она в
+     * двойной точности и самая дорогая часть LineIntersector.
+     */
+    static int intersectionNum(Coordinate p1, Coordinate p2, Coordinate q1, Coordinate q2) {
         if (!Envelope.intersects(p1, p2, q1, q2)) {
-            return false;
+            return LineIntersector.NO_INTERSECTION;
         }
         int pq1 = Orientation.index(p1, p2, q1);
         int pq2 = Orientation.index(p1, p2, q2);
         if (pq1 > 0 && pq2 > 0 || pq1 < 0 && pq2 < 0) {
-            return false;
+            return LineIntersector.NO_INTERSECTION;
         }
         int qp1 = Orientation.index(q1, q2, p1);
         int qp2 = Orientation.index(q1, q2, p2);
         if (qp1 > 0 && qp2 > 0 || qp1 < 0 && qp2 < 0) {
-            return false;
+            return LineIntersector.NO_INTERSECTION;
         }
         if (pq1 == 0 && pq2 == 0 && qp1 == 0 && qp2 == 0) {
             LineIntersector intersector = new RobustLineIntersector();
             intersector.computeIntersection(p1, p2, q1, q2);
-            return intersector.hasIntersection();
+            return intersector.getIntersectionNum();
         }
-        return true;
+        return LineIntersector.POINT_INTERSECTION;
     }
 
     private static final class Special {
@@ -245,6 +514,12 @@ public final class ObstacleSet {
      * города прямоугольник вокруг точки и врезки накрывает квадратные километры зданий, а трасса идёт полосой.
      */
     public ObstacleSet(ObstacleIndex index, Rules rules, Envelope area, int dn, Geometry corridor) {
+        this(index, rules, area, dn, corridor, null);
+    }
+
+    /** То же с кэшем расчёта для буферов зон (null — без кэша). */
+    public ObstacleSet(ObstacleIndex index, Rules rules, Envelope area, int dn, Geometry corridor, RouteCache cache) {
+        this.cache = cache;
         PreparedGeometry inside = corridor == null ? null : PreparedGeometryFactory.prepare(corridor);
         double halfWidth = rules.diameter(dn).getWidthM() / 2;
         List<Zone> forbid = new ArrayList<>();
@@ -299,6 +574,7 @@ public final class ObstacleSet {
         for (Zone zone : forbid) {
             forbidZones.insert(zone.geometry.getEnvelopeInternal(), zone);
         }
+        forbidGrid = new ZoneGrid(forbid);
         for (Special special : specialList) {
             specials.insert(special.zone.geometry.getEnvelopeInternal(), special);
         }
@@ -326,6 +602,7 @@ public final class ObstacleSet {
             margins.add(PreparedGeometryFactory.prepare(marginZone));
         }
         // узлы только в области: зоны длинных дорог и труб иначе приносят узлы на километры вокруг, а граф O(n²)
+        List<Coordinate[]> rings = new ArrayList<>();
         for (Map.Entry<Coordinate, Coordinate[]> candidate : candidates.entrySet()) {
             Coordinate c = candidate.getKey();
             if (area.contains(c) && (inside == null || inside.intersects(factory.createPoint(c)))
@@ -333,6 +610,16 @@ public final class ObstacleSet {
                 nodes.add(c);
                 rings.add(candidate.getValue());
             }
+        }
+        around = new double[6 * nodes.size()];
+        for (int i = 0; i < nodes.size(); i++) {
+            Coordinate[] ring = rings.get(i);
+            around[6 * i] = nodes.get(i).x;
+            around[6 * i + 1] = nodes.get(i).y;
+            around[6 * i + 2] = ring == null ? Double.NaN : ring[0].x;
+            around[6 * i + 3] = ring == null ? Double.NaN : ring[0].y;
+            around[6 * i + 4] = ring == null ? Double.NaN : ring[1].x;
+            around[6 * i + 5] = ring == null ? Double.NaN : ring[1].y;
         }
     }
 
@@ -353,9 +640,8 @@ public final class ObstacleSet {
 
     /** Точка в зоне запрета (с отступом): камера ветвления там не ставится. */
     public boolean insideForbid(Coordinate c) {
-        Geometry point = factory.createPoint(c);
         for (Object item : forbidZones.query(new Envelope(c))) {
-            if (((Zone) item).prepared.intersects(point)) {
+            if (((Zone) item).contains(c)) {
                 return true;
             }
         }
@@ -373,15 +659,14 @@ public final class ObstacleSet {
      * проверять; узлы без кольца (точки вдоль дорог) допускают любые рёбра.
      */
     public boolean tangent(int node, Coordinate other) {
-        Coordinate[] ring = rings.get(node);
-        if (ring == null) {
+        int k = 6 * node;
+        if (Double.isNaN(around[k + 2])) {
             return true;
         }
-        Coordinate v = nodes.get(node);
-        double dx = other.x - v.x;
-        double dy = other.y - v.y;
-        double prev = dx * (ring[0].y - v.y) - dy * (ring[0].x - v.x);
-        double next = dx * (ring[1].y - v.y) - dy * (ring[1].x - v.x);
+        double dx = other.x - around[k];
+        double dy = other.y - around[k + 1];
+        double prev = dx * (around[k + 3] - around[k + 1]) - dy * (around[k + 2] - around[k]);
+        double next = dx * (around[k + 5] - around[k + 1]) - dy * (around[k + 4] - around[k]);
         return prev * next >= -TANGENT_EPS;
     }
 
@@ -401,22 +686,18 @@ public final class ObstacleSet {
      * вес по нижней оценке, иначе переход со сдвигом вбок через узлы в полосе легче прямого.
      */
     public double edgeWeight(Coordinate a, Coordinate b, Set<String> ignored, boolean aNode, boolean bNode) {
-        LineString edge = factory.createLineString(new Coordinate[] {a, b});
-        Envelope envelope = edge.getEnvelopeInternal();
-        for (Object item : forbidZones.query(envelope)) {
-            Zone zone = (Zone) item;
-            if (!ignored.contains(zone.id) && zone.box.intersects(a, b) && zone.intersects(a, b, edge)) {
-                return Double.NaN;
-            }
+        if (forbidGrid.hit(a, b, ignored)) {
+            return Double.NaN;
         }
+        LineString edge = factory.createLineString(new Coordinate[] {a, b});
         List<Special> crossed = new ArrayList<>();
-        for (Object item : specials.query(envelope)) {
+        for (Object item : specials.query(new Envelope(a, b))) {
             Special special = (Special) item;
-            if (!special.zone.box.intersects(a, b) || ignored.contains(special.id) && touches(special, a, b)) {
+            if (!special.zone.hitsBox(a, b) || ignored.contains(special.id) && touches(special, a, b)) {
                 continue;
             }
             if (!special.crossedBy(a, b, edge)) {
-                if (special.zone.intersects(a, b, edge)) {
+                if (special.zone.intersects(a, b)) {
                     return Double.NaN;
                 }
                 continue;
@@ -425,6 +706,10 @@ public final class ObstacleSet {
                 return Double.NaN;
             }
             crossed.add(special);
+        }
+        if (crossed.isEmpty()) {
+            // без специальных частей вес — длина, как у weight(getLength(), []) + 0 + 0
+            return a.distance(b);
         }
         double beforeA = 0;
         double beforeB = 0;
@@ -614,15 +899,14 @@ public final class ObstacleSet {
 
     private static boolean crossingAllowed(Special special, Coordinate a, Coordinate b) {
         Double minAngleDeg = special.rule.getMinAngleDeg();
-        LineIntersector intersector = new RobustLineIntersector();
         boolean sideCrossed = false;
         for (LineSegment side : special.sidesNear(a, b)) {
-            intersector.computeIntersection(a, b, side.p0, side.p1);
-            if (!intersector.hasIntersection()) {
+            int found = intersectionNum(a, b, side.p0, side.p1);
+            if (found == LineIntersector.NO_INTERSECTION) {
                 continue;
             }
             // отрезок, идущий вдоль стороны или оси объекта, пересечением не считается
-            if (intersector.getIntersectionNum() == LineIntersector.COLLINEAR_INTERSECTION) {
+            if (found == LineIntersector.COLLINEAR_INTERSECTION) {
                 return false;
             }
             if (minAngleDeg != null && acuteAngleDeg(a, b, side) < minAngleDeg + ANGLE_MARGIN_DEG) {
@@ -647,15 +931,14 @@ public final class ObstacleSet {
     }
 
     private boolean insideAnyZone(Coordinate c) {
-        Geometry point = factory.createPoint(c);
         Envelope envelope = new Envelope(c);
         for (Object item : forbidZones.query(envelope)) {
-            if (((Zone) item).prepared.intersects(point)) {
+            if (((Zone) item).contains(c)) {
                 return true;
             }
         }
         for (Object item : specials.query(envelope)) {
-            if (((Special) item).zone.prepared.intersects(point)) {
+            if (((Special) item).zone.contains(c)) {
                 return true;
             }
         }
@@ -668,14 +951,18 @@ public final class ObstacleSet {
         return envelope.intersects(area);
     }
 
-    // Буфер строится на SIMPLIFY_M шире: после упрощения граница не заходит внутрь настоящего отступа.
-    private static Geometry zone(Geometry geometry, double distance) {
-        Geometry buffer = BufferOp.bufferOp(geometry, distance + SIMPLIFY_M, ZONE_BUFFER);
-        return TopologyPreservingSimplifier.simplify(buffer, SIMPLIFY_M);
+    // Буфер строится на SIMPLIFY_M шире: после упрощения граница не заходит внутрь настоящего отступа. Буферы
+    // сложных зданий дороже остального графа, а соседние области одного Ду берут те же объекты, поэтому буфер
+    // берётся из кэша расчёта по геометрии и отступу.
+    private Geometry zone(Geometry geometry, double distance) {
+        java.util.function.Supplier<Geometry> build = () -> TopologyPreservingSimplifier.simplify(
+                BufferOp.bufferOp(geometry, distance + SIMPLIFY_M, ZONE_BUFFER), SIMPLIFY_M);
+        return cache == null ? build.get()
+                : cache.computeIfAbsent(List.of(ZONE_KEY, geometry, distance), ZONE_BYTES * geometry.getNumPoints(), build);
     }
 
     // Зона узлов снаружи зоны запрета не меньше чем на NODE_OFFSET_M с учётом упрощения обеих зон.
-    private static Geometry nodeZone(Geometry geometry, double distance) {
+    private Geometry nodeZone(Geometry geometry, double distance) {
         return zone(geometry, distance + 2 * SIMPLIFY_M + NODE_OFFSET_M);
     }
 

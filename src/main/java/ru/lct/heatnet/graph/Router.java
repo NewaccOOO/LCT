@@ -37,10 +37,15 @@ public final class Router {
     private static final double UNKNOWN = Double.NEGATIVE_INFINITY;
     /** Предел состояний точного поиска: дальше перебор считается безнадёжным и маршрут не ищется. */
     private static final int EXACT_STATES = 100_000;
+    private static final double HYPOT_TOL = 1e-15;
+    private static final double MAX_TURN_COS = Math.cos(Math.toRadians(MAX_TURN_DEG));
+    private static final double TURN_COS_TOL = 1e-9;
 
     private final ObstacleSet obstacles;
     private final GeometryFactory factory = new GeometryFactory();
     private final List<Coordinate> nodes;
+    /** Координаты узлов подряд (x, y): оценка через узел в routeToAny перебирает все узлы на каждую цель. */
+    private final double[] nodeXY;
     private final int[][] adjacency;
     private final double[][] adjacencyWeight;
     // веса точек запроса и таблицы Дейкстры: одни и те же точки запрашиваются десятки и сотни раз за расчёт
@@ -74,9 +79,14 @@ public final class Router {
     /** С коридором: узлы и препятствия только внутри полигона corridor, см. {@link ObstacleSet}. */
     public Router(ObstacleIndex index, Rules rules, Envelope area, int dn, RouteCache cache, org.locationtech.jts.geom.Geometry corridor) {
         this.cache = cache;
-        obstacles = new ObstacleSet(index, rules, area, dn, corridor);
+        obstacles = new ObstacleSet(index, rules, area, dn, corridor, cache);
         nodes = obstacles.nodes();
         int n = nodes.size();
+        nodeXY = new double[2 * n];
+        for (int i = 0; i < n; i++) {
+            nodeXY[2 * i] = nodes.get(i).x;
+            nodeXY[2 * i + 1] = nodes.get(i).y;
+        }
         List<List<Integer>> to = new ArrayList<>();
         List<List<Double>> weight = new ArrayList<>();
         for (int i = 0; i < n; i++) {
@@ -152,14 +162,14 @@ public final class Router {
             double[] toNodes = partialWeights(t, ignored);
             for (int v = 0; v < n; v++) {
                 // нижняя оценка через узел: до него по графу плюс по прямой; вес до узла считается только если она бьёт текущий
-                if (dist[v] + nodes.get(v).distance(t) >= weight) {
+                if (!below(dist[v], nodeXY[2 * v], nodeXY[2 * v + 1], t, weight)) {
                     continue;
                 }
                 if (toNodes[v] == UNKNOWN) {
                     toNodes[v] = obstacles.tangent(v, t) ? obstacles.edgeWeight(t, nodes.get(v), ignored, false, true) : Double.NaN;
                 }
                 if (!Double.isNaN(toNodes[v]) && dist[v] + toNodes[v] < weight
-                        && deflectionDeg(pred[v] < 0 ? source : nodes.get(pred[v]), nodes.get(v), t) <= MAX_TURN_DEG) {
+                        && turnAllowed(pred[v] < 0 ? source : nodes.get(pred[v]), nodes.get(v), t)) {
                     weight = dist[v] + toNodes[v];
                     via = v;
                 }
@@ -215,12 +225,16 @@ public final class Router {
     private Exact exactStates(Coordinate source, Set<String> ignored, Coordinate incoming) {
         int n = nodes.size();
         double[] toNode = nodeWeights(source, ignored);
+        // dist отдаёт состояния exactBest в своём порядке обхода, а поиск только читает веса: чтение идёт из копии
+        // на массивах, у HashMap<Long, Double> оно было половиной времени поиска
         Map<Long, Double> dist = new HashMap<>();
+        StateWeights known = new StateWeights();
         Map<Long, Long> came = new HashMap<>();
         PriorityQueue<double[]> heap = new PriorityQueue<>((a, b) -> Double.compare(a[0], b[0]));
         for (int v = 0; v < n; v++) {
-            if (!Double.isNaN(toNode[v]) && deflectionDeg(incoming, source, nodes.get(v)) <= MAX_TURN_DEG) {
+            if (!Double.isNaN(toNode[v]) && turnAllowed(incoming, source, nodes.get(v))) {
                 dist.put(state(v, -1, n), toNode[v]);
+                known.put(state(v, -1, n), toNode[v]);
                 heap.add(new double[] {toNode[v], v, -1});
             }
         }
@@ -232,19 +246,21 @@ public final class Router {
             double[] top = heap.poll();
             int v = (int) top[1];
             int p = (int) top[2];
-            if (top[0] > dist.getOrDefault(state(v, p, n), Double.POSITIVE_INFINITY) + 1e-9) {
+            if (top[0] > known.get(state(v, p, n)) + 1e-9) {
                 continue;
             }
-            Coordinate before = p < 0 ? source : nodes.get(p);
+            double beforeX = p < 0 ? source.x : nodeXY[2 * p];
+            double beforeY = p < 0 ? source.y : nodeXY[2 * p + 1];
             for (int k = 0; k < adjacency[v].length; k++) {
                 int w = adjacency[v][k];
-                if (deflectionDeg(before, nodes.get(v), nodes.get(w)) > MAX_TURN_DEG) {
+                if (!turnAllowed(beforeX, beforeY, nodeXY[2 * v], nodeXY[2 * v + 1], nodeXY[2 * w], nodeXY[2 * w + 1])) {
                     continue;
                 }
                 double weight = top[0] + adjacencyWeight[v][k];
                 long next = state(w, v, n);
-                if (weight < dist.getOrDefault(next, Double.POSITIVE_INFINITY) - 1e-9) {
+                if (weight < known.get(next) - 1e-9) {
                     dist.put(next, weight);
+                    known.put(next, weight);
                     came.put(next, state(v, p, n));
                     heap.add(new double[] {weight, w, v});
                 }
@@ -266,7 +282,7 @@ public final class Router {
         for (Point target : targets) {
             Coordinate t = target.getCoordinate();
             double extra = target.getUserData() instanceof Double ? (Double) target.getUserData() : 0;
-            if (deflectionDeg(incoming, source, t) <= MAX_TURN_DEG) {
+            if (turnAllowed(incoming, source, t)) {
                 double direct = obstacles.edgeWeight(t, source, ignored, false, false);
                 if (!Double.isNaN(direct) && direct + extra < bestWeight) {
                     bestWeight = direct + extra;
@@ -281,7 +297,7 @@ public final class Router {
                 int p = (int) (state.getKey() % (n + 1));
                 Coordinate before = p == n ? source : nodes.get(p);
                 if (state.getValue() + nodes.get(v).distance(t) + extra >= bestWeight
-                        || deflectionDeg(before, nodes.get(v), t) > MAX_TURN_DEG) {
+                        || !turnAllowed(before, nodes.get(v), t)) {
                     continue;
                 }
                 if (toNodes[v] == UNKNOWN) {
@@ -309,6 +325,61 @@ public final class Router {
         LineString line = start.getFactory().createLineString(coords.toArray(new Coordinate[0]));
         List<SpecialSpan> spans = obstacles.spans(line, ignored);
         return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), spans) + bestExtra, spans);
+    }
+
+    /**
+     * Веса состояний точного поиска на массивах, отсутствующее — бесконечность: открытая адресация с линейным
+     * пробированием, ключи состояний неотрицательны, пустая ячейка — -1.
+     */
+    static final class StateWeights {
+        private long[] keys = new long[1 << 10];
+        private double[] weights = new double[1 << 10];
+        private int size;
+
+        StateWeights() {
+            Arrays.fill(keys, -1);
+        }
+
+        double get(long key) {
+            for (int i = slot(key, keys.length); ; i = (i + 1) & (keys.length - 1)) {
+                if (keys[i] == key) {
+                    return weights[i];
+                }
+                if (keys[i] < 0) {
+                    return Double.POSITIVE_INFINITY;
+                }
+            }
+        }
+
+        void put(long key, double weight) {
+            if (2 * (size + 1) > keys.length) {
+                long[] oldKeys = keys;
+                double[] oldWeights = weights;
+                keys = new long[2 * oldKeys.length];
+                weights = new double[2 * oldKeys.length];
+                Arrays.fill(keys, -1);
+                size = 0;
+                for (int i = 0; i < oldKeys.length; i++) {
+                    if (oldKeys[i] >= 0) {
+                        put(oldKeys[i], oldWeights[i]);
+                    }
+                }
+            }
+            int i = slot(key, keys.length);
+            while (keys[i] >= 0 && keys[i] != key) {
+                i = (i + 1) & (keys.length - 1);
+            }
+            if (keys[i] < 0) {
+                keys[i] = key;
+                size++;
+            }
+            weights[i] = weight;
+        }
+
+        private static int slot(long key, int capacity) {
+            long mixed = key * 0x9E3779B97F4A7C15L;
+            return (int) (mixed ^ mixed >>> 32) & (capacity - 1);
+        }
     }
 
     /** Состояние точного поиска: узел и предшественник (n — пришли из точки запроса). */
@@ -345,13 +416,15 @@ public final class Router {
                 continue;
             }
             done[v] = true;
-            Coordinate before = pred[v] < 0 ? source : nodes.get(pred[v]);
+            double beforeX = pred[v] < 0 ? source.x : nodeXY[2 * pred[v]];
+            double beforeY = pred[v] < 0 ? source.y : nodeXY[2 * pred[v] + 1];
             for (int k = 0; k < adjacency[v].length; k++) {
                 int w = adjacency[v][k];
                 double candidate = dist[v] + adjacencyWeight[v][k];
                 // ponytail: поворот считается по предшественнику узла, а не по состоянию (узел, направление): путь
                 // может быть не кратчайшим среди путей с поворотами до 90°, зато таблица остаётся O(узлов)
-                if (candidate < dist[w] && deflectionDeg(before, nodes.get(v), nodes.get(w)) <= MAX_TURN_DEG) {
+                if (candidate < dist[w]
+                        && turnAllowed(beforeX, beforeY, nodeXY[2 * v], nodeXY[2 * v + 1], nodeXY[2 * w], nodeXY[2 * w + 1])) {
                     dist[w] = candidate;
                     pred[w] = v;
                     heap.add(new double[] {candidate, w});
@@ -451,9 +524,56 @@ public final class Router {
         return false;
     }
 
+    /**
+     * {@code dist + node.distance(t) < weight} для узла (x, y) без Math.hypot в большинстве случаев: на Java 11 он
+     * программный и был седьмой частью расчёта. Корень из суммы квадратов отличается от hypot не больше чем на
+     * 4 ulp (если квадраты не уходят в денормалы), поэтому с запасом 1e-15 он решает сравнение так же; сложение
+     * монотонно. Спорные случаи считаются через hypot.
+     */
+    static boolean below(double dist, double x, double y, Coordinate t, double weight) {
+        if (dist >= weight) {
+            return false;
+        }
+        double dx = x - t.x;
+        double dy = y - t.y;
+        double approx = Math.sqrt(dx * dx + dy * dy);
+        if (dist + approx * (1 - HYPOT_TOL) >= weight) {
+            return false;
+        }
+        return approx > 1e-100 && dist + approx * (1 + HYPOT_TOL) < weight || dist + Math.hypot(dx, dy) < weight;
+    }
+
+    /**
+     * {@code deflectionDeg(a, b, c) <= MAX_TURN_DEG} без двух atan2 (на Java 11 они программные) в большинстве
+     * случаев: поворот сравнивается через косинус по скалярному произведению. Ошибка обоих способов меньше 1e-12,
+     * поэтому при косинусе дальше TURN_COS_TOL от порога ответ тот же; ближе к порогу считает deflectionDeg.
+     */
+    static boolean turnAllowed(Coordinate a, Coordinate b, Coordinate c) {
+        return turnAllowed(a.x, a.y, b.x, b.y, c.x, c.y);
+    }
+
+    /** {@link #turnAllowed(Coordinate, Coordinate, Coordinate)} для точек (ax, ay), (bx, by), (cx, cy). */
+    private static boolean turnAllowed(double ax, double ay, double bx, double by, double cx, double cy) {
+        double ux = bx - ax;
+        double uy = by - ay;
+        double vx = cx - bx;
+        double vy = cy - by;
+        double norm = Math.sqrt((ux * ux + uy * uy) * (vx * vx + vy * vy));
+        if (norm > 1e-100) {
+            double dot = ux * vx + uy * vy;
+            if (dot >= (MAX_TURN_COS + TURN_COS_TOL) * norm) {
+                return true;
+            }
+            if (dot <= (MAX_TURN_COS - TURN_COS_TOL) * norm) {
+                return false;
+            }
+        }
+        return deflectionDeg(new Coordinate(ax, ay), new Coordinate(bx, by), new Coordinate(cx, cy)) <= MAX_TURN_DEG;
+    }
+
     /** Изменение направления в вершине b пути a–b–c, градусы; 0 — по прямой. */
     public static double deflectionDeg(Coordinate a, Coordinate b, Coordinate c) {
-        if (a.distance(b) == 0 || b.distance(c) == 0) {
+        if (a.equals2D(b) || b.equals2D(c)) {
             return 0;
         }
         return 180 - Math.toDegrees(Angle.angleBetween(a, b, c));
