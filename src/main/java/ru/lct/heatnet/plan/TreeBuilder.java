@@ -57,6 +57,8 @@ final class TreeBuilder {
     /** Сколько точек границы пробуется как начало финального участка: ближайшая, затем ближайшие точки сторон. */
     private static final int PORTAL_TRIES = 8;
     private static final Coordinate[] NO_PORTAL = new Coordinate[0];
+    /** Проходы срезки углов рёбер, см. {@link #cut}. */
+    private static final int CUT_PASSES = 2;
 
     private final int nodeLimit;
     private final Map<String, LineString> networkById;
@@ -146,8 +148,15 @@ final class TreeBuilder {
      */
     Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
             double chamberPenaltyM, double tieInPenaltyM, boolean fromPortalDirection) {
+        return build(router, dn, area, tie, connections, chamberPenaltyM, tieInPenaltyM, fromPortalDirection, false);
+    }
+
+    /** То же; {@code cut} — маршруты веток со срезанными углами у вершин зон, см. {@link Router#routeToAny}. */
+    Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
+            double chamberPenaltyM, double tieInPenaltyM, boolean fromPortalDirection, boolean cut) {
         Run run = new Run(router, dn, area, tie, chamberPenaltyM, tieInPenaltyM);
         run.fromPortalDirection = fromPortalDirection;
+        run.cut = cut;
         return run.build(connections);
     }
 
@@ -189,6 +198,8 @@ final class TreeBuilder {
         final Map<String, Coordinate[]> portalByConnection = new HashMap<>();
         /** Маршрут выходит из здания вдоль финального прямого участка, см. {@link #build}. */
         boolean fromPortalDirection;
+        /** Маршруты со срезанными углами, см. {@link #build}. */
+        boolean cut;
 
         Run(Router router, int dn, Envelope area, TieCandidate tie, double chamberPenaltyM, double tieInPenaltyM) {
             this.router = router;
@@ -333,8 +344,8 @@ final class TreeBuilder {
                 return null;
             }
             Point start = portal == null ? connection.getGeometry() : factory.createPoint(portal[0]);
-            Route route = portal == null || !fromPortalDirection ? router.routeToAny(start, targets, ignored)
-                    : router.routeExact(start, targets, ignored, connection.getGeometry().getCoordinate());
+            Route route = portal == null || !fromPortalDirection ? router.routeToAny(start, targets, ignored, cut)
+                    : router.routeExact(start, targets, ignored, connection.getGeometry().getCoordinate(), cut);
             if (route == null) {
                 return null;
             }
@@ -665,6 +676,34 @@ final class TreeBuilder {
             }
             return pieces;
         }
+    }
+
+    /**
+     * Дерево с углами рёбер, срезанными хордами ({@link Router#cutPass}): хорда не ближе CUT_APART_M к другим
+     * рёбрам, точка выхода из здания остаётся на месте — финальный участок идёт от ближайшей границы. Узлы и
+     * топология дерева прежние; без срезов возвращается то же дерево.
+     */
+    Tree cut(Tree tree, Router router) {
+        Tree result = new Tree(tree.tie);
+        result.unconnected.addAll(tree.unconnected);
+        boolean changed = false;
+        for (Tree.Edge edge : tree.edges) {
+            List<LineSegment> others = new ArrayList<>();
+            for (Tree.Edge other : tree.edges) {
+                Coordinate[] coords = other.line.getCoordinates();
+                for (int i = 0; other != edge && i + 1 < coords.length; i++) {
+                    others.add(new LineSegment(coords[i], coords[i + 1]));
+                }
+            }
+            List<Coordinate> coords = new ArrayList<>(Arrays.asList(edge.line.getCoordinates()));
+            Coordinate exit = edge.to.kind == Tree.Kind.CONNECTION && buildingByConnection.containsKey(edge.to.connection.getId())
+                    && coords.size() > 2 ? coords.get(coords.size() - 2) : null;
+            for (int pass = 0; pass < CUT_PASSES && router.cutPass(coords, tree.tie.getIgnored(), exit, others); pass++) {
+                changed = true;
+            }
+            result.edges.add(new Tree.Edge(edge.from, edge.to, factory.createLineString(coords.toArray(new Coordinate[0]))));
+        }
+        return changed ? result : tree;
     }
 
     /** Часть полилинии; конец у камеры ветвления ставится ровно в её точку. */

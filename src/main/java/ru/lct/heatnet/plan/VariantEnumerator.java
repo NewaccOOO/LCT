@@ -1211,13 +1211,24 @@ public final class VariantEnumerator {
         // кандидатов, поэтому итог не зависит от расписания нитей. В районе города нити заняты районами.
         java.util.stream.Stream<TieCandidate> stream = district || !PARALLEL ? cheapest.stream() : cheapest.parallelStream();
         List<Option> options = stream.map(candidate -> {
-            Tree tree = builder.build(router, dn, area, candidate, subset, rules.chamberCost(dn) / metreRub,
-                    rules.tieInCost() / metreRub, fromPortalDirection);
-            if (tree.edges.isEmpty()) {
-                log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
-                return null;
+            // ветки идут маршрутами со срезанными углами; если сборка или отступы по фактическому Ду такое дерево не
+            // принимают (срезанная трасса прижата к зоне Ду графа), дерево строится заново без срезки
+            for (boolean cutRoutes : new boolean[] {true, false}) {
+                Tree tree = builder.build(router, dn, area, candidate, subset, rules.chamberCost(dn) / metreRub,
+                        rules.tieInCost() / metreRub, fromPortalDirection, cutRoutes);
+                if (tree.edges.isEmpty()) {
+                    log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
+                    return null;
+                }
+                // углы трассы срезаются по точному отступу; если сборка срезанное дерево не принимает, берётся прежнее
+                Tree cut = builder.cut(tree, router);
+                Option option = cut == tree ? null : option(cut, label, verify, area, dn, region);
+                option = option != null ? option : option(tree, label, verify, area, dn, region);
+                if (option != null) {
+                    return option;
+                }
             }
-            return option(tree, label, verify, area, dn, region);
+            return null;
         }).filter(Objects::nonNull).collect(Collectors.toList());
         options.sort(Comparator.comparingDouble(option -> option.score));
         return options;

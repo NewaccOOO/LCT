@@ -34,6 +34,12 @@ public final class Router {
     private static final double PUSH_TURN_DEG = 6;
     private static final double[] PUSH_STEPS_M = {0.5, 1, 2, 4, 8};
     private static final int MAX_PUSHES = 20;
+    /** Срезка углов, см. cutPass: проходы, шаги поиска наибольшего среза и зазор хорды до других рёбер дерева. */
+    private static final int CUT_PASSES = 2;
+    private static final int CUT_STEPS = 6;
+    private static final double CUT_APART_M = 0.5;
+    /** Подотрезок после срезки не короче метра с запасом: check18 видит 1,00 м после округления координат как 0,999. */
+    private static final double CUT_PIECE_M = 1.05;
     private static final double UNKNOWN = Double.NEGATIVE_INFINITY;
     /** Предел состояний точного поиска: дальше перебор считается безнадёжным и маршрут не ищется. */
     private static final int EXACT_STATES = 100_000;
@@ -129,6 +135,11 @@ public final class Router {
      * ленивые веса до узлов при гонке пишутся одинаковыми.
      */
     public Route routeToAny(Point from, Collection<Point> targets, Set<String> ignored) {
+        return routeToAny(from, targets, ignored, false);
+    }
+
+    /** То же; {@code cut} — срезать углы пути у вершин зон, см. {@link #cutPass}. */
+    public Route routeToAny(Point from, Collection<Point> targets, Set<String> ignored, boolean cut) {
         int n = nodes.size();
         Coordinate source = from.getCoordinate();
         Table table = table(source, ignored);
@@ -181,6 +192,9 @@ public final class Router {
         coords.add(0, source);
         coords.add(bestTarget);
         straighten(coords, ignored);
+        if (cut) {
+            cutCorners(coords, ignored);
+        }
         LineString line = from.getFactory().createLineString(coords.toArray(new Coordinate[0]));
         List<SpecialSpan> spans = obstacles.spans(line, ignored);
         return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), spans) + bestExtra, spans);
@@ -192,13 +206,13 @@ public final class Router {
      * вызывается только для точки, которая иначе остаётся без сети (п. 2.5). {@code null} — пути нет или перебор
      * дошёл до предела состояний.
      */
-    public Route routeExact(Point start, Collection<Point> targets, Set<String> ignored, Coordinate incoming) {
+    public Route routeExact(Point start, Collection<Point> targets, Set<String> ignored, Coordinate incoming, boolean cut) {
         Coordinate source = start.getCoordinate();
         // состояния зависят только от точки выхода и направления, а кандидатов врезки у точки несколько
         Exact search = cache.computeIfAbsent(List.of(this, "exact", source.x, source.y, ignored, incoming.x, incoming.y),
                 64L * nodes.size(), () -> exactStates(source, ignored, incoming));
         // даже без состояний цель бывает видна из точки выхода напрямую
-        return exactBest(start, targets, ignored, incoming, search.dist, search.came);
+        return exactBest(start, targets, ignored, incoming, search.dist, search.came, cut);
     }
 
     /** Состояния точного поиска: вес до каждой пары «узел, предшественник» и путь к ней. */
@@ -256,7 +270,7 @@ public final class Router {
 
     /** Лучшая цель по состояниям точного поиска и маршрут до неё. */
     private Route exactBest(Point start, Collection<Point> targets, Set<String> ignored, Coordinate incoming,
-            Map<Long, Double> dist, Map<Long, Long> came) {
+            Map<Long, Double> dist, Map<Long, Long> came, boolean cut) {
         int n = nodes.size();
         Coordinate source = start.getCoordinate();
         double bestWeight = Double.POSITIVE_INFINITY;
@@ -306,6 +320,9 @@ public final class Router {
         coords.add(0, source);
         coords.add(bestTarget);
         straighten(coords, ignored);
+        if (cut) {
+            cutCorners(coords, ignored);
+        }
         LineString line = start.getFactory().createLineString(coords.toArray(new Coordinate[0]));
         List<SpecialSpan> spans = obstacles.spans(line, ignored);
         return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), spans) + bestExtra, spans);
@@ -421,6 +438,115 @@ public final class Router {
                 at += after;
             }
         }
+    }
+
+    /** Срезка углов маршрута: до CUT_PASSES проходов {@link #cutPass}, второй срезает углы хорд первого. */
+    private void cutCorners(List<Coordinate> coords, Set<String> ignored) {
+        for (int pass = 0; pass < CUT_PASSES && cutPass(coords, ignored, null, null); pass++) {
+            // проход уже заменил вершины в coords
+        }
+    }
+
+    /**
+     * Один проход срезки углов ломаной. Узлы графа — вершины зон с углами JOIN_MITRE: у угла здания узел стоит на
+     * d·√2 от него, а отступ меряется до самого здания. Вершина заменяется хордой между точками на соседних
+     * отрезках, самой далёкой от вершины, при которой хорда допустима и не пересекает объектов специального прохода.
+     * Вершина берёт не больше половины соседних отрезков, поэтому срезки не перекрываются, а подотрезки остаются не
+     * короче метра; вершины у специальных частей не трогаются: спецпроход — один прямой участок. {@code keep} —
+     * вершина, которую не трогать, или null; {@code apart} — отрезки других рёбер дерева, к которым хорда, как и к
+     * своей ломаной вне вершины, не ближе CUT_APART_M; без apart срез кэшируется по тройке вершин. true — что-то
+     * срезано, coords заменены.
+     */
+    public boolean cutPass(List<Coordinate> coords, Set<String> ignored, Coordinate keep, List<LineSegment> apart) {
+        if (coords.size() < 3) {
+            return false;
+        }
+        List<SpecialSpan> spans = obstacles.spans(factory.createLineString(coords.toArray(new Coordinate[0])), ignored);
+        List<Coordinate> result = new ArrayList<>(List.of(coords.get(0)));
+        double at = 0;
+        for (int i = 1; i + 1 < coords.size(); i++) {
+            Coordinate prev = coords.get(i - 1);
+            Coordinate cur = coords.get(i);
+            Coordinate next = coords.get(i + 1);
+            double before = prev.distance(cur);
+            double after = cur.distance(next);
+            at += before;
+            double turn = deflectionDeg(prev, cur, next);
+            double room = Math.min(before, after) / 2 - CUT_PIECE_M / 2;
+            double least = CUT_PIECE_M / 2 / Math.cos(Math.toRadians(turn / 2));
+            double cut;
+            if (cur == keep || turn < 2 * PUSH_TURN_DEG || room <= least
+                    || overlapsSpan(spans, at - before - MIN_PIECE_M, at + after + MIN_PIECE_M)) {
+                cut = 0;
+            } else if (apart == null) {
+                cut = cache.computeIfAbsent(List.of(this, "cut", prev.x, prev.y, cur.x, cur.y, next.x, next.y, ignored),
+                        8, () -> longestCut(prev, cur, next, least, room, ignored, List.of()));
+            } else {
+                List<LineSegment> near = new ArrayList<>(apart);
+                for (int k = 0; k + 1 < coords.size(); k++) {
+                    if (k != i - 1 && k != i) {
+                        near.add(new LineSegment(coords.get(k), coords.get(k + 1)));
+                    }
+                }
+                cut = longestCut(prev, cur, next, least, room, ignored, near);
+            }
+            if (cut > 0) {
+                result.add(toward(cur, prev, cut));
+                result.add(toward(cur, next, cut));
+            } else {
+                result.add(cur);
+            }
+        }
+        result.add(coords.get(coords.size() - 1));
+        if (result.size() == coords.size()) {
+            return false;
+        }
+        coords.clear();
+        coords.addAll(result);
+        return true;
+    }
+
+    /** Наибольший срез от least до room, при котором хорда годится; 0 — даже least не годится. */
+    private double longestCut(Coordinate prev, Coordinate cur, Coordinate next, double least, double room, Set<String> ignored,
+            List<LineSegment> apart) {
+        if (chord(cur, prev, next, room, ignored, apart)) {
+            return room;
+        }
+        if (!chord(cur, prev, next, least, ignored, apart)) {
+            return 0.0;
+        }
+        double low = least;
+        double high = room;
+        for (int k = 0; k < CUT_STEPS; k++) {
+            double mid = (low + high) / 2;
+            if (chord(cur, prev, next, mid, ignored, apart)) {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        return low;
+    }
+
+    /** Хорда среза cut у вершины cur допустима, обычная (без спецпрохода) и не ближе CUT_APART_M к отрезкам apart. */
+    private boolean chord(Coordinate cur, Coordinate prev, Coordinate next, double cut, Set<String> ignored, List<LineSegment> apart) {
+        Coordinate a = toward(cur, prev, cut);
+        Coordinate b = toward(cur, next, cut);
+        if (!(obstacles.edgeWeight(a, b, ignored) <= a.distance(b) + 1e-9)) {
+            return false;
+        }
+        LineSegment chord = new LineSegment(a, b);
+        for (LineSegment segment : apart) {
+            if (chord.distance(segment) < CUT_APART_M) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static Coordinate toward(Coordinate from, Coordinate to, double distance) {
+        double share = distance / from.distance(to);
+        return new Coordinate(from.x + (to.x - from.x) * share, from.y + (to.y - from.y) * share);
     }
 
     /**
