@@ -62,6 +62,9 @@ public final class ObstacleSet {
     /** Насколько узлы пересечения дороги стоят внутри полосы margin_m: сборка прижимает границу спецучастка к узлу ближе 0,08 м. */
     private static final double MARGIN_NODE_INSET_M = 0.1;
     private static final String ZONE_KEY = "zone";
+    /** Повороты угла зоны, у которых вершина JOIN_MITRE в зоне соседа заменяется двумя, см. halves. */
+    private static final double HALVES_MIN_TURN_DEG = 20;
+    private static final double HALVES_MAX_TURN_DEG = 120;
     /** Сторон зоны в куске с общей рамкой, см. Zone#chunks. */
     private static final int CHUNK = 8;
     /** Оценка памяти буфера на вершину исходной геометрии: Coordinate и ссылка на неё. */
@@ -85,10 +88,161 @@ public final class ObstacleSet {
      */
     private final double[] around;
 
+    /**
+     * Зона отступа: точки ближе distance к объекту. Расстояние считается точно, как у правила и check18, а не по
+     * буферу с углами JOIN_MITRE: у угла здания такой буфер торчит на d·√2, закрывает проходы между углами соседних
+     * зданий и уводит трассу от угла дальше нужного.
+     */
     static final class Zone {
         /** ID объекта зоны запрета; отрезок с этим ID в ignored зону не проверяет (финальный участок к своему ОКС). */
         final String id;
+        /** Сам объект зоны. */
         final Geometry geometry;
+        final double distance;
+        final boolean polygon;
+        /** Рамка объекта и она же с отступом: длинный отрезок задевает рамки многих зон, её проверка дешевле сторон. */
+        final Envelope core;
+        final Envelope box;
+        /** Круг вокруг объекта: отрезок дальше круга с отступом зону не задевает, стороны не перебираются. */
+        final double centerX;
+        final double centerY;
+        final double radius;
+        /** Стороны объекта подряд: x0, y0, x1, y1; у точки — вырожденные стороны в её точках. */
+        final double[] sides;
+        /** Рамки кусков сторон, см. {@link ObstacleSet#chunks}. */
+        final double[] chunks;
+        /** Прежняя зона с углами JOIN_MITRE для точек выхода, строится при первом запросе, см. {@link ObstacleSet#insideForbid(Coordinate)}. */
+        volatile Area mitre;
+
+        /** distance — отступ правила; зона берёт его с запасом SIMPLIFY_M, как прежний буфер до упрощения. */
+        Zone(String id, Geometry geometry, double distance) {
+            this.id = id;
+            this.geometry = geometry;
+            this.distance = distance + SIMPLIFY_M;
+            this.polygon = geometry.getDimension() == 2;
+            this.core = geometry.getEnvelopeInternal();
+            this.box = new Envelope(core);
+            box.expandBy(this.distance);
+            Coordinate center = core.centre();
+            this.centerX = center == null ? 0 : center.x;
+            this.centerY = center == null ? 0 : center.y;
+            this.radius = Math.hypot(core.getWidth(), core.getHeight()) / 2;
+            LineSegment[] segments = geometry.getDimension() == 0 ? points(geometry)
+                    : segments(polygon ? geometry.getBoundary() : geometry);
+            this.sides = sides(segments);
+            this.chunks = chunks(segments);
+        }
+
+        /** Отрезок a–b задевает рамку зоны с отступом, см. {@link ObstacleSet#hitsBox}. */
+        boolean hitsBox(Coordinate a, Coordinate b) {
+            return ObstacleSet.hitsBox(box, a, b);
+        }
+
+        /**
+         * Отрезок a–b (a и b могут совпадать) ближе distance + extra к объекту или внутри полигона. Расстояние до
+         * стороны — ближайший из концов к другому отрезку или пересечение, в квадратах и без JTS: ребро графа
+         * проверяется против зон миллионы раз. Пересечение считается без робастной арифметики: почти касание и так
+         * ловит расстояние, отступ не меньше метра. {@code outside} — один из концов заведомо вне объекта (узел графа
+         * вне всех зон): тогда отрезок без близких сторон целиком снаружи, и точка в полигоне не проверяется.
+         */
+        boolean intersects(Coordinate a, Coordinate b, double extra, boolean outside) {
+            double reach = distance + extra;
+            double minX = Math.min(a.x, b.x) - reach;
+            double maxX = Math.max(a.x, b.x) + reach;
+            double minY = Math.min(a.y, b.y) - reach;
+            double maxY = Math.max(a.y, b.y) + reach;
+            double limit = reach * reach;
+            double dx = b.x - a.x;
+            double dy = b.y - a.y;
+            double length2 = dx * dx + dy * dy;
+            if (squared(centerX, centerY, a, dx, dy, length2) > (radius + reach) * (radius + reach)) {
+                return false;
+            }
+            // сторона по одну сторону от прямой отрезка дальше отступа до него не дотягивается: векторное
+            // произведение — расстояние до прямой, умноженное на длину отрезка
+            double far = reach * Math.sqrt(length2);
+            for (int c = 0; c < chunks.length; c += 4) {
+                if (chunks[c] > maxX || chunks[c + 2] < minX || chunks[c + 1] > maxY || chunks[c + 3] < minY) {
+                    continue;
+                }
+                for (int k = c * CHUNK, end = Math.min(sides.length, k + 4 * CHUNK); k < end; k += 4) {
+                    double x0 = sides[k];
+                    double y0 = sides[k + 1];
+                    double x1 = sides[k + 2];
+                    double y1 = sides[k + 3];
+                    if (Math.max(x0, x1) < minX || Math.min(x0, x1) > maxX || Math.max(y0, y1) < minY || Math.min(y0, y1) > maxY) {
+                        continue;
+                    }
+                    double c0 = dx * (y0 - a.y) - dy * (x0 - a.x);
+                    double c1 = dx * (y1 - a.y) - dy * (x1 - a.x);
+                    if (c0 > far && c1 > far || c0 < -far && c1 < -far) {
+                        continue;
+                    }
+                    double sx = x1 - x0;
+                    double sy = y1 - y0;
+                    double side2 = sx * sx + sy * sy;
+                    if (squared(a.x, a.y, x0, y0, sx, sy, side2) <= limit || squared(b.x, b.y, x0, y0, sx, sy, side2) <= limit
+                            || squared(x0, y0, a, dx, dy, length2) <= limit || squared(x1, y1, a, dx, dy, length2) <= limit) {
+                        return true;
+                    }
+                    // концы стороны по разные стороны отрезка, концы отрезка по разные стороны стороны
+                    double t0 = sx * (a.y - y0) - sy * (a.x - x0);
+                    double t1 = sx * (a.y + dy - y0) - sy * (a.x + dx - x0);
+                    if ((c0 < 0) != (c1 < 0) && (t0 < 0) != (t1 < 0)) {
+                        return true;
+                    }
+                }
+            }
+            // ни одна сторона не близко: отрезок целиком снаружи или целиком внутри полигона
+            return polygon && !outside && core.contains(a) && core.contains(b) && inside(a);
+        }
+
+        boolean covers(Coordinate c) {
+            return box.contains(c) && intersects(c, c, 0, false);
+        }
+
+        /**
+         * Точка внутри полигона, чётность пересечений луча вправо; точку у границы уже поймало расстояние, поэтому
+         * ответ тот же при любом способе.
+         */
+        private boolean inside(Coordinate p) {
+            boolean inside = false;
+            for (int c = 0; c < chunks.length; c += 4) {
+                if (chunks[c + 1] > p.y || chunks[c + 3] < p.y || chunks[c + 2] < p.x) {
+                    continue;
+                }
+                for (int k = c * CHUNK, end = Math.min(sides.length, k + 4 * CHUNK); k < end; k += 4) {
+                    double x0 = sides[k];
+                    double y0 = sides[k + 1];
+                    double x1 = sides[k + 2];
+                    double y1 = sides[k + 3];
+                    if (y0 > p.y != y1 > p.y && p.x < x0 + (p.y - y0) * (x1 - x0) / (y1 - y0)) {
+                        inside = !inside;
+                    }
+                }
+            }
+            return inside;
+        }
+    }
+
+    /** Квадрат расстояния от точки (x, y) до отрезка из a с направлением (dx, dy), length2 — квадрат его длины. */
+    private static double squared(double x, double y, Coordinate a, double dx, double dy, double length2) {
+        return squared(x, y, a.x, a.y, dx, dy, length2);
+    }
+
+    /** Квадрат расстояния от точки (x, y) до отрезка из (x0, y0) с направлением (dx, dy), length2 — квадрат его длины. */
+    private static double squared(double x, double y, double x0, double y0, double dx, double dy, double length2) {
+        double t = length2 == 0 ? 0 : Math.max(0, Math.min(1, ((x - x0) * dx + (y - y0) * dy) / length2));
+        double ex = x0 + t * dx - x;
+        double ey = y0 + t * dy - y;
+        return ex * ex + ey * ey;
+    }
+
+    /**
+     * Многоугольник как область: то же, что PreparedGeometry.intersects с точкой и отрезком, на массиве сторон.
+     * Так проверяются полоса margin_m и сам полигон спецобъекта и прежняя зона запрета с углами JOIN_MITRE.
+     */
+    static final class Area {
         // Длинный отрезок задевает рамки многих зон; проверка отрезка против рамки дешевле проверки сторон.
         final Envelope box;
         /** Стороны всех колец зоны подряд: x0, y0, x1, y1. */
@@ -96,18 +250,10 @@ public final class ObstacleSet {
         /** Рамки кусков сторон, см. {@link ObstacleSet#chunks}; отбрасывают и стороны вдали от луча из начала отрезка. */
         final double[] chunks;
 
-        Zone(String id, Geometry geometry) {
-            this.id = id;
-            this.geometry = geometry;
+        Area(Geometry geometry) {
             this.box = geometry.getEnvelopeInternal();
             LineSegment[] segments = segments(geometry.getBoundary());
-            this.sides = new double[4 * segments.length];
-            for (int k = 0; k < segments.length; k++) {
-                sides[4 * k] = segments[k].p0.x;
-                sides[4 * k + 1] = segments[k].p0.y;
-                sides[4 * k + 2] = segments[k].p1.x;
-                sides[4 * k + 3] = segments[k].p1.y;
-            }
+            this.sides = sides(segments);
             this.chunks = chunks(segments);
         }
 
@@ -200,6 +346,18 @@ public final class ObstacleSet {
             }
             return crossings % 2 == 1;
         }
+    }
+
+    /** Стороны подряд в массиве: x0, y0, x1, y1. */
+    private static double[] sides(LineSegment[] segments) {
+        double[] sides = new double[4 * segments.length];
+        for (int k = 0; k < segments.length; k++) {
+            sides[4 * k] = segments[k].p0.x;
+            sides[4 * k + 1] = segments[k].p0.y;
+            sides[4 * k + 2] = segments[k].p1.x;
+            sides[4 * k + 3] = segments[k].p1.y;
+        }
+        return sides;
     }
 
     /**
@@ -329,10 +487,11 @@ public final class ObstacleSet {
         }
 
         /**
-         * Отрезок a–b задевает зону не из ignored. Клетки идут полосами поперёк длинной оси отрезка от a к b; в полосе
-         * отрезок занимает отрезок поперечной оси между его значениями на краях полосы, с запасом EDGE_EPS_M.
+         * Отрезок a–b задевает зону не из ignored, {@code outside} — как у {@link Zone#intersects}. Клетки идут
+         * полосами поперёк длинной оси отрезка от a к b; в полосе отрезок занимает отрезок поперечной оси между его
+         * значениями на краях полосы, с запасом EDGE_EPS_M.
          */
-        boolean hit(Coordinate a, Coordinate b, Set<String> ignored) {
+        boolean hit(Coordinate a, Coordinate b, Set<String> ignored, boolean outside) {
             boolean alongX = Math.abs(b.x - a.x) >= Math.abs(b.y - a.y);
             double au = alongX ? a.x : a.y;
             double av = alongX ? a.y : a.x;
@@ -382,7 +541,7 @@ public final class ObstacleSet {
                         }
                         marks[z] = round;
                         Zone zone = zones[z];
-                        if (zone.hitsBox(a, b) && !ignored.contains(zone.id) && zone.intersects(a, b)) {
+                        if (zone.hitsBox(a, b) && !ignored.contains(zone.id) && zone.intersects(a, b, 0, outside)) {
                             return true;
                         }
                     }
@@ -451,22 +610,22 @@ public final class ObstacleSet {
         final PreparedGeometry object;
         final Zone zone;
         /** Полоса margin_m вокруг полигона; у линии null. */
-        final Zone margin;
-        /** Сам полигон как зона для проверки пересечения отрезком; у линии null. */
-        final Zone shape;
+        final Area margin;
+        /** Сам полигон как область для проверки пересечения отрезком; у линии null. */
+        final Area shape;
         final LineSegment[] sides;
         /** Рамки кусков sides, см. {@link ObstacleSet#chunks}. */
         final double[] chunks;
 
-        Special(String id, String type, RestrictionRule rule, Geometry geometry, Geometry zone) {
+        Special(String id, String type, RestrictionRule rule, Geometry geometry, double zoneDistance) {
             this.id = id;
             this.type = type;
             this.rule = rule;
             this.polygon = geometry.getDimension() == 2;
             this.object = PreparedGeometryFactory.prepare(geometry);
-            this.zone = new Zone(id, zone);
-            this.margin = polygon ? new Zone(id, geometry.buffer(rule.getMarginM(), MARGIN_QUADRANT_SEGMENTS)) : null;
-            this.shape = polygon ? new Zone(id, geometry) : null;
+            this.zone = new Zone(id, geometry, zoneDistance);
+            this.margin = polygon ? new Area(geometry.buffer(rule.getMarginM(), MARGIN_QUADRANT_SEGMENTS)) : null;
+            this.shape = polygon ? new Area(geometry) : null;
             this.sides = segments(polygon ? geometry.getBoundary() : geometry);
             this.chunks = chunks(sides);
         }
@@ -552,6 +711,8 @@ public final class ObstacleSet {
         double halfWidth = rules.diameter(dn).getWidthM() / 2;
         List<Zone> forbid = new ArrayList<>();
         List<Geometry> nodeZones = new ArrayList<>();
+        // отступ каждой зоны узлов от объекта, см. halves
+        List<Double> nodeOffsets = new ArrayList<>();
         List<Geometry> crossingNodeZones = new ArrayList<>();
         List<Geometry> marginZones = new ArrayList<>();
         List<Special> specialList = new ArrayList<>();
@@ -560,8 +721,9 @@ public final class ObstacleSet {
         oksClearance = oksDistance;
         for (ExistingOks oks : index.existingOks(area)) {
             if (near(oks.getGeometry(), oksDistance, area) && (inside == null || inside.intersects(oks.getGeometry()))) {
-                forbid.add(new Zone(oks.getId(), zone(oks.getGeometry(), oksDistance)));
+                forbid.add(new Zone(oks.getId(), oks.getGeometry(), oksDistance));
                 nodeZones.add(nodeZone(oks.getGeometry(), oksDistance));
+                nodeOffsets.add(nodeOffset(oksDistance));
             }
         }
         for (Restriction restriction : index.restrictions(area)) {
@@ -575,11 +737,12 @@ public final class ObstacleSet {
                 continue;
             }
             nodeZones.add(nodeZone(geometry, distance));
+            nodeOffsets.add(nodeOffset(distance));
             // точку нельзя пересечь под углом или пройти через её зону: её обходят с отступом правила, как запрет
             if (rule.forbid() || geometry.getDimension() == 0) {
-                forbid.add(new Zone(restriction.getId(), zone(geometry, distance)));
+                forbid.add(new Zone(restriction.getId(), geometry, distance));
             } else {
-                Special special = new Special(restriction.getId(), restriction.getType(), rule, geometry, zone(geometry, distance));
+                Special special = new Special(restriction.getId(), restriction.getType(), rule, geometry, distance);
                 specialList.add(special);
                 if (special.polygon) {
                     // спецпроход — один прямой участок с полосой margin_m за полигоном: внутри полосы узлов нет, а
@@ -594,28 +757,30 @@ public final class ObstacleSet {
             double distance = network.clearanceM(dn) + halfWidth + rules.diameter(segment.getDiameter()).getWidthM() / 2;
             if (near(segment.getGeometry(), distance, area) && (inside == null || inside.intersects(segment.getGeometry()))) {
                 nodeZones.add(nodeZone(segment.getGeometry(), distance));
-                specialList.add(new Special(segment.getId(), HEAT_NETWORK, network, segment.getGeometry(),
-                        zone(segment.getGeometry(), distance)));
+                nodeOffsets.add(nodeOffset(distance));
+                specialList.add(new Special(segment.getId(), HEAT_NETWORK, network, segment.getGeometry(), distance));
             }
         }
 
         for (Zone zone : forbid) {
-            forbidZones.insert(zone.geometry.getEnvelopeInternal(), zone);
+            forbidZones.insert(zone.box, zone);
         }
         forbidGrid = new ZoneGrid(forbid);
         for (Special special : specialList) {
-            specials.insert(special.zone.geometry.getEnvelopeInternal(), special);
+            specials.insert(special.zone.box, special);
         }
         forbidZones.build();
         specials.build();
 
         Map<Coordinate, Coordinate[]> candidates = new LinkedHashMap<>();
-        for (Geometry nodeZone : nodeZones) {
+        Map<Coordinate, Double> offsets = new java.util.HashMap<>();
+        for (int z = 0; z < nodeZones.size(); z++) {
+            Geometry nodeZone = nodeZones.get(z);
             for (int i = 0; i < nodeZone.getNumGeometries(); i++) {
                 Polygon polygon = (Polygon) nodeZone.getGeometryN(i);
-                addConvexVertices(polygon.getExteriorRing(), true, candidates);
+                addConvexVertices(polygon.getExteriorRing(), true, nodeOffsets.get(z), candidates, offsets);
                 for (int h = 0; h < polygon.getNumInteriorRing(); h++) {
-                    addConvexVertices(polygon.getInteriorRingN(h), false, candidates);
+                    addConvexVertices(polygon.getInteriorRingN(h), false, nodeOffsets.get(z), candidates, offsets);
                 }
             }
         }
@@ -633,10 +798,21 @@ public final class ObstacleSet {
         List<Coordinate[]> rings = new ArrayList<>();
         for (Map.Entry<Coordinate, Coordinate[]> candidate : candidates.entrySet()) {
             Coordinate c = candidate.getKey();
-            if (area.contains(c) && (inside == null || inside.intersects(factory.createPoint(c)))
-                    && !insideAnyZone(c) && !insideAny(margins, c)) {
+            Coordinate[] ring = candidate.getValue();
+            if (!area.contains(c) || inside != null && !inside.intersects(factory.createPoint(c)) || insideAny(margins, c)) {
+                continue;
+            }
+            if (!insideAnyZone(c)) {
                 nodes.add(c);
-                rings.add(candidate.getValue());
+                rings.add(ring);
+                continue;
+            }
+            // угол зоны JOIN_MITRE попал в зону соседа, хотя проход между углами бывает: вместо него две вершины
+            // описанного вокруг угла многоугольника, они ближе к объекту
+            Coordinate[] halves = ring == null ? null : halves(c, ring, offsets.get(c));
+            if (halves != null) {
+                addNode(halves[0], new Coordinate[] {ring[0], halves[1]}, area, inside, margins, rings);
+                addNode(halves[1], new Coordinate[] {halves[0], ring[1]}, area, inside, margins, rings);
             }
         }
         around = new double[6 * nodes.size()];
@@ -649,6 +825,35 @@ public final class ObstacleSet {
             around[6 * i + 4] = ring == null ? Double.NaN : ring[1].x;
             around[6 * i + 5] = ring == null ? Double.NaN : ring[1].y;
         }
+    }
+
+    private void addNode(Coordinate c, Coordinate[] ring, Envelope area, PreparedGeometry inside, List<PreparedGeometry> margins,
+            List<Coordinate[]> rings) {
+        if (area.contains(c) && (inside == null || inside.intersects(factory.createPoint(c))) && !insideAnyZone(c)
+                && !insideAny(margins, c)) {
+            nodes.add(c);
+            rings.add(ring);
+        }
+    }
+
+    /**
+     * Две вершины описанного вокруг угла объекта многоугольника в две стороны вместо вершины v угла JOIN_MITRE с
+     * соседями ring по кольцу: v отстоит от угла объекта на D/cos(θ/2), они — на D/cos(θ/4), где D — отступ зоны
+     * узлов, θ — поворот в v. null — угол слишком острый или соседи ближе нужного сдвига.
+     */
+    private static Coordinate[] halves(Coordinate v, Coordinate[] ring, double offset) {
+        double turn = Math.toRadians(Router.deflectionDeg(ring[0], v, ring[1]));
+        double shift = offset * (Math.tan(turn / 2) - Math.tan(turn / 4));
+        if (turn < Math.toRadians(HALVES_MIN_TURN_DEG) || turn > Math.toRadians(HALVES_MAX_TURN_DEG)
+                || shift >= v.distance(ring[0]) || shift >= v.distance(ring[1])) {
+            return null;
+        }
+        return new Coordinate[] {toward(v, ring[0], shift), toward(v, ring[1], shift)};
+    }
+
+    private static Coordinate toward(Coordinate from, Coordinate to, double distance) {
+        double share = distance / from.distance(to);
+        return new Coordinate(from.x + (to.x - from.x) * share, from.y + (to.y - from.y) * share);
     }
 
     private boolean insideAny(List<PreparedGeometry> polygons, Coordinate c) {
@@ -666,14 +871,34 @@ public final class ObstacleSet {
         return oksClearance;
     }
 
-    /** Точка в зоне запрета (с отступом): камера ветвления там не ставится. */
+    /**
+     * Точка в прежней зоне запрета с углами JOIN_MITRE. По ней ставятся точки выхода из здания: у выхода между частями
+     * здания угол такой зоны отодвигает его до второй части, луч снова входит в здание, и берётся следующая сторона
+     * (приложение 18.09, п. 2.2); по точной зоне выход остаётся в тупике, откуда ветки нет.
+     */
     public boolean insideForbid(Coordinate c) {
+        return insideForbid(c, true);
+    }
+
+    /** Точка в зоне запрета: точной (там не ставится камера ветвления) или, если {@code mitre}, прежней. */
+    public boolean insideForbid(Coordinate c, boolean mitre) {
         for (Object item : forbidZones.query(new Envelope(c))) {
-            if (((Zone) item).contains(c)) {
+            Zone zone = (Zone) item;
+            if (mitre ? zone.box.contains(c) && mitre(zone).contains(c) : zone.covers(c)) {
                 return true;
             }
         }
         return false;
+    }
+
+    /** Прежняя зона запрета с углами JOIN_MITRE; строится при первом запросе, при гонке нитей — одинаковая. */
+    private Area mitre(Zone zone) {
+        Area area = zone.mitre;
+        if (area == null) {
+            area = new Area(zone(zone.geometry, zone.distance - SIMPLIFY_M));
+            zone.mitre = area;
+        }
+        return area;
     }
 
     /** Узлы visibility graph: выпуклые снаружи вершины зон и точки вдоль сторон дорог, не лежащие ни в одной зоне. */
@@ -719,7 +944,7 @@ public final class ObstacleSet {
      * вес по нижней оценке, иначе переход со сдвигом вбок через узлы в полосе легче прямого.
      */
     public double edgeWeight(Coordinate a, Coordinate b, Set<String> ignored, boolean aNode, boolean bNode) {
-        if (forbidGrid.hit(a, b, ignored)) {
+        if (forbidGrid.hit(a, b, ignored, aNode || bNode)) {
             return Double.NaN;
         }
         List<Special> crossed = new ArrayList<>();
@@ -729,7 +954,7 @@ public final class ObstacleSet {
                 continue;
             }
             if (!special.crossedBy(a, b)) {
-                if (special.zone.intersects(a, b)) {
+                if (special.zone.intersects(a, b, 0, aNode || bNode)) {
                     return Double.NaN;
                 }
                 continue;
@@ -756,6 +981,32 @@ public final class ObstacleSet {
         }
         LineString edge = factory.createLineString(new Coordinate[] {a, b});
         return weight(edge.getLength(), spans(edge, crossed, Set.of())) + beforeA + beforeB;
+    }
+
+    /**
+     * Отрезок a–b обычный: не пересекает объектов специального прохода и держит отступы с запасом margin. Так
+     * проверяется хорда срезки угла: трасса у самой зоны графа не прошла бы проверку отступов, когда сборка
+     * поднимает Ду по длине на ступень, а запас как у узлов графа эту ступень покрывает.
+     */
+    public boolean plain(Coordinate a, Coordinate b, Set<String> ignored, double margin) {
+        Envelope envelope = new Envelope(a, b);
+        envelope.expandBy(margin);
+        for (Object item : forbidZones.query(envelope)) {
+            Zone zone = (Zone) item;
+            if (!ignored.contains(zone.id) && zone.intersects(a, b, margin, false)) {
+                return false;
+            }
+        }
+        for (Object item : specials.query(envelope)) {
+            Special special = (Special) item;
+            if (ignored.contains(special.id) && touches(special, a, b)) {
+                continue;
+            }
+            if (special.crossedBy(a, b) || special.zone.intersects(a, b, margin, false)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -869,7 +1120,7 @@ public final class ObstacleSet {
      * режется в точках пересечения со сторонами, кусок берётся, если его середина внутри. Замена наложения JTS
      * {@code intersection}: оно на каждый отрезок графа строило планарный граф.
      */
-    private static List<double[]> inside(Coordinate p0, Coordinate p1, Zone polygon, LineIntersector intersector) {
+    private static List<double[]> inside(Coordinate p0, Coordinate p1, Area polygon, LineIntersector intersector) {
         TreeSet<Double> cuts = new TreeSet<>(List.of(0.0, p0.distance(p1)));
         polygon.cuts(p0, p1, intersector, cuts);
         List<double[]> result = new ArrayList<>();
@@ -954,12 +1205,12 @@ public final class ObstacleSet {
     private boolean insideAnyZone(Coordinate c) {
         Envelope envelope = new Envelope(c);
         for (Object item : forbidZones.query(envelope)) {
-            if (((Zone) item).contains(c)) {
+            if (((Zone) item).covers(c)) {
                 return true;
             }
         }
         for (Object item : specials.query(envelope)) {
-            if (((Special) item).zone.contains(c)) {
+            if (((Special) item).zone.covers(c)) {
                 return true;
             }
         }
@@ -987,7 +1238,14 @@ public final class ObstacleSet {
         return zone(geometry, distance + 2 * SIMPLIFY_M + NODE_OFFSET_M);
     }
 
-    private static void addConvexVertices(LinearRing ring, boolean shell, Map<Coordinate, Coordinate[]> out) {
+    /** Отступ зоны узлов от объекта с учётом упрощения, см. {@link #nodeZone}. */
+    private static double nodeOffset(double distance) {
+        return distance + 3 * SIMPLIFY_M + NODE_OFFSET_M;
+    }
+
+    /** Выпуклые снаружи вершины кольца в out с соседями по кольцу, у новой вершины — отступ её зоны в offsets. */
+    private static void addConvexVertices(LinearRing ring, boolean shell, double offset, Map<Coordinate, Coordinate[]> out,
+            Map<Coordinate, Double> offsets) {
         Coordinate[] coords = ring.getCoordinates();
         int n = coords.length - 1;
         if (n < 3) {
@@ -996,10 +1254,21 @@ public final class ObstacleSet {
         int obstacleTurn = shell == Orientation.isCCW(coords) ? Orientation.COUNTERCLOCKWISE : Orientation.CLOCKWISE;
         for (int i = 0; i < n; i++) {
             Coordinate prev = coords[(i + n - 1) % n];
-            if (Orientation.index(prev, coords[i], coords[i + 1]) == obstacleTurn) {
-                out.putIfAbsent(coords[i], new Coordinate[] {prev, coords[i + 1]});
+            if (Orientation.index(prev, coords[i], coords[i + 1]) == obstacleTurn
+                    && out.putIfAbsent(coords[i], new Coordinate[] {prev, coords[i + 1]}) == null) {
+                offsets.put(coords[i], offset);
             }
         }
+    }
+
+    /** Точечный объект: вырожденные стороны в его точках, расстояние до них — до самих точек. */
+    private static LineSegment[] points(Geometry puntal) {
+        Coordinate[] coords = puntal.getCoordinates();
+        LineSegment[] result = new LineSegment[coords.length];
+        for (int i = 0; i < coords.length; i++) {
+            result[i] = new LineSegment(coords[i], coords[i]);
+        }
+        return result;
     }
 
     private static LineSegment[] segments(Geometry lineal) {
