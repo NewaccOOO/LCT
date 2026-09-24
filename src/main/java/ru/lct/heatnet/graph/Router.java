@@ -53,14 +53,16 @@ public final class Router {
     private final java.util.concurrent.atomic.AtomicLong tableRequests = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong tableHits = new java.util.concurrent.atomic.AtomicLong();
 
-    /** Таблица Дейкстры от точки запроса: расстояния до узлов и предшественники. */
+    /** Таблица Дейкстры от точки запроса: расстояния до узлов, предшественники и узлы по возрастанию расстояния. */
     private static final class Table {
         final double[] dist;
         final int[] pred;
+        final int[] order;
 
-        Table(double[] dist, int[] pred) {
+        Table(double[] dist, int[] pred, int[] order) {
             this.dist = dist;
             this.pred = pred;
+            this.order = order;
         }
     }
 
@@ -144,6 +146,7 @@ public final class Router {
         Table table = table(source, ignored);
         double[] dist = table.dist;
         int[] pred = table.pred;
+        int[] order = table.order;
         double bestWeight = Double.POSITIVE_INFINITY;
         Coordinate bestTarget = null;
         int bestVia = -1;
@@ -160,17 +163,24 @@ public final class Router {
             double weight = Double.isNaN(direct) ? Double.POSITIVE_INFINITY : direct;
             int via = -1;
             double[] toNodes = partialWeights(t, ignored);
-            for (int v = 0; v < n; v++) {
-                // нижняя оценка через узел: до него по графу плюс по прямой; вес до узла считается только если она бьёт текущий
-                if (!below(dist[v], nodeXY[2 * v], nodeXY[2 * v + 1], t, weight)) {
+            // узлы по возрастанию веса от источника: дальше текущего веса они не выиграют. Выбор тот же, что у
+            // перебора по номерам: наименьший вес, при равенстве — прямой отрезок, затем меньший номер узла
+            for (int v : order) {
+                if (dist[v] > weight) {
+                    break;
+                }
+                // нижняя оценка через узел: до него по графу плюс по прямой; вес до узла считается только если она не
+                // хуже текущего
+                if (beyond(dist[v], nodeXY[2 * v], nodeXY[2 * v + 1], t, weight)) {
                     continue;
                 }
                 if (toNodes[v] == UNKNOWN) {
                     toNodes[v] = obstacles.tangent(v, t) ? obstacles.edgeWeight(t, nodes.get(v), ignored, false, true) : Double.NaN;
                 }
-                if (!Double.isNaN(toNodes[v]) && dist[v] + toNodes[v] < weight
+                double total = dist[v] + toNodes[v];
+                if ((total < weight || total == weight && via >= 0 && v < via)
                         && turnAllowed(pred[v] < 0 ? source : nodes.get(pred[v]), nodes.get(v), t)) {
-                    weight = dist[v] + toNodes[v];
+                    weight = total;
                     via = v;
                 }
             }
@@ -401,6 +411,8 @@ public final class Router {
         int[] pred = new int[n];
         Arrays.fill(pred, -1);
         boolean[] done = new boolean[n];
+        int[] order = new int[n];
+        int settled = 0;
         PriorityQueue<double[]> heap = new PriorityQueue<>((a, b) -> Double.compare(a[0], b[0]));
         for (int v = 0; v < n; v++) {
             if (!Double.isNaN(dist[v])) {
@@ -416,6 +428,7 @@ public final class Router {
                 continue;
             }
             done[v] = true;
+            order[settled++] = v;
             double beforeX = pred[v] < 0 ? source.x : nodeXY[2 * pred[v]];
             double beforeY = pred[v] < 0 ? source.y : nodeXY[2 * pred[v] + 1];
             for (int k = 0; k < adjacency[v].length; k++) {
@@ -431,8 +444,8 @@ public final class Router {
                 }
             }
         }
-        Table table = new Table(dist, pred);
-        cache.put(key, table, 12L * n);
+        Table table = new Table(dist, pred, Arrays.copyOf(order, settled));
+        cache.put(key, table, 16L * n);
         return table;
     }
 
@@ -525,22 +538,22 @@ public final class Router {
     }
 
     /**
-     * {@code dist + node.distance(t) < weight} для узла (x, y) без Math.hypot в большинстве случаев: на Java 11 он
+     * {@code dist + node.distance(t) > weight} для узла (x, y) без Math.hypot в большинстве случаев: на Java 11 он
      * программный и был седьмой частью расчёта. Корень из суммы квадратов отличается от hypot не больше чем на
      * 4 ulp (если квадраты не уходят в денормалы), поэтому с запасом 1e-15 он решает сравнение так же; сложение
      * монотонно. Спорные случаи считаются через hypot.
      */
-    static boolean below(double dist, double x, double y, Coordinate t, double weight) {
-        if (dist >= weight) {
-            return false;
-        }
+    static boolean beyond(double dist, double x, double y, Coordinate t, double weight) {
         double dx = x - t.x;
         double dy = y - t.y;
         double approx = Math.sqrt(dx * dx + dy * dy);
-        if (dist + approx * (1 - HYPOT_TOL) >= weight) {
+        if (dist + approx * (1 - HYPOT_TOL) > weight) {
+            return true;
+        }
+        if (approx > 1e-100 && dist + approx * (1 + HYPOT_TOL) <= weight) {
             return false;
         }
-        return approx > 1e-100 && dist + approx * (1 + HYPOT_TOL) < weight || dist + Math.hypot(dx, dy) < weight;
+        return dist + Math.hypot(dx, dy) > weight;
     }
 
     /**

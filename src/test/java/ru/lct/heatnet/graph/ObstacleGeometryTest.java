@@ -105,7 +105,7 @@ class ObstacleGeometryTest {
     }
 
     @Test
-    void belowMatchesHypotSum() {
+    void beyondMatchesHypotSum() {
         for (int i = 0; i < 200_000; i++) {
             Coordinate node = new Coordinate(412_000 + random.nextDouble() * 1000, 6_171_000 + random.nextDouble() * 1000);
             Coordinate t = i % 3 == 0 ? new Coordinate(node) : new Coordinate(412_000 + random.nextDouble() * 1000, 6_171_000 + random.nextDouble() * 1000);
@@ -113,7 +113,7 @@ class ObstacleGeometryTest {
             double exact = dist + node.distance(t);
             // вес ровно на сумме, на соседних double и случайный
             double weight = i % 4 == 0 ? exact : i % 4 == 1 ? Math.nextUp(exact) : i % 4 == 2 ? Math.nextDown(exact) : random.nextDouble() * 3000;
-            assertEquals(exact < weight, Router.below(dist, node.x, node.y, t, weight), dist + " " + node + " " + t + " " + weight);
+            assertEquals(exact > weight, Router.beyond(dist, node.x, node.y, t, weight), dist + " " + node + " " + t + " " + weight);
         }
     }
 
