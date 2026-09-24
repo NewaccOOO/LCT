@@ -85,6 +85,14 @@ class ObstacleGeometryTest {
     }
 
     @Test
+    void gridSkipsEmptyZone() {
+        ObstacleSet.ZoneGrid grid = new ObstacleSet.ZoneGrid(List.of(new ObstacleSet.Zone("z", zone()),
+                new ObstacleSet.Zone("empty", factory.createPolygon())));
+        assertEquals(1, grid.zones.length);
+        grid.hit(new Coordinate(0, 0), new Coordinate(40, 40), Set.of());
+    }
+
+    @Test
     void turnAllowedMatchesDeflection() {
         Coordinate b = new Coordinate(412_345.678, 6_171_234.567);
         for (int i = 0; i < 200_000; i++) {

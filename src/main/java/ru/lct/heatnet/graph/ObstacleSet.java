@@ -284,7 +284,8 @@ public final class ObstacleSet {
         final int[] items;
 
         ZoneGrid(List<Zone> list) {
-            zones = list.toArray(new Zone[0]);
+            // у пустой зоны рамка null: она ни с чем не пересекается, и STRtree её тоже не хранил
+            zones = list.stream().filter(zone -> !zone.box.isNull()).toArray(Zone[]::new);
             Envelope bounds = new Envelope();
             for (Zone zone : zones) {
                 bounds.expandToInclude(zone.box);
