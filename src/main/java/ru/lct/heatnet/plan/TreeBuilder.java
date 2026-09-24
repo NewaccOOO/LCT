@@ -690,7 +690,10 @@ final class TreeBuilder {
             for (int pass = 0; pass < CUT_PASSES && router.cutPass(coords, tree.tie.getIgnored(), exit, others); pass++) {
                 changed = true;
             }
-            result.edges.add(new Tree.Edge(edge.from, edge.to, factory.createLineString(coords.toArray(new Coordinate[0]))));
+            // у нового дерева свой узел врезки: ребро от прежнего degree(root) не считает, и ёмкость общей камеры
+            // врезки (VariantEnumerator#compatible) не проверялась бы
+            Tree.Node from = edge.from == tree.root ? result.root : edge.from;
+            result.edges.add(new Tree.Edge(from, edge.to, factory.createLineString(coords.toArray(new Coordinate[0]))));
         }
         return changed ? result : tree;
     }

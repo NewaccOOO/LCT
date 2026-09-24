@@ -139,6 +139,24 @@ class TreeBuilderTest {
         assertTrue(inside.getLength() < 9, "выход через наружную стену x=150, а не сквозь двор: " + inside.getLength());
     }
 
+    @Test
+    void cutTreeKeepsEdgeFromTieInRoot() {
+        // ствол с прямым углом вдали от препятствий: срезка заменяет угол хордой, ребро должно остаться у узла врезки
+        PlanFixture fixture = PlanFixture.trunk().oks("o-1", 300, 60, 5);
+        InputData input = fixture.input();
+        TieInFinder finder = new TieInFinder(input, rules);
+        TieCandidate tie = finder.find(List.of(point(200, 30)), DN).stream()
+                .filter(TieCandidate::isChamber).findFirst().orElseThrow();
+        Tree tree = new Tree(tie);
+        tree.edges.add(new Tree.Edge(tree.root, Tree.Node.connection(fixture.connection("o-1")), PlanFixture.GEOMETRY.createLineString(
+                new Coordinate[] {tie.getPoint().getCoordinate(), new Coordinate(200, 60), new Coordinate(300, 60)})));
+
+        Tree cut = builder(input, finder).cut(tree, new Router(input, rules, AREA, DN));
+
+        assertTrue(cut != tree && cut.edges.get(0).line.getNumPoints() > 3, "угол срезан: " + cut.edges.get(0).line);
+        assertEquals(1, cut.degree(cut.root), "ребро от узла врезки срезанного дерева");
+    }
+
     private TreeBuilder builder(InputData input, TieInFinder finder) {
         return builder(input, finder, Map.of());
     }
