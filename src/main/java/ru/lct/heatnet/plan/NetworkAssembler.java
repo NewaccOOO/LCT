@@ -10,6 +10,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 import org.locationtech.jts.algorithm.Angle;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
@@ -24,9 +25,12 @@ import ru.lct.heatnet.calc.DiameterPlanner;
 import ru.lct.heatnet.calc.FlowCalculator;
 import ru.lct.heatnet.calc.TreeEdge;
 import ru.lct.heatnet.graph.Router;
+import ru.lct.heatnet.model.Chamber;
+import ru.lct.heatnet.model.ConnectionPoint;
 import ru.lct.heatnet.model.ExistingOks;
 import ru.lct.heatnet.model.FutureOks;
 import ru.lct.heatnet.model.InputData;
+import ru.lct.heatnet.model.NetworkSegment;
 import ru.lct.heatnet.model.NewChamber;
 import ru.lct.heatnet.model.NewSegment;
 import ru.lct.heatnet.model.Restriction;
@@ -73,9 +77,11 @@ final class NetworkAssembler {
     private final CostCalculator costs;
     private final DiameterPlanner planner;
     private final Map<String, Double> flowByOks = new HashMap<>();
-    /** ID входа: выходные ID с ними не совпадают. */
-    private final Set<String> inputIds = new HashSet<>();
+    /** ID источника входа; остальные ID берутся из списков входа, см. {@link #inputIds}. */
+    private final String sourceId;
+    /** Проверки ID входа по префиксу и целиком: выходные ID с ID входа не совпадают. */
     private final Map<String, Boolean> startsByPrefix = new HashMap<>();
+    private final Map<String, Boolean> knownIds = new HashMap<>();
     private final GeometryFactory factory = new GeometryFactory();
 
     /** Счётчики выходных ID; общие на несколько сборок, когда один вариант собирается по частям (город). */
@@ -133,27 +139,33 @@ final class NetworkAssembler {
         this.specials = specials;
         this.costs = new CostCalculator(rules);
         this.planner = new DiameterPlanner(rules);
-        inputIds.add(input.getSource().getId());
-        input.getSegments().forEach(segment -> inputIds.add(segment.getId()));
-        input.getChambers().forEach(chamber -> inputIds.add(chamber.getId()));
-        input.getConnectionPoints().forEach(connection -> inputIds.add(connection.getId()));
+        this.sourceId = input.getSource().getId();
         for (FutureOks oks : input.getFutureOks()) {
             flowByOks.put(oks.getId(), oks.getFlowTph());
-            inputIds.add(oks.getId());
-        }
-        for (ExistingOks oks : input.getExistingOks()) {
-            inputIds.add(oks.getId());
-        }
-        for (Restriction restriction : input.getRestrictions()) {
-            inputIds.add(restriction.getId());
         }
     }
 
     private boolean startsInputId(String prefix) {
         // вход города — миллионы ID, а префиксов за расчёт единицы: каждый проверяется один раз
         synchronized (startsByPrefix) {
-            return startsByPrefix.computeIfAbsent(prefix, key -> inputIds.stream().anyMatch(id -> id.startsWith(key)));
+            return startsByPrefix.computeIfAbsent(prefix, key -> inputIds().anyMatch(id -> id.startsWith(key)));
         }
+    }
+
+    private boolean isInputId(String id) {
+        synchronized (knownIds) {
+            return knownIds.computeIfAbsent(id, key -> inputIds().anyMatch(key::equals));
+        }
+    }
+
+    /** ID входа по спискам: множество из шести миллионов ID города строилось ради считанных проверок. */
+    private Stream<String> inputIds() {
+        return Stream.of(Stream.of(sourceId), input.getSegments().stream().map(NetworkSegment::getId),
+                input.getChambers().stream().map(Chamber::getId),
+                input.getConnectionPoints().stream().map(ConnectionPoint::getId),
+                input.getFutureOks().stream().map(FutureOks::getId),
+                input.getExistingOks().stream().map(ExistingOks::getId),
+                input.getRestrictions().stream().map(Restriction::getId)).flatMap(ids -> ids);
     }
 
     /**
@@ -172,7 +184,7 @@ final class NetworkAssembler {
     /** Сводка по частям варианта, собранным отдельно с общими счётчиками. */
     VariantSummary summary(String variantId, int rank, List<NewSegment> segments, List<NewChamber> chambers,
             int existingTieIns, List<FutureOks> unconnected) {
-        String summaryId = inputIds.contains("summary_" + variantId) ? prefix(variantId) + "summary" : "summary_" + variantId;
+        String summaryId = isInputId("summary_" + variantId) ? prefix(variantId) + "summary" : "summary_" + variantId;
         VariantSummary draft = costs.summary(summaryId, variantId, segments, chambers, existingTieIns, unconnected);
         return new VariantSummary(draft.getId(), variantId, rank, draft.getConstructionCost(),
                 draft.getChamberConstructionCost(), draft.getExistingChamberTieInCount(),

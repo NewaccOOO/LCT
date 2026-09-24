@@ -1504,12 +1504,13 @@ public final class VariantEnumerator {
             query.expandBy(GROUP_DISTANCE_M);
             @SuppressWarnings("unchecked")
             List<Integer> hits = index.query(query);
-            Point pi = connections.get(i).getGeometry();
+            // расстояние точек по координатам то же, что Point.distance, без DistanceOp на каждую пару
+            Coordinate pi = connections.get(i).getGeometry().getCoordinate();
             for (Integer j : hits) {
                 if (j <= i) {
                     continue;
                 }
-                if (pi.distance(connections.get(j).getGeometry()) <= GROUP_DISTANCE_M) {
+                if (pi.distance(connections.get(j).getGeometry().getCoordinate()) <= GROUP_DISTANCE_M) {
                     root[find(root, i)] = find(root, j);
                 }
             }
@@ -1563,7 +1564,7 @@ public final class VariantEnumerator {
         Coordinate b = null;
         for (ConnectionPoint p : connections) {
             for (ConnectionPoint q : connections) {
-                if (a == null || p.getGeometry().distance(q.getGeometry()) > a.distance(b)) {
+                if (a == null || p.getGeometry().getCoordinate().distance(q.getGeometry().getCoordinate()) > a.distance(b)) {
                     a = p.getGeometry().getCoordinate().copy();
                     b = q.getGeometry().getCoordinate().copy();
                 }
