@@ -2,6 +2,7 @@ package ru.lct.heatnet.graph;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -127,6 +128,32 @@ public final class ObstacleSet {
         /** Отрезок a–b задевает рамку зоны, см. {@link ObstacleSet#hitsBox}. */
         boolean hitsBox(Coordinate a, Coordinate b) {
             return ObstacleSet.hitsBox(box, a, b);
+        }
+
+        /**
+         * Расстояния от p0 до точек, где отрезок p0–p1 пересекает стороны зоны, в out: точки считает intersector, как
+         * при переборе всех сторон, но куски сторон вдали от отрезка пропускаются по рамке.
+         */
+        void cuts(Coordinate p0, Coordinate p1, LineIntersector intersector, Collection<Double> out) {
+            double minX = Math.min(p0.x, p1.x);
+            double maxX = Math.max(p0.x, p1.x);
+            double minY = Math.min(p0.y, p1.y);
+            double maxY = Math.max(p0.y, p1.y);
+            for (int c = 0; c < chunks.length; c += 4) {
+                if (chunks[c] > maxX || chunks[c + 2] < minX || chunks[c + 1] > maxY || chunks[c + 3] < minY) {
+                    continue;
+                }
+                for (int k = c * CHUNK, end = Math.min(sides.length, k + 4 * CHUNK); k < end; k += 4) {
+                    if (!meet(p0, p1, sides[k], sides[k + 1], sides[k + 2], sides[k + 3])) {
+                        continue;
+                    }
+                    intersector.computeIntersection(p0, p1, new Coordinate(sides[k], sides[k + 1]),
+                            new Coordinate(sides[k + 2], sides[k + 3]));
+                    for (int i = 0; i < intersector.getIntersectionNum(); i++) {
+                        out.add(p0.distance(intersector.getIntersection(i)));
+                    }
+                }
+            }
         }
 
         /** То же, что PreparedGeometry.intersects(точка): точка внутри зоны или на её границе. */
@@ -427,9 +454,8 @@ public final class ObstacleSet {
         final boolean polygon;
         final PreparedGeometry object;
         final Zone zone;
-        final Geometry marginZone;
-        /** Стороны колец marginZone; у линии null. */
-        final LineSegment[] marginSides;
+        /** Полоса margin_m вокруг полигона; у линии null. */
+        final Zone margin;
         final LineSegment[] sides;
         final boolean small;
 
@@ -440,8 +466,7 @@ public final class ObstacleSet {
             this.polygon = geometry.getDimension() == 2;
             this.object = PreparedGeometryFactory.prepare(geometry);
             this.zone = new Zone(id, zone);
-            this.marginZone = polygon ? geometry.buffer(rule.getMarginM(), MARGIN_QUADRANT_SEGMENTS) : null;
-            this.marginSides = polygon ? segments(marginZone.getBoundary()) : null;
+            this.margin = polygon ? new Zone(id, geometry.buffer(rule.getMarginM(), MARGIN_QUADRANT_SEGMENTS)) : null;
             this.sides = segments(polygon ? geometry.getBoundary() : geometry);
             this.small = polygon && geometry.getNumPoints() <= SMALL_POLYGON_POINTS;
         }
@@ -810,7 +835,7 @@ public final class ObstacleSet {
                     continue;
                 }
                 if (special.polygon) {
-                    for (double[] piece : inside(p0, p1, special.marginSides, intersector)) {
+                    for (double[] piece : inside(p0, p1, special.margin, intersector)) {
                         raw.add(span(start + piece[0], start + piece[1], special));
                     }
                 } else {
@@ -836,17 +861,9 @@ public final class ObstacleSet {
      * режется в точках пересечения со сторонами, кусок берётся, если его середина внутри. Замена наложения JTS
      * {@code intersection}: оно на каждый отрезок графа строило планарный граф.
      */
-    private static List<double[]> inside(Coordinate p0, Coordinate p1, LineSegment[] sides, LineIntersector intersector) {
+    private static List<double[]> inside(Coordinate p0, Coordinate p1, Zone polygon, LineIntersector intersector) {
         TreeSet<Double> cuts = new TreeSet<>(List.of(0.0, p0.distance(p1)));
-        for (LineSegment side : sides) {
-            if (!meet(p0, p1, side.p0, side.p1)) {
-                continue;
-            }
-            intersector.computeIntersection(p0, p1, side.p0, side.p1);
-            for (int k = 0; k < intersector.getIntersectionNum(); k++) {
-                cuts.add(p0.distance(intersector.getIntersection(k)));
-            }
-        }
+        polygon.cuts(p0, p1, intersector, cuts);
         List<double[]> result = new ArrayList<>();
         double length = p0.distance(p1);
         Double from = null;
@@ -854,11 +871,7 @@ public final class ObstacleSet {
             if (from != null && to > from) {
                 double mid = (from + to) / 2 / length;
                 Coordinate middle = new Coordinate(p0.x + (p1.x - p0.x) * mid, p0.y + (p1.y - p0.y) * mid);
-                RayCrossingCounter counter = new RayCrossingCounter(middle);
-                for (LineSegment side : sides) {
-                    counter.countSegment(side.p0, side.p1);
-                }
-                if (counter.getLocation() != Location.EXTERIOR) {
+                if (polygon.contains(middle)) {
                     if (!result.isEmpty() && result.get(result.size() - 1)[1] == from) {
                         result.get(result.size() - 1)[1] = to;
                     } else {
