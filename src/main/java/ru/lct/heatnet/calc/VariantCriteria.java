@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 import org.locationtech.jts.algorithm.Angle;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
@@ -140,14 +141,14 @@ public final class VariantCriteria {
         }
 
         double[] turns = turns(variant);
+        // проход по 3 млн ОКС города параллельно; расход складывается по порядку входа, как раньше
         Set<String> unconnected = new HashSet<>(summary.getUnconnectedOksIds());
-        int connected = 0;
+        List<FutureOks> connectedOks = input.getFutureOks().parallelStream()
+                .filter(oks -> !unconnected.contains(oks.getId())).collect(Collectors.toList());
+        int connected = connectedOks.size();
         double connectedFlow = 0;
-        for (FutureOks oks : input.getFutureOks()) {
-            if (!unconnected.contains(oks.getId())) {
-                connected++;
-                connectedFlow += oks.getFlowTph();
-            }
+        for (FutureOks oks : connectedOks) {
+            connectedFlow += oks.getFlowTph();
         }
         double costWithoutPenalty = summary.getCalculatedCost() - summary.getUnconnectedPenalty();
 

@@ -76,7 +76,8 @@ final class NetworkAssembler {
     private final SpecialObjects specials;
     private final CostCalculator costs;
     private final DiameterPlanner planner;
-    private final Map<String, Double> flowByOks = new HashMap<>();
+    /** ОКС входа по id у перечислителя: своя карта расходов на 3 млн ОКС города не строится. */
+    private final Map<String, FutureOks> oksById;
     /** ID источника входа; остальные ID берутся из списков входа, см. {@link #inputIds}. */
     private final String sourceId;
     /** Проверки ID входа по префиксу и целиком: выходные ID с ID входа не совпадают. */
@@ -133,16 +134,14 @@ final class NetworkAssembler {
         }
     }
 
-    NetworkAssembler(InputData input, Rules rules, SpecialObjects specials) {
+    NetworkAssembler(InputData input, Rules rules, SpecialObjects specials, Map<String, FutureOks> oksById) {
         this.input = input;
         this.rules = rules;
         this.specials = specials;
         this.costs = new CostCalculator(rules);
         this.planner = new DiameterPlanner(rules);
         this.sourceId = input.getSource().getId();
-        for (FutureOks oks : input.getFutureOks()) {
-            flowByOks.put(oks.getId(), oks.getFlowTph());
-        }
+        this.oksById = oksById;
     }
 
     private boolean startsInputId(String prefix) {
@@ -299,7 +298,8 @@ final class NetworkAssembler {
                 Edge edge = edges.get(i);
                 treeEdges.add(new TreeEdge(edge.id, edge.from(), edge.to(), edge.length));
                 if (edge.source.to.kind == Tree.Kind.CONNECTION) {
-                    oksFlowByNode.put(edge.to(), flowByOks.getOrDefault(edge.source.to.connection.getOksId(), 0.0));
+                    FutureOks oks = oksById.get(edge.source.to.connection.getOksId());
+                    oksFlowByNode.put(edge.to(), oks == null ? 0.0 : oks.getFlowTph());
                 }
             }
             Map<String, Double> flows = FlowCalculator.flows(treeEdges, root, oksFlowByNode);

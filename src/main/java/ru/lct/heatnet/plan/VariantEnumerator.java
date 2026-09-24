@@ -430,18 +430,16 @@ public final class VariantEnumerator {
         // путь длиннее предельной длины наибольшего ДУ недопустим при любом диаметре: точка дальше этого от сети
         // остаётся без маршрута, и граф для неё не строится
         double reach = rules.diameters().get(rules.diameters().size() - 1).getMaxLengthM();
-        List<ConnectionPoint> near = new ArrayList<>();
         // расстояния независимы, индексы сети после build только читаются; в карте только ближние точки
-        Map<String, Double> toNetwork = new java.util.concurrent.ConcurrentHashMap<>();
-        rest.parallelStream().forEach(connection -> {
-            double distance = direct.networkDistance(connection.getGeometry(), reach);
-            if (distance <= reach) {
-                toNetwork.put(connection.getId(), distance);
-            }
-        });
-        for (ConnectionPoint connection : rest) {
-            if (toNetwork.containsKey(connection.getId())) {
-                near.add(connection);
+        double[] distances = new double[rest.size()];
+        IntStream.range(0, rest.size()).parallel()
+                .forEach(i -> distances[i] = direct.networkDistance(rest.get(i).getGeometry(), reach));
+        List<ConnectionPoint> near = new ArrayList<>();
+        Map<String, Double> toNetwork = new HashMap<>();
+        for (int i = 0; i < rest.size(); i++) {
+            if (distances[i] <= reach) {
+                near.add(rest.get(i));
+                toNetwork.put(rest.get(i).getId(), distances[i]);
             }
         }
         List<List<ConnectionPoint>> districts = districts(near);
@@ -452,7 +450,7 @@ public final class VariantEnumerator {
                 reach, rest.size() - near.size(), districts.size(), (System.nanoTime() - started) / 1_000_000_000L);
         List<List<Draft>> results = districts.isEmpty() ? List.of()
                 : solve(districts, started + CITY_DEADLINE_S * 1_000_000_000L);
-        assembler = new NetworkAssembler(input, rules, specials);
+        assembler = new NetworkAssembler(input, rules, specials, oksById);
         int most = Math.max(directTrees.size(), results.stream().mapToInt(List::size).max().orElse(0));
         List<Variant> variants = new ArrayList<>();
         for (int k = 0; k < Math.min(MAX_VARIANTS, Math.max(most, 1)); k++) {
@@ -555,13 +553,9 @@ public final class VariantEnumerator {
     private List<FutureOks> missing(List<Tree> trees) {
         Set<String> connected = new HashSet<>();
         trees.forEach(tree -> tree.connected().forEach(connection -> connected.add(connection.getOksId())));
-        List<FutureOks> result = new ArrayList<>();
-        for (FutureOks oks : input.getFutureOks()) {
-            if (!connected.contains(oks.getId())) {
-                result.add(oks);
-            }
-        }
-        return result;
+        // проход по 3 млн ОКС города параллельно, порядок входа сохраняется
+        return input.getFutureOks().parallelStream().filter(oks -> !connected.contains(oks.getId()))
+                .collect(Collectors.toList());
     }
 
     /** Районы: группы близких ОКС, крупные группы режутся пополам, пока не станут не больше CITY_BLOCK. */
@@ -709,7 +703,7 @@ public final class VariantEnumerator {
                 regionByConnection.put(connection.getId(), region);
             }
         }
-        assembler = new NetworkAssembler(input, rules, specials);
+        assembler = new NetworkAssembler(input, rules, specials, oksById);
         List<List<ConnectionPoint>> singles = new ArrayList<>();
         for (ConnectionPoint connection : connectionByOks.values()) {
             singles.add(List.of(connection));
@@ -1490,6 +1484,7 @@ public final class VariantEnumerator {
         for (int i = 0; i < n; i++) {
             root[i] = i;
         }
+        Coordinate[] xy = coordinates(connections);
         STRtree index = new STRtree();
         for (int i = 0; i < n; i++) {
             Envelope env = connections.get(i).getGeometry().getEnvelopeInternal();
@@ -1504,13 +1499,11 @@ public final class VariantEnumerator {
             query.expandBy(GROUP_DISTANCE_M);
             @SuppressWarnings("unchecked")
             List<Integer> hits = index.query(query);
-            // расстояние точек по координатам то же, что Point.distance, без DistanceOp на каждую пару
-            Coordinate pi = connections.get(i).getGeometry().getCoordinate();
             for (Integer j : hits) {
                 if (j <= i) {
                     continue;
                 }
-                if (pi.distance(connections.get(j).getGeometry().getCoordinate()) <= GROUP_DISTANCE_M) {
+                if (xy[i].distance(xy[j]) <= GROUP_DISTANCE_M) {
                     root[find(root, i)] = find(root, j);
                 }
             }
@@ -1560,13 +1553,14 @@ public final class VariantEnumerator {
 
     /** k-means с k = 2, старт с двух самых далёких точек. */
     static List<List<ConnectionPoint>> kMeans(List<ConnectionPoint> connections) {
+        Coordinate[] xy = coordinates(connections);
         Coordinate a = null;
         Coordinate b = null;
-        for (ConnectionPoint p : connections) {
-            for (ConnectionPoint q : connections) {
-                if (a == null || p.getGeometry().getCoordinate().distance(q.getGeometry().getCoordinate()) > a.distance(b)) {
-                    a = p.getGeometry().getCoordinate().copy();
-                    b = q.getGeometry().getCoordinate().copy();
+        for (Coordinate p : xy) {
+            for (Coordinate q : xy) {
+                if (a == null || p.distance(q) > a.distance(b)) {
+                    a = p.copy();
+                    b = q.copy();
                 }
             }
         }
@@ -1575,9 +1569,8 @@ public final class VariantEnumerator {
         for (int iteration = 0; iteration < KMEANS_ITERATIONS; iteration++) {
             first.clear();
             second.clear();
-            for (ConnectionPoint connection : connections) {
-                Coordinate c = connection.getGeometry().getCoordinate();
-                (c.distance(a) <= c.distance(b) ? first : second).add(connection);
+            for (int i = 0; i < xy.length; i++) {
+                (xy[i].distance(a) <= xy[i].distance(b) ? first : second).add(connections.get(i));
             }
             if (first.isEmpty() || second.isEmpty()) {
                 break;
@@ -1592,6 +1585,18 @@ public final class VariantEnumerator {
             }
         }
         return result;
+    }
+
+    /**
+     * Координаты точек один раз на группу: точка входа хранит их упакованными и создаёт Coordinate на каждый вызов,
+     * а расстояние по координатам то же, что Point.distance, без DistanceOp на каждую пару.
+     */
+    private static Coordinate[] coordinates(List<ConnectionPoint> connections) {
+        Coordinate[] xy = new Coordinate[connections.size()];
+        for (int i = 0; i < xy.length; i++) {
+            xy[i] = connections.get(i).getGeometry().getCoordinate();
+        }
+        return xy;
     }
 
     private static Coordinate center(List<ConnectionPoint> connections) {

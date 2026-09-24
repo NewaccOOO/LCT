@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
@@ -163,13 +164,20 @@ final class DirectTies {
         // общие кандидаты от учёта мест не зависят и считаются параллельно, места и новые камеры — по порядку точек.
         // На городе 98 % точек вне рамки сети с запасом REACH_M, любой кандидат у них дальше REACH_M; ближние идут
         // подряд в начале списка, поэтому параллельно считаются только они, иначе почти все достаются одной нити
+        // расходы и рамка — проход по 3 млн объектов, параллельно; диаметр по порядку, чтобы ошибка расхода была прежней
+        double[] flows = new double[connections.size()];
+        boolean[] reachable = new boolean[connections.size()];
+        IntStream.range(0, connections.size()).parallel().forEach(i -> {
+            ConnectionPoint connection = connections.get(i);
+            FutureOks oks = oksById.get(connection.getOksId());
+            flows[i] = oks == null ? 0.0 : oks.getFlowTph();
+            reachable[i] = withinReach.contains(connection.getGeometry().getCoordinate());
+        });
         Shared[] prepared = new Shared[connections.size()];
         List<Integer> near = new ArrayList<>();
         for (int i = 0; i < connections.size(); i++) {
-            ConnectionPoint connection = connections.get(i);
-            FutureOks oks = oksById.get(connection.getOksId());
-            int dn = rules.diameterFor(oks == null ? 0.0 : oks.getFlowTph()).getDn();
-            if (withinReach.contains(connection.getGeometry().getCoordinate())) {
+            int dn = rules.diameterFor(flows[i]).getDn();
+            if (reachable[i]) {
                 prepared[i] = new Shared(dn, false);
                 near.add(i);
             } else {
