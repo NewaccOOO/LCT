@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.ToDoubleFunction;
+import org.locationtech.jts.algorithm.Distance;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.GeometryFactory;
@@ -68,11 +69,25 @@ final class TieInFinder {
         Set<String> result = new TreeSet<>();
         for (Object item : segmentIndex.query(envelope)) {
             NetworkSegment segment = (NetworkSegment) item;
-            if (segment.getGeometry().isWithinDistance(point, TOUCH_M)) {
+            if (within(segment.getGeometry(), point.getCoordinate(), TOUCH_M)) {
                 result.add(segment.getId());
             }
         }
         return result;
+    }
+
+    /**
+     * То же, что line.isWithinDistance(point, distance), без объектов DistanceOp: рамка запроса у длинных труб города
+     * задевает десятки участков, и проверка шла на каждую врезку.
+     */
+    private static boolean within(LineString line, Coordinate c, double distance) {
+        Coordinate[] coords = line.getCoordinates();
+        for (int i = 0; i + 1 < coords.length; i++) {
+            if (Distance.pointToSegment(c, coords[i], coords[i + 1]) <= distance) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Кандидаты для точек в порядке точек и расстояния; dn — расчётный диаметр новой сети у врезки. */

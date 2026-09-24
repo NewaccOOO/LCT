@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import org.locationtech.jts.algorithm.Distance;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
@@ -660,6 +661,12 @@ final class DirectTies {
                 if (geometry.getDimension() < 2 && rule.getHalfWidthM() != null) {
                     distance += rule.getHalfWidthM();
                 }
+                // дальний объект отсекается расстоянием: оно дешевле пересечения, а город даёт десятки длинных дорог
+                // на рамку отрезка
+                double gap = geometry.distance(piece);
+                if (gap > 0 && gap >= distance - DIST_EPS_M) {
+                    continue;
+                }
                 if (!rule.forbid() && geometry.getDimension() > 0 && geometry.intersects(piece)) {
                     // специальный проход прямым отрезком: у дороги и путей — под углом не меньше заданного
                     if (!crossingAllowed(piece, geometry, rule)) {
@@ -667,7 +674,7 @@ final class DirectTies {
                     }
                     continue;
                 }
-                if (geometry.distance(piece) < distance - DIST_EPS_M) {
+                if (gap < distance - DIST_EPS_M) {
                     return reject(reasons, "ограничение " + restriction.getType());
                 }
             }
@@ -685,7 +692,7 @@ final class DirectTies {
                     if (segment.getGeometry().intersects(away)) {
                         return reject(reasons, "вдоль трубы врезки");
                     }
-                } else if (segment.getGeometry().distance(piece) < distance - DIST_EPS_M
+                } else if (pipeDistance(segment.getGeometry(), line[i], line[i + 1]) < distance - DIST_EPS_M
                         && !(crossPipes && segment.getGeometry().intersects(piece)
                                 && crossingAllowed(piece, segment.getGeometry(), network))) {
                     return reject(reasons, "чужая труба");
@@ -725,6 +732,19 @@ final class DirectTies {
             }
         }
         return crossed;
+    }
+
+    /**
+     * То же, что pipe.distance(отрезок a–b), без объектов DistanceOp: рамка отрезка у длинных труб города задевает
+     * десятки участков, и это была главная цена проверки.
+     */
+    private static double pipeDistance(LineString pipe, Coordinate a, Coordinate b) {
+        Coordinate[] coords = pipe.getCoordinates();
+        double best = Double.POSITIVE_INFINITY;
+        for (int i = 0; i + 1 < coords.length; i++) {
+            best = Math.min(best, Distance.segmentToSegment(coords[i], coords[i + 1], a, b));
+        }
+        return best;
     }
 
     private static List<Object> nearest(STRtree tree, Point point) {
