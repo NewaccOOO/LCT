@@ -499,6 +499,30 @@ class GeoJsonStreamReaderTest {
         assertSameRead(MAPPER.writeValueAsString(collection(features)), 10);
     }
 
+    // Файл больше блока чтения строками: фича на строке с запятой в конце или в начале следующей строки, пустые
+    // строки, CRLF, ключ корня после features; JSON с отступами читается срезами. Всё как чтение деревьями.
+    @Test
+    void linesAcrossBlocksMatchTreeRead() throws IOException {
+        ArrayNode features = validFeatures();
+        for (int i = 0; i < 6000; i++) {
+            double lon = 37.0 + (i % 100) * 0.001;
+            double lat = 55.5 + (i / 100) * 0.001;
+            features.add(feature("Polygon", new double[][][] {{{lon, lat}, {lon + 0.0005, lat}, {lon + 0.0005, lat + 0.0005}, {lon, lat}}},
+                    "id", "P" + i, "object_type", "restriction", "restriction_type", i % 3 == 0 ? "oks" : "park"));
+        }
+        List<String> lines = new ArrayList<>();
+        for (JsonNode feature : features) {
+            lines.add(MAPPER.writeValueAsString(feature));
+        }
+        String head = "{\"type\":\"FeatureCollection\",\"features\":[\n";
+        assertSameRead(head + String.join(",\n", lines) + "\n]}\n", 0);
+        assertSameRead(head + String.join("\n,", lines) + "\n\n],\"name\":\"x\"}", 0);
+        assertSameRead(head + String.join(",\r\n\r\n", lines) + "]}", 0);
+        assertSameRead(MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(collection(features)), 0);
+        assertSameRead(head + String.join(",\n", lines) + ",\n]}\n", 1);
+        assertSameRead(head + String.join(",\n", lines.subList(0, 3000)) + "\n" + String.join(",\n", lines.subList(3000, 6009)) + "]}", 1);
+    }
+
     private void assertSameRead(String json, int diagnostics) throws IOException {
         Path streamed = dir.resolve("utf8.geojson");
         Path tree = dir.resolve("utf16.geojson");

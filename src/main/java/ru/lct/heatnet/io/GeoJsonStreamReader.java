@@ -73,8 +73,8 @@ import ru.lct.heatnet.rules.Rules;
 
 /**
  * Потоковое чтение входного GeoJSON (раздел 12 CONSTRAINTS.md и формат датасета организаторов,
- * docs/interpretation.md): в памяти одновременно только одна фича в виде дерева, геометрия сразу переводится
- * в EPSG:32637. Чего нет во входе датасета (направление сети, текущий расход, диаметр камеры, перспективные ОКС),
+ * docs/interpretation.md): файл читается блоками, фичи разбирают нити пула, в памяти одновременно только блоки в
+ * работе; геометрия сразу переводится в EPSG:32637. Чего нет во входе датасета (направление сети, текущий расход, диаметр камеры, перспективные ОКС),
  * выводится после чтения. Ошибки данных возвращаются диагностиками.
  */
 public class GeoJsonStreamReader {
@@ -121,19 +121,22 @@ public class GeoJsonStreamReader {
             Map.entry(TopologyValidationError.INVALID_COORDINATE, "недопустимая координата"),
             Map.entry(TopologyValidationError.RING_NOT_CLOSED, "контур не замкнут"));
     private static final Locale RUSSIAN = new Locale("ru");
-    /** Фич в пачке чтения и в задаче пула, см. Scan.features и Scan.sliced. */
+    /** Фич в пачке чтения и в задаче пула, см. Scan.features. */
     private static final int BATCH = 8192;
     private static final int CHUNK = 512;
-    private static final int THREADS = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+    // главный поток при чтении строками только читает блоки и сливает части, ядро ему не нужно
+    private static final int THREADS = Runtime.getRuntime().availableProcessors();
     private static final ExecutorService POOL = Executors.newFixedThreadPool(THREADS, task -> {
         Thread thread = new Thread(task, "geojson-geometry");
         thread.setDaemon(true);
         return thread;
     });
-    /** Блок файла, который главный поток режет на фичи, фич в куске и сколько кусков разом в пуле, см. Scan.sliced. */
+    /** Блок файла, который главный поток режет на куски, фич в куске срезов и сколько кусков разом в пуле, см. Scan.lines. */
     private static final int BLOCK = 1 << 20;
     private static final int SLICE = 2048;
     private static final int IN_FLIGHT = 4 * THREADS;
+    /** Строка длиннее — файл не по строкам, см. Scan.lines. */
+    private static final int LINE_LIMIT = 16 << 20;
     private static final byte[] REST_PREFIX = "{\"features\":[]".getBytes(StandardCharsets.UTF_8);
     /** Степени десяти, точные в double, как SMALL_10_POW в jdk.internal.math.FloatingDecimal, см. decimal. */
     private static final double[] TENS = {
@@ -183,20 +186,33 @@ public class GeoJsonStreamReader {
         return input;
     }
 
-    /** Чтение срезами (см. Scan.sliced); если срез не совпал с фичей, файл читается заново без срезов. */
+    /** Как читается массив features: строками в пуле, срезами по границам фич или деревьями на главном потоке. */
+    private enum Mode { LINES, SLICES, TREE }
+
+    /**
+     * Чтение строками (см. Scan.lines); если фичи переходят через перевод строки — срезами (см. Scan.sliced); если
+     * срезы не сошлись с разбором, файл читается деревьями на главном потоке, как без пула.
+     */
     private static InputData scan(Path path, Supplier<Scan> scans) {
         try {
-            return scan(path, scans.get(), true);
+            try {
+                return scan(path, scans.get(), Mode.LINES);
+            } catch (LinesMismatch e) {
+                log.info("read: фичи не по строкам, файл читается срезами: {}", e.getMessage());
+                return scan(path, scans.get(), Mode.SLICES);
+            }
         } catch (SliceMismatch e) {
             log.warn("read: срезы фич не совпали с разбором, файл читается без них: {}", e.getMessage());
-            return scan(path, scans.get(), false);
+            return scan(path, scans.get(), Mode.TREE);
         }
     }
 
-    private static InputData scan(Path path, Scan scan, boolean sliced) {
+    private static InputData scan(Path path, Scan scan, Mode mode) {
+        boolean sliced = mode != Mode.TREE;
         try (JsonParser parser = MAPPER.getFactory().createParser(path.toFile());
                 FileChannel channel = sliced ? FileChannel.open(path, StandardOpenOption.READ) : null) {
             scan.channel = channel;
+            scan.lines = mode == Mode.LINES;
             scan.read(parser);
         } catch (JsonProcessingException e) {
             if (sliced) {
@@ -299,8 +315,9 @@ public class GeoJsonStreamReader {
         byte[] geometryBytes;
         int geometryFrom;
         int geometryTo;
-        /** Файл для чтения срезов, см. sliced; null — чтение деревьями на главном потоке. */
+        /** Файл для чтения строками или срезами, см. lines и sliced; null — чтение деревьями на главном потоке. */
         FileChannel channel;
+        boolean lines;
         Source source;
         int sources;
         int ordinal;
@@ -359,7 +376,7 @@ public class GeoJsonStreamReader {
                 if (name.equals("features") && value == JsonToken.START_ARRAY) {
                     hasFeatures = true;
                     if (channel != null) {
-                        parser = sliced(parser);
+                        parser = lines ? lines(parser) : sliced(parser);
                     } else {
                         features(parser);
                     }
@@ -894,52 +911,205 @@ public class GeoJsonStreamReader {
             int count = 0;
             int[] bounds = new int[2 * SLICE];
             ArrayDeque<Future<Scan>> parts = new ArrayDeque<>();
-            while (true) {
-                int start = space(block, at, length);
-                if (start < length && block[start] == ']') {
-                    offset += start + 1;
-                    break;
-                }
-                if (start < length && total > 0) {
-                    if (block[start] != ',') {
-                        throw new SliceMismatch("после фичи нет запятой, байт " + (offset + start));
+            try {
+                while (true) {
+                    int start = space(block, at, length);
+                    if (start < length && block[start] == ']') {
+                        offset += start + 1;
+                        break;
                     }
-                    start = space(block, start + 1, length);
+                    if (start < length && total > 0) {
+                        if (block[start] != ',') {
+                            throw new SliceMismatch("после фичи нет запятой, байт " + (offset + start));
+                        }
+                        start = space(block, start + 1, length);
+                    }
+                    if (start < length && block[start] != '{') {
+                        throw new SliceMismatch("элемент features не объект, байт " + (offset + start));
+                    }
+                    int end = start < length ? objectEnd(block, start, length) : -1;
+                    if (end < 0) {
+                        // фича не уместилась в блок: кусок уходит в пул, недочитанный хвост переносится в новый блок
+                        submit(parts, block, bounds, count, ordinal + total - count);
+                        count = 0;
+                        int tail = length - at;
+                        byte[] next = new byte[Math.max(BLOCK, 2 * tail)];
+                        System.arraycopy(block, at, next, 0, tail);
+                        offset += at;
+                        block = next;
+                        length = tail + fill(block, tail, offset + tail);
+                        at = 0;
+                        continue;
+                    }
+                    bounds[2 * count] = start;
+                    bounds[2 * count + 1] = end;
+                    count++;
+                    total++;
+                    at = end;
+                    if (count == SLICE) {
+                        submit(parts, block, bounds, count, ordinal + total - count);
+                        count = 0;
+                    }
                 }
-                if (start < length && block[start] != '{') {
-                    throw new SliceMismatch("элемент features не объект, байт " + (offset + start));
+                submit(parts, block, bounds, count, ordinal + total - count);
+                while (!parts.isEmpty()) {
+                    merge(take(parts.poll()));
                 }
-                int end = start < length ? objectEnd(block, start, length) : -1;
-                if (end < 0) {
-                    // фича не уместилась в блок: кусок уходит в пул, недочитанный хвост переносится в новый блок
-                    submit(parts, block, bounds, count, ordinal + total - count);
-                    count = 0;
-                    int tail = length - at;
-                    byte[] next = new byte[Math.max(BLOCK, 2 * tail)];
-                    System.arraycopy(block, at, next, 0, tail);
-                    offset += at;
-                    block = next;
-                    length = tail + fill(block, tail, offset + tail);
-                    at = 0;
-                    continue;
-                }
-                bounds[2 * count] = start;
-                bounds[2 * count + 1] = end;
-                count++;
-                total++;
-                at = end;
-                if (count == SLICE) {
-                    submit(parts, block, bounds, count, ordinal + total - count);
-                    count = 0;
-                }
-            }
-            submit(parts, block, bounds, count, ordinal + total - count);
-            while (!parts.isEmpty()) {
-                merge(parts.poll());
+            } finally {
+                parts.forEach(part -> part.cancel(false));
             }
             ordinal += total;
-            // Остаток корня разбирает Jackson с байта за массивом, перед ним пустой массив на месте прочитанного.
-            // Второй массив features, если он есть, читается деревьями на главном потоке.
+            return rest(offset);
+        }
+
+        /**
+         * Фичи массива features строками: главный поток читает файл блоками и режет их по последнему переводу строки,
+         * нить пула сама находит фичи в своём куске строк (см. region) и разбирает их, главный поток сливает части по
+         * порядку и сверяет запятые на стыках (см. Joint). Сырого перевода строки внутри строки JSON не бывает,
+         * поэтому кусок, первый байт которого между фичами, начинается вне строки; следующий кусок начинается между
+         * фичами, если ни одна фича предыдущего не перешла через его конец. Иначе (JSON с отступами, строка длиннее
+         * LINE_LIMIT) — LinesMismatch, и файл читается срезами, см. sliced. Возвращает разбор корня после массива.
+         */
+        JsonParser lines(JsonParser parser) throws IOException {
+            long open = parser.getTokenLocation().getByteOffset();
+            if (open < 0) {
+                features(parser);
+                return parser;
+            }
+            byte[] block = new byte[BLOCK];
+            long offset = open;
+            int length = fill(block, 0, offset);
+            if (block[0] != '[') {
+                throw new SliceMismatch("массив features не с байта " + open);
+            }
+            int at = 1;
+            boolean eof = false;
+            Joint joint = new Joint();
+            ArrayDeque<Future<Region>> parts = new ArrayDeque<>();
+            try {
+                while (joint.close < 0 && !(eof && at == length)) {
+                    int cut = eof ? length : lastLine(block, at, length);
+                    if (cut < 0) {
+                        // в блоке нет конца строки: хвост переносится в новый блок, при нужде больший
+                        int tail = length - at;
+                        if (tail >= LINE_LIMIT) {
+                            throw new LinesMismatch("строка длиннее " + LINE_LIMIT + " байт, байт " + (offset + at));
+                        }
+                        byte[] next = new byte[Math.max(BLOCK, 2 * tail)];
+                        System.arraycopy(block, at, next, 0, tail);
+                        offset += at;
+                        block = next;
+                        at = 0;
+                        int read = channel.read(ByteBuffer.wrap(block, tail, block.length - tail), offset + tail);
+                        eof = read < 0;
+                        length = tail + Math.max(read, 0);
+                        continue;
+                    }
+                    byte[] lines = block;
+                    int from = at;
+                    long start = offset;
+                    parts.add(POOL.submit(() -> region(lines, from, cut, start)));
+                    at = cut;
+                    while (!parts.isEmpty() && joint.close < 0 && (parts.peek().isDone() || parts.size() > IN_FLIGHT)) {
+                        joint.add(take(parts.poll()));
+                    }
+                }
+                while (!parts.isEmpty() && joint.close < 0) {
+                    joint.add(take(parts.poll()));
+                }
+            } finally {
+                parts.forEach(part -> part.cancel(false));
+            }
+            if (joint.close < 0) {
+                throw new SliceMismatch("файл оборвался в массиве features");
+            }
+            ordinal += joint.features;
+            return rest(joint.close + 1);
+        }
+
+        /**
+         * Кусок строк массива features с первого байта между фичами: фичи по скобкам, запятые между ними, конец
+         * массива, затем разбор фич, как в part. Номера фич куску неизвестны, поэтому part считает их с нуля, а
+         * Joint не берёт часть, у которой номер попал в диагностику. Кусок, который кончается внутри фичи или
+         * начинается не между фичами, — LinesMismatch.
+         */
+        Region region(byte[] block, int from, int to, long offset) throws IOException {
+            Region region = new Region(offset);
+            int[] bounds = new int[256];
+            int count = 0;
+            int commas = 0;
+            int at = from;
+            while ((at = space(block, at, to)) < to) {
+                byte c = block[at];
+                if (c == ',') {
+                    commas++;
+                    at++;
+                    continue;
+                }
+                if (c == ']') {
+                    region.close = offset + at;
+                    break;
+                }
+                int end = c == '{' ? objectEnd(block, at, to) : -1;
+                if (end < 0) {
+                    throw new LinesMismatch("фича не в своих строках, байт " + (offset + at));
+                }
+                if (count == 0) {
+                    region.before = commas;
+                } else if (commas != 1) {
+                    throw new SliceMismatch("между фичами не одна запятая, байт " + (offset + at));
+                }
+                commas = 0;
+                if (2 * count == bounds.length) {
+                    bounds = Arrays.copyOf(bounds, 2 * bounds.length);
+                }
+                bounds[2 * count] = at;
+                bounds[2 * count + 1] = end;
+                count++;
+                at = end;
+            }
+            if (count == 0) {
+                region.before = commas;
+            } else {
+                region.after = commas;
+            }
+            region.features = count;
+            region.part = part(block, Arrays.copyOf(bounds, 2 * count), 0);
+            return region;
+        }
+
+        /** Слияние кусков строк по порядку: запятые на стыках, число фич и конец массива features. */
+        final class Joint {
+            int features;
+            int commas;
+            long close = -1;
+
+            void add(Region region) throws IOException {
+                if (region.part.diagnostics.stream().anyMatch(d -> d.getFeatureId().startsWith("#"))) {
+                    throw new LinesMismatch("в диагностике номер фичи, а куску строк номера неизвестны");
+                }
+                if (region.features > 0) {
+                    if (commas + region.before != (features > 0 ? 1 : 0)) {
+                        throw new SliceMismatch("запятые между фичами на стыке строк, байт " + region.offset);
+                    }
+                    commas = region.after;
+                } else {
+                    commas += region.before;
+                }
+                if (region.close >= 0 && commas > 0) {
+                    throw new SliceMismatch("запятая перед концом features, байт " + region.close);
+                }
+                features += region.features;
+                merge(region.part);
+                close = region.close;
+            }
+        }
+
+        /**
+         * Остаток корня после массива features разбирает Jackson с байта offset, перед ним пустой массив на месте
+         * прочитанного. Второй массив features, если он есть, читается деревьями на главном потоке.
+         */
+        JsonParser rest(long offset) throws IOException {
             FileChannel file = channel;
             channel = null;
             file.position(offset);
@@ -967,7 +1137,7 @@ public class GeoJsonStreamReader {
                 parts.add(POOL.submit(() -> part(block, mine, first)));
             }
             while (!parts.isEmpty() && (parts.peek().isDone() || parts.size() > IN_FLIGHT)) {
-                merge(parts.poll());
+                merge(take(parts.poll()));
             }
         }
 
@@ -985,20 +1155,24 @@ public class GeoJsonStreamReader {
             return part;
         }
 
-        /**
-         * Часть в общее чтение. Повтор id между частями видит только общий typeById, и диагностика досталась бы
-         * части, которая успела позже; второй источник часть не видит вовсе. Оба случая читаются подряд.
-         */
-        void merge(Future<Scan> future) throws IOException {
-            Scan part;
+        /** Результат задачи пула; её SliceMismatch и LinesMismatch бросаются как есть. */
+        <T> T take(Future<T> future) throws IOException {
             try {
-                part = future.get();
+                return future.get();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IOException("Чтение прервано", e);
             } catch (ExecutionException e) {
-                throw new SliceMismatch(String.valueOf(e.getCause()));
+                throw e.getCause() instanceof SliceMismatch ? (SliceMismatch) e.getCause()
+                        : new SliceMismatch(String.valueOf(e.getCause()));
             }
+        }
+
+        /**
+         * Часть в общее чтение. Повтор id между частями видит только общий typeById, и диагностика досталась бы
+         * части, которая успела позже; второй источник часть не видит вовсе. Оба случая читаются подряд.
+         */
+        void merge(Scan part) {
             if (part.duplicates > 0 || sources + part.sources > 1) {
                 throw new SliceMismatch("повтор id или второй источник");
             }
@@ -1062,8 +1236,29 @@ public class GeoJsonStreamReader {
         }
     }
 
+    /** Кусок строк массива features: часть чтения, число фич, запятые до первой и после последней, конец массива. */
+    private static final class Region {
+        final long offset;
+        Scan part;
+        int features;
+        int before;
+        int after;
+        long close = -1;
+
+        Region(long offset) {
+            this.offset = offset;
+        }
+    }
+
+    /** Фичи файла не по строкам: он читается срезами, см. Scan.lines. */
+    private static final class LinesMismatch extends SliceMismatch {
+        LinesMismatch(String message) {
+            super(message);
+        }
+    }
+
     /** Срез файла не совпал с фичей: кодировка или BOM сдвинули байтовые смещения разбора. */
-    private static final class SliceMismatch extends RuntimeException {
+    private static class SliceMismatch extends RuntimeException {
         SliceMismatch(String message) {
             super(message);
         }
@@ -1688,6 +1883,16 @@ public class GeoJsonStreamReader {
             default:
                 return null;
         }
+    }
+
+    /** Индекс за последним переводом строки в [from, to) или -1. */
+    private static int lastLine(byte[] bytes, int from, int to) {
+        for (int i = to - 1; i >= from; i--) {
+            if (bytes[i] == '\n') {
+                return i + 1;
+            }
+        }
+        return -1;
     }
 
     /** Первый байт с from, который не пробельный символ JSON. */
