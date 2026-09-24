@@ -28,5 +28,7 @@ class OrganizerDatasetRegressionTest {
         Variant best = result.getVariants().get(0);
         assertEquals(1, best.getSummary().getRank());
         assertEquals(ORGANIZER_RANK1_SCORE, best.getSummary().getScore(), 1e-6);
+        // с переносом врезки к стволу другие врезки дают почти ту же трассу, третий вариант — от блоков второго без переноса
+        assertEquals(3, result.getVariants().size());
     }
 }
