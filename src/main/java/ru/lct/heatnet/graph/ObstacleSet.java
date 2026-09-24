@@ -98,6 +98,10 @@ public final class ObstacleSet {
         final IndexedPointInAreaLocator locator;
         final Geometry geometry;
         final Envelope core;
+        /** Круг вокруг объекта: отрезок дальше круга с отступом зону не задевает, стороны не перебираются. */
+        final double centerX;
+        final double centerY;
+        final double radius;
         /** Прежняя зона с углами JOIN_MITRE для точек выхода и камер, строится при первом запросе. */
         private volatile PreparedGeometry mitre;
 
@@ -107,6 +111,9 @@ public final class ObstacleSet {
             this.geometry = geometry;
             this.distance = distance + SIMPLIFY_M;
             this.core = geometry.getEnvelopeInternal();
+            this.centerX = core.centre().x;
+            this.centerY = core.centre().y;
+            this.radius = Math.hypot(core.getWidth(), core.getHeight()) / 2;
             this.envelope = new Envelope(core);
             envelope.expandBy(this.distance);
             this.box = new RectangleLineIntersector(envelope);
@@ -141,11 +148,14 @@ public final class ObstacleSet {
          * расстояние, отступ не меньше метра.
          */
         boolean intersects(Coordinate a, Coordinate b) {
-            return intersects(a, b, 0);
+            return intersects(a, b, 0, false);
         }
 
-        /** То же с отступом шире на extra. */
-        boolean intersects(Coordinate a, Coordinate b, double extra) {
+        /**
+         * То же с отступом шире на extra. {@code outside} — один из концов заведомо вне объекта (узел графа вне
+         * всех зон): тогда отрезок без близких сторон целиком снаружи, и точка в полигоне не проверяется.
+         */
+        boolean intersects(Coordinate a, Coordinate b, double extra, boolean outside) {
             double reach = distance + extra;
             double minX = Math.min(a.x, b.x) - reach;
             double maxX = Math.max(a.x, b.x) + reach;
@@ -155,6 +165,9 @@ public final class ObstacleSet {
             double dx = b.x - a.x;
             double dy = b.y - a.y;
             double length2 = dx * dx + dy * dy;
+            if (squared(centerX, centerY, a, dx, dy, length2) > (radius + reach) * (radius + reach)) {
+                return false;
+            }
             List<?> candidates = sideIndex == null ? Arrays.asList(sides) : sideIndex.query(new Envelope(minX, maxX, minY, maxY));
             for (Object item : candidates) {
                 Side side = (Side) item;
@@ -168,7 +181,7 @@ public final class ObstacleSet {
                 }
             }
             // ни одна сторона не близко: отрезок целиком снаружи или целиком внутри полигона
-            return polygon && core.contains(a) && inside(a);
+            return polygon && !outside && core.contains(a) && inside(a);
         }
 
         boolean covers(Coordinate c) {
@@ -549,11 +562,17 @@ public final class ObstacleSet {
         return oksClearance;
     }
 
-    /** Точка в зоне запрета (с отступом): камера ветвления там не ставится. */
+    /** Точка в прежней зоне запрета с углами JOIN_MITRE, см. Zone#coversMitre. */
     public boolean insideForbid(Coordinate c) {
+        return insideForbid(c, true);
+    }
+
+    /** Точка в зоне запрета: точной (там не ставится камера ветвления) или, если {@code mitre}, прежней. */
+    public boolean insideForbid(Coordinate c, boolean mitre) {
         Geometry point = factory.createPoint(c);
         for (Object item : forbidZones.query(new Envelope(c))) {
-            if (((Zone) item).coversMitre(c, point)) {
+            Zone zone = (Zone) item;
+            if (mitre ? zone.coversMitre(c, point) : zone.covers(c)) {
                 return true;
             }
         }
@@ -603,7 +622,7 @@ public final class ObstacleSet {
         Envelope envelope = edge.getEnvelopeInternal();
         for (Object item : forbidZones.query(envelope)) {
             Zone zone = (Zone) item;
-            if (!ignored.contains(zone.id) && zone.box.intersects(a, b) && zone.intersects(a, b)) {
+            if (!ignored.contains(zone.id) && zone.box.intersects(a, b) && zone.intersects(a, b, 0, aNode || bNode)) {
                 return Double.NaN;
             }
         }
@@ -614,7 +633,7 @@ public final class ObstacleSet {
                 continue;
             }
             if (!special.crossedBy(a, b, edge)) {
-                if (special.zone.intersects(a, b)) {
+                if (special.zone.intersects(a, b, 0, aNode || bNode)) {
                     return Double.NaN;
                 }
                 continue;
@@ -649,7 +668,7 @@ public final class ObstacleSet {
         envelope.expandBy(margin);
         for (Object item : forbidZones.query(envelope)) {
             Zone zone = (Zone) item;
-            if (!ignored.contains(zone.id) && zone.intersects(a, b, margin)) {
+            if (!ignored.contains(zone.id) && zone.intersects(a, b, margin, false)) {
                 return false;
             }
         }
@@ -658,7 +677,7 @@ public final class ObstacleSet {
             if (ignored.contains(special.id) && touches(special, a, b)) {
                 continue;
             }
-            if (special.crossedBy(a, b, edge) || special.zone.intersects(a, b, margin)) {
+            if (special.crossedBy(a, b, edge) || special.zone.intersects(a, b, margin, false)) {
                 return false;
             }
         }

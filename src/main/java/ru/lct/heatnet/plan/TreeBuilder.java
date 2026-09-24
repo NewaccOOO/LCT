@@ -557,7 +557,7 @@ final class TreeBuilder {
                 }
             }
             Coordinate at = new LengthIndexedLine(edge.line).extractPoint(position);
-            return !specials.near(at, dn) && !obstacles.insideForbid(at);
+            return !specials.near(at, dn) && !obstacles.insideForbid(at, false);
         }
 
         Coordinate[] branch(List<Coordinate> head, Coordinate end) {
