@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -510,17 +511,8 @@ class GeoJsonStreamReaderTest {
     // строки, CRLF, ключ корня после features; JSON с отступами читается срезами. Всё как чтение деревьями.
     @Test
     void linesAcrossBlocksMatchTreeRead() throws IOException {
-        ArrayNode features = validFeatures();
-        for (int i = 0; i < 6000; i++) {
-            double lon = 37.0 + (i % 100) * 0.001;
-            double lat = 55.5 + (i / 100) * 0.001;
-            features.add(feature("Polygon", new double[][][] {{{lon, lat}, {lon + 0.0005, lat}, {lon + 0.0005, lat + 0.0005}, {lon, lat}}},
-                    "id", "P" + i, "object_type", "restriction", "restriction_type", i % 3 == 0 ? "oks" : "park"));
-        }
-        List<String> lines = new ArrayList<>();
-        for (JsonNode feature : features) {
-            lines.add(MAPPER.writeValueAsString(feature));
-        }
+        ArrayNode features = withPolygons(6000);
+        List<String> lines = lines(features);
         String head = "{\"type\":\"FeatureCollection\",\"features\":[\n";
         assertSameRead(head + String.join(",\n", lines) + "\n]}\n", 0);
         assertSameRead(head + String.join("\n,", lines) + "\n\n],\"name\":\"x\"}", 0);
@@ -528,6 +520,47 @@ class GeoJsonStreamReaderTest {
         assertSameRead(MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(collection(features)), 0);
         assertSameRead(head + String.join(",\n", lines) + ",\n]}\n", 1);
         assertSameRead(head + String.join(",\n", lines.subList(0, 3000)) + "\n" + String.join(",\n", lines.subList(3000, 6009)) + "]}", 1);
+    }
+
+    // Нити пула разбирают куски строк и за концом features, пока главный поток не дошёл до «]». Второй массив
+    // features читается после первого, как деревьями, без ложных повторов id от таких кусков.
+    @Test
+    void secondFeaturesArrayMatchesTreeRead() throws IOException {
+        List<String> lines = lines(withPolygons(20000));
+        assertSameRead("{\"type\":\"FeatureCollection\",\"features\":[\n" + String.join(",\n", lines.subList(0, 10000))
+                + "\n],\"features\":[\n" + String.join(",\n", lines.subList(10000, lines.size())) + "\n]}\n", 0);
+    }
+
+    // Фичи другого массива корня после features не читаются, и их id не закрывают ссылку из features.
+    @Test
+    void featuresOfAnotherRootArrayAreNotRead() throws IOException {
+        ArrayNode features = withPolygons(10000);
+        features.add(feature("LineString", new double[][] {{37.60, 55.74}, {37.61, 55.74}},
+                "id", "NX", "object_type", "heat_network", "diameter", 200, "upstream_object_id", "EXTRA1"));
+        String chamber = MAPPER.writeValueAsString(
+                feature("Point", new double[] {37.7, 55.8}, "id", "EXTRA1", "object_type", "heat_chamber"));
+        assertSameRead("{\"type\":\"FeatureCollection\",\"features\":[\n" + String.join(",\n", lines(features))
+                + "\n],\"extra\":[\n" + String.join(",\n", Collections.nCopies(20000, chamber)) + "\n]}\n", 1);
+    }
+
+    /** validFeatures и за ними count треугольников P0, P1, ...: каждый третий — здание, остальные — парки. */
+    private static ArrayNode withPolygons(int count) {
+        ArrayNode features = validFeatures();
+        for (int i = 0; i < count; i++) {
+            double lon = 37.0 + (i % 100) * 0.001;
+            double lat = 55.5 + (i / 100) * 0.001;
+            features.add(feature("Polygon", new double[][][] {{{lon, lat}, {lon + 0.0005, lat}, {lon + 0.0005, lat + 0.0005}, {lon, lat}}},
+                    "id", "P" + i, "object_type", "restriction", "restriction_type", i % 3 == 0 ? "oks" : "park"));
+        }
+        return features;
+    }
+
+    private static List<String> lines(ArrayNode features) throws IOException {
+        List<String> lines = new ArrayList<>();
+        for (JsonNode feature : features) {
+            lines.add(MAPPER.writeValueAsString(feature));
+        }
+        return lines;
     }
 
     private void assertSameRead(String json, int diagnostics) throws IOException {

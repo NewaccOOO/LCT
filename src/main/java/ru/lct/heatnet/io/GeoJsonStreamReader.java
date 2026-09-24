@@ -37,6 +37,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
@@ -303,6 +304,10 @@ public class GeoJsonStreamReader {
         final Map<String, String> upstreamById = new LinkedHashMap<>();
         final Map<String, Integer> unknownRestrictionTypes = new LinkedHashMap<>();
         final List<Ref> refs = new ArrayList<>();
+        /** Байт «]» массива features, как только его нашёл главный поток при чтении строками, см. region. */
+        volatile long featuresEnd = Long.MAX_VALUE;
+        /** Первый байт самого дальнего куска строк, который начал разбор фич, см. region. */
+        final AtomicLong farthestPart = new AtomicLong(-1);
         final boolean skipObstacles;
         /** Второй проход после чистого первого: читаются только препятствия, id уже проверены, см. read. */
         final boolean obstaclesOnly;
@@ -968,7 +973,8 @@ public class GeoJsonStreamReader {
          * порядку и сверяет запятые на стыках (см. Joint). Сырого перевода строки внутри строки JSON не бывает,
          * поэтому кусок, первый байт которого между фичами, начинается вне строки; следующий кусок начинается между
          * фичами, если ни одна фича предыдущего не перешла через его конец. Иначе (JSON с отступами, строка длиннее
-         * LINE_LIMIT) — LinesMismatch, и файл читается срезами, см. sliced. Возвращает разбор корня после массива.
+         * LINE_LIMIT) или пул начал разбор строк за концом массива — LinesMismatch, и файл читается срезами, см. sliced.
+         * Возвращает разбор корня после массива.
          */
         JsonParser lines(JsonParser parser) throws IOException {
             long open = parser.getTokenLocation().getByteOffset();
@@ -1023,6 +1029,10 @@ public class GeoJsonStreamReader {
             if (joint.close < 0) {
                 throw new SliceMismatch("файл оборвался в массиве features");
             }
+            featuresEnd = joint.close;
+            if (farthestPart.get() > joint.close) {
+                throw new LinesMismatch("пул начал разбор строк за концом features, байт " + farthestPart.get());
+            }
             ordinal += joint.features;
             return rest(joint.close + 1);
         }
@@ -1074,6 +1084,15 @@ public class GeoJsonStreamReader {
                 region.after = commas;
             }
             region.features = count;
+            // Кусок за концом features пул может взять раньше, чем главный поток найдёт «]», а part пишет в общие
+            // typeById и numericIds. Кусок сначала отмечается, потом сверяется с концом массива: либо он видит конец
+            // и не разбирается, либо главный поток видит его отметку и читает файл заново срезами, см. lines.
+            if (count > 0) {
+                farthestPart.accumulateAndGet(offset + from, Math::max);
+                if (offset + from > featuresEnd) {
+                    return region;
+                }
+            }
             region.part = part(block, Arrays.copyOf(bounds, 2 * count), 0);
             return region;
         }
