@@ -1237,9 +1237,11 @@ public final class VariantEnumerator {
             // новый ствол подходит к своей трубе тоже наискось
             rerooted = rerooted == tree ? tree : slid(rerooted, router, dn, metreRub);
             Option best = null;
-            for (Tree shape : new java.util.LinkedHashSet<>(List.of(builder.cut(slid, router), slid, builder.cut(rerooted, router),
-                    rerooted, builder.cut(tree, router), tree))) {
-                Option option = option(shape, label, verify, area, dn, region);
+            for (Tree shape : new java.util.LinkedHashSet<>(List.of(slid, rerooted, tree))) {
+                // срезка только укорачивает рёбра: несрезанное дерево собирается, если срезанное не собралось
+                Tree cut = builder.cut(shape, router);
+                Option option = cut == shape ? null : option(cut, label, verify, area, dn, region);
+                option = option != null ? option : option(shape, label, verify, area, dn, region);
                 if (option != null && (best == null || option.score < best.score)) {
                     best = option;
                 }
@@ -1346,7 +1348,9 @@ public final class VariantEnumerator {
         TieCandidate tie = null;
         Coordinate[] line = null;
         for (TieCandidate candidate : finder.find(List.of(junction), dn)) {
-            if (candidate.nodeKey().equals(tree.tie.nodeKey())) {
+            // маршрут не короче прямой: дальние врезки не ищутся
+            if (candidate.nodeKey().equals(tree.tie.nodeKey())
+                    || junction.distance(candidate.getPoint()) + tiePenalty(candidate, dn, metreRub) >= best) {
                 continue;
             }
             Route route = router.routeToAny(junction, List.of(candidate.getPoint()), candidate.getIgnored(), true);

@@ -168,10 +168,18 @@ public final class ObstacleSet {
             if (squared(centerX, centerY, a, dx, dy, length2) > (radius + reach) * (radius + reach)) {
                 return false;
             }
+            // сторона по одну сторону от прямой отрезка дальше отступа до него не дотягивается: векторное
+            // произведение — расстояние до прямой, умноженное на длину отрезка
+            double far = reach * Math.sqrt(length2);
             List<?> candidates = sideIndex == null ? Arrays.asList(sides) : sideIndex.query(new Envelope(minX, maxX, minY, maxY));
             for (Object item : candidates) {
                 Side side = (Side) item;
                 if (side.maxX < minX || side.minX > maxX || side.maxY < minY || side.minY > maxY) {
+                    continue;
+                }
+                double c0 = dx * (side.y0 - a.y) - dy * (side.x0 - a.x);
+                double c1 = dx * (side.y1 - a.y) - dy * (side.x1 - a.x);
+                if (c0 > far && c1 > far || c0 < -far && c1 < -far) {
                     continue;
                 }
                 if (side.squared(a.x, a.y) <= limit || side.squared(b.x, b.y) <= limit
@@ -181,7 +189,7 @@ public final class ObstacleSet {
                 }
             }
             // ни одна сторона не близко: отрезок целиком снаружи или целиком внутри полигона
-            return polygon && !outside && core.contains(a) && inside(a);
+            return polygon && !outside && core.contains(a) && core.contains(b) && inside(a);
         }
 
         boolean covers(Coordinate c) {
