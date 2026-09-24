@@ -1537,11 +1537,16 @@ public final class VariantEnumerator {
     }
 
     /**
-     * Правило variants (docs/interpretation.md): врезка дальше 20 м от всех врезок другого или другое разбиение. Другой
-     * existing_object_id сам по себе различием не считается: врезка на соседнюю трубу ближе 20 м — та же трасса.
+     * Правило variants: другой existing_object_id, врезка дальше 20 м от всех врезок другого или другое разбиение.
+     * Другой объект врезки ближе 20 м оставлен отличием: без него на 19 сценариях S10–S13 оставался один вариант при
+     * подключённых ОКС, а docs/interpretation.md допускает один вариант только без врезок.
      */
     private boolean differ(Draft a, Draft b) {
-        return farTie(a, b) || farTie(b, a) || !partition(a).equals(partition(b));
+        Set<String> idsA = new HashSet<>();
+        Set<String> idsB = new HashSet<>();
+        a.trees.forEach(tree -> idsA.add(tree.tie.getExistingObjectId()));
+        b.trees.forEach(tree -> idsB.add(tree.tie.getExistingObjectId()));
+        return !idsA.equals(idsB) || farTie(a, b) || farTie(b, a) || !partition(a).equals(partition(b));
     }
 
     private static boolean farTie(Draft mine, Draft others) {
