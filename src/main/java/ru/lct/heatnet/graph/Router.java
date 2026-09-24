@@ -6,7 +6,6 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.PriorityQueue;
 import java.util.Set;
 import org.locationtech.jts.algorithm.Angle;
 import org.locationtech.jts.geom.Coordinate;
@@ -48,6 +47,8 @@ public final class Router {
     private final double[] nodeXY;
     private final int[][] adjacency;
     private final double[][] adjacencyWeight;
+    /** Номер первого ребра узла в сквозной нумерации рёбер adjacency, последний элемент — число рёбер. */
+    private final int[] edgeStart;
     // веса точек запроса и таблицы Дейкстры: одни и те же точки запрашиваются десятки и сотни раз за расчёт
     private final RouteCache cache;
     private final java.util.concurrent.atomic.AtomicLong tableRequests = new java.util.concurrent.atomic.AtomicLong();
@@ -121,6 +122,10 @@ public final class Router {
         for (int i = 0; i < n; i++) {
             adjacency[i] = to.get(i).stream().mapToInt(Integer::intValue).toArray();
             adjacencyWeight[i] = weight.get(i).stream().mapToDouble(Double::doubleValue).toArray();
+        }
+        edgeStart = new int[n + 1];
+        for (int i = 0; i < n; i++) {
+            edgeStart[i + 1] = edgeStart[i] + adjacency[i].length;
         }
     }
 
@@ -221,12 +226,15 @@ public final class Router {
         return exactBest(start, targets, ignored, incoming, search.dist, search.came);
     }
 
-    /** Состояния точного поиска: вес до каждой пары «узел, предшественник» и путь к ней. */
+    /**
+     * Состояния точного поиска: вес до каждой пары «узел, предшественник» и путь к ней: came по номеру состояния
+     * (см. {@link #stateIndex}) — ключ состояния, из которого пришли, -1 — из точки запроса.
+     */
     private static final class Exact {
         final Map<Long, Double> dist;
-        final Map<Long, Long> came;
+        final long[] came;
 
-        Exact(Map<Long, Double> dist, Map<Long, Long> came) {
+        Exact(Map<Long, Double> dist, long[] came) {
             this.dist = dist;
             this.came = came;
         }
@@ -236,27 +244,32 @@ public final class Router {
         int n = nodes.size();
         double[] toNode = nodeWeights(source, ignored);
         // dist отдаёт состояния exactBest в своём порядке обхода, а поиск только читает веса: чтение идёт из копии
-        // на массивах, у HashMap<Long, Double> оно было половиной времени поиска
+        // в массиве, у HashMap<Long, Double> оно было половиной времени поиска. Состояние (w, v) — ребро графа v→w,
+        // его номер edgeStart[v] + k; начальное состояние (v, -1) — номер edges + v
         Map<Long, Double> dist = new HashMap<>();
-        StateWeights known = new StateWeights();
-        Map<Long, Long> came = new HashMap<>();
-        PriorityQueue<double[]> heap = new PriorityQueue<>((a, b) -> Double.compare(a[0], b[0]));
+        int edges = edgeStart[n];
+        double[] known = new double[edges + n];
+        Arrays.fill(known, Double.POSITIVE_INFINITY);
+        long[] came = new long[edges + n];
+        Arrays.fill(came, -1);
+        Heap heap = new Heap();
         for (int v = 0; v < n; v++) {
             if (!Double.isNaN(toNode[v]) && turnAllowed(incoming, source, nodes.get(v))) {
                 dist.put(state(v, -1, n), toNode[v]);
-                known.put(state(v, -1, n), toNode[v]);
-                heap.add(new double[] {toNode[v], v, -1});
+                known[edges + v] = toNode[v];
+                heap.add(toNode[v], v, -1, edges + v);
             }
         }
         for (int expanded = 0; !heap.isEmpty(); expanded++) {
             if (expanded > EXACT_STATES) {
                 LOG.debug("routeExact: предел состояний {} при {} узлах", EXACT_STATES, n);
-                return new Exact(Map.of(), Map.of());
+                return new Exact(Map.of(), new long[0]);
             }
-            double[] top = heap.poll();
-            int v = (int) top[1];
-            int p = (int) top[2];
-            if (top[0] > known.get(state(v, p, n)) + 1e-9) {
+            heap.poll();
+            double reached = heap.key;
+            int v = heap.node;
+            int p = heap.pred;
+            if (reached > known[heap.id] + 1e-9) {
                 continue;
             }
             double beforeX = p < 0 ? source.x : nodeXY[2 * p];
@@ -266,13 +279,14 @@ public final class Router {
                 if (!turnAllowed(beforeX, beforeY, nodeXY[2 * v], nodeXY[2 * v + 1], nodeXY[2 * w], nodeXY[2 * w + 1])) {
                     continue;
                 }
-                double weight = top[0] + adjacencyWeight[v][k];
-                long next = state(w, v, n);
-                if (weight < known.get(next) - 1e-9) {
+                double weight = reached + adjacencyWeight[v][k];
+                int edge = edgeStart[v] + k;
+                if (weight < known[edge] - 1e-9) {
+                    long next = state(w, v, n);
                     dist.put(next, weight);
-                    known.put(next, weight);
-                    came.put(next, state(v, p, n));
-                    heap.add(new double[] {weight, w, v});
+                    known[edge] = weight;
+                    came[edge] = state(v, p, n);
+                    heap.add(weight, w, v, edge);
                 }
             }
         }
@@ -282,7 +296,7 @@ public final class Router {
 
     /** Лучшая цель по состояниям точного поиска и маршрут до неё. */
     private Route exactBest(Point start, Collection<Point> targets, Set<String> ignored, Coordinate incoming,
-            Map<Long, Double> dist, Map<Long, Long> came) {
+            Map<Long, Double> dist, long[] came) {
         int n = nodes.size();
         Coordinate source = start.getCoordinate();
         double bestWeight = Double.POSITIVE_INFINITY;
@@ -326,7 +340,7 @@ public final class Router {
             return null;
         }
         List<Coordinate> coords = new ArrayList<>();
-        for (long state = bestState; state >= 0; state = came.getOrDefault(state, -1L)) {
+        for (long state = bestState; state >= 0; state = came[stateIndex(state, n)]) {
             coords.add(0, nodes.get((int) (state / (n + 1))));
         }
         coords.add(0, source);
@@ -338,58 +352,95 @@ public final class Router {
     }
 
     /**
-     * Веса состояний точного поиска на массивах, отсутствующее — бесконечность: открытая адресация с линейным
-     * пробированием, ключи состояний неотрицательны, пустая ячейка — -1.
+     * Двоичная куча на массивах для Дейкстры и точного поиска: те же сравнения и перестановки, что у PriorityQueue с
+     * компаратором по весу (JDK 11), поэтому порядок извлечения при равных весах тот же, но без массива на каждое
+     * добавление. poll кладёт извлечённое в key, node, pred, id.
      */
-    static final class StateWeights {
-        private long[] keys = new long[1 << 10];
-        private double[] weights = new double[1 << 10];
+    static final class Heap {
+        private double[] keys = new double[64];
+        /** По три числа на элемент: node, pred, id. */
+        private int[] values = new int[3 * 64];
         private int size;
+        double key;
+        int node;
+        int pred;
+        int id;
 
-        StateWeights() {
-            Arrays.fill(keys, -1);
+        boolean isEmpty() {
+            return size == 0;
         }
 
-        double get(long key) {
-            for (int i = slot(key, keys.length); ; i = (i + 1) & (keys.length - 1)) {
-                if (keys[i] == key) {
-                    return weights[i];
+        void add(double key, int node, int pred, int id) {
+            if (size == keys.length) {
+                keys = Arrays.copyOf(keys, 2 * size);
+                values = Arrays.copyOf(values, 6 * size);
+            }
+            int at = size++;
+            while (at > 0) {
+                int parent = (at - 1) >>> 1;
+                if (Double.compare(key, keys[parent]) >= 0) {
+                    break;
                 }
-                if (keys[i] < 0) {
-                    return Double.POSITIVE_INFINITY;
-                }
+                move(parent, at);
+                at = parent;
             }
+            set(at, key, node, pred, id);
         }
 
-        void put(long key, double weight) {
-            if (2 * (size + 1) > keys.length) {
-                long[] oldKeys = keys;
-                double[] oldWeights = weights;
-                keys = new long[2 * oldKeys.length];
-                weights = new double[2 * oldKeys.length];
-                Arrays.fill(keys, -1);
-                size = 0;
-                for (int i = 0; i < oldKeys.length; i++) {
-                    if (oldKeys[i] >= 0) {
-                        put(oldKeys[i], oldWeights[i]);
-                    }
+        void poll() {
+            key = keys[0];
+            node = values[0];
+            pred = values[1];
+            id = values[2];
+            int n = --size;
+            if (n == 0) {
+                return;
+            }
+            double lastKey = keys[n];
+            int lastNode = values[3 * n];
+            int lastPred = values[3 * n + 1];
+            int lastId = values[3 * n + 2];
+            int at = 0;
+            int half = n >>> 1;
+            while (at < half) {
+                int child = 2 * at + 1;
+                if (child + 1 < n && Double.compare(keys[child], keys[child + 1]) > 0) {
+                    child++;
                 }
+                if (Double.compare(lastKey, keys[child]) <= 0) {
+                    break;
+                }
+                move(child, at);
+                at = child;
             }
-            int i = slot(key, keys.length);
-            while (keys[i] >= 0 && keys[i] != key) {
-                i = (i + 1) & (keys.length - 1);
-            }
-            if (keys[i] < 0) {
-                keys[i] = key;
-                size++;
-            }
-            weights[i] = weight;
+            set(at, lastKey, lastNode, lastPred, lastId);
         }
 
-        private static int slot(long key, int capacity) {
-            long mixed = key * 0x9E3779B97F4A7C15L;
-            return (int) (mixed ^ mixed >>> 32) & (capacity - 1);
+        private void move(int from, int to) {
+            keys[to] = keys[from];
+            System.arraycopy(values, 3 * from, values, 3 * to, 3);
         }
+
+        private void set(int at, double key, int node, int pred, int id) {
+            keys[at] = key;
+            values[3 * at] = node;
+            values[3 * at + 1] = pred;
+            values[3 * at + 2] = id;
+        }
+    }
+
+    /** Номер состояния с ключом key в сквозной нумерации рёбер: ребро p→v или edges + v у начального (v, -1). */
+    private int stateIndex(long key, int n) {
+        int v = (int) (key / (n + 1));
+        int p = (int) (key % (n + 1));
+        if (p == n) {
+            return edgeStart[n] + v;
+        }
+        int k = 0;
+        while (adjacency[p][k] != v) {
+            k++;
+        }
+        return edgeStart[p] + k;
     }
 
     /** Состояние точного поиска: узел и предшественник (n — пришли из точки запроса). */
@@ -413,18 +464,18 @@ public final class Router {
         boolean[] done = new boolean[n];
         int[] order = new int[n];
         int settled = 0;
-        PriorityQueue<double[]> heap = new PriorityQueue<>((a, b) -> Double.compare(a[0], b[0]));
+        Heap heap = new Heap();
         for (int v = 0; v < n; v++) {
             if (!Double.isNaN(dist[v])) {
-                heap.add(new double[] {dist[v], v});
+                heap.add(dist[v], v, 0, 0);
             } else {
                 dist[v] = Double.POSITIVE_INFINITY;
             }
         }
         while (!heap.isEmpty()) {
-            double[] top = heap.poll();
-            int v = (int) top[1];
-            if (done[v] || top[0] > dist[v]) {
+            heap.poll();
+            int v = heap.node;
+            if (done[v] || heap.key > dist[v]) {
                 continue;
             }
             done[v] = true;
@@ -440,7 +491,7 @@ public final class Router {
                         && turnAllowed(beforeX, beforeY, nodeXY[2 * v], nodeXY[2 * v + 1], nodeXY[2 * w], nodeXY[2 * w + 1])) {
                     dist[w] = candidate;
                     pred[w] = v;
-                    heap.add(new double[] {candidate, w});
+                    heap.add(candidate, w, 0, 0);
                 }
             }
         }

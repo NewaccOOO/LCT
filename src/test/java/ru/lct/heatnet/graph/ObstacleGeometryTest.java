@@ -118,17 +118,24 @@ class ObstacleGeometryTest {
     }
 
     @Test
-    void stateWeightsMatchHashMap() {
-        Router.StateWeights weights = new Router.StateWeights();
-        java.util.Map<Long, Double> expected = new java.util.HashMap<>();
-        for (int i = 0; i < 300_000; i++) {
-            long key = (long) random.nextInt(20_000) * 20_001 + random.nextInt(20_001);
-            if (random.nextBoolean()) {
-                double weight = random.nextDouble();
-                weights.put(key, weight);
-                expected.put(key, weight);
+    void heapPollsInPriorityQueueOrder() {
+        Router.Heap heap = new Router.Heap();
+        java.util.PriorityQueue<double[]> expected = new java.util.PriorityQueue<>((a, b) -> Double.compare(a[0], b[0]));
+        for (int i = 0; i < 200_000; i++) {
+            if (expected.isEmpty() || random.nextInt(3) > 0) {
+                // веса из короткого списка: много равных, порядок при них задаёт устройство кучи
+                double key = random.nextInt(20) * 0.5;
+                heap.add(key, i, i + 1, i + 2);
+                expected.add(new double[] {key, i, i + 1, i + 2});
+            } else {
+                double[] top = expected.poll();
+                heap.poll();
+                assertEquals(top[0], heap.key);
+                assertEquals((int) top[1], heap.node);
+                assertEquals((int) top[2], heap.pred);
+                assertEquals((int) top[3], heap.id);
             }
-            assertEquals(expected.getOrDefault(key, Double.POSITIVE_INFINITY), weights.get(key));
+            assertEquals(expected.isEmpty(), heap.isEmpty());
         }
     }
 
