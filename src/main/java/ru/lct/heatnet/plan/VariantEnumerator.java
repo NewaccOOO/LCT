@@ -419,11 +419,9 @@ public final class VariantEnumerator {
     private Result city() {
         long started = System.nanoTime();
         List<ConnectionPoint> all = new ArrayList<>(connectionByOks.values());
-        Map<String, Double> flowByOks = new HashMap<>();
-        oksById.forEach((id, oks) -> flowByOks.put(id, oks.getFlowTph()));
         DirectTies direct = new DirectTies(input, rules, obstacleIndex, finder, buildingByConnection);
         List<ConnectionPoint> rest = new ArrayList<>();
-        List<List<Tree>> directTrees = direct.connect(all, flowByOks, 2, rest);
+        List<List<Tree>> directTrees = direct.connect(all, oksById, 2, rest);
         log.info("city: direct trees={} rest={} elapsed={}s", directTrees.get(0).size(), rest.size(),
                 (System.nanoTime() - started) / 1_000_000_000L);
         if (direct.same(directTrees.get(0), directTrees.get(1))) {
@@ -436,7 +434,7 @@ public final class VariantEnumerator {
         // расстояния независимы, индексы сети после build только читаются; в карте только ближние точки
         Map<String, Double> toNetwork = new java.util.concurrent.ConcurrentHashMap<>();
         rest.parallelStream().forEach(connection -> {
-            double distance = direct.networkDistance(connection.getGeometry());
+            double distance = direct.networkDistance(connection.getGeometry(), reach);
             if (distance <= reach) {
                 toNetwork.put(connection.getId(), distance);
             }
