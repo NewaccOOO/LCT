@@ -320,8 +320,11 @@ public final class ObstacleSet {
             }
         }
 
-        private int index(double value, double origin) {
-            return (int) Math.floor((value - origin) / cell);
+        /** (int) Math.floor((value - origin) / cell) без Math.floor: на Java 11 он программный и заметен в обходе клеток. */
+        int index(double value, double origin) {
+            double at = (value - origin) / cell;
+            int i = (int) at;
+            return at < i && i != Integer.MIN_VALUE ? i - 1 : i;
         }
 
         /**
@@ -683,12 +686,17 @@ public final class ObstacleSet {
      * проверять; узлы без кольца (точки вдоль дорог) допускают любые рёбра.
      */
     public boolean tangent(int node, Coordinate other) {
+        return tangent(node, other.x, other.y);
+    }
+
+    /** {@link #tangent(int, Coordinate)} для точки (x, y). */
+    boolean tangent(int node, double x, double y) {
         int k = 6 * node;
         if (Double.isNaN(around[k + 2])) {
             return true;
         }
-        double dx = other.x - around[k];
-        double dy = other.y - around[k + 1];
+        double dx = x - around[k];
+        double dy = y - around[k + 1];
         double prev = dx * (around[k + 3] - around[k + 1]) - dy * (around[k + 2] - around[k]);
         double next = dx * (around[k + 5] - around[k + 1]) - dy * (around[k + 4] - around[k]);
         return prev * next >= -TANGENT_EPS;

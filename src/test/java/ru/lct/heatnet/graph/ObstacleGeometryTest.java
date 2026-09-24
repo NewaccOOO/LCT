@@ -139,6 +139,17 @@ class ObstacleGeometryTest {
         }
     }
 
+    @Test
+    void gridIndexMatchesFloor() {
+        ObstacleSet.ZoneGrid grid = new ObstacleSet.ZoneGrid(List.of(new ObstacleSet.Zone("z", zone())));
+        double[] values = {0, -0.0, 0.5, -0.5, -1, -1e-300, 1e-300, 3e9, -3e9, -2147483648.5, Double.NaN,
+            Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY};
+        for (int i = 0; i < 100_000; i++) {
+            double value = i < values.length ? values[i] : (random.nextDouble() - 0.5) * Math.pow(10, random.nextInt(12));
+            assertEquals((int) Math.floor((value - grid.x0) / grid.cell), grid.index(value, grid.x0), "" + value);
+        }
+    }
+
     /** Координата на решётке шагом 0,5 м: много общих вершин и коллинеарных случаев. */
     private double lattice() {
         return random.nextInt(81) * 0.5;

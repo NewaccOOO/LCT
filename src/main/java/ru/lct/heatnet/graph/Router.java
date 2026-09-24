@@ -99,8 +99,10 @@ public final class Router {
         // перебор O(n²) пар, но геометрия проверяется только у рёбер, касательных к зонам в обоих концах; пары
         // считаются параллельно по i, каждая нить пишет только свои списки, симметричные рёбра добавляются потом
         java.util.stream.IntStream.range(0, n).parallel().forEach(i -> {
+            double x = nodeXY[2 * i];
+            double y = nodeXY[2 * i + 1];
             for (int j = 0; j < i; j++) {
-                if (!obstacles.tangent(i, nodes.get(j)) || !obstacles.tangent(j, nodes.get(i))) {
+                if (!obstacles.tangent(i, nodeXY[2 * j], nodeXY[2 * j + 1]) || !obstacles.tangent(j, x, y)) {
                     continue;
                 }
                 double w = obstacles.edgeWeight(nodes.get(i), nodes.get(j), Set.of(), true, true);
