@@ -545,9 +545,14 @@ final class NetworkAssembler {
                 around.expandBy(NODE_APART_M);
                 for (Object item : lines.query(around)) {
                     NewSegment b = (NewSegment) item;
-                    if (a.getId().compareTo(b.getId()) >= 0
-                            || apart(a.getGeometry().getCoordinates(), b.getGeometry().getCoordinates(), NODE_APART_M)
-                            || a.getGeometry().distance(b.getGeometry()) > NODE_APART_M) {
+                    Coordinate[] coordsA = a.getGeometry().getCoordinates();
+                    Coordinate[] coordsB = b.getGeometry().getCoordinates();
+                    if (a.getId().compareTo(b.getId()) >= 0 || apart(coordsA, coordsB, NODE_APART_M)) {
+                        continue;
+                    }
+                    // у участков с общим концом расстояние JTS — ноль: отрезки с общей точкой пересекаются
+                    double distance = sharedEnd(coordsA, coordsB) ? 0 : a.getGeometry().distance(b.getGeometry());
+                    if (distance > NODE_APART_M) {
                         continue;
                     }
                     Set<String> shared = new HashSet<>(List.of(group.get(a.getStartNodeId()), group.get(a.getEndNodeId())));
@@ -558,12 +563,13 @@ final class NetworkAssembler {
                         throw new IllegalStateException("Участки " + a.getId() + " и " + b.getId()
                                 + " ближе " + NODE_APART_M + " м, один из них специальный");
                     }
-                    if (a.getGeometry().distance(b.getGeometry()) > TOUCH_APART_M) {
+                    if (distance > TOUCH_APART_M) {
                         continue;
                     }
                     LineString restA = rest(a, shared, group);
                     LineString restB = rest(b, shared, group);
-                    if (restA != null && restB != null && restA.distance(restB) <= TOUCH_APART_M) {
+                    if (restA != null && restB != null && !apart(restA.getCoordinates(), restB.getCoordinates(), TOUCH_APART_M)
+                            && restA.distance(restB) <= TOUCH_APART_M) {
                         throw new IllegalStateException("Участки " + a.getId() + " и " + b.getId()
                                 + " касаются вне общего узла");
                     }
@@ -940,6 +946,15 @@ final class NetworkAssembler {
         double gap = limit + GAP_EPS_M;
         return Math.min(r.x, s.x) - Math.max(p.x, q.x) > gap || Math.min(p.x, q.x) - Math.max(r.x, s.x) > gap
                 || Math.min(r.y, s.y) - Math.max(p.y, q.y) > gap || Math.min(p.y, q.y) - Math.max(r.y, s.y) > gap;
+    }
+
+    /** Конец одной линии совпадает с концом другой. */
+    private static boolean sharedEnd(Coordinate[] a, Coordinate[] b) {
+        Coordinate a0 = a[0];
+        Coordinate a1 = a[a.length - 1];
+        Coordinate b0 = b[0];
+        Coordinate b1 = b[b.length - 1];
+        return a0.equals2D(b0) || a0.equals2D(b1) || a1.equals2D(b0) || a1.equals2D(b1);
     }
 
     /** {@link #apart(Coordinate, Coordinate, Coordinate, Coordinate, double)} для всех пар отрезков линий a и b. */
