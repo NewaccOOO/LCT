@@ -146,7 +146,6 @@ public final class Router {
      * ленивые веса до узлов при гонке пишутся одинаковыми.
      */
     public Route routeToAny(Point from, Collection<Point> targets, Set<String> ignored) {
-        int n = nodes.size();
         Coordinate source = from.getCoordinate();
         Table table = table(source, ignored);
         double[] dist = table.dist;
