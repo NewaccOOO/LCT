@@ -156,6 +156,13 @@ public final class VariantEnumerator {
             : Set.of(System.getProperty("heatnet.city.only").split(","));
 
     private static final long CITY_CACHE_MB = 64;
+    /** Пул для деревьев подмножеств, см. {@link #prefetch}; нити демоны, как у пула чтения. */
+    private static final ExecutorService PREFETCH_POOL = Executors.newFixedThreadPool(
+            Runtime.getRuntime().availableProcessors(), task -> {
+                Thread thread = new Thread(task, "subset-trees");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     private final InputData input;
     private final Rules rules;
@@ -288,9 +295,8 @@ public final class VariantEnumerator {
         final List<Tree> trees;
         final List<FutureOks> unconnected;
         final Variant variant;
-        /** Линии и их полоса SAME_ROUTE_M для сравнения трасс, строятся по требованию. */
-        Geometry lines;
-        Geometry buffered;
+        /** Трасса для сравнения по R-11, строится по требованию. */
+        RouteBand band;
 
         Draft(List<Tree> trees, List<FutureOks> unconnected, Variant variant) {
             this.trees = trees;
@@ -1051,6 +1057,7 @@ public final class VariantEnumerator {
     /** То же; {@code slide} — деревья с врезкой, перенесённой к стволу, см. {@link #slid}. */
     private Draft draft(List<List<ConnectionPoint>> partition, java.util.function.ToIntFunction<List<ConnectionPoint>> alternative,
             boolean slide) {
+        prefetch(partition, slide);
         List<List<ConnectionPoint>> queue = new ArrayList<>(partition);
         queue.sort(Comparator.comparingInt((List<ConnectionPoint> subset) -> -subset.size())
                 .thenComparing(subset -> subset.get(0).getId()));
@@ -1130,11 +1137,61 @@ public final class VariantEnumerator {
      */
     private List<Option> options(List<ConnectionPoint> subset, boolean slide) {
         Region region = regionByConnection.get(subset.get(0).getId());
-        String key = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining("|")) + (slide ? "" : "#fixed");
+        String key = optionsKey(subset, slide);
         List<Option> cached = region.options.get(key);
         if (cached != null) {
             return cached;
         }
+        List<Option> options = computeOptions(region, subset, slide);
+        region.options.put(key, options);
+        return options;
+    }
+
+    private static String optionsKey(List<ConnectionPoint> subset, boolean slide) {
+        return subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining("|")) + (slide ? "" : "#fixed");
+    }
+
+    /**
+     * Деревья ещё не посчитанных подмножеств разбиения, все сразу и параллельно. Черновик берёт подмножества по
+     * одному, и параллельно строились только деревья кандидатов одного подмножества (до шести), а ядер больше.
+     * Деревья подмножества от других подмножеств не зависят, поэтому выход тот же. Подмножества считаются в своём
+     * пуле, а не в общем: нить общего пула, которая строит граф внутри Region.router, могла бы взять задачу другого
+     * подмножества и попросить тот же граф. В районе города нити заняты районами.
+     */
+    private void prefetch(List<List<ConnectionPoint>> partition, boolean slide) {
+        if (district || !PARALLEL) {
+            return;
+        }
+        Map<String, List<ConnectionPoint>> missing = new LinkedHashMap<>();
+        for (List<ConnectionPoint> subset : partition) {
+            String key = optionsKey(subset, slide);
+            if (!regionByConnection.get(subset.get(0).getId()).options.containsKey(key)) {
+                missing.putIfAbsent(key, subset);
+            }
+        }
+        if (missing.size() < 2) {
+            return;
+        }
+        List<Future<List<Option>>> computed = new ArrayList<>();
+        for (List<ConnectionPoint> subset : missing.values()) {
+            computed.add(PREFETCH_POOL.submit(() -> computeOptions(regionByConnection.get(subset.get(0).getId()), subset, slide)));
+        }
+        int i = 0;
+        for (Map.Entry<String, List<ConnectionPoint>> subset : missing.entrySet()) {
+            try {
+                regionByConnection.get(subset.getValue().get(0).getId()).options.put(subset.getKey(), computed.get(i++).get());
+            } catch (ExecutionException e) {
+                // подмножество, на котором расчёт падает, упадёт так же при обычном вызове options
+                log.debug("prefetch: {} не посчитано: {}", subset.getKey(), e.getCause().toString());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Деревья подмножеств прерваны", e);
+            }
+        }
+    }
+
+    /** Деревья подмножества, см. {@link #options(List, boolean)}; кэш region.options не трогает. */
+    private List<Option> computeOptions(Region region, List<ConnectionPoint> subset, boolean slide) {
         List<Point> points = points(subset);
         double flow = flow(subset);
         // граф по диаметру расхода подмножества со ступенью запаса, как у Region: отступы группы шире нужных ветке
@@ -1180,7 +1237,6 @@ public final class VariantEnumerator {
                 options.sort(Comparator.comparingDouble(option -> option.score));
             }
         }
-        region.options.put(key, options);
         return options;
     }
 
@@ -1572,45 +1628,38 @@ public final class VariantEnumerator {
         return new HashSet<>(byRoot.values());
     }
 
-    /** R-11: больше 80 % длины меньшего варианта совпадает с трассой другого. */
+    /** R-11: больше 90 % длины меньшего варианта совпадает с трассой другого. */
     private boolean sameRoute(Draft a, Draft b) {
-        Geometry lineA = lines(a);
-        Geometry lineB = lines(b);
-        double shorter = Math.min(lineA.getLength(), lineB.getLength());
-        if (shorter == 0) {
-            return lineA.getLength() == lineB.getLength();
+        return RouteBand.same(band(a), band(b), SAME_ROUTE_SHARE);
+    }
+
+    private RouteBand band(Draft draft) {
+        if (draft.band == null) {
+            List<LineString> edges = draft.trees.stream().flatMap(tree -> tree.edges.stream()).map(edge -> edge.line)
+                    .collect(Collectors.toList());
+            draft.band = new RouteBand(edges, edges.size() + draft.trees.size(), SAME_ROUTE_M, factory);
         }
-        if (lineA.getEnvelopeInternal().distance(lineB.getEnvelopeInternal()) > SAME_ROUTE_M) {
+        return draft.band;
+    }
+
+    /**
+     * Рамки не дальше TREES_APART_M; пустая рамка — не известно, считать точно. Рамки, разнесённые больше порога по
+     * одной оси, отсекаются без расстояния: совместимость дерева проверяется со всеми принятыми, и hypot в
+     * Envelope.distance был заметной ценой черновика.
+     */
+    private static boolean near(Envelope a, Envelope b) {
+        if (a.isNull() || b.isNull()) {
+            return true;
+        }
+        if (a.getMinX() - b.getMaxX() > TREES_APART_M || b.getMinX() - a.getMaxX() > TREES_APART_M
+                || a.getMinY() - b.getMaxY() > TREES_APART_M || b.getMinY() - a.getMaxY() > TREES_APART_M) {
             return false;
         }
-        // буфер черновика строится один раз: отобранный вариант (a) сравнивается со всеми следующими. Его полоса уже
-        // готова, поэтому она считается первой, а буфер кандидата — только если первая доля выше порога
-        double limit = SAME_ROUTE_SHARE * shorter;
-        return lineB.intersection(buffered(a)).getLength() > limit && lineA.intersection(buffered(b)).getLength() > limit;
+        return a.distance(b) <= TREES_APART_M;
     }
 
-    private Geometry buffered(Draft draft) {
-        if (draft.buffered == null) {
-            draft.buffered = lines(draft).buffer(SAME_ROUTE_M);
-        }
-        return draft.buffered;
-    }
-
-    private Geometry lines(Draft draft) {
-        if (draft.lines == null) {
-            draft.lines = factory.createMultiLineString(draft.trees.stream().flatMap(tree -> tree.edges.stream())
-                    .map(edge -> edge.line).toArray(LineString[]::new));
-        }
-        return draft.lines;
-    }
-
-    /** Рамки не дальше TREES_APART_M; пустая рамка — не известно, считать точно. */
-    private static boolean near(Envelope a, Envelope b) {
-        return a.isNull() || b.isNull() || a.distance(b) <= TREES_APART_M;
-    }
-
-    private Geometry geometry(Tree tree) {
-        return factory.createMultiLineString(tree.edges.stream().map(edge -> edge.line).toArray(LineString[]::new));
+    private static Geometry geometry(Tree tree) {
+        return tree.geometry();
     }
 
     private List<FutureOks> unconnected(Set<String> oksIds) {

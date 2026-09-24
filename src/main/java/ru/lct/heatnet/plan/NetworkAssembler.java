@@ -1,6 +1,7 @@
 package ru.lct.heatnet.plan;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -13,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import org.locationtech.jts.algorithm.Angle;
+import org.locationtech.jts.algorithm.Distance;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
@@ -71,6 +73,13 @@ final class NetworkAssembler {
     /** Участок в зоне считается при перекрытии больше 0,1 м: специальный кусок короче не распознать. */
     private static final double MIN_SPECIAL_M = 0.12;
     private static final double MIN_SPLIT_DEG = 30.5;
+    /** Полоса по x вокруг точки пересечения, где ищутся точки врезки: TOUCH_M с запасом на округление. */
+    private static final double TIE_BAND_M = TieInFinder.TOUCH_M + 1e-6;
+    /** Запас к порогу расстояния при отсеве пар отрезков по рамкам, см. apart. */
+    private static final double GAP_EPS_M = 1e-6;
+    /** Начала выходных ID: префикс варианта «v…_» и ID сводки. */
+    private static final String OUTPUT_PREFIX = "v";
+    private static final String SUMMARY_PREFIX = "summary_";
 
     private final InputData input;
     private final Rules rules;
@@ -84,6 +93,8 @@ final class NetworkAssembler {
     /** Проверки ID входа по префиксу и целиком: выходные ID с ID входа не совпадают. */
     private final Map<String, Boolean> startsByPrefix = new ConcurrentHashMap<>();
     private final Map<String, Boolean> knownIds = new ConcurrentHashMap<>();
+    /** ID входа с началом OUTPUT_PREFIX или SUMMARY_PREFIX, см. {@link #ids}; null — ещё не собраны. */
+    private volatile List<String> reserved;
     private final GeometryFactory factory = new GeometryFactory();
 
     /** Счётчики выходных ID; общие на несколько сборок, когда один вариант собирается по частям (город). */
@@ -147,11 +158,33 @@ final class NetworkAssembler {
 
     private boolean startsInputId(String prefix) {
         // вход города — миллионы ID, а префиксов за расчёт единицы: каждый проверяется один раз, повторный — без замка
-        return startsByPrefix.computeIfAbsent(prefix, key -> inputIds().anyMatch(id -> id.startsWith(key)));
+        return startsByPrefix.computeIfAbsent(prefix, key -> ids(key).anyMatch(id -> id.startsWith(key)));
     }
 
     private boolean isInputId(String id) {
-        return knownIds.computeIfAbsent(id, key -> inputIds().anyMatch(key::equals));
+        return knownIds.computeIfAbsent(id, key -> ids(key).anyMatch(key::equals));
+    }
+
+    /**
+     * ID входа, среди которых искать key: выходные ID начинаются с «v» или «summary_», и такие ID входа собираются
+     * одним проходом; остальные ключи ищутся по всему входу. Каждая проверка проходила шесть миллионов ID города,
+     * а их восемь на расчёт, и остальные сборки ждали.
+     */
+    private Stream<String> ids(String key) {
+        if (!key.startsWith(OUTPUT_PREFIX) && !key.startsWith(SUMMARY_PREFIX)) {
+            return inputIds();
+        }
+        List<String> found = reserved;
+        if (found == null) {
+            synchronized (this) {
+                if (reserved == null) {
+                    reserved = inputIds().filter(id -> id.startsWith(OUTPUT_PREFIX) || id.startsWith(SUMMARY_PREFIX))
+                            .collect(java.util.stream.Collectors.toList());
+                }
+                found = reserved;
+            }
+        }
+        return found.stream();
     }
 
     /** ID входа по спискам: множество из шести миллионов ID города строилось ради считанных проверок. */
@@ -207,7 +240,6 @@ final class NetworkAssembler {
         final Map<String, List<Tree>> units = new LinkedHashMap<>();
         final List<Edge> edges = new ArrayList<>();
         final Map<String, List<Integer>> edgesByUnit = new HashMap<>();
-        final STRtree edgeIndex = new STRtree();
         final Map<String, List<Integer>> incident = new HashMap<>();
         final Map<String, Double> flowByEdge = new HashMap<>();
         final Map<String, Integer> dnByEdge = new HashMap<>();
@@ -222,6 +254,8 @@ final class NetworkAssembler {
         final List<NewSegment> segments = new ArrayList<>();
         List<List<Zone>> zonesByEdge;
         List<List<double[]>> specialByEdge;
+        /** Точки врезки узлов по возрастанию x, см. atTie; null — ещё не нужны. */
+        Coordinate[] tiesByX;
         int existingTieIns;
 
         Build(String variantId, int rank, List<Tree> trees, List<FutureOks> unconnected, Counters counters) {
@@ -242,12 +276,10 @@ final class NetworkAssembler {
                         incident.computeIfAbsent(edge.from(), key -> new ArrayList<>()).add(edges.size());
                         incident.computeIfAbsent(edge.to(), key -> new ArrayList<>()).add(edges.size());
                         edgesByUnit.computeIfAbsent(unit.getKey(), key -> new ArrayList<>()).add(edges.size());
-                        edgeIndex.insert(source.line.getEnvelopeInternal(), edges.size());
                         edges.add(edge);
                     }
                 }
             }
-            edgeIndex.build();
         }
 
         Variant run() {
@@ -424,10 +456,10 @@ final class NetworkAssembler {
                 Set<SpecialObjects.Special> exempt = new HashSet<>(exemptByNode.getOrDefault(segment.getStartNodeId(), Set.of()));
                 exempt.addAll(exemptByNode.getOrDefault(segment.getEndNodeId(), Set.of()));
                 boolean fromTie = tieNodeIds.contains(segment.getStartNodeId());
+                Coordinate start = segment.getGeometry().getCoordinateN(0);
                 for (SpecialObjects.Special special : specials.around(segment.getGeometry(), segment.getDiameter())) {
                     if (exempt.contains(special)
-                            || fromTie && special.network && special.geometry.isWithinDistance(
-                                    factory.createPoint(segment.getGeometry().getCoordinateN(0)), TieInFinder.TOUCH_M)) {
+                            || fromTie && special.network && withinDistance(special.geometry, start, TieInFinder.TOUCH_M)) {
                         continue;
                     }
                     double need = specials.clearance(special, segment.getDiameter());
@@ -455,20 +487,16 @@ final class NetworkAssembler {
             List<String> ids = new ArrayList<>(points.keySet());
             Map<String, String> group = new HashMap<>();
             ids.forEach(id -> group.put(id, id));
-            STRtree index = new STRtree();
-            for (String id : ids) {
-                index.insert(new Envelope(points.get(id)), id);
-            }
-            for (String id : ids) {
-                Envelope near = new Envelope(points.get(id));
-                near.expandBy(NODE_APART_M);
-                for (Object item : index.query(near)) {
-                    String other = (String) item;
-                    if (other.equals(id) || points.get(id).distance(points.get(other)) > NODE_APART_M) {
-                        continue;
+            // узлы по x: пара ближе NODE_APART_M лежит в полосе по x той же ширины, дальше по списку не смотрим
+            List<String> byX = new ArrayList<>(ids);
+            byX.sort(Comparator.comparingDouble(id -> points.get(id).x));
+            for (int i = 0; i < byX.size(); i++) {
+                Coordinate at = points.get(byX.get(i));
+                for (int j = i + 1; j < byX.size() && points.get(byX.get(j)).x - at.x <= NODE_APART_M + GAP_EPS_M; j++) {
+                    if (at.distance(points.get(byX.get(j))) <= NODE_APART_M) {
+                        throw new IllegalStateException("Узлы " + byX.get(i) + " и " + byX.get(j) + " ближе "
+                                + NODE_APART_M + " м: проверка считает их одним узлом");
                     }
-                    throw new IllegalStateException("Узлы " + id + " и " + other + " ближе "
-                            + NODE_APART_M + " м: проверка считает их одним узлом");
                 }
             }
             for (NewSegment segment : segments) {
@@ -479,7 +507,8 @@ final class NetworkAssembler {
                 }
                 for (int i = 0; i + 1 < coords.length; i++) {
                     for (int j = i + 2; j + 1 < coords.length; j++) {
-                        if (new LineSegment(coords[i], coords[i + 1]).distance(new LineSegment(coords[j], coords[j + 1])) <= TOUCH_APART_M) {
+                        if (!apart(coords[i], coords[i + 1], coords[j], coords[j + 1], TOUCH_APART_M) && new LineSegment(
+                                coords[i], coords[i + 1]).distance(new LineSegment(coords[j], coords[j + 1])) <= TOUCH_APART_M) {
                             throw new IllegalStateException("Участок " + segment.getId() + " касается сам себя");
                         }
                     }
@@ -516,7 +545,9 @@ final class NetworkAssembler {
                 around.expandBy(NODE_APART_M);
                 for (Object item : lines.query(around)) {
                     NewSegment b = (NewSegment) item;
-                    if (a.getId().compareTo(b.getId()) >= 0 || a.getGeometry().distance(b.getGeometry()) > NODE_APART_M) {
+                    if (a.getId().compareTo(b.getId()) >= 0
+                            || apart(a.getGeometry().getCoordinates(), b.getGeometry().getCoordinates(), NODE_APART_M)
+                            || a.getGeometry().distance(b.getGeometry()) > NODE_APART_M) {
                         continue;
                     }
                     Set<String> shared = new HashSet<>(List.of(group.get(a.getStartNodeId()), group.get(a.getEndNodeId())));
@@ -613,16 +644,26 @@ final class NetworkAssembler {
             for (Edge edge : edges) {
                 trace.expandToInclude(edge.source.line.getEnvelopeInternal());
             }
+            // рёбра каждого объекта, чья зона задевает их рамку, по возрастанию индекса: списки объектов у рёбер
+            // общие для всех черновиков с этим деревом, а запрос к индексу рёбер на каждый объект трассы был дороже
+            // самих зон. Порядок зон у ребра на участки не влияет
+            Map<SpecialObjects.Special, List<Integer>> edgesBySpecial = new LinkedHashMap<>();
+            for (int i = 0; i < edges.size(); i++) {
+                for (SpecialObjects.Special special : nearSpecials(edges.get(i).source)) {
+                    edgesBySpecial.computeIfAbsent(special, key -> new ArrayList<>()).add(i);
+                }
+            }
             List<Zone> zones = new ArrayList<>();
-            for (SpecialObjects.Special special : specials.within(trace)) {
-                Envelope envelope = (special.polygon ? special.buffered : special.geometry).getEnvelopeInternal();
-                if (!envelope.intersects(trace)) {
+            for (Map.Entry<SpecialObjects.Special, List<Integer>> near : edgesBySpecial.entrySet()) {
+                SpecialObjects.Special special = near.getKey();
+                // объект берётся, если его рамка задевает рамку трассы
+                if (!special.geometry.getEnvelopeInternal().intersects(trace)) {
                     continue;
                 }
                 if (special.polygon) {
-                    polygonZone(special, envelope, zones);
+                    polygonZone(special, near.getValue(), zones);
                 } else {
-                    lineZone(special, envelope, zones);
+                    lineZone(special, near.getValue(), zones);
                 }
             }
             for (Zone zone : zones) {
@@ -631,33 +672,14 @@ final class NetworkAssembler {
             return result;
         }
 
-        /** Рёбра, чья рамка пересекает envelope, по возрастанию индекса. */
-        List<Integer> edgesNear(Envelope envelope) {
-            TreeSet<Integer> result = new TreeSet<>();
-            for (Object item : edgeIndex.query(envelope)) {
-                result.add((Integer) item);
-            }
-            return new ArrayList<>(result);
-        }
-
-        /** Связные части трассы в буфере полигона, которые пересекают сам полигон. */
-        void polygonZone(SpecialObjects.Special special, Envelope envelope, List<Zone> result) {
+        /** Связные части трассы в буфере полигона, которые пересекают сам полигон; near — рёбра у буфера. */
+        void polygonZone(SpecialObjects.Special special, List<Integer> near, List<Zone> result) {
             List<Zone> pieces = new ArrayList<>();
-            List<Geometry> parts = new ArrayList<>();
-            for (int i : edgesNear(envelope)) {
-                LineString line = edges.get(i).source.line;
-                Geometry inside = line.intersection(special.buffered);
-                LengthIndexedLine indexed = new LengthIndexedLine(line);
-                for (int g = 0; g < inside.getNumGeometries(); g++) {
-                    Geometry part = inside.getGeometryN(g);
-                    if (!(part instanceof LineString) || part.getLength() == 0) {
-                        continue;
-                    }
-                    Coordinate[] coords = part.getCoordinates();
-                    double a = indexed.project(coords[0]);
-                    double b = indexed.project(coords[coords.length - 1]);
-                    pieces.add(new Zone(i, Math.min(a, b), Math.max(a, b), special));
-                    parts.add(part);
+            List<Piece> parts = new ArrayList<>();
+            for (int i : near) {
+                for (Piece piece : pieces(edges.get(i).source, special)) {
+                    pieces.add(new Zone(i, piece.from, piece.to, special));
+                    parts.add(piece);
                 }
             }
             int[] cluster = new int[parts.size()];
@@ -666,14 +688,14 @@ final class NetworkAssembler {
             }
             for (int i = 0; i < parts.size(); i++) {
                 for (int j = i + 1; j < parts.size(); j++) {
-                    if (parts.get(i).intersects(parts.get(j))) {
+                    if (parts.get(i).part.intersects(parts.get(j).part)) {
                         cluster[find(cluster, i)] = find(cluster, j);
                     }
                 }
             }
             boolean[] crossing = new boolean[parts.size()];
             for (int i = 0; i < parts.size(); i++) {
-                if (special.prepared.intersects(parts.get(i))) {
+                if (parts.get(i).crossing) {
                     crossing[find(cluster, i)] = true;
                 }
             }
@@ -685,28 +707,36 @@ final class NetworkAssembler {
         }
 
         /** По margin_m в обе стороны от каждого пересечения; пересечение сети в точке врезки не считается. */
-        void lineZone(SpecialObjects.Special special, Envelope envelope, List<Zone> result) {
-            for (int i : edgesNear(envelope)) {
-                LineString line = edges.get(i).source.line;
-                if (!special.crossedBy(line)) {
-                    continue;
-                }
-                Geometry hit = line.intersection(special.geometry);
-                LengthIndexedLine indexed = new LengthIndexedLine(line);
-                for (Coordinate c : hit.getCoordinates()) {
-                    if (special.network && atTie(c, special.geometry)) {
+        void lineZone(SpecialObjects.Special special, List<Integer> near, List<Zone> result) {
+            for (int i : near) {
+                for (Hit hit : hits(edges.get(i).source, special)) {
+                    if (special.network && atTie(hit.at, special.geometry)) {
                         continue;
                     }
-                    spread(result, i, indexed.project(c), special);
+                    spread(result, i, hit.position, special);
                 }
             }
         }
 
         boolean atTie(Coordinate c, Geometry line) {
-            for (List<Tree> unit : units.values()) {
-                Coordinate tie = unit.get(0).root.point;
-                if (c.distance(tie) <= TieInFinder.TOUCH_M
-                        && line.isWithinDistance(factory.createPoint(tie), TieInFinder.TOUCH_M)) {
+            if (tiesByX == null) {
+                tiesByX = units.values().stream().map(unit -> unit.get(0).root.point)
+                        .sorted(Comparator.comparingDouble(tie -> tie.x)).toArray(Coordinate[]::new);
+            }
+            // точки врезки по x: ближе TOUCH_M к c только те, что в полосе x ± TOUCH_M, остальные не проверяются
+            int k = 0;
+            int end = tiesByX.length;
+            while (k < end) {
+                int mid = (k + end) >>> 1;
+                if (tiesByX[mid].x < c.x - TIE_BAND_M) {
+                    k = mid + 1;
+                } else {
+                    end = mid;
+                }
+            }
+            for (; k < tiesByX.length && tiesByX[k].x <= c.x + TIE_BAND_M; k++) {
+                Coordinate tie = tiesByX[k];
+                if (c.distance(tie) <= TieInFinder.TOUCH_M && withinDistance(line, tie, TieInFinder.TOUCH_M)) {
                     return true;
                 }
             }
@@ -799,6 +829,129 @@ final class NetworkAssembler {
             }
             return result;
         }
+    }
+
+    /** Часть ребра в буфере полигона: границы по длине ребра, сама линия и задевает ли она полигон. */
+    private static final class Piece {
+        final double from;
+        final double to;
+        final Geometry part;
+        final boolean crossing;
+
+        Piece(double from, double to, Geometry part, boolean crossing) {
+            this.from = from;
+            this.to = to;
+            this.part = part;
+            this.crossing = crossing;
+        }
+    }
+
+    /** Точка пересечения ребра с линейным объектом и её место по длине ребра. */
+    private static final class Hit {
+        final Coordinate at;
+        final double position;
+
+        Hit(Coordinate at, double position) {
+            this.at = at;
+            this.position = position;
+        }
+    }
+
+    /** Спецобъекты, чья зона (буфер полигона или сама линия) задевает рамку ребра; считаются один раз на ребро. */
+    private List<SpecialObjects.Special> nearSpecials(Tree.Edge edge) {
+        List<SpecialObjects.Special> near = edge.nearSpecials;
+        if (near == null) {
+            near = specials.zonesNear(edge.line.getEnvelopeInternal());
+            edge.nearSpecials = near;
+        }
+        return near;
+    }
+
+    /** Части ребра в буфере полигона special; считаются один раз на ребро и объект, см. {@link Tree.Edge#crossings}. */
+    @SuppressWarnings("unchecked")
+    private static List<Piece> pieces(Tree.Edge edge, SpecialObjects.Special special) {
+        List<Piece> cached = (List<Piece>) edge.crossings.get(special);
+        if (cached != null) {
+            return cached;
+        }
+        List<Piece> pieces = new ArrayList<>();
+        if (!special.bufferedPrepared.intersects(edge.line)) {
+            // рамка ребра задевает рамку буфера, а сам буфер нет: наложение дало бы пустую геометрию
+            edge.crossings.putIfAbsent(special, pieces);
+            return pieces;
+        }
+        Geometry inside = edge.line.intersection(special.buffered);
+        LengthIndexedLine indexed = new LengthIndexedLine(edge.line);
+        for (int g = 0; g < inside.getNumGeometries(); g++) {
+            Geometry part = inside.getGeometryN(g);
+            if (!(part instanceof LineString) || part.getLength() == 0) {
+                continue;
+            }
+            Coordinate[] coords = part.getCoordinates();
+            double a = indexed.project(coords[0]);
+            double b = indexed.project(coords[coords.length - 1]);
+            pieces.add(new Piece(Math.min(a, b), Math.max(a, b), part, special.prepared.intersects(part)));
+        }
+        edge.crossings.putIfAbsent(special, pieces);
+        return pieces;
+    }
+
+    /** Пересечения ребра с линейным объектом special; считаются один раз на ребро и объект. */
+    @SuppressWarnings("unchecked")
+    private static List<Hit> hits(Tree.Edge edge, SpecialObjects.Special special) {
+        List<Hit> cached = (List<Hit>) edge.crossings.get(special);
+        if (cached != null) {
+            return cached;
+        }
+        List<Hit> hits = new ArrayList<>();
+        if (special.crossedBy(edge.line)) {
+            LengthIndexedLine indexed = new LengthIndexedLine(edge.line);
+            for (Coordinate c : edge.line.intersection(special.geometry).getCoordinates()) {
+                hits.add(new Hit(c, indexed.project(c)));
+            }
+        }
+        edge.crossings.putIfAbsent(special, hits);
+        return hits;
+    }
+
+    /**
+     * То же, что line.isWithinDistance(точка c, distance) для линии сети: рамки, затем расстояния до отрезков, как в
+     * DistanceOp, но без его объектов на каждый вызов. Проверка идёт на каждый участок от врезки и на каждое
+     * пересечение с трубой, а у магистрали сотни отрезков.
+     */
+    private static boolean withinDistance(Geometry line, Coordinate c, double distance) {
+        if (line.getEnvelopeInternal().distance(new Envelope(c)) > distance) {
+            return false;
+        }
+        Coordinate[] coords = line.getCoordinates();
+        for (int i = 0; i + 1 < coords.length; i++) {
+            if (Distance.pointToSegment(c, coords[i], coords[i + 1]) <= distance) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Рамки отрезков p–q и r–s разнесены по x или y больше чем на limit с запасом на округление: тогда и расстояние
+     * между отрезками больше limit, и его не нужно считать. Проверки касаний перебирают все пары отрезков участков.
+     */
+    private static boolean apart(Coordinate p, Coordinate q, Coordinate r, Coordinate s, double limit) {
+        double gap = limit + GAP_EPS_M;
+        return Math.min(r.x, s.x) - Math.max(p.x, q.x) > gap || Math.min(p.x, q.x) - Math.max(r.x, s.x) > gap
+                || Math.min(r.y, s.y) - Math.max(p.y, q.y) > gap || Math.min(p.y, q.y) - Math.max(r.y, s.y) > gap;
+    }
+
+    /** {@link #apart(Coordinate, Coordinate, Coordinate, Coordinate, double)} для всех пар отрезков линий a и b. */
+    private static boolean apart(Coordinate[] a, Coordinate[] b, double limit) {
+        for (int i = 0; i + 1 < a.length; i++) {
+            for (int j = 0; j + 1 < b.length; j++) {
+                if (!apart(a[i], a[i + 1], b[j], b[j + 1], limit)) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private static boolean inside(List<double[]> intervals, double at) {

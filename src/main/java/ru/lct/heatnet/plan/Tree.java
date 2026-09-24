@@ -3,8 +3,12 @@ package ru.lct.heatnet.plan;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
+import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
 import ru.lct.heatnet.model.ConnectionPoint;
 
@@ -39,6 +43,13 @@ final class Tree {
         final Node from;
         final Node to;
         final LineString line;
+        /**
+         * Части ребра в зонах спецобъектов по объекту, их считает и хранит сборка (NetworkAssembler): дерево входит
+         * в сотни черновиков, а пересечение с объектом зависит только от ребра и объекта.
+         */
+        final Map<SpecialObjects.Special, Object> crossings = new ConcurrentHashMap<>();
+        /** Спецобъекты перечислителя, чья зона задевает рамку ребра; считает сборка, null — ещё не считались. */
+        volatile List<SpecialObjects.Special> nearSpecials;
 
         Edge(Node from, Node to, LineString line) {
             this.from = from;
@@ -47,10 +58,15 @@ final class Tree {
         }
     }
 
+    private static final GeometryFactory FACTORY = new GeometryFactory();
+
     final TieCandidate tie;
     final Node root;
     final List<Edge> edges = new ArrayList<>();
     final List<ConnectionPoint> unconnected = new ArrayList<>();
+    /** Рамка и линии готового дерева, считаются один раз: дерево входит в сотни черновиков. */
+    private volatile Envelope envelope;
+    private volatile Geometry geometry;
 
     Tree(TieCandidate tie) {
         this.tie = tie;
@@ -67,13 +83,29 @@ final class Tree {
         return degree;
     }
 
-    /** Рамка всех рёбер; у дерева без рёбер пустая. */
+    /** Рамка всех рёбер готового дерева, общая: не менять; у дерева без рёбер пустая. */
     Envelope envelope() {
-        Envelope envelope = new Envelope();
-        for (Edge edge : edges) {
-            envelope.expandToInclude(edge.line.getEnvelopeInternal());
+        Envelope cached = envelope;
+        if (cached == null) {
+            cached = new Envelope();
+            for (Edge edge : edges) {
+                cached.expandToInclude(edge.line.getEnvelopeInternal());
+            }
+            envelope = cached;
         }
-        return envelope;
+        return cached;
+    }
+
+    /** Линии всех рёбер готового дерева одной геометрией. */
+    Geometry geometry() {
+        Geometry cached = geometry;
+        if (cached == null) {
+            cached = FACTORY.createMultiLineString(edges.stream().map(edge -> edge.line).toArray(LineString[]::new));
+            // рамку JTS считает лениво; здесь она считается до того, как геометрию увидят другие нити
+            cached.getEnvelopeInternal();
+            geometry = cached;
+        }
+        return cached;
     }
 
     List<ConnectionPoint> connected() {

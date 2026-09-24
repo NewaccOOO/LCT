@@ -186,6 +186,8 @@ final class TreeBuilder {
         // ребро дерева не меняется после создания, а его специальные части и допустимые цели нужны на каждом шаге
         // для каждого оставшегося ОКС
         final Map<Tree.Edge, List<SpecialSpan>> spansByEdge = new IdentityHashMap<>();
+        /** Положения вершин ребра по длине: allowed проверяет по ним каждую точку ребра через 10 м. */
+        final Map<Tree.Edge, List<Double>> verticesByEdge = new IdentityHashMap<>();
         final Map<Tree.Edge, List<Point>> targetsByEdge = new IdentityHashMap<>();
         /** Точка выхода по id точки подключения: {выход}, NO_PORTAL — выхода нет, null — точка не в полигоне. */
         final Map<String, Coordinate[]> portalByConnection = new HashMap<>();
@@ -545,7 +547,7 @@ final class TreeBuilder {
             if (edge.to.kind == Tree.Kind.CONNECTION && position > length - CONNECTION_GAP_M) {
                 return false;
             }
-            for (double vertex : vertexPositions(edge.line)) {
+            for (double vertex : verticesByEdge.computeIfAbsent(edge, e -> vertexPositions(e.line))) {
                 double gap = Math.abs(vertex - position);
                 if (gap > 1e-9 && gap < MIN_PIECE_M) {
                     return false;

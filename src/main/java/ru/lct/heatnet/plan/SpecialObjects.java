@@ -30,6 +30,8 @@ final class SpecialObjects {
     private static final int MARGIN_QUADRANT_SEGMENTS = 16;
     /** Запас к отступу, чтобы узел не встал на самой границе зоны сближения. */
     private static final double NEAR_EXTRA_M = 0.1;
+    /** Сторон в куске с общей рамкой, см. Special#chunks. */
+    private static final int CHUNK = 8;
 
     static final class Special {
         final Geometry geometry;
@@ -40,8 +42,15 @@ final class SpecialObjects {
         final double halfWidth;
         final PreparedGeometry prepared;
         final Geometry buffered;
+        /** Буфер полигона для быстрой проверки, задевает ли его ребро: наложение JTS считается только тогда. */
+        final PreparedGeometry bufferedPrepared;
         /** Стороны линейного объекта или колец полигона. */
         final LineSegment[] sides;
+        /**
+         * Рамки кусков по CHUNK сторон подряд: minX, minY, maxX, maxY. У магистрали города сотни сторон, а рамка
+         * куска отбрасывает разом все его стороны вдали от отрезка.
+         */
+        private final double[] chunks;
 
         Special(Geometry geometry, boolean network, RestrictionRule rule, double halfWidth) {
             this.geometry = geometry;
@@ -51,7 +60,23 @@ final class SpecialObjects {
             this.halfWidth = halfWidth;
             this.prepared = polygon ? PreparedGeometryFactory.prepare(geometry) : null;
             this.buffered = polygon ? geometry.buffer(rule.getMarginM(), MARGIN_QUADRANT_SEGMENTS) : null;
+            this.bufferedPrepared = polygon ? PreparedGeometryFactory.prepare(buffered) : null;
             this.sides = sides(polygon ? geometry.getBoundary() : geometry);
+            this.chunks = new double[4 * ((sides.length + CHUNK - 1) / CHUNK)];
+            for (int k = 0; k < sides.length; k++) {
+                int c = k / CHUNK * 4;
+                boolean first = k % CHUNK == 0;
+                LineSegment side = sides[k];
+                chunks[c] = first ? side.minX() : Math.min(chunks[c], side.minX());
+                chunks[c + 1] = first ? side.minY() : Math.min(chunks[c + 1], side.minY());
+                chunks[c + 2] = first ? side.maxX() : Math.max(chunks[c + 2], side.maxX());
+                chunks[c + 3] = first ? side.maxY() : Math.max(chunks[c + 3], side.maxY());
+            }
+        }
+
+        /** Рамка куска сторон c (номер в chunks, кратный 4). */
+        private Envelope chunk(int c) {
+            return new Envelope(chunks[c], chunks[c + 2], chunks[c + 1], chunks[c + 3]);
         }
 
         /**
@@ -111,10 +136,17 @@ final class SpecialObjects {
             Coordinate[] coords = line.getCoordinates();
             for (int i = 0; i + 1 < coords.length; i++) {
                 Envelope piece = new Envelope(coords[i], coords[i + 1]);
-                for (LineSegment side : sides) {
-                    if (piece.distance(new Envelope(side.p0, side.p1)) < limit
-                            && Distance.segmentToSegment(coords[i], coords[i + 1], side.p0, side.p1) < limit) {
-                        return true;
+                for (int c = 0; c < chunks.length; c += 4) {
+                    // рамка стороны внутри рамки куска и не ближе её к отрезку
+                    if (piece.distance(chunk(c)) >= limit) {
+                        continue;
+                    }
+                    for (int k = c / 4 * CHUNK, end = Math.min(sides.length, k + CHUNK); k < end; k++) {
+                        LineSegment side = sides[k];
+                        if (piece.distance(new Envelope(side.p0, side.p1)) < limit
+                                && Distance.segmentToSegment(coords[i], coords[i + 1], side.p0, side.p1) < limit) {
+                            return true;
+                        }
                     }
                 }
             }
@@ -128,9 +160,16 @@ final class SpecialObjects {
         boolean crossedBy(LineString line) {
             Coordinate[] coords = line.getCoordinates();
             for (int i = 0; i + 1 < coords.length; i++) {
-                for (LineSegment side : sides) {
-                    if (ObstacleSet.meet(coords[i], coords[i + 1], side.p0, side.p1)) {
-                        return true;
+                Envelope piece = new Envelope(coords[i], coords[i + 1]);
+                for (int c = 0; c < chunks.length; c += 4) {
+                    // meet сначала сравнивает рамки: стороны куска, чья рамка не задевает отрезок, не пересекаются с ним
+                    if (!piece.intersects(chunk(c))) {
+                        continue;
+                    }
+                    for (int k = c / 4 * CHUNK, end = Math.min(sides.length, k + CHUNK); k < end; k++) {
+                        if (ObstacleSet.meet(coords[i], coords[i + 1], sides[k].p0, sides[k].p1)) {
+                            return true;
+                        }
                     }
                 }
             }
@@ -151,6 +190,8 @@ final class SpecialObjects {
 
     final List<Special> all = new ArrayList<>();
     private final STRtree index = new STRtree();
+    /** Объекты по рамке зоны сборки: буфера margin_m у полигона, самой линии у линии. */
+    private final STRtree zoneIndex = new STRtree();
     private final Set<RestrictionRule> kinds = new HashSet<>();
     private final Rules rules;
     private final double maxHalfWidth;
@@ -174,11 +215,13 @@ final class SpecialObjects {
         double widest = 0;
         for (Special special : all) {
             index.insert(special.geometry.getEnvelopeInternal(), special);
+            zoneIndex.insert((special.polygon ? special.buffered : special.geometry).getEnvelopeInternal(), special);
             widest = Math.max(widest, special.halfWidth);
             kinds.add(special.rule);
         }
         maxHalfWidth = widest;
         index.build();
+        zoneIndex.build();
     }
 
     /** Точка ближе отступа к какому-либо объекту со специальным проходом для диаметра dn. */
@@ -223,10 +266,10 @@ final class SpecialObjects {
         };
     }
 
-    /** Объекты, чья рамка пересекает envelope. */
-    List<Special> within(Envelope envelope) {
+    /** Объекты, чья зона сборки (буфер полигона или сама линия) задевает рамку envelope. */
+    List<Special> zonesNear(Envelope envelope) {
         List<Special> result = new ArrayList<>();
-        for (Object item : index.query(envelope)) {
+        for (Object item : zoneIndex.query(envelope)) {
             result.add((Special) item);
         }
         return result;
