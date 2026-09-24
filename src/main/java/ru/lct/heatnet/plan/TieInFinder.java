@@ -48,12 +48,14 @@ final class TieInFinder {
     private final Map<String, Integer> linksByChamber = new HashMap<>();
     /** Участки сети по рамке: город — сотни тысяч участков, и перебор всех на каждую врезку был главной ценой. */
     private final STRtree segmentIndex = new STRtree();
+    private final Map<String, NetworkSegment> segmentById = new HashMap<>();
 
     TieInFinder(InputData input, Rules rules) {
         this.input = input;
         this.rules = rules;
         for (NetworkSegment segment : input.getSegments()) {
             segmentIndex.insert(segment.getGeometry().getEnvelopeInternal(), segment);
+            segmentById.put(segment.getId(), segment);
         }
         segmentIndex.build();
         for (Chamber chamber : input.getChambers()) {
@@ -140,6 +142,12 @@ final class TieInFinder {
         }
         return new TieCandidate(chamber.getId(), TieCandidate.HEAT_CHAMBER, chamber.getDiameter(), chamber.getGeometry(),
                 touching(chamber.getGeometry()), capacity);
+    }
+
+    /** Врезка у проекции точки на участок врезки tie в трубу, как у {@link #find}; null — участок не подходит. */
+    TieCandidate onSamePipe(TieCandidate tie, Point point, int dn) {
+        NetworkSegment segment = segmentById.get(tie.getExistingObjectId());
+        return segment == null ? null : pipeCandidate(segment, point, dn);
     }
 
     TieCandidate pipeCandidate(NetworkSegment segment, Point point, int dn) {

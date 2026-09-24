@@ -50,6 +50,42 @@ class RouterTest {
     }
 
     @Test
+    void routePassesBetweenDiagonalCornersCloserThanMitreZones() {
+        // углы двух парков по диагонали в 3,2 м: круглые зоны отступа не смыкаются, а зоны с углами JOIN_MITRE
+        // смыкались и закрывали проход
+        Geometry left = rect(-50, -50, 0, 0);
+        Geometry right = rect(2.263, 2.263, 50, 50);
+        Router router = router(List.of(new Restriction("park-1", left, "park"), new Restriction("park-2", right, "park")),
+                List.of());
+
+        Route route = router.route(point(-30, 32.263), point(32.263, -30), Set.of());
+
+        assertNotNull(route);
+        double clearance = rules.restriction("park").clearanceM(DN) + halfWidth;
+        assertEquals(2, route.getGeometry().getNumPoints(), route.getGeometry().toString());
+        assertTrue(route.getGeometry().distance(left) >= clearance, "до парка " + route.getGeometry().distance(left));
+        assertTrue(route.getGeometry().distance(right) >= clearance, "до парка " + route.getGeometry().distance(right));
+    }
+
+    @Test
+    void cutRouteHugsCornerKeepingClearance() {
+        // обход угла через вершину зоны JOIN_MITRE длиннее: срезка заменяет её хордами у самого отступа
+        Geometry park = rect(-50, -50, 0, 0);
+        Router router = router(List.of(new Restriction("park-1", park, "park")), List.of());
+
+        Route plain = router.routeToAny(point(-40, 5), List.of(point(5, -40)), Set.of(), false);
+        Route cut = router.routeToAny(point(-40, 5), List.of(point(5, -40)), Set.of(), true);
+
+        double clearance = rules.restriction("park").clearanceM(DN) + halfWidth;
+        assertTrue(cut.getLength() < plain.getLength() - 0.1, cut.getLength() + " против " + plain.getLength());
+        assertTrue(cut.getGeometry().distance(park) >= clearance, "до парка " + cut.getGeometry().distance(park));
+        Coordinate[] coords = cut.getGeometry().getCoordinates();
+        for (int i = 0; i + 1 < coords.length; i++) {
+            assertTrue(coords[i].distance(coords[i + 1]) >= 1, "звено " + i + ": " + cut.getGeometry());
+        }
+    }
+
+    @Test
     void routeAroundThinWallTurnsNoSteeperThanNinetyDegrees() {
         // тонкая стена между точкой и целью: обход её конца без ограничения дал бы разворот почти на 180°
         Geometry wall = rect(-1, -60, 1, 60);
@@ -77,7 +113,7 @@ class RouterTest {
         Point ahead = point(40, 10);
 
         Route free = router.routeToAny(exit, List.of(behind, ahead), Set.of());
-        Route limited = router.routeExact(exit, List.of(behind, ahead), Set.of(), new Coordinate(0, -30));
+        Route limited = router.routeExact(exit, List.of(behind, ahead), Set.of(), new Coordinate(0, -30), false);
 
         assertEquals(behind.getCoordinate(), free.getGeometry().getCoordinateN(1));
         assertNotNull(limited);

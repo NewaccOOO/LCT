@@ -27,12 +27,14 @@ import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.LineSegment;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.index.quadtree.Quadtree;
 import org.locationtech.jts.index.strtree.STRtree;
 import ru.lct.heatnet.graph.ObstacleIndex;
 import ru.lct.heatnet.graph.ObstacleSet;
+import ru.lct.heatnet.graph.Route;
 import ru.lct.heatnet.graph.RouteCache;
 import ru.lct.heatnet.graph.Router;
 import ru.lct.heatnet.calc.Scorer;
@@ -75,6 +77,8 @@ public final class VariantEnumerator {
     /** Дерево ОКС идёт в обход, если оно длиннее прямой до ближайшего кандидата врезки больше чем во столько раз. */
     private static final double DETOUR_RATIO = 1.1;
     private static final double TREES_APART_M = 0.5;
+    /** Сдвиг врезки к стволу берётся, если ствол короче хотя бы на столько, см. slid. */
+    private static final double SLIDE_MIN_M = 1.0;
     private static final double SHARED_ROOT_CLIP_M = 0.15;
     private static final double SHARED_ROOT_APART_M = 0.01;
     private static final int MAX_VARIANTS = 3;
@@ -756,29 +760,44 @@ public final class VariantEnumerator {
             picked = pick(drafts);
         }
         if (!picked.isEmpty()) {
-            // содержательно другие сети от лучшего черновика для вариантов 2 и 3: другая врезка у каждого блока
-            // (до трёх отличных) и разбиение больших блоков пополам двумя врезками
-            List<List<ConnectionPoint>> blocks = blocksOf(picked.get(0));
-            // крупные блоки первыми: их врезка меняет больше трассы; на сотнях блоков перебор всех утраивал время
-            blocks.sort(Comparator.comparingInt((List<ConnectionPoint> block) -> -block.size()));
-            for (int i = 0; i < Math.min(blocks.size(), EXTRA_VARIANT_BLOCKS); i++) {
-                for (int rank = 1; rank <= 3; rank++) {
-                    List<List<ConnectionPoint>> same = copy(blocks);
-                    drafts.add(new Move(same, same.get(i), rank).realize(this));
-                }
-                if (blocks.get(i).size() >= 3) {
-                    List<List<ConnectionPoint>> parts = splitGroup(blocks.get(i));
-                    if (parts.size() == 2) {
-                        List<List<ConnectionPoint>> halves = copy(blocks);
-                        halves.remove(i);
-                        halves.addAll(parts);
-                        drafts.add(new Move(halves, null).realize(this));
-                    }
-                }
-            }
+            // содержательно другие сети от лучшего черновика для вариантов 2 и 3
+            others(picked.get(0), drafts, true);
+            picked = pick(drafts);
+        }
+        if (picked.size() == 2 && !district) {
+            // перенос врезки к стволу сводит другие врезки блока на ту же трубу у той же вершины, и трасса почти не
+            // меняется: третий вариант ищется от блоков второго с врезками там, где их нашёл поиск кандидатов
+            others(picked.get(1), drafts, false);
             picked = pick(drafts);
         }
         return picked;
+    }
+
+    /**
+     * Черновики от блоков draft: другая врезка у каждого блока (до трёх отличных) и разбиение больших блоков пополам;
+     * {@code slide} — как у {@link #draft}.
+     */
+    private void others(Draft draft, List<Draft> drafts, boolean slide) {
+        List<List<ConnectionPoint>> blocks = blocksOf(draft);
+        // крупные блоки первыми: их врезка меняет больше трассы; на сотнях блоков перебор всех утраивал время
+        blocks.sort(Comparator.comparingInt((List<ConnectionPoint> block) -> -block.size()));
+        for (int i = 0; i < Math.min(blocks.size(), EXTRA_VARIANT_BLOCKS); i++) {
+            for (int rank = 1; rank <= 3; rank++) {
+                List<List<ConnectionPoint>> same = copy(blocks);
+                List<ConnectionPoint> alternative = same.get(i);
+                int r = rank;
+                drafts.add(draft(same, subset -> subset == alternative ? r : 0, slide));
+            }
+            if (blocks.get(i).size() >= 3) {
+                List<List<ConnectionPoint>> parts = splitGroup(blocks.get(i));
+                if (parts.size() == 2) {
+                    List<List<ConnectionPoint>> halves = copy(blocks);
+                    halves.remove(i);
+                    halves.addAll(parts);
+                    drafts.add(draft(halves, subset -> 0, slide));
+                }
+            }
+        }
     }
 
     /** Блоки черновика: точки каждого дерева и по блоку на неподключённую точку. */
@@ -822,6 +841,9 @@ public final class VariantEnumerator {
         long started = System.nanoTime();
         int spent = 0;
         int sinceBestImprove = 0;
+        // соседей начального черновика перебираем всех: с врезками у ствола он бывает уже хорош, первые 50 соседей
+        // хуже, и остановка по застою обрывала поиск до первого улучшения («густо-100»: 115,70 вместо 113,69)
+        int firstScan = moves(blocks).size();
         while (spent < budget) {
             Move step = null;
             Draft stepDraft = null;
@@ -829,7 +851,7 @@ public final class VariantEnumerator {
                 if (spent >= budget) {
                     break;
                 }
-                if (SEARCH_STALL > 0 && sinceBestImprove >= SEARCH_STALL) {
+                if (SEARCH_STALL > 0 && sinceBestImprove >= SEARCH_STALL && spent >= firstScan) {
                     break;
                 }
                 String key = move.key();
@@ -856,7 +878,7 @@ public final class VariantEnumerator {
                 if (current == best) {
                     break;
                 }
-                if (SEARCH_STALL > 0 && sinceBestImprove >= SEARCH_STALL) {
+                if (SEARCH_STALL > 0 && sinceBestImprove >= SEARCH_STALL && spent >= firstScan) {
                     break;
                 }
                 blocks = bestBlocks;
@@ -878,7 +900,7 @@ public final class VariantEnumerator {
                 log.info("search: score={} trees={} drafts={} elapsed={}s", best.score(), blocks.size(), spent,
                         (System.nanoTime() - started) / 1_000_000_000L);
             }
-            if (SEARCH_STALL > 0 && sinceBestImprove >= SEARCH_STALL) {
+            if (SEARCH_STALL > 0 && sinceBestImprove >= SEARCH_STALL && spent >= firstScan) {
                 log.info("search: stall stop drafts={} sinceBestImprove={}", spent, sinceBestImprove);
                 break;
             }
@@ -1022,6 +1044,12 @@ public final class VariantEnumerator {
      * врезками; без маршрута — в штраф.
      */
     private Draft draft(List<List<ConnectionPoint>> partition, java.util.function.ToIntFunction<List<ConnectionPoint>> alternative) {
+        return draft(partition, alternative, true);
+    }
+
+    /** То же; {@code slide} — деревья с врезкой, перенесённой к стволу, см. {@link #slid}. */
+    private Draft draft(List<List<ConnectionPoint>> partition, java.util.function.ToIntFunction<List<ConnectionPoint>> alternative,
+            boolean slide) {
         List<List<ConnectionPoint>> queue = new ArrayList<>(partition);
         queue.sort(Comparator.comparingInt((List<ConnectionPoint> subset) -> -subset.size())
                 .thenComparing(subset -> subset.get(0).getId()));
@@ -1029,7 +1057,7 @@ public final class VariantEnumerator {
         Set<String> unconnectedIds = new HashSet<>();
         for (int next = 0; next < queue.size(); next++) {
             List<ConnectionPoint> subset = queue.get(next);
-            List<Option> options = options(subset);
+            List<Option> options = options(subset, slide);
             int rank = alternative.applyAsInt(subset);
             int start = rank > 0 ? alternativeIndex(options, rank) : 0;
             Tree chosen = null;
@@ -1041,7 +1069,7 @@ public final class VariantEnumerator {
                 }
             }
             if (chosen == null) {
-                chosen = merged(subset, options, accepted);
+                chosen = merged(subset, options, accepted, slide);
             }
             if (chosen == null) {
                 subset.forEach(connection -> unconnectedIds.add(connection.getOksId()));
@@ -1071,7 +1099,7 @@ public final class VariantEnumerator {
      * строятся одним деревом. Возвращает это дерево (вызывающий добавит его в accepted) или null, если объединить
      * не удалось; тогда accepted остаётся прежним.
      */
-    private Tree merged(List<ConnectionPoint> subset, List<Option> options, List<Tree> accepted) {
+    private Tree merged(List<ConnectionPoint> subset, List<Option> options, List<Tree> accepted, boolean slide) {
         if (options.isEmpty()) {
             return null;
         }
@@ -1085,7 +1113,7 @@ public final class VariantEnumerator {
             }
             union.addAll(subset);
             accepted.remove(blocker);
-            for (Option option : options(union)) {
+            for (Option option : options(union, slide)) {
                 if (option.tree.unconnected.isEmpty() && compatible(option.tree, accepted)) {
                     return option.tree;
                 }
@@ -1095,10 +1123,13 @@ public final class VariantEnumerator {
         return null;
     }
 
-    /** Деревья подмножества ОКС по всем кандидатам врезки, от лучшего score отдельно собранного дерева. */
-    private List<Option> options(List<ConnectionPoint> subset) {
+    /**
+     * Деревья подмножества ОКС по всем кандидатам врезки, от лучшего score отдельно собранного дерева; {@code slide} —
+     * переносить врезку к стволу, см. {@link #slid}.
+     */
+    private List<Option> options(List<ConnectionPoint> subset, boolean slide) {
         Region region = regionByConnection.get(subset.get(0).getId());
-        String key = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining("|"));
+        String key = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining("|")) + (slide ? "" : "#fixed");
         List<Option> cached = region.options.get(key);
         if (cached != null) {
             return cached;
@@ -1110,7 +1141,7 @@ public final class VariantEnumerator {
         Diameter step = rules.nextDiameter(byFlow.getDn());
         int blockDn = district ? region.dn : Math.min(region.dn, step != null ? step.getDn() : byFlow.getDn());
         List<TieCandidate> all = reach(finder.find(points, blockDn), points);
-        List<Option> options = options(region, blockDn, region.area, subset, false, all);
+        List<Option> options = options(region, blockDn, region.area, subset, false, all, false, slide);
         // ОКС, не вошедшие в общее дерево, draft подключает по одному, поэтому повторы нужны только одиночным
         if (subset.size() == 1) {
             int ownDn = rules.diameterFor(oksById.get(subset.get(0).getOksId()).getFlowTph()).getDn();
@@ -1119,20 +1150,20 @@ public final class VariantEnumerator {
                 if (detour(options, points.get(0), own)) {
                     // D-7: с запасом по диаметру маршрута нет или он в обход, а отступы для Ду по расходу меньше и
                     // могут пропустить короче: повтор с этим Ду, отступы и предельная длина — по фактическому Ду
-                    options.addAll(options(region, ownDn, region.area, subset, true, own));
+                    options.addAll(options(region, ownDn, region.area, subset, true, own, false, slide));
                 }
             }
             if (incomplete(options) && !district) {
                 // обход может не поместиться в область вокруг ОКС и кандидатов: последняя попытка на широкой области
                 options.addAll(options(region, blockDn, region.wideArea, subset, false,
-                        candidates(points, flow, blockDn)));
+                        candidates(points, flow, blockDn), false, slide));
             }
             if (incomplete(options)) {
                 // маршрута нет из-за поворота в точке выхода из здания круче 90°: трасса вдоль финального участка
                 // длиннее, но неподключение при доступном маршруте запрещено (п. 2.5). Область широкая: обход
                 // в тесной застройке выходит за прямоугольник вокруг точки и кандидатов
                 Envelope wide = district ? region.area : region.wideArea;
-                options.addAll(options(region, blockDn, wide, subset, false, candidates(points, flow, blockDn), true));
+                options.addAll(options(region, blockDn, wide, subset, false, candidates(points, flow, blockDn), true, slide));
             }
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
@@ -1140,8 +1171,13 @@ public final class VariantEnumerator {
             // все ближайшие кандидаты дают ту же врезку, а вариантов нужно не меньше двух (правило variants):
             // пробуется та же сеть дальше OTHER_TIE_M от лучшей врезки
             List<TieCandidate> along = finder.along(options.get(0).tree.tie, blockDn, OTHER_TIE_M);
-            options.addAll(options(region, blockDn, region.area, subset, false, along));
+            options.addAll(options(region, blockDn, region.area, subset, false, along, false, slide));
             options.sort(Comparator.comparingDouble(option -> option.score));
+            if (alternativeIndex(options) == 0) {
+                // сдвиг к стволу вернул врезку к лучшей: другую врезку для второго варианта даёт дерево без сдвига
+                options.addAll(options(region, blockDn, region.area, subset, false, along, false, false));
+                options.sort(Comparator.comparingDouble(option -> option.score));
+            }
         }
         region.options.put(key, options);
         return options;
@@ -1189,11 +1225,12 @@ public final class VariantEnumerator {
 
     private List<Option> options(Region region, int dn, Envelope area, List<ConnectionPoint> subset, boolean verify,
             List<TieCandidate> candidates) {
-        return options(region, dn, area, subset, verify, candidates, false);
+        return options(region, dn, area, subset, verify, candidates, false, true);
     }
 
+    /** {@code slide} — переносить врезку к стволу, см. {@link #slid} и {@link #rerooted}. */
     private List<Option> options(Region region, int dn, Envelope area, List<ConnectionPoint> subset, boolean verify,
-            List<TieCandidate> candidates, boolean fromPortalDirection) {
+            List<TieCandidate> candidates, boolean fromPortalDirection, boolean slide) {
         String label = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(","));
         // метр ветки стоит в S и как стоимость трубы, и как длина: разовый расход переводится в метры по обоим
         double metreRub = rules.diameter(dn).getNewRubM() + rules.lengthWorthRub();
@@ -1209,10 +1246,161 @@ public final class VariantEnumerator {
                 log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
                 return null;
             }
-            return option(tree, label, verify, area, dn, region);
+            // углы трассы срезаются по точному отступу, врезка переносится к стволу или ствол прокладывается к
+            // врезке у первой камеры; из того, что соберётся, берётся лучшее по score, вплоть до дерева как построено
+            Tree slid = slide ? slid(tree, router, dn, metreRub) : tree;
+            Tree rerooted = slide ? rerooted(tree, router, dn, metreRub) : tree;
+            // новый ствол подходит к своей трубе тоже наискось
+            rerooted = rerooted == tree ? tree : slid(rerooted, router, dn, metreRub);
+            Option best = null;
+            for (Tree shape : new java.util.LinkedHashSet<>(List.of(slid, rerooted, tree))) {
+                // срезка только укорачивает рёбра: несрезанное дерево собирается, если срезанное не собралось
+                Tree cut = builder.cut(shape, router);
+                Option option = cut == shape ? null : option(cut, label, verify, area, dn, region);
+                option = option != null ? option : option(shape, label, verify, area, dn, region);
+                if (option != null && (best == null || option.score < best.score)) {
+                    best = option;
+                }
+            }
+            return best;
         }).filter(Objects::nonNull).collect(Collectors.toList());
         options.sort(Comparator.comparingDouble(option -> option.score));
         return options;
+    }
+
+    /**
+     * Дерево с врезкой, перенесённой к вершине ствола: кандидаты врезки — проекции точек подключения, и ствол
+     * подходит к сети наискось или тянется к дальней врезке мимо ближней трубы (гипотеза Q12). У каждой вершины
+     * ствола пробуются проекция на трубу прежней врезки и кандидаты врезки самой вершины; берётся врезка, у которой
+     * прямая до вершины вместе с остатком ствола и ценой узла врезки короче всего и хотя бы на SLIDE_MIN_M короче
+     * прежнего. Прямая допустима, без спецпрохода, не идёт вдоль трубы, не ближе TREES_APART_M к другим отрезкам
+     * дерева, а поворот в вершине не круче 90°. Переносится только врезка с одним ребром; иначе дерево прежнее.
+     */
+    private Tree slid(Tree tree, Router router, int dn, double metreRub) {
+        if (tree.degree(tree.root) != 1) {
+            return tree;
+        }
+        Tree.Edge trunk = tree.edges.stream().filter(edge -> edge.from == tree.root).findFirst().orElseThrow();
+        List<LineSegment> others = new ArrayList<>();
+        for (Tree.Edge edge : tree.edges) {
+            Coordinate[] coords = edge.line.getCoordinates();
+            for (int i = 0; edge != trunk && i + 1 < coords.length; i++) {
+                others.add(new LineSegment(coords[i], coords[i + 1]));
+            }
+        }
+        Coordinate[] coords = trunk.line.getCoordinates();
+        ObstacleSet obstacles = router.obstacles();
+        double rest = trunk.line.getLength();
+        double best = rest + tiePenalty(tree.tie, dn, metreRub) - SLIDE_MIN_M;
+        TieCandidate tie = null;
+        int from = 0;
+        // проекция точки подключения на трубу и так среди кандидатов врезки
+        int last = trunk.to.kind == Tree.Kind.CONNECTION ? coords.length - 1 : coords.length;
+        for (int k = 1; k < last; k++) {
+            rest -= coords[k - 1].distance(coords[k]);
+            Point vertex = factory.createPoint(coords[k]);
+            // врезки у самой вершины: ближайшие камеры и проекции на ближайшие участки; в районе города поиск по
+            // всем камерам на каждую вершину дорог, там только своя труба
+            List<TieCandidate> candidates = new ArrayList<>(district ? List.of() : finder.find(List.of(vertex), dn));
+            TieCandidate same = tree.tie.isChamber() ? null : finder.onSamePipe(tree.tie, vertex, dn);
+            if (same != null) {
+                candidates.add(same);
+            }
+            for (TieCandidate candidate : candidates) {
+                Coordinate at = candidate.getPoint().getCoordinate();
+                double straight = at.distance(coords[k]);
+                if (straight + rest + tiePenalty(candidate, dn, metreRub) >= best || straight < TreeBuilder.MIN_PIECE_M
+                        || k + 1 < coords.length && Router.deflectionDeg(at, coords[k], coords[k + 1]) > Router.MAX_TURN_DEG
+                        || !(obstacles.edgeWeight(at, coords[k], candidate.getIgnored()) <= straight + 1e-9)
+                        || obstacles.alongIgnored(at, coords[k], candidate.getIgnored())) {
+                    continue;
+                }
+                LineSegment segment = new LineSegment(at, coords[k]);
+                boolean apart = true;
+                for (LineSegment other : others) {
+                    apart &= segment.distance(other) >= TREES_APART_M;
+                }
+                // отрезки ствола до вершины k уходят вместе с прежней врезкой, отрезок из k смежный
+                for (int i = k + 1; i + 1 < coords.length; i++) {
+                    apart &= segment.distance(new LineSegment(coords[i], coords[i + 1])) >= TREES_APART_M;
+                }
+                if (apart) {
+                    best = straight + rest + tiePenalty(candidate, dn, metreRub);
+                    tie = candidate;
+                    from = k;
+                }
+            }
+        }
+        if (tie == null) {
+            return tree;
+        }
+        Tree result = new Tree(tie);
+        result.unconnected.addAll(tree.unconnected);
+        Coordinate[] line = new Coordinate[coords.length - from + 1];
+        line[0] = tie.getPoint().getCoordinate();
+        System.arraycopy(coords, from, line, 1, coords.length - from);
+        for (Tree.Edge edge : tree.edges) {
+            result.edges.add(edge == trunk ? new Tree.Edge(result.root, trunk.to, factory.createLineString(line)) : edge);
+        }
+        return result;
+    }
+
+    /**
+     * Дерево со стволом, проложенным заново от первой камеры ветвления к лучшей из врезок у неё: ближайших камер
+     * и проекций на ближайшие участки. Кандидаты врезки дерева — проекции точек подключения, а ствол от камеры
+     * ветвления до них бывает длиннее пути к трубе рядом с самой камерой. Маршрут берётся по графу, если с ценой
+     * узла врезки он хотя бы на SLIDE_MIN_M короче прежнего ствола; остальное проверяет сборка.
+     */
+    private Tree rerooted(Tree tree, Router router, int dn, double metreRub) {
+        if (district || tree.degree(tree.root) != 1) {
+            return tree;
+        }
+        Tree.Edge trunk = tree.edges.stream().filter(edge -> edge.from == tree.root).findFirst().orElseThrow();
+        if (trunk.to.kind != Tree.Kind.JUNCTION) {
+            return tree;
+        }
+        Point junction = factory.createPoint(trunk.to.point);
+        double best = trunk.line.getLength() + tiePenalty(tree.tie, dn, metreRub) - SLIDE_MIN_M;
+        TieCandidate tie = null;
+        Coordinate[] line = null;
+        for (TieCandidate candidate : finder.find(List.of(junction), dn)) {
+            // маршрут не короче прямой: дальние врезки не ищутся
+            if (candidate.nodeKey().equals(tree.tie.nodeKey())
+                    || junction.distance(candidate.getPoint()) + tiePenalty(candidate, dn, metreRub) >= best) {
+                continue;
+            }
+            Route route = router.routeToAny(junction, List.of(candidate.getPoint()), candidate.getIgnored(), true);
+            if (route == null || route.getWeight() + tiePenalty(candidate, dn, metreRub) >= best) {
+                continue;
+            }
+            Coordinate[] coords = route.getGeometry().getCoordinates();
+            Coordinate[] reversed = new Coordinate[coords.length];
+            for (int i = 0; i < coords.length; i++) {
+                reversed[i] = coords[coords.length - 1 - i];
+            }
+            if (router.obstacles().alongIgnored(reversed[0], reversed[1], candidate.getIgnored())) {
+                continue;
+            }
+            best = route.getWeight() + tiePenalty(candidate, dn, metreRub);
+            tie = candidate;
+            line = reversed;
+        }
+        if (tie == null) {
+            return tree;
+        }
+        line[0] = tie.getPoint().getCoordinate();
+        line[line.length - 1] = trunk.to.point;
+        Tree result = new Tree(tie);
+        result.unconnected.addAll(tree.unconnected);
+        for (Tree.Edge edge : tree.edges) {
+            result.edges.add(edge == trunk ? new Tree.Edge(result.root, trunk.to, factory.createLineString(line)) : edge);
+        }
+        return result;
+    }
+
+    /** Цена узла врезки в метрах ветки: врезка в камеру или новая камера на трубе. */
+    private double tiePenalty(TieCandidate tie, int dn, double metreRub) {
+        return (tie.isChamber() ? rules.tieInCost() : rules.chamberCost(dn)) / metreRub;
     }
 
     /**
@@ -1348,13 +1536,12 @@ public final class VariantEnumerator {
         }
     }
 
-    /** Правило variants: другой existing_object_id, врезка дальше 20 м от всех врезок другого или другое разбиение. */
+    /**
+     * Правило variants (docs/interpretation.md): врезка дальше 20 м от всех врезок другого или другое разбиение. Другой
+     * existing_object_id сам по себе различием не считается: врезка на соседнюю трубу ближе 20 м — та же трасса.
+     */
     private boolean differ(Draft a, Draft b) {
-        Set<String> idsA = new HashSet<>();
-        Set<String> idsB = new HashSet<>();
-        a.trees.forEach(tree -> idsA.add(tree.tie.getExistingObjectId()));
-        b.trees.forEach(tree -> idsB.add(tree.tie.getExistingObjectId()));
-        return !idsA.equals(idsB) || farTie(a, b) || farTie(b, a) || !partition(a).equals(partition(b));
+        return farTie(a, b) || farTie(b, a) || !partition(a).equals(partition(b));
     }
 
     private static boolean farTie(Draft mine, Draft others) {
