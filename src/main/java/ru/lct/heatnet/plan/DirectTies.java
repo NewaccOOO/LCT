@@ -4,9 +4,12 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
@@ -25,6 +28,7 @@ import ru.lct.heatnet.graph.Router;
 import ru.lct.heatnet.model.Chamber;
 import ru.lct.heatnet.model.ConnectionPoint;
 import ru.lct.heatnet.model.ExistingOks;
+import ru.lct.heatnet.model.FutureOks;
 import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.NetworkSegment;
 import ru.lct.heatnet.model.Restriction;
@@ -46,6 +50,8 @@ final class DirectTies {
     private static final double REACH_M = Double.parseDouble(System.getProperty("heatnet.city.reach", "300"));
     /** Сколько точек контура пробуется как начало финального участка: ближайшая, затем ближайшие точки сторон. */
     private static final int PORTAL_TRIES = 8;
+    /** Столько ближних точек подряд получают участки к уже поставленным новым камерам одной параллельной пачкой. */
+    private static final int AHEAD = 32;
     private static final double PORTAL_EXTRA_M = 0.3;
     private static final double PORTAL_STEP_M = 0.5;
     private static final double PORTAL_MAX_M = 30;
@@ -61,8 +67,10 @@ final class DirectTies {
     private final GeometryFactory factory = new GeometryFactory();
     private final STRtree chambers = new STRtree();
     private final STRtree pipes = new STRtree();
+    /** Рамка существующей сети: труб и камер. */
+    private final Envelope network = new Envelope();
     /** Рамка сети с запасом REACH_M: точка вне её дальше REACH_M от любой врезки, кандидаты у неё не считаются. */
-    private final Envelope withinReach = new Envelope();
+    private final Envelope withinReach;
     /** Почему прямые участки отбрасывались, для лога: причина → число. */
     private final Map<String, Integer> rejected = new java.util.TreeMap<>();
 
@@ -87,12 +95,13 @@ final class DirectTies {
         this.buildingByConnection = buildingByConnection;
         for (Chamber chamber : input.getChambers()) {
             chambers.insert(chamber.getGeometry().getEnvelopeInternal(), chamber);
-            withinReach.expandToInclude(chamber.getGeometry().getEnvelopeInternal());
+            network.expandToInclude(chamber.getGeometry().getEnvelopeInternal());
         }
         for (NetworkSegment segment : input.getSegments()) {
             pipes.insert(segment.getGeometry().getEnvelopeInternal(), segment);
-            withinReach.expandToInclude(segment.getGeometry().getEnvelopeInternal());
+            network.expandToInclude(segment.getGeometry().getEnvelopeInternal());
         }
+        withinReach = new Envelope(network);
         withinReach.expandBy(REACH_M);
         chambers.build();
         pipes.build();
@@ -102,8 +111,60 @@ final class DirectTies {
     private static final class Ledger {
         final List<Tree> trees = new ArrayList<>();
         final Map<String, Integer> used = new HashMap<>();
+        /** Новые камеры парами «ключ узла → врезка»: ключ через String.format у каждой точки заметно тормозил. */
         final Quadtree created = new Quadtree();
         final Map<String, TieCandidate> createdByKey = new HashMap<>();
+    }
+
+    /** Общие для вариантов кандидаты точки: существующие камеры и трубы с допустимыми прямыми участками. */
+    private static final class Shared {
+        final int dn;
+        final boolean far;
+        final List<Option> options = new ArrayList<>();
+        final Set<String> seen = new HashSet<>();
+        /** Отказы, с которыми кандидаты считались: в общий счёт идут по порядку точек. */
+        final Map<String, Integer> rejected = new HashMap<>();
+        /** Участки к новым камерам, посчитанные заранее пачкой точек, см. {@link #ahead}. */
+        final Map<TieCandidate, Tried> tried = new IdentityHashMap<>();
+        /** Выходы из своего здания, общие для всех врезок точки, см. {@link #portals}. */
+        List<Portal> portals;
+
+        Shared(int dn, boolean far) {
+            this.dn = dn;
+            this.far = far;
+        }
+    }
+
+    /** Точка вне рамки сети с запасом REACH_M: кандидатов у неё нет, один отказ «далеко». */
+    private static final Shared FAR = new Shared(0, true);
+
+    static {
+        FAR.rejected.put("далеко", 1);
+    }
+
+    /**
+     * Выход из своего здания на луче через сторону контура: точка выхода (null — выхода нет) и пересекает ли отрезок
+     * от точки подключения до выхода здание один раз.
+     */
+    private static final class Portal {
+        final Coordinate exit;
+        final boolean leavesOnce;
+
+        Portal(Coordinate exit, boolean leavesOnce) {
+            this.exit = exit;
+            this.leavesOnce = leavesOnce;
+        }
+    }
+
+    /** Прямой участок к новой камере: вариант подключения (null — участок недопустим) и отказы при его расчёте. */
+    private static final class Tried {
+        final Option option;
+        final Map<String, Integer> rejected;
+
+        Tried(Option option, Map<String, Integer> rejected) {
+            this.option = option;
+            this.rejected = rejected;
+        }
     }
 
     /**
@@ -113,79 +174,53 @@ final class DirectTies {
      * трубе — по два участка каждой проходящей трубы и новые в остаток до четырёх. Точки без допустимого варианта
      * попадают в {@code rest}.
      */
-    List<List<Tree>> connect(List<ConnectionPoint> connections, Map<String, Double> flowByOks, int variants,
+    List<List<Tree>> connect(List<ConnectionPoint> connections, Map<String, FutureOks> oksById, int variants,
             List<ConnectionPoint> rest) {
         List<Ledger> ledgers = new ArrayList<>();
         for (int k = 0; k < variants; k++) {
             ledgers.add(new Ledger());
         }
         long started = System.nanoTime();
-        int done = 0;
-        for (ConnectionPoint connection : connections) {
-            if (++done % 500_000 == 0) {
-                log.info("direct: {}/{} points, rest={} elapsed={}s", done, connections.size(), rest.size(),
+        // общие кандидаты от учёта мест не зависят и считаются параллельно, места и новые камеры — по порядку точек.
+        // На городе 98 % точек вне рамки сети с запасом REACH_M, любой кандидат у них дальше REACH_M; ближние идут
+        // подряд в начале списка, поэтому параллельно считаются только они, иначе почти все достаются одной нити
+        // расходы и рамка — проход по 3 млн объектов, параллельно; диаметр по порядку, чтобы ошибка расхода была прежней
+        double[] flows = new double[connections.size()];
+        boolean[] reachable = new boolean[connections.size()];
+        IntStream.range(0, connections.size()).parallel().forEach(i -> {
+            ConnectionPoint connection = connections.get(i);
+            FutureOks oks = oksById.get(connection.getOksId());
+            flows[i] = oks == null ? 0.0 : oks.getFlowTph();
+            reachable[i] = withinReach.contains(connection.getGeometry().getCoordinate());
+        });
+        Shared[] prepared = new Shared[connections.size()];
+        List<Integer> near = new ArrayList<>();
+        for (int i = 0; i < connections.size(); i++) {
+            int dn = rules.diameterFor(flows[i]).getDn();
+            if (reachable[i]) {
+                prepared[i] = new Shared(dn, false);
+                near.add(i);
+            } else {
+                prepared[i] = FAR;
+            }
+        }
+        near.parallelStream().forEach(i -> shared(connections.get(i), prepared[i]));
+        int placed = 0;
+        for (int i = 0; i < connections.size(); i++) {
+            if ((i + 1) % 500_000 == 0) {
+                log.info("direct: {}/{} points, rest={} elapsed={}s", i + 1, connections.size(), rest.size(),
                         (System.nanoTime() - started) / 1_000_000_000L);
             }
-            double flow = flowByOks.getOrDefault(connection.getOksId(), 0.0);
-            int dn = rules.diameterFor(flow).getDn();
-            Point point = connection.getGeometry();
-            // общие для вариантов кандидаты: существующие камеры и трубы; место проверяется по варианту ниже
-            List<Option> shared = new ArrayList<>();
-            Set<String> seen = new HashSet<>();
-            // на городе 98 % точек вне рамки сети с запасом REACH_M: любой кандидат у них дальше REACH_M, и шесть
-            // запросов к индексам ради отказа «далеко» не делаются
-            boolean far = !withinReach.contains(point.getCoordinate());
-            if (far) {
-                reject("далеко");
-            }
-            for (Object item : far || chambers.size() == 0 ? List.of() : nearest(chambers, point)) {
-                TieCandidate tie = finder.chamberCandidate((Chamber) item);
-                if (tie != null && seen.add(tie.nodeKey())) {
-                    option(shared, tie, connection, dn, rules.tieInCost());
-                }
-            }
-            for (Object item : far || pipes.size() == 0 ? List.of() : nearest(pipes, point)) {
-                NetworkSegment segment = (NetworkSegment) item;
-                TieCandidate tie = finder.pipeCandidate(segment, point, dn);
-                if (tie == null || !seen.add(tie.nodeKey())) {
-                    continue;
-                }
-                option(shared, tie, connection, dn, tie.isChamber() ? rules.tieInCost()
-                        : rules.chamberCost(Math.max(dn, segment.getDiameter())));
-            }
+            ConnectionPoint connection = connections.get(i);
+            Shared shared = prepared[i];
+            shared.rejected.forEach((reason, count) -> rejected.merge(reason, count, Integer::sum));
             boolean connected = false;
-            for (int k = 0; k < variants; k++) {
-                Ledger ledger = ledgers.get(k);
-                List<Option> options = new ArrayList<>();
-                for (Option option : shared) {
-                    if (!option.tie.isChamber() || roomInChamber(option.tie, ledger.used)) {
-                        options.add(option);
-                    }
+            if (!shared.far) {
+                if (placed % AHEAD == 0) {
+                    ahead(connections, prepared, near.subList(placed, Math.min(near.size(), placed + AHEAD)), ledgers);
                 }
-                Envelope around = new Envelope(point.getCoordinate());
-                around.expandBy(REACH_M);
-                for (Object item : far ? List.of() : ledger.created.query(around)) {
-                    TieCandidate tie = (TieCandidate) item;
-                    if (ledger.used.getOrDefault(tie.nodeKey(), 0) < tie.getCapacity() && !seen.contains(tie.nodeKey())) {
-                        option(options, tie, connection, dn, 0);
-                    }
-                }
-                options.sort(Comparator.comparingDouble(option -> option.cost));
-                if (options.isEmpty()) {
-                    continue;
-                }
-                connected = true;
-                Option chosen = options.get(Math.min(k, options.size() - 1));
-                String key = chosen.tie.nodeKey();
-                ledger.used.merge(key, 1, Integer::sum);
-                if (!chosen.tie.isChamber() && ledger.createdByKey.putIfAbsent(key, chosen.tie) == null) {
-                    ledger.created.insert(chosen.tie.getPoint().getEnvelopeInternal(), chosen.tie);
-                }
-                Tree tree = new Tree(chosen.tie);
-                Coordinate[] coords = chosen.line.clone();
-                coords[0] = tree.root.point;
-                tree.edges.add(new Tree.Edge(tree.root, Tree.Node.connection(connection), factory.createLineString(coords)));
-                ledger.trees.add(tree);
+                placed++;
+                connected = place(connection, shared, ledgers);
             }
             if (!connected) {
                 rest.add(connection);
@@ -202,9 +237,143 @@ final class DirectTies {
         return result;
     }
 
-    private boolean reject(String reason) {
-        rejected.merge(reason, 1, Integer::sum);
+    /** Общие кандидаты точки у сети: ближайшие существующие камеры и врезки в ближайшие трубы. */
+    private void shared(ConnectionPoint connection, Shared shared) {
+        int dn = shared.dn;
+        Point point = connection.getGeometry();
+        for (Object item : chambers.isEmpty() ? List.of() : nearest(chambers, point)) {
+            TieCandidate tie = finder.chamberCandidate((Chamber) item);
+            if (tie != null && shared.seen.add(tie.nodeKey())) {
+                add(shared.options, option(tie, connection, shared, rules.tieInCost(), shared.rejected));
+            }
+        }
+        for (Object item : pipes.isEmpty() ? List.of() : nearest(pipes, point)) {
+            NetworkSegment segment = (NetworkSegment) item;
+            TieCandidate tie = finder.pipeCandidate(segment, point, dn);
+            if (tie == null || !shared.seen.add(tie.nodeKey())) {
+                continue;
+            }
+            add(shared.options, option(tie, connection, shared, tie.isChamber() ? rules.tieInCost()
+                    : rules.chamberCost(Math.max(dn, segment.getDiameter())), shared.rejected));
+        }
+    }
+
+    /**
+     * Участки от следующих ближних точек ко всем новым камерам рядом, уже поставленным и со свободным местом, одной
+     * параллельной пачкой: у точки таких камер в среднем 18, и параллельный расчёт по одной точке больше ждал нитей,
+     * чем считал. Место в камере только убывает, поэтому лишними окажутся лишь камеры, заполненные внутри пачки;
+     * камеры, поставленные точками пачки, досчитывает {@link #place}.
+     */
+    private void ahead(List<ConnectionPoint> connections, Shared[] prepared, List<Integer> points, List<Ledger> ledgers) {
+        List<Integer> owners = new ArrayList<>();
+        List<TieCandidate> ties = new ArrayList<>();
+        for (int i : points) {
+            Map<TieCandidate, Boolean> free = new IdentityHashMap<>();
+            for (Ledger ledger : ledgers) {
+                free(ledger, connections.get(i), prepared[i]).forEach(tie -> free.put(tie, true));
+            }
+            for (TieCandidate tie : free.keySet()) {
+                owners.add(i);
+                ties.add(tie);
+            }
+        }
+        List<Tried> results = IntStream.range(0, ties.size()).parallel()
+                .mapToObj(t -> tried(ties.get(t), connections.get(owners.get(t)), prepared[owners.get(t)]))
+                .collect(Collectors.toList());
+        for (int t = 0; t < ties.size(); t++) {
+            prepared[owners.get(t)].tried.put(ties.get(t), results.get(t));
+        }
+    }
+
+    /**
+     * Подключение точки в каждом варианте: общие кандидаты со свободным местом и поставленные раньше новые камеры
+     * рядом. Участки к новым камерам от варианта не зависят и считаются по разу на камеру; отказы учитываются по
+     * вариантам, как при расчёте подряд. false — ни в одном варианте допустимого участка нет.
+     */
+    private boolean place(ConnectionPoint connection, Shared shared, List<Ledger> ledgers) {
+        List<List<TieCandidate>> free = new ArrayList<>();
+        List<TieCandidate> missing = new ArrayList<>();
+        for (Ledger ledger : ledgers) {
+            List<TieCandidate> ties = free(ledger, connection, shared);
+            for (TieCandidate tie : ties) {
+                if (!shared.tried.containsKey(tie)) {
+                    shared.tried.put(tie, null);
+                    missing.add(tie);
+                }
+            }
+            free.add(ties);
+        }
+        List<Tried> results = missing.parallelStream().map(tie -> tried(tie, connection, shared))
+                .collect(Collectors.toList());
+        for (int t = 0; t < missing.size(); t++) {
+            shared.tried.put(missing.get(t), results.get(t));
+        }
+        boolean connected = false;
+        for (int k = 0; k < ledgers.size(); k++) {
+            Ledger ledger = ledgers.get(k);
+            List<Option> options = new ArrayList<>();
+            for (Option option : shared.options) {
+                if (!option.tie.isChamber() || roomInChamber(option.tie, ledger.used)) {
+                    options.add(option);
+                }
+            }
+            for (TieCandidate tie : free.get(k)) {
+                Tried result = shared.tried.get(tie);
+                result.rejected.forEach((reason, count) -> rejected.merge(reason, count, Integer::sum));
+                add(options, result.option);
+            }
+            options.sort(Comparator.comparingDouble(option -> option.cost));
+            if (options.isEmpty()) {
+                continue;
+            }
+            connected = true;
+            Option chosen = options.get(Math.min(k, options.size() - 1));
+            String key = chosen.tie.nodeKey();
+            ledger.used.merge(key, 1, Integer::sum);
+            if (!chosen.tie.isChamber() && ledger.createdByKey.putIfAbsent(key, chosen.tie) == null) {
+                ledger.created.insert(chosen.tie.getPoint().getEnvelopeInternal(), Map.entry(key, chosen.tie));
+            }
+            Tree tree = new Tree(chosen.tie);
+            Coordinate[] coords = chosen.line.clone();
+            coords[0] = tree.root.point;
+            tree.edges.add(new Tree.Edge(tree.root, Tree.Node.connection(connection), factory.createLineString(coords)));
+            ledger.trees.add(tree);
+        }
+        shared.tried.clear();
+        return connected;
+    }
+
+    /** Новые камеры варианта у точки со свободным местом, кроме её общих кандидатов, в порядке индекса. */
+    private static List<TieCandidate> free(Ledger ledger, ConnectionPoint connection, Shared shared) {
+        Envelope around = new Envelope(connection.getGeometry().getCoordinate());
+        around.expandBy(REACH_M);
+        List<TieCandidate> ties = new ArrayList<>();
+        for (Object item : ledger.created.query(around)) {
+            @SuppressWarnings("unchecked")
+            Map.Entry<String, TieCandidate> created = (Map.Entry<String, TieCandidate>) item;
+            String key = created.getKey();
+            TieCandidate tie = created.getValue();
+            if (ledger.used.getOrDefault(key, 0) < tie.getCapacity() && !shared.seen.contains(key)) {
+                ties.add(tie);
+            }
+        }
+        return ties;
+    }
+
+    private Tried tried(TieCandidate tie, ConnectionPoint connection, Shared shared) {
+        Map<String, Integer> reasons = new HashMap<>();
+        return new Tried(option(tie, connection, shared, 0, reasons), reasons);
+    }
+
+    private static boolean reject(Map<String, Integer> reasons, String reason) {
+        reasons.merge(reason, 1, Integer::sum);
         return false;
+    }
+
+    private static void add(List<Option> options, Option option) {
+        if (option != null) {
+            options.add(option);
+        }
     }
 
     /** В существующей камере после уже сделанных подключений есть место ещё для одного участка. */
@@ -212,11 +381,17 @@ final class DirectTies {
         return finder.links(tie.getExistingObjectId()) + used.getOrDefault(tie.nodeKey(), 0) < rules.chamberRule().getMaxSegments();
     }
 
-    /** Расстояние от точки до ближайшего объекта существующей сети: трубы или камеры. */
-    double networkDistance(Point point) {
+    /**
+     * Расстояние от точки до ближайшего объекта существующей сети: трубы или камеры. Точка дальше {@code limit} от
+     * рамки сети дальше limit и от самой сети: для неё +∞ без запросов к индексам (на городе таких 3 млн).
+     */
+    double networkDistance(Point point, double limit) {
+        if (network.isNull() || network.distance(point.getEnvelopeInternal()) > limit) {
+            return Double.POSITIVE_INFINITY;
+        }
         double best = Double.POSITIVE_INFINITY;
         for (STRtree tree : List.of(pipes, chambers)) {
-            if (tree.size() == 0) {
+            if (tree.isEmpty()) {
                 continue;
             }
             ItemDistance distance = (a, b) -> ((Geometry) geometry(a)).distance((Geometry) geometry(b));
@@ -239,11 +414,13 @@ final class DirectTies {
         return true;
     }
 
-    /** Добавляет вариант подключения к врезке, если прямой участок допустим. */
-    private void option(List<Option> options, TieCandidate tie, ConnectionPoint connection, int dn, double nodeCost) {
-        Coordinate[] line = line(tie, connection, dn);
+    /** Вариант подключения к врезке; null — прямой участок недопустим, причина в {@code reasons}. */
+    private Option option(TieCandidate tie, ConnectionPoint connection, Shared shared, double nodeCost,
+            Map<String, Integer> reasons) {
+        int dn = shared.dn;
+        Coordinate[] line = line(tie, connection, shared, reasons);
         if (line == null) {
-            return;
+            return null;
         }
         double length = 0;
         for (int i = 0; i + 1 < line.length; i++) {
@@ -251,7 +428,7 @@ final class DirectTies {
         }
         Diameter byLength = rules.diameterForLength(length);
         int actual = Math.max(dn, byLength == null ? dn : byLength.getDn());
-        options.add(new Option(tie, line, nodeCost + length * rules.diameter(actual).getNewRubM()));
+        return new Option(tie, line, nodeCost + length * rules.diameter(actual).getNewRubM());
     }
 
     /**
@@ -259,11 +436,12 @@ final class DirectTies {
      * финальный), иначе через точку выхода на луче «точка → ближайшая граница» (приложение 18.09, п. 2.2). null —
      * участок нарушает отступы или идёт вдоль трубы врезки.
      */
-    private Coordinate[] line(TieCandidate tie, ConnectionPoint connection, int dn) {
+    private Coordinate[] line(TieCandidate tie, ConnectionPoint connection, Shared shared, Map<String, Integer> reasons) {
+        int dn = shared.dn;
         Coordinate cp = connection.getGeometry().getCoordinate();
         Coordinate tiePoint = tie.getPoint().getCoordinate();
         if (cp.distance(tiePoint) > REACH_M) {
-            reject("далеко");
+            reject(reasons, "далеко");
             return null;
         }
         ExistingOks building = buildingByConnection.get(connection.getId());
@@ -272,46 +450,63 @@ final class DirectTies {
         if (building == null || building.getGeometry().distance(tie.getPoint()) <= clearance) {
             Coordinate[] line = {tiePoint, cp};
             if (cp.distance(tiePoint) < TreeBuilder.MIN_PIECE_M) {
-                reject("короче метра");
+                reject(reasons, "короче метра");
                 return null;
             }
             if (building != null && !TreeBuilder.leavesOnce(building.getGeometry(), cp, tiePoint)) {
-                reject("снова через своё здание");
+                reject(reasons, "снова через своё здание");
                 return null;
             }
-            return valid(line, 0, tie, dn, own) ? line : null;
+            return valid(line, 0, tie, dn, own, reasons) ? line : null;
         }
-        // ближайшая точка внешнего контура, затем ближайшие точки других сторон: луч через ближайшую может упираться
-        // в зону соседа или давать поворот круче 90° к врезке
-        int tries = 0;
-        Coordinate last = null;
-        for (Coordinate anchor : anchors(building.getGeometry(), cp)) {
-            if (last != null && anchor.distance(last) < TreeBuilder.MIN_PIECE_M) {
+        for (Portal portal : portals(cp, shared, building, clearance)) {
+            if (portal.exit == null) {
+                reject(reasons, "нет выхода");
                 continue;
             }
-            last = anchor;
-            if (tries++ >= PORTAL_TRIES) {
-                break;
-            }
-            Coordinate exit = exit(cp, anchor, building, clearance);
-            if (exit == null) {
-                reject("нет выхода");
+            if (!portal.leavesOnce) {
+                reject(reasons, "снова через своё здание");
                 continue;
             }
-            if (!TreeBuilder.leavesOnce(building.getGeometry(), cp, exit)) {
-                reject("снова через своё здание");
-                continue;
-            }
+            Coordinate exit = portal.exit;
             Coordinate[] line = {tiePoint, exit, cp};
             if (Router.deflectionDeg(tiePoint, exit, cp) > Router.MAX_TURN_DEG || exit.distance(tiePoint) < TreeBuilder.MIN_PIECE_M) {
-                reject("поворот у выхода");
+                reject(reasons, "поворот у выхода");
                 continue;
             }
-            if (valid(line, 1, tie, dn, own)) {
+            if (valid(line, 1, tie, dn, own, reasons)) {
                 return line;
             }
         }
         return null;
+    }
+
+    /**
+     * Выходы из своего здания по порядку попыток: ближайшая точка внешнего контура, затем ближайшие точки других
+     * сторон — луч через ближайшую может упираться в зону соседа или давать поворот круче 90° к врезке. От врезки
+     * выходы не зависят: у точки два десятка врезок, и поиск выхода с проверкой здания шёл на каждую. Врезки точки
+     * считаются в разных нитях, поэтому выходы строятся под замком точки.
+     */
+    private List<Portal> portals(Coordinate cp, Shared shared, ExistingOks building, double clearance) {
+        synchronized (shared) {
+            if (shared.portals == null) {
+                List<Portal> portals = new ArrayList<>();
+                Coordinate last = null;
+                for (Coordinate anchor : anchors(building.getGeometry(), cp)) {
+                    if (last != null && anchor.distance(last) < TreeBuilder.MIN_PIECE_M) {
+                        continue;
+                    }
+                    last = anchor;
+                    if (portals.size() >= PORTAL_TRIES) {
+                        break;
+                    }
+                    Coordinate exit = exit(cp, anchor, building, clearance);
+                    portals.add(new Portal(exit, exit != null && TreeBuilder.leavesOnce(building.getGeometry(), cp, exit)));
+                }
+                shared.portals = portals;
+            }
+            return shared.portals;
+        }
     }
 
     /** Ближайшие к cp точки сторон внешних контуров полигона по возрастанию расстояния. */
@@ -369,7 +564,8 @@ final class DirectTies {
      * запретным ограничениям и существующей сети, не пересекают объекты со специальным проходом и не идут вдоль
      * труб врезки.
      */
-    private boolean valid(Coordinate[] line, int finalPiece, TieCandidate tie, int dn, String ownId) {
+    private boolean valid(Coordinate[] line, int finalPiece, TieCandidate tie, int dn, String ownId,
+            Map<String, Integer> reasons) {
         double halfWidth = rules.diameter(dn).getWidthM() / 2;
         double oksClearance = rules.restriction(OKS_EXISTING).clearanceM(dn) + halfWidth;
         RestrictionRule network = rules.restriction(HEAT_NETWORK);
@@ -379,7 +575,7 @@ final class DirectTies {
             String exempt = i >= finalPiece ? ownId : null;
             for (ExistingOks oks : index.existingOks(envelope)) {
                 if (!oks.getId().equals(exempt) && oks.getGeometry().distance(piece) < oksClearance - DIST_EPS_M) {
-                    return reject("чужое здание");
+                    return reject(reasons, "чужое здание");
                 }
             }
             for (Restriction restriction : index.restrictions(envelope)) {
@@ -392,12 +588,12 @@ final class DirectTies {
                 if (!rule.forbid() && geometry.getDimension() > 0 && geometry.intersects(piece)) {
                     // специальный проход прямым отрезком: у дороги и путей — под углом не меньше заданного
                     if (!crossingAllowed(piece, geometry, rule)) {
-                        return reject("угол пересечения " + restriction.getType());
+                        return reject(reasons, "угол пересечения " + restriction.getType());
                     }
                     continue;
                 }
                 if (geometry.distance(piece) < distance - DIST_EPS_M) {
-                    return reject("ограничение " + restriction.getType());
+                    return reject(reasons, "ограничение " + restriction.getType());
                 }
             }
             for (NetworkSegment segment : index.segments(envelope)) {
@@ -407,15 +603,15 @@ final class DirectTies {
                     // от врезки отрезок уходит от трубы: дальше 0,5 м он её не касается
                     double skip = TieInFinder.TOUCH_M / piece.getLength();
                     if (skip >= 1) {
-                        return reject("короче 0,5 м");
+                        return reject(reasons, "короче 0,5 м");
                     }
                     LineString away = factory.createLineString(new Coordinate[] {
                             new LineSegment(line[0], line[1]).pointAlong(skip), line[1]});
                     if (segment.getGeometry().intersects(away)) {
-                        return reject("вдоль трубы врезки");
+                        return reject(reasons, "вдоль трубы врезки");
                     }
                 } else if (segment.getGeometry().distance(piece) < distance - DIST_EPS_M) {
-                    return reject("чужая труба");
+                    return reject(reasons, "чужая труба");
                 }
             }
         }

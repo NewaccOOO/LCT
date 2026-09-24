@@ -1,6 +1,8 @@
 package ru.lct.heatnet.calc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -8,8 +10,10 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
+import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
+import org.locationtech.jts.geom.Point;
 import ru.lct.heatnet.model.ConnectionPoint;
 import ru.lct.heatnet.model.FutureOks;
 import ru.lct.heatnet.model.InputData;
@@ -92,6 +96,19 @@ class VariantCriteriaTest {
                 reasons.stream().map(r -> r.get("reason")).collect(java.util.stream.Collectors.toList()));
         assertEquals(List.of("water-1"), reasons.get(0).get("object_ids"));
         assertEquals(List.of("park-1"), reasons.get(1).get("object_ids"));
+    }
+
+    @Test
+    void openFindsRingOfSeveralZones() {
+        // четыре стороны вместе окружают точку, без верхней — буква П: рамка группы точку содержит, контур нет
+        List<Geometry> sides = List.of(factory.toGeometry(new Envelope(-30, -20, -30, 30)),
+                factory.toGeometry(new Envelope(20, 30, -30, 30)), factory.toGeometry(new Envelope(-30, 30, -30, -20)),
+                factory.toGeometry(new Envelope(-30, 30, 20, 30)));
+        Point center = factory.createPoint(new Coordinate(0, 0));
+
+        assertFalse(VariantCriteria.open(center, sides));
+        assertTrue(VariantCriteria.open(center, sides.subList(0, 3)));
+        assertTrue(VariantCriteria.open(factory.createPoint(new Coordinate(100, 0)), sides));
     }
 
     private FutureOks oks(String id) {

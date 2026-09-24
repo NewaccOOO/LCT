@@ -2,7 +2,10 @@ package ru.lct.heatnet.calc;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -11,10 +14,13 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 import org.locationtech.jts.algorithm.Angle;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.LineString;
+import org.locationtech.jts.geom.LinearRing;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.Polygon;
 import org.locationtech.jts.operation.union.UnaryUnionOp;
@@ -52,6 +58,8 @@ public final class VariantCriteria {
     private static final double ENCLOSURE_RADIUS_M = 2000;
     /** Больше стольких причин на вариант не считается: на городе неподключённых десятки тысяч, причина на каждую — секунды. */
     private static final int MAX_REASONS = 1000;
+    /** Зоны ближе этого считаются касающимися, точка ближе этого к контуру — лежащей на нём: запас на округления. */
+    private static final double TOUCH_EPS_M = 1e-3;
 
     private final InputData input;
     private final Rules rules;
@@ -66,9 +74,8 @@ public final class VariantCriteria {
     private final Map<String, Map<String, Object>> reasons = new HashMap<>();
     /** Зоны запрета по объекту и отступу для причин неподключения. */
     private final Map<String, Geometry> zoneCache = new ConcurrentHashMap<>();
-    // точка подключения и расход по ОКС: строятся при первой причине, линейный поиск на городе был O(n²)
+    // точка подключения по ОКС: строится при первой причине, линейный поиск на городе был O(n²)
     private Map<String, ConnectionPoint> connectionByOks;
-    private Map<String, Double> flowByOks;
     /** Зоны запрета по рамке: здания и запретные ограничения; строится при первой причине. */
     private STRtree forbidIndex;
 
@@ -134,14 +141,14 @@ public final class VariantCriteria {
         }
 
         double[] turns = turns(variant);
+        // проход по 3 млн ОКС города параллельно; расход складывается по порядку входа, как раньше
         Set<String> unconnected = new HashSet<>(summary.getUnconnectedOksIds());
-        int connected = 0;
+        List<FutureOks> connectedOks = input.getFutureOks().parallelStream()
+                .filter(oks -> !unconnected.contains(oks.getId())).collect(Collectors.toList());
+        int connected = connectedOks.size();
         double connectedFlow = 0;
-        for (FutureOks oks : input.getFutureOks()) {
-            if (!unconnected.contains(oks.getId())) {
-                connected++;
-                connectedFlow += oks.getFlowTph();
-            }
+        for (FutureOks oks : connectedOks) {
+            connectedFlow += oks.getFlowTph();
         }
         double costWithoutPenalty = summary.getCalculatedCost() - summary.getUnconnectedPenalty();
 
@@ -160,13 +167,16 @@ public final class VariantCriteria {
                 withoutReason++;
             }
         }
-        // геометрии своих зданий одним проходом по ОКС: поиск по id на каждую причину на городе шёл по 3 млн записей
+        // геометрии своих зданий и расходы одним проходом по ОКС: поиск по id на каждую причину на городе шёл по
+        // 3 млн записей; расход — у первого ОКС с этим id, геометрия — у последнего, как было
         Set<String> wanted = new HashSet<>(explained);
         wanted.removeAll(reasons.keySet());
         Map<String, Geometry> own = new HashMap<>();
-        for (FutureOks oks : input.getFutureOks()) {
+        Map<String, Double> flows = new HashMap<>();
+        for (FutureOks oks : wanted.isEmpty() ? List.<FutureOks>of() : input.getFutureOks()) {
             if (wanted.contains(oks.getId())) {
                 own.put(oks.getId(), oks.getGeometry());
+                flows.putIfAbsent(oks.getId(), oks.getFlowTph());
             }
         }
         List<Map<String, Object>> unconnectedReasons = new ArrayList<>();
@@ -175,7 +185,7 @@ public final class VariantCriteria {
         index();
         forbidIndex();
         Map<String, Map<String, Object>> fresh = new ConcurrentHashMap<>();
-        wanted.parallelStream().forEach(id -> fresh.put(id, reason(id, own.get(id))));
+        wanted.parallelStream().forEach(id -> fresh.put(id, reason(id, own.get(id), flows.getOrDefault(id, 0.0))));
         reasons.putAll(fresh);
         for (String oksId : explained) {
             unconnectedReasons.add(reasons.get(oksId));
@@ -252,7 +262,7 @@ public final class VariantCriteria {
                     .filter(c -> area.contains(c.getGeometry().getCoordinate()) && networkDistance(c.getGeometry()) <= reachM)
                     .forEach(c -> within.add(c.getOksId()));
         }
-        return network.size() > 0 && connectionByOks.containsKey(oksId) && !within.contains(oksId);
+        return !network.isEmpty() && connectionByOks.containsKey(oksId) && !within.contains(oksId);
     }
 
     private double networkDistance(Point point) {
@@ -282,8 +292,6 @@ public final class VariantCriteria {
         if (connectionByOks == null) {
             connectionByOks = new HashMap<>();
             input.getConnectionPoints().forEach(c -> connectionByOks.putIfAbsent(c.getOksId(), c));
-            flowByOks = new HashMap<>();
-            input.getFutureOks().forEach(o -> flowByOks.putIfAbsent(o.getId(), o.getFlowTph()));
         }
     }
 
@@ -292,13 +300,12 @@ public final class VariantCriteria {
      * маршрута при диаметре по расходу ОКС: точка внутри зоны или в кольце зон. Иначе зоны точку не замыкают, и
      * трассу не дали предельная длина, правило поворотов, углы пересечения или соседние деревья.
      */
-    private Map<String, Object> reason(String oksId, Geometry own) {
+    private Map<String, Object> reason(String oksId, Geometry own, double flow) {
         index();
         ConnectionPoint connection = connectionByOks.get(oksId);
         if (connection == null) {
             return reason(oksId, "no_connection_point", "у ОКС нет точки подключения", List.of());
         }
-        double flow = flowByOks.getOrDefault(oksId, 0.0);
         List<Diameter> diameters = rules.diameters();
         if (flow > diameters.get(diameters.size() - 1).getCapacityTph()) {
             return reason(oksId, "flow_exceeds_capacity", "расход больше пропускной способности наибольшего диаметра",
@@ -341,7 +348,7 @@ public final class VariantCriteria {
             return reason(oksId, "inside_forbidden_zone", "точка подключения внутри запретной зоны с учётом отступа: "
                     + "финальный прямой участок из своего здания упирается в чужую зону", inside);
         }
-        if (!zones.isEmpty()) {
+        if (!zones.isEmpty() && !open(point, zones.values())) {
             Geometry union = UnaryUnionOp.union(zones.values());
             for (int i = 0; i < union.getNumGeometries(); i++) {
                 Geometry part = union.getGeometryN(i);
@@ -358,6 +365,64 @@ public final class VariantCriteria {
         }
         return reason(oksId, "no_route", "запретные зоны точку не замыкают, но допустимая трасса не найдена: "
                 + "мешают предельная длина, правило поворотов, углы пересечения или соседние трассы", List.of());
+    }
+
+    /**
+     * Зоны точку заведомо не окружают. Кольцо зон вокруг точки пересекает любой луч из неё, поэтому проверяются только
+     * группы касающихся зон у луча вправо: группа не окружает точку, если её рамка точку не содержит или её объединение —
+     * один полигон, внешний контур которого точку не содержит. Объединение всех зон в радиусе 2 км на городе — 0,2 с
+     * на точку, группы у луча — миллисекунды. При сомнении false, и решает полное объединение, как раньше.
+     */
+    static boolean open(Point point, Collection<Geometry> zones) {
+        List<Geometry> list = new ArrayList<>(zones);
+        Envelope[] grown = new Envelope[list.size()];
+        STRtree byEnvelope = new STRtree();
+        double right = point.getX();
+        for (int i = 0; i < list.size(); i++) {
+            grown[i] = new Envelope(list.get(i).getEnvelopeInternal());
+            grown[i].expandBy(TOUCH_EPS_M);
+            byEnvelope.insert(grown[i], i);
+            right = Math.max(right, grown[i].getMaxX());
+        }
+        Coordinate at = point.getCoordinate();
+        LineString ray = point.getFactory().createLineString(new Coordinate[] {at, new Coordinate(right + 1, at.y)});
+        boolean[] grouped = new boolean[list.size()];
+        for (int i = 0; i < list.size(); i++) {
+            if (grouped[i] || !grown[i].intersects(ray.getEnvelopeInternal())
+                    || !list.get(i).isWithinDistance(ray, TOUCH_EPS_M)) {
+                continue;
+            }
+            List<Geometry> group = new ArrayList<>();
+            Envelope envelope = new Envelope();
+            Deque<Integer> queue = new ArrayDeque<>(List.of(i));
+            grouped[i] = true;
+            while (!queue.isEmpty()) {
+                int a = queue.poll();
+                group.add(list.get(a));
+                envelope.expandToInclude(grown[a]);
+                for (Object item : byEnvelope.query(grown[a])) {
+                    int b = (Integer) item;
+                    if (!grouped[b] && list.get(a).isWithinDistance(list.get(b), TOUCH_EPS_M)) {
+                        grouped[b] = true;
+                        queue.add(b);
+                    }
+                }
+            }
+            if (!envelope.contains(at)) {
+                continue;
+            }
+            // несколько полигонов у касающихся зон — касание в точке, его объединение всех зон может решить иначе
+            Geometry union = group.size() == 1 ? group.get(0) : UnaryUnionOp.union(group);
+            if (!(union instanceof Polygon)) {
+                return false;
+            }
+            LinearRing shell = ((Polygon) union).getExteriorRing();
+            if (shell.isWithinDistance(point, TOUCH_EPS_M)
+                    || union.getFactory().createPolygon(shell.getCoordinates()).contains(point)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void addZone(Map<String, Geometry> zones, String id, Geometry geometry, double distance, Envelope around) {

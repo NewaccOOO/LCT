@@ -9,7 +9,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 import org.locationtech.jts.algorithm.Angle;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
@@ -24,9 +26,12 @@ import ru.lct.heatnet.calc.DiameterPlanner;
 import ru.lct.heatnet.calc.FlowCalculator;
 import ru.lct.heatnet.calc.TreeEdge;
 import ru.lct.heatnet.graph.Router;
+import ru.lct.heatnet.model.Chamber;
+import ru.lct.heatnet.model.ConnectionPoint;
 import ru.lct.heatnet.model.ExistingOks;
 import ru.lct.heatnet.model.FutureOks;
 import ru.lct.heatnet.model.InputData;
+import ru.lct.heatnet.model.NetworkSegment;
 import ru.lct.heatnet.model.NewChamber;
 import ru.lct.heatnet.model.NewSegment;
 import ru.lct.heatnet.model.Restriction;
@@ -72,10 +77,13 @@ final class NetworkAssembler {
     private final SpecialObjects specials;
     private final CostCalculator costs;
     private final DiameterPlanner planner;
-    private final Map<String, Double> flowByOks = new HashMap<>();
-    /** ID входа: выходные ID с ними не совпадают. */
-    private final Set<String> inputIds = new HashSet<>();
-    private final Map<String, Boolean> startsByPrefix = new HashMap<>();
+    /** ОКС входа по id у перечислителя: своя карта расходов на 3 млн ОКС города не строится. */
+    private final Map<String, FutureOks> oksById;
+    /** ID источника входа; остальные ID берутся из списков входа, см. {@link #inputIds}. */
+    private final String sourceId;
+    /** Проверки ID входа по префиксу и целиком: выходные ID с ID входа не совпадают. */
+    private final Map<String, Boolean> startsByPrefix = new ConcurrentHashMap<>();
+    private final Map<String, Boolean> knownIds = new ConcurrentHashMap<>();
     private final GeometryFactory factory = new GeometryFactory();
 
     /** Счётчики выходных ID; общие на несколько сборок, когда один вариант собирается по частям (город). */
@@ -127,33 +135,33 @@ final class NetworkAssembler {
         }
     }
 
-    NetworkAssembler(InputData input, Rules rules, SpecialObjects specials) {
+    NetworkAssembler(InputData input, Rules rules, SpecialObjects specials, Map<String, FutureOks> oksById) {
         this.input = input;
         this.rules = rules;
         this.specials = specials;
         this.costs = new CostCalculator(rules);
         this.planner = new DiameterPlanner(rules);
-        inputIds.add(input.getSource().getId());
-        input.getSegments().forEach(segment -> inputIds.add(segment.getId()));
-        input.getChambers().forEach(chamber -> inputIds.add(chamber.getId()));
-        input.getConnectionPoints().forEach(connection -> inputIds.add(connection.getId()));
-        for (FutureOks oks : input.getFutureOks()) {
-            flowByOks.put(oks.getId(), oks.getFlowTph());
-            inputIds.add(oks.getId());
-        }
-        for (ExistingOks oks : input.getExistingOks()) {
-            inputIds.add(oks.getId());
-        }
-        for (Restriction restriction : input.getRestrictions()) {
-            inputIds.add(restriction.getId());
-        }
+        this.sourceId = input.getSource().getId();
+        this.oksById = oksById;
     }
 
     private boolean startsInputId(String prefix) {
-        // вход города — миллионы ID, а префиксов за расчёт единицы: каждый проверяется один раз
-        synchronized (startsByPrefix) {
-            return startsByPrefix.computeIfAbsent(prefix, key -> inputIds.stream().anyMatch(id -> id.startsWith(key)));
-        }
+        // вход города — миллионы ID, а префиксов за расчёт единицы: каждый проверяется один раз, повторный — без замка
+        return startsByPrefix.computeIfAbsent(prefix, key -> inputIds().anyMatch(id -> id.startsWith(key)));
+    }
+
+    private boolean isInputId(String id) {
+        return knownIds.computeIfAbsent(id, key -> inputIds().anyMatch(key::equals));
+    }
+
+    /** ID входа по спискам: множество из шести миллионов ID города строилось ради считанных проверок. */
+    private Stream<String> inputIds() {
+        return Stream.of(Stream.of(sourceId), input.getSegments().stream().map(NetworkSegment::getId),
+                input.getChambers().stream().map(Chamber::getId),
+                input.getConnectionPoints().stream().map(ConnectionPoint::getId),
+                input.getFutureOks().stream().map(FutureOks::getId),
+                input.getExistingOks().stream().map(ExistingOks::getId),
+                input.getRestrictions().stream().map(Restriction::getId)).flatMap(ids -> ids);
     }
 
     /**
@@ -172,7 +180,7 @@ final class NetworkAssembler {
     /** Сводка по частям варианта, собранным отдельно с общими счётчиками. */
     VariantSummary summary(String variantId, int rank, List<NewSegment> segments, List<NewChamber> chambers,
             int existingTieIns, List<FutureOks> unconnected) {
-        String summaryId = inputIds.contains("summary_" + variantId) ? prefix(variantId) + "summary" : "summary_" + variantId;
+        String summaryId = isInputId("summary_" + variantId) ? prefix(variantId) + "summary" : "summary_" + variantId;
         VariantSummary draft = costs.summary(summaryId, variantId, segments, chambers, existingTieIns, unconnected);
         return new VariantSummary(draft.getId(), variantId, rank, draft.getConstructionCost(),
                 draft.getChamberConstructionCost(), draft.getExistingChamberTieInCount(),
@@ -287,7 +295,8 @@ final class NetworkAssembler {
                 Edge edge = edges.get(i);
                 treeEdges.add(new TreeEdge(edge.id, edge.from(), edge.to(), edge.length));
                 if (edge.source.to.kind == Tree.Kind.CONNECTION) {
-                    oksFlowByNode.put(edge.to(), flowByOks.getOrDefault(edge.source.to.connection.getOksId(), 0.0));
+                    FutureOks oks = oksById.get(edge.source.to.connection.getOksId());
+                    oksFlowByNode.put(edge.to(), oks == null ? 0.0 : oks.getFlowTph());
                 }
             }
             Map<String, Double> flows = FlowCalculator.flows(treeEdges, root, oksFlowByNode);
