@@ -146,6 +146,9 @@ public final class VariantEnumerator {
      * граница шумит от загрузки машины: два прогона с 600 с дали 13 178 и 13 177 подключённых; 900 с — запас.
      */
     private static final long CITY_DEADLINE_S = Long.getLong("heatnet.city.deadline", 900);
+    /** Считать только районы с этими номерами (свойство heatnet.city.only, через запятую): замеры и сверка отдельных районов. */
+    private static final Set<String> CITY_ONLY = System.getProperty("heatnet.city.only") == null ? null
+            : Set.of(System.getProperty("heatnet.city.only").split(","));
 
     private static final long CITY_CACHE_MB = 64;
 
@@ -594,6 +597,9 @@ public final class VariantEnumerator {
                 List<ConnectionPoint> connections = districts.get(i);
                 int index = i;
                 futures.set(i, pool.submit(() -> {
+                    if (CITY_ONLY != null && !CITY_ONLY.contains(String.valueOf(index))) {
+                        return List.<Draft>of();
+                    }
                     if (System.nanoTime() > deadlineNanos) {
                         skipped.incrementAndGet();
                         return List.<Draft>of();
