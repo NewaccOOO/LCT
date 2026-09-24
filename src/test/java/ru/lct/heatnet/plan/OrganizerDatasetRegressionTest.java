@@ -13,11 +13,11 @@ import ru.lct.heatnet.rules.Rules;
 /**
  * Эталон S rank=1 на {@code data/real/dataset.geojson} по правилам технического приложения от 18.09.2026
  * (до них было 12.596; 13.019 до строгого финального участка в 0.6.0; 13.729 до точных зон отступа, срезки углов
- * и врезки у ствола).
+ * и врезки у ствола; 12.608 до выхода из здания по Ду участка: точки 3 и 11 теперь выходят от ближней стены).
  * Менять константу только при намеренной смене качества.
  */
 class OrganizerDatasetRegressionTest {
-    private static final double ORGANIZER_RANK1_SCORE = 12.608;
+    private static final double ORGANIZER_RANK1_SCORE = 12.866;
 
     @Test
     void rank1ScoreMatchesBaseline() throws Exception {

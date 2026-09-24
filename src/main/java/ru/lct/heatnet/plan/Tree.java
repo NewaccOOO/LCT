@@ -51,6 +51,8 @@ final class Tree {
     final Node root;
     final List<Edge> edges = new ArrayList<>();
     final List<ConnectionPoint> unconnected = new ArrayList<>();
+    /** Есть ветка по графу меньшего Ду, чем у дерева (TreeBuilder.Run#portal): отступы проверяются по Ду участков. */
+    boolean narrow;
 
     Tree(TieCandidate tie) {
         this.tie = tie;

@@ -1237,30 +1237,53 @@ public final class VariantEnumerator {
         double metreRub = rules.diameter(dn).getNewRubM() + rules.lengthWorthRub();
         Router router = region.router(dn, area);
         List<TieCandidate> cheapest = cheapestCandidates(subset, candidates);
+        TreeBuilder.Graphs graphs = new TreeBuilder.Graphs() {
+            @Override
+            public int leafDn(ConnectionPoint connection) {
+                return rules.diameterFor(flow(List.of(connection))).getDn();
+            }
+
+            @Override
+            public ObstacleSet obstacles(int otherDn) {
+                return region.obstacles(otherDn, area);
+            }
+
+            @Override
+            public Router router(int otherDn) {
+                return region.router(otherDn, area);
+            }
+        };
         // деревья кандидатов независимы, граф и кэш общие и потокобезопасны; порядок результатов — порядок
         // кандидатов, поэтому итог не зависит от расписания нитей. В районе города нити заняты районами.
         java.util.stream.Stream<TieCandidate> stream = district || !PARALLEL ? cheapest.stream() : cheapest.parallelStream();
         List<Option> options = stream.map(candidate -> {
-            Tree tree = builder.build(router, dn, area, candidate, subset, rules.chamberCost(dn) / metreRub,
-                    rules.tieInCost() / metreRub, fromPortalDirection);
-            if (tree.edges.isEmpty()) {
-                log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
-                return null;
-            }
-            // углы трассы срезаются по точному отступу, врезка переносится к стволу или ствол прокладывается к
-            // врезке у первой камеры; из того, что соберётся, берётся лучшее по score, вплоть до дерева как построено
-            Tree slid = slide ? slid(tree, router, dn, metreRub) : tree;
-            Tree rerooted = slide ? rerooted(tree, router, dn, metreRub) : tree;
-            // новый ствол подходит к своей трубе тоже наискось
-            rerooted = rerooted == tree ? tree : slid(rerooted, router, dn, metreRub);
             Option best = null;
-            for (Tree shape : new java.util.LinkedHashSet<>(List.of(slid, rerooted, tree))) {
-                // срезка только укорачивает рёбра: несрезанное дерево собирается, если срезанное не собралось
-                Tree cut = builder.cut(shape, router);
-                Option option = cut == shape ? null : option(cut, label, verify, area, dn, region);
-                option = option != null ? option : option(shape, label, verify, area, dn, region);
-                if (option != null && (best == null || option.score < best.score)) {
-                    best = option;
+            // ветки к точкам, у которых по графу дерева закрыта ближняя сторона здания, идут по графу Ду своего
+            // участка; если сборка такое дерево отвергла, оно строится заново только по графу дерева
+            for (TreeBuilder.Graphs narrow : java.util.Arrays.asList(graphs, null)) {
+                Tree tree = builder.build(router, dn, area, candidate, subset, rules.chamberCost(dn) / metreRub,
+                        rules.tieInCost() / metreRub, fromPortalDirection, narrow);
+                if (tree.edges.isEmpty()) {
+                    log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
+                    return null;
+                }
+                // углы трассы срезаются по точному отступу, врезка переносится к стволу или ствол прокладывается к
+                // врезке у первой камеры; из того, что соберётся, берётся лучшее по score, вплоть до дерева как построено
+                Tree slid = slide ? slid(tree, router, dn, metreRub) : tree;
+                Tree rerooted = slide ? rerooted(tree, router, dn, metreRub) : tree;
+                // новый ствол подходит к своей трубе тоже наискось
+                rerooted = rerooted == tree ? tree : slid(rerooted, router, dn, metreRub);
+                for (Tree shape : new java.util.LinkedHashSet<>(List.of(slid, rerooted, tree))) {
+                    // срезка только укорачивает рёбра: несрезанное дерево собирается, если срезанное не собралось
+                    Tree cut = builder.cut(shape, router);
+                    Option option = cut == shape ? null : option(cut, label, verify, area, dn, region, tree.narrow);
+                    option = option != null ? option : option(shape, label, verify, area, dn, region, tree.narrow);
+                    if (option != null && (best == null || option.score < best.score)) {
+                        best = option;
+                    }
+                }
+                if (best != null || !tree.narrow) {
+                    break;
                 }
             }
             return best;
@@ -1406,9 +1429,10 @@ public final class VariantEnumerator {
 
     /**
      * Дерево, собранное отдельным вариантом, со своим score; null, если сборка его отбросила. Если фактический ДУ
-     * участков (по предельной длине пути) больше ДУ графа, отступы проверяются заново для него.
+     * участков (по предельной длине пути) больше ДУ графа, отступы проверяются заново для него; у дерева с веткой
+     * по графу меньшего Ду ({@code narrow}) — по Ду каждого участка.
      */
-    private Option option(Tree tree, String label, boolean verify, Envelope area, int graphDn, Region region) {
+    private Option option(Tree tree, String label, boolean verify, Envelope area, int graphDn, Region region, boolean narrow) {
         Set<String> ids = new HashSet<>();
         tree.unconnected.forEach(connection -> ids.add(connection.getOksId()));
         try {
@@ -1417,7 +1441,8 @@ public final class VariantEnumerator {
                     alone.getSummary().getScore(), tree.unconnected.size());
             int maxDn = alone.getSegments().stream().mapToInt(NewSegment::getDiameter).max().orElse(graphDn);
             boolean check = verify || maxDn > graphDn;
-            return !check || clearanceHolds(tree, alone, area, region) ? new Option(tree, alone.getSummary().getScore()) : null;
+            boolean holds = narrow ? forbidClear(tree, alone, area, region) : !check || clearanceHolds(tree, alone, area, region);
+            return holds ? new Option(tree, alone.getSummary().getScore()) : null;
         } catch (IllegalStateException | IllegalArgumentException e) {
             // дерево нарушает правила при сборке (предельная длина, отступ участка, число поворотов): кандидат отбрасывается
             log.debug("options: subset={} tie={} отброшено: {}", label, tree.tie.nodeKey(), e.getMessage());
@@ -1464,6 +1489,30 @@ public final class VariantEnumerator {
             }
             for (int i = 0; i + 1 < coords.length; i++) {
                 if (Double.isNaN(obstacles.edgeWeight(coords[i], coords[i + 1], i + 2 == coords.length ? last : ignored))) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Участки не заходят в зоны запрета по своему фактическому Ду; финальный отрезок к точке подключения — без
+     * отступа к её полигону. Отступы от объектов специального прохода по Ду участка проверяет сборка.
+     */
+    private boolean forbidClear(Tree tree, Variant alone, Envelope area, Region region) {
+        Set<String> ignored = tree.tie.getIgnored();
+        for (NewSegment segment : alone.getSegments()) {
+            ObstacleSet obstacles = region.obstacles(segment.getDiameter(), area);
+            Coordinate[] coords = segment.getGeometry().getCoordinates();
+            ExistingOks building = buildingByConnection.get(segment.getEndNodeId());
+            Set<String> last = ignored;
+            if (building != null) {
+                last = new HashSet<>(ignored);
+                last.add(building.getId());
+            }
+            for (int i = 0; i + 1 < coords.length; i++) {
+                if (obstacles.forbidden(coords[i], coords[i + 1], i + 2 == coords.length ? last : ignored)) {
                     return false;
                 }
             }
