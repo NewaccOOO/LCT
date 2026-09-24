@@ -710,10 +710,13 @@ public final class ObstacleSet {
         PreparedGeometry inside = corridor == null ? null : PreparedGeometryFactory.prepare(corridor);
         double halfWidth = rules.diameter(dn).getWidthM() / 2;
         List<Zone> forbid = new ArrayList<>();
-        List<Geometry> nodeZones = new ArrayList<>();
+        // объекты и отступы зон узлов: буферы строятся потом параллельно, см. nodeZones
+        List<Geometry> nodeObjects = new ArrayList<>();
+        List<Double> nodeDistances = new ArrayList<>();
         // отступ каждой зоны узлов от объекта, см. halves
         List<Double> nodeOffsets = new ArrayList<>();
-        List<Geometry> crossingNodeZones = new ArrayList<>();
+        List<Geometry> crossingObjects = new ArrayList<>();
+        List<Double> crossingDistances = new ArrayList<>();
         List<Geometry> marginZones = new ArrayList<>();
         List<Special> specialList = new ArrayList<>();
 
@@ -722,7 +725,8 @@ public final class ObstacleSet {
         for (ExistingOks oks : index.existingOks(area)) {
             if (near(oks.getGeometry(), oksDistance, area) && (inside == null || inside.intersects(oks.getGeometry()))) {
                 forbid.add(new Zone(oks.getId(), oks.getGeometry(), oksDistance));
-                nodeZones.add(nodeZone(oks.getGeometry(), oksDistance));
+                nodeObjects.add(oks.getGeometry());
+                nodeDistances.add(oksDistance);
                 nodeOffsets.add(nodeOffset(oksDistance));
             }
         }
@@ -736,7 +740,8 @@ public final class ObstacleSet {
             if (!near(geometry, distance, area) || inside != null && !inside.intersects(geometry)) {
                 continue;
             }
-            nodeZones.add(nodeZone(geometry, distance));
+            nodeObjects.add(geometry);
+            nodeDistances.add(distance);
             nodeOffsets.add(nodeOffset(distance));
             // точку нельзя пересечь под углом или пройти через её зону: её обходят с отступом правила, как запрет
             if (rule.forbid() || geometry.getDimension() == 0) {
@@ -748,7 +753,8 @@ public final class ObstacleSet {
                     // спецпроход — один прямой участок с полосой margin_m за полигоном: внутри полосы узлов нет, а
                     // узлы для пересечения стоят у её внешней границы, чтобы отрезок через дорогу был прямым от узла до узла
                     marginZones.add(geometry.buffer(rule.getMarginM() - MARGIN_NODE_INSET_M, MARGIN_QUADRANT_SEGMENTS));
-                    crossingNodeZones.add(nodeZone(geometry, Math.max(distance, rule.getMarginM() - 2 * SIMPLIFY_M - NODE_OFFSET_M)));
+                    crossingObjects.add(geometry);
+                    crossingDistances.add(Math.max(distance, rule.getMarginM() - 2 * SIMPLIFY_M - NODE_OFFSET_M));
                 }
             }
         }
@@ -756,7 +762,8 @@ public final class ObstacleSet {
         for (NetworkSegment segment : index.segments(area)) {
             double distance = network.clearanceM(dn) + halfWidth + rules.diameter(segment.getDiameter()).getWidthM() / 2;
             if (near(segment.getGeometry(), distance, area) && (inside == null || inside.intersects(segment.getGeometry()))) {
-                nodeZones.add(nodeZone(segment.getGeometry(), distance));
+                nodeObjects.add(segment.getGeometry());
+                nodeDistances.add(distance);
                 nodeOffsets.add(nodeOffset(distance));
                 specialList.add(new Special(segment.getId(), HEAT_NETWORK, network, segment.getGeometry(), distance));
             }
@@ -772,6 +779,8 @@ public final class ObstacleSet {
         forbidZones.build();
         specials.build();
 
+        List<Geometry> nodeZones = nodeZones(nodeObjects, nodeDistances);
+        List<Geometry> crossingNodeZones = nodeZones(crossingObjects, crossingDistances);
         Map<Coordinate, Coordinate[]> candidates = new LinkedHashMap<>();
         Map<Coordinate, Double> offsets = new java.util.HashMap<>();
         for (int z = 0; z < nodeZones.size(); z++) {
@@ -1236,6 +1245,20 @@ public final class ObstacleSet {
     // Зона узлов снаружи зоны запрета не меньше чем на NODE_OFFSET_M с учётом упрощения обеих зон.
     private Geometry nodeZone(Geometry geometry, double distance) {
         return zone(geometry, distance + 2 * SIMPLIFY_M + NODE_OFFSET_M);
+    }
+
+    /**
+     * Зоны узлов объектов в их порядке. Буферы независимы и строятся параллельно: граф области строится в основной
+     * нити, пока остальные ждут, а буферы сложных зданий были главной его ценой на датасете организаторов. В нити
+     * общего пула — последовательно: набор зон строится под замком карты (Region.obstacles), и нить, ожидая свои
+     * части, могла бы взять задачу, которая просит тот же набор.
+     */
+    private List<Geometry> nodeZones(List<Geometry> objects, List<Double> distances) {
+        java.util.stream.IntStream indices = java.util.stream.IntStream.range(0, objects.size());
+        if (!(Thread.currentThread() instanceof java.util.concurrent.ForkJoinWorkerThread)) {
+            indices = indices.parallel();
+        }
+        return indices.mapToObj(i -> nodeZone(objects.get(i), distances.get(i))).collect(java.util.stream.Collectors.toList());
     }
 
     /** Отступ зоны узлов от объекта с учётом упрощения, см. {@link #nodeZone}. */

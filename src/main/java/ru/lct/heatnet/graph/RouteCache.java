@@ -4,6 +4,8 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
 /**
@@ -20,6 +22,11 @@ public final class RouteCache {
 
     private final long budgetBytes;
     private final LinkedHashMap<List<Object>, Sized> entries = new LinkedHashMap<>(64, 0.75f, true);
+    /**
+     * Записи, которые сейчас считает какая-то нить: деревья кандидатов одного блока строятся параллельно и
+     * одновременно просили буфер зоны одного здания, на датасете организаторов это были две пятых буферов.
+     */
+    private final Map<List<Object>, CompletableFuture<Object>> running = new ConcurrentHashMap<>();
     private long bytes;
     private long peakBytes;
     private long evictions;
@@ -57,14 +64,33 @@ public final class RouteCache {
         }
     }
 
+    /**
+     * Значение из кэша или посчитанное. Если его уже считает другая нить, ждёт её результата; если та упала или
+     * получила null, считает сама, как без ожидания.
+     */
+    @SuppressWarnings("unchecked")
     <T> T computeIfAbsent(List<Object> key, long valueBytes, Supplier<T> compute) {
         T cached = get(key);
         if (cached != null) {
             return cached;
         }
-        T value = compute.get();
-        put(key, value, valueBytes);
-        return value;
+        CompletableFuture<Object> mine = new CompletableFuture<>();
+        CompletableFuture<Object> other = running.putIfAbsent(key, mine);
+        if (other != null) {
+            T value = (T) other.handle((result, error) -> error == null ? result : null).join();
+            return value != null ? value : compute.get();
+        }
+        try {
+            T value = compute.get();
+            put(key, value, valueBytes);
+            mine.complete(value);
+            return value;
+        } catch (RuntimeException | Error e) {
+            mine.completeExceptionally(e);
+            throw e;
+        } finally {
+            running.remove(key);
+        }
     }
 
     /** Занято и пик в МБ, число записей и вытеснений — для строки итога поиска. */
