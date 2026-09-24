@@ -26,6 +26,8 @@ import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.locationtech.jts.geom.Envelope;
+import org.locationtech.jts.geom.LineString;
+import org.locationtech.jts.io.WKBWriter;
 import ru.lct.heatnet.model.Chamber;
 import ru.lct.heatnet.model.Diagnostic;
 import ru.lct.heatnet.model.ExistingOks;
@@ -40,6 +42,7 @@ class GeoJsonStreamReaderTest {
     private static final Rules RULES = Rules.load();
     private static final Path SAMPLE = Path.of("data/samples/small-1.geojson");
     private static final long LARGE_FILE_BYTES = 50L * 1024 * 1024;
+    private static final WKBWriter WKB = new WKBWriter();
 
     @TempDir
     Path dir;
@@ -376,6 +379,198 @@ class GeoJsonStreamReaderTest {
 
         assertEquals(List.of(), data.getDiagnostics());
         assertEquals(parks, data.getRestrictions().size());
+    }
+
+    @Test
+    void decimalMatchesParseDouble() {
+        java.util.Random random = new java.util.Random(7);
+        int fast = 0;
+        for (int n = 0; n < 200_000; n++) {
+            StringBuilder text = new StringBuilder(random.nextBoolean() ? "-" : "");
+            text.append(random.nextInt(4) == 0 ? "0" : String.valueOf(1 + random.nextInt(999)));
+            text.append('.');
+            int fraction = 1 + random.nextInt(random.nextBoolean() ? 9 : 18);
+            for (int i = 0; i < fraction; i++) {
+                text.append(random.nextInt(3) == 0 ? '0' : (char) ('0' + random.nextInt(10)));
+            }
+            if (random.nextInt(4) == 0) {
+                text.append(random.nextBoolean() ? 'e' : 'E').append(random.nextBoolean() ? "-" : "+").append(random.nextInt(40));
+            }
+            String number = text.toString();
+            double value = GeoJsonStreamReader.decimal(number.getBytes(StandardCharsets.US_ASCII), 0, number.length());
+            if (!Double.isNaN(value)) {
+                fast++;
+                assertEquals(Double.doubleToRawLongBits(Double.parseDouble(number)), Double.doubleToRawLongBits(value), number);
+            }
+        }
+        assertTrue(fast > 100_000, "быстрый разбор берёт обычные координаты: " + fast);
+    }
+
+    // Быстрый разбор берёт только корректный JSON и строит те же узлы, что readTree; остальное отдаёт Jackson.
+    @Test
+    void fastMatchesReadTreeOrGivesUp() throws IOException {
+        String geometry = "\"geometry\":{\"type\":\"Point\",\"coordinates\":[37.6,55.7]}";
+        List<String> fast = List.of(
+                "{\"type\":\"Feature\"," + geometry + ",\"properties\":{\"id\":7,\"big\":12345678901,\"max\":2147483647,"
+                        + "\"over\":2147483648,\"min\":-2147483648,\"under\":-2147483649,\"long\":123456789012345678,"
+                        + "\"zero\":-0,\"flow\":2.50,\"e\":1e3,\"E\":-1.5E-2,\"s\":\"x\",\"empty\":\"\",\"t\":true,"
+                        + "\"f\":false,\"n\":null,\"id\":8}}",
+                " { \"properties\" : { } ,\n\t" + geometry + " , \"type\" : 1 , \"extra\" : null } ",
+                "{" + geometry + ",\"properties\":\"abc\"}");
+        List<String> slow = List.of(
+                "{" + geometry + ",\"properties\":{\"s\":\"ТЭЦ\"}}",
+                "{" + geometry + ",\"properties\":{\"s\":\"a\\u0041\"}}",
+                "{" + geometry + ",\"properties\":{\"n\":1234567890123456789}}",
+                "{" + geometry + ",\"properties\":{\"n\":[1]}}",
+                "{" + geometry + ",\"properties\":{\"n\":{}}}",
+                "{" + geometry + "," + geometry + "}",
+                "{" + geometry + ",\"properties\":{\"n\":01}}",
+                "{" + geometry + ",\"properties\":{\"n\":1.}}",
+                "{" + geometry + ",\"properties\":{\"n\":.5}}",
+                "{" + geometry + ",\"properties\":{\"n\":+1}}",
+                "{" + geometry + ",\"properties\":{\"n\":tru}}",
+                "{" + geometry + ",\"properties\":{\"n\":nulll}}",
+                "{" + geometry + ",\"properties\":{\"n\":1,}}",
+                "{" + geometry + ",\"properties\":{\"n\" 1}}",
+                "{" + geometry + ",\"properties\":{\"n\":\"a\tb\"}}",
+                "{" + geometry + ",\"properties\":{\"n\":1}} x",
+                "{\"geometry\":{\"type\":\"Point\",\"coordinates\":[37.6,55.7,]},\"properties\":{}}");
+        for (String json : fast) {
+            JsonNode expected = MAPPER.readTree(json);
+            ((ObjectNode) expected).remove("geometry");
+            byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+            assertEquals(expected, GeoJsonStreamReader.fastFeature(bytes), json);
+        }
+        for (String json : slow) {
+            assertNull(GeoJsonStreamReader.fastFeature(json.getBytes(StandardCharsets.UTF_8)), json);
+        }
+    }
+
+    // Чтение строками в пуле (UTF-8, с BOM и без) и чтение деревьями на главном потоке (UTF-16, без байтовых
+    // смещений) дают один и тот же вход и те же диагностики, в том числе там, где быстрый разбор отдаёт фичу Jackson.
+    @Test
+    void pooledReadMatchesTreeRead() throws IOException {
+        ArrayNode features = validFeatures();
+        features.add(feature("Point", new int[] {37, 55}, "id", "I1", "object_type", "restriction", "restriction_type", "park"));
+        features.add(feature("LineString", new double[][] {{37.6, 55.7, 120.5}, {3.77e1, 5.58e1}},
+                "id", "Z1", "object_type", "restriction", "restriction_type", "park"));
+        features.add(feature("MultiLineString", new double[][][] {{{37.6, 55.7}, {37.7, 55.8}}, {{37.61, 55.71}, {37.71, 55.81}}},
+                "id", "M1", "object_type", "restriction", "restriction_type", "park"));
+        features.add(feature("MultiPolygon", new double[][][][] {
+            {{{37.60, 55.60}, {37.70, 55.60}, {37.70, 55.70}, {37.60, 55.60}}},
+            {{{37.80, 55.60}, {37.90, 55.60}, {37.90, 55.70}, {37.80, 55.70}, {37.80, 55.60}},
+                {{37.82, 55.62}, {37.84, 55.62}, {37.84, 55.64}, {37.82, 55.62}}}},
+                "id", "M2", "object_type", "oks_existing"));
+        ObjectNode reordered = feature("Point", new double[] {37.65, 55.75}, "id", "T1", "object_type", "restriction",
+                "restriction_type", "park");
+        reordered.set("geometry", MAPPER.createObjectNode().put("foo", 1)
+                .<ObjectNode>set("coordinates", MAPPER.valueToTree(new double[] {37.65, 55.75})).put("type", "Point"));
+        features.add(reordered);
+        ((ObjectNode) features.get(features.size() - 1).get("geometry")).putArray("bbox").add(1);
+        ObjectNode future = feature("Polygon", new double[0], "id", "O2", "object_type", "oks_future", "flow_tph", 1.5);
+        future.set("geometry", MAPPER.createObjectNode().<ObjectNode>set("coordinates", MAPPER.valueToTree(
+                new double[][][] {{{37.62, 55.76}, {37.63, 55.76}, {37.63, 55.77}, {37.62, 55.76}}})).put("type", "Polygon"));
+        features.add(future);
+        features.add(feature("Point", new double[] {190, 55}, "id", "B1", "object_type", "restriction", "restriction_type", "park"));
+        features.add(feature("Point", new double[] {37.6}, "id", "B2", "object_type", "restriction", "restriction_type", "park"));
+        features.add(feature("Polygon", new double[][][] {{{37.6, 55.7}, {37.61, 55.7}, {37.61, 55.71}, {37.6, 55.71}}},
+                "id", "B3", "object_type", "restriction", "restriction_type", "park"));
+        features.add(feature("Polygon", new double[][][] {{{37.6, 55.7}, {37.61, 55.71}, {37.61, 55.7}, {37.6, 55.71}, {37.6, 55.7}}},
+                "id", "B4", "object_type", "restriction", "restriction_type", "park"));
+        features.add(feature("LineString", new double[][] {{37.6, 55.7}}, "id", "B5", "object_type", "restriction", "restriction_type", "park"));
+        ObjectNode strings = feature("Point", new double[] {37.6, 55.7}, "id", "B6", "object_type", "restriction", "restriction_type", "park");
+        ((ArrayNode) strings.get("geometry").get("coordinates")).insert(0, "x");
+        features.add(strings);
+        features.add(feature("GeometryCollection", new double[0], "id", "B7", "object_type", "restriction", "restriction_type", "park"));
+        ObjectNode bare = features.get(7).deepCopy();
+        bare.remove("geometry");
+        ((ObjectNode) bare.get("properties")).put("id", "B8");
+        features.add(bare);
+        String json = MAPPER.writeValueAsString(collection(features));
+
+        assertSameRead(json, 8);
+        assertSameRead("{\"type\":\"FeatureCollection\",\"features\":[1," + json.substring(json.indexOf('[') + 1), 9);
+        assertSameRead("{\"features\":[]}", 2);
+        // сломанный JSON в геометрии ограничения: первый проход её не разбирает, ту же ошибку даёт второй
+        Path broken = dir.resolve("broken-geometry.geojson");
+        Files.writeString(broken, json.replace("[37.66,55.76],[37.67,55.76]", "[37.66,55.76],,[37.67,55.76]"));
+        List<Diagnostic> once = GeoJsonStreamReader.read(broken).getDiagnostics();
+        assertEquals(1, once.size());
+        assertTrue(once.get(0).getProblem().startsWith("файл не разбирается как JSON"), once.toString());
+        assertEquals(once, GeoJsonStreamReader.read(broken, GeoJsonStreamReaderTest::nearConnections).getDiagnostics());
+        features.add(features.get(1).deepCopy());
+        assertSameRead(MAPPER.writeValueAsString(collection(features)), 9);
+        ObjectNode second = features.get(0).deepCopy();
+        ((ObjectNode) second.get("properties")).put("id", "S2");
+        features.add(second);
+        assertSameRead(MAPPER.writeValueAsString(collection(features)), 10);
+    }
+
+    // Файл больше блока чтения строками: фича на строке с запятой в конце или в начале следующей строки, пустые
+    // строки, CRLF, ключ корня после features; JSON с отступами читается срезами. Всё как чтение деревьями.
+    @Test
+    void linesAcrossBlocksMatchTreeRead() throws IOException {
+        ArrayNode features = validFeatures();
+        for (int i = 0; i < 6000; i++) {
+            double lon = 37.0 + (i % 100) * 0.001;
+            double lat = 55.5 + (i / 100) * 0.001;
+            features.add(feature("Polygon", new double[][][] {{{lon, lat}, {lon + 0.0005, lat}, {lon + 0.0005, lat + 0.0005}, {lon, lat}}},
+                    "id", "P" + i, "object_type", "restriction", "restriction_type", i % 3 == 0 ? "oks" : "park"));
+        }
+        List<String> lines = new ArrayList<>();
+        for (JsonNode feature : features) {
+            lines.add(MAPPER.writeValueAsString(feature));
+        }
+        String head = "{\"type\":\"FeatureCollection\",\"features\":[\n";
+        assertSameRead(head + String.join(",\n", lines) + "\n]}\n", 0);
+        assertSameRead(head + String.join("\n,", lines) + "\n\n],\"name\":\"x\"}", 0);
+        assertSameRead(head + String.join(",\r\n\r\n", lines) + "]}", 0);
+        assertSameRead(MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(collection(features)), 0);
+        assertSameRead(head + String.join(",\n", lines) + ",\n]}\n", 1);
+        assertSameRead(head + String.join(",\n", lines.subList(0, 3000)) + "\n" + String.join(",\n", lines.subList(3000, 6009)) + "]}", 1);
+    }
+
+    private void assertSameRead(String json, int diagnostics) throws IOException {
+        Path utf8 = dir.resolve("utf8.geojson");
+        Path tree = dir.resolve("utf16.geojson");
+        Path bom = dir.resolve("bom.geojson");
+        Files.writeString(utf8, json, StandardCharsets.UTF_8);
+        Files.writeString(tree, json, StandardCharsets.UTF_16LE);
+        Files.writeString(bom, "\uFEFF" + json, StandardCharsets.UTF_8);
+        InputData expected = GeoJsonStreamReader.read(tree);
+        assertEquals(diagnostics, expected.getDiagnostics().size(), expected.getDiagnostics().toString());
+        InputData expectedTwoPass = GeoJsonStreamReader.read(tree, GeoJsonStreamReaderTest::nearConnections);
+        assertEquals(expected.getDiagnostics(), expectedTwoPass.getDiagnostics(), "второй проход проверяет всё, как один");
+        for (Path file : List.of(utf8, bom)) {
+            assertSameInput(expected, GeoJsonStreamReader.read(file));
+            assertSameInput(expectedTwoPass, GeoJsonStreamReader.read(file, GeoJsonStreamReaderTest::nearConnections));
+        }
+    }
+
+    private static void assertSameInput(InputData expected, InputData actual) {
+        assertEquals(expected.getDiagnostics(), actual.getDiagnostics());
+        assertEquals(expected.getWarnings(), actual.getWarnings());
+        assertEquals(expected.getNumericIds(), actual.getNumericIds());
+        assertEquals(describe(expected), describe(actual));
+    }
+
+    private static Envelope nearConnections(InputData partial) {
+        Envelope extent = new Envelope();
+        partial.getConnectionPoints().forEach(c -> extent.expandToInclude(c.getGeometry().getCoordinate()));
+        extent.expandBy(2000);
+        return extent.isNull() ? null : extent;
+    }
+
+    private static List<String> describe(InputData data) {
+        List<String> lines = new ArrayList<>();
+        data.getSegments().forEach(s -> lines.add(s.getId() + " " + s.getUpstreamId() + " " + WKBWriter.toHex(WKB.write(s.getGeometry()))));
+        data.getChambers().forEach(c -> lines.add(c.getId() + " " + c.getDiameter() + " " + WKBWriter.toHex(WKB.write(c.getGeometry()))));
+        data.getFutureOks().forEach(o -> lines.add(o.getId() + " " + o.getFlowTph() + " " + WKBWriter.toHex(WKB.write(o.getGeometry()))));
+        data.getConnectionPoints().forEach(c -> lines.add(c.getId() + " " + c.getOksId() + " " + WKBWriter.toHex(WKB.write(c.getGeometry()))));
+        data.getExistingOks().forEach(e -> lines.add(e.getId() + " " + WKBWriter.toHex(WKB.write(e.getGeometry()))));
+        data.getRestrictions().forEach(r -> lines.add(r.getId() + " " + r.getType() + " " + WKBWriter.toHex(WKB.write(r.getGeometry()))
+                + (r.getGeometry() instanceof LineString ? " " + ((LineString) r.getGeometry()).getCoordinateSequence().getDimension() : "")));
+        return lines;
     }
 
     private void assertOnly(ArrayNode features, String featureId, String field) throws IOException {
