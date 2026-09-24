@@ -1234,6 +1234,8 @@ public final class VariantEnumerator {
             // врезке у первой камеры; из того, что соберётся, берётся лучшее по score, вплоть до дерева как построено
             Tree slid = slide ? slid(tree, router, dn, metreRub) : tree;
             Tree rerooted = slide ? rerooted(tree, router, dn, metreRub) : tree;
+            // новый ствол подходит к своей трубе тоже наискось
+            rerooted = rerooted == tree ? tree : slid(rerooted, router, dn, metreRub);
             Option best = null;
             for (Tree shape : new java.util.LinkedHashSet<>(List.of(builder.cut(slid, router), slid, builder.cut(rerooted, router),
                     rerooted, builder.cut(tree, router), tree))) {
