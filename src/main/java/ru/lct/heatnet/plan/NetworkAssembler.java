@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import org.locationtech.jts.algorithm.Angle;
@@ -81,8 +82,8 @@ final class NetworkAssembler {
     /** ID источника входа; остальные ID берутся из списков входа, см. {@link #inputIds}. */
     private final String sourceId;
     /** Проверки ID входа по префиксу и целиком: выходные ID с ID входа не совпадают. */
-    private final Map<String, Boolean> startsByPrefix = new HashMap<>();
-    private final Map<String, Boolean> knownIds = new HashMap<>();
+    private final Map<String, Boolean> startsByPrefix = new ConcurrentHashMap<>();
+    private final Map<String, Boolean> knownIds = new ConcurrentHashMap<>();
     private final GeometryFactory factory = new GeometryFactory();
 
     /** Счётчики выходных ID; общие на несколько сборок, когда один вариант собирается по частям (город). */
@@ -145,16 +146,12 @@ final class NetworkAssembler {
     }
 
     private boolean startsInputId(String prefix) {
-        // вход города — миллионы ID, а префиксов за расчёт единицы: каждый проверяется один раз
-        synchronized (startsByPrefix) {
-            return startsByPrefix.computeIfAbsent(prefix, key -> inputIds().anyMatch(id -> id.startsWith(key)));
-        }
+        // вход города — миллионы ID, а префиксов за расчёт единицы: каждый проверяется один раз, повторный — без замка
+        return startsByPrefix.computeIfAbsent(prefix, key -> inputIds().anyMatch(id -> id.startsWith(key)));
     }
 
     private boolean isInputId(String id) {
-        synchronized (knownIds) {
-            return knownIds.computeIfAbsent(id, key -> inputIds().anyMatch(key::equals));
-        }
+        return knownIds.computeIfAbsent(id, key -> inputIds().anyMatch(key::equals));
     }
 
     /** ID входа по спискам: множество из шести миллионов ID города строилось ради считанных проверок. */
