@@ -61,8 +61,6 @@ public final class ObstacleSet {
     private static final double TANGENT_EPS = 1e-9;
     /** Насколько узлы пересечения дороги стоят внутри полосы margin_m: сборка прижимает границу спецучастка к узлу ближе 0,08 м. */
     private static final double MARGIN_NODE_INSET_M = 0.1;
-    /** Полигоны спецобъектов не больше чем в столько вершин проверяются против отрезка напрямую, см. Special#crossedBy. */
-    private static final int SMALL_POLYGON_POINTS = 64;
     private static final String ZONE_KEY = "zone";
     /** Сторон зоны в куске с общей рамкой, см. Zone#chunks. */
     private static final int CHUNK = 8;
@@ -95,10 +93,7 @@ public final class ObstacleSet {
         final Envelope box;
         /** Стороны всех колец зоны подряд: x0, y0, x1, y1. */
         final double[] sides;
-        /**
-         * Рамки кусков по CHUNK сторон подряд: minX, minY, maxX, maxY. Соседние стороны кольца лежат рядом, и рамка
-         * куска отбрасывает разом все его стороны вдали от отрезка и от луча из его начала.
-         */
+        /** Рамки кусков сторон, см. {@link ObstacleSet#chunks}; отбрасывают и стороны вдали от луча из начала отрезка. */
         final double[] chunks;
 
         Zone(String id, Geometry geometry) {
@@ -113,16 +108,7 @@ public final class ObstacleSet {
                 sides[4 * k + 2] = segments[k].p1.x;
                 sides[4 * k + 3] = segments[k].p1.y;
             }
-            this.chunks = new double[4 * ((segments.length + CHUNK - 1) / CHUNK)];
-            for (int k = 0; k < segments.length; k++) {
-                int c = k / CHUNK * 4;
-                Envelope side = new Envelope(segments[k].p0, segments[k].p1);
-                boolean first = k % CHUNK == 0;
-                chunks[c] = first ? side.getMinX() : Math.min(chunks[c], side.getMinX());
-                chunks[c + 1] = first ? side.getMinY() : Math.min(chunks[c + 1], side.getMinY());
-                chunks[c + 2] = first ? side.getMaxX() : Math.max(chunks[c + 2], side.getMaxX());
-                chunks[c + 3] = first ? side.getMaxY() : Math.max(chunks[c + 3], side.getMaxY());
-            }
+            this.chunks = chunks(segments);
         }
 
         /** Отрезок a–b задевает рамку зоны, см. {@link ObstacleSet#hitsBox}. */
@@ -214,6 +200,24 @@ public final class ObstacleSet {
             }
             return crossings % 2 == 1;
         }
+    }
+
+    /**
+     * Рамки кусков по CHUNK сторон подряд: minX, minY, maxX, maxY. Соседние стороны кольца или линии лежат рядом, и
+     * рамка куска отбрасывает разом все его стороны вдали от отрезка.
+     */
+    private static double[] chunks(LineSegment[] segments) {
+        double[] chunks = new double[4 * ((segments.length + CHUNK - 1) / CHUNK)];
+        for (int k = 0; k < segments.length; k++) {
+            int c = k / CHUNK * 4;
+            Envelope side = new Envelope(segments[k].p0, segments[k].p1);
+            boolean first = k % CHUNK == 0;
+            chunks[c] = first ? side.getMinX() : Math.min(chunks[c], side.getMinX());
+            chunks[c + 1] = first ? side.getMinY() : Math.min(chunks[c + 1], side.getMinY());
+            chunks[c + 2] = first ? side.getMaxX() : Math.max(chunks[c + 2], side.getMaxX());
+            chunks[c + 3] = first ? side.getMaxY() : Math.max(chunks[c + 3], side.getMaxY());
+        }
+        return chunks;
     }
 
     /** {@link #meet} для стороны, заданной числами, без объектов на каждую сторону. */
@@ -390,20 +394,8 @@ public final class ObstacleSet {
         }
     }
 
-    /** Отрезок a–b задевает стороны или, если area, его начало внутри колец из этих сторон. */
-    private static boolean crosses(List<LineSegment> sides, Coordinate a, Coordinate b, boolean area) {
-        if (area) {
-            RayCrossingCounter counter = new RayCrossingCounter(a);
-            for (LineSegment side : sides) {
-                counter.countSegment(side.p0, side.p1);
-                if (counter.isOnSegment()) {
-                    return true;
-                }
-            }
-            if (counter.getLocation() != Location.EXTERIOR) {
-                return true;
-            }
-        }
+    /** Отрезок a–b задевает одну из сторон. */
+    private static boolean crosses(List<LineSegment> sides, Coordinate a, Coordinate b) {
         for (LineSegment side : sides) {
             if (meet(a, b, side.p0, side.p1)) {
                 return true;
@@ -456,8 +448,11 @@ public final class ObstacleSet {
         final Zone zone;
         /** Полоса margin_m вокруг полигона; у линии null. */
         final Zone margin;
+        /** Сам полигон как зона для проверки пересечения отрезком; у линии null. */
+        final Zone shape;
         final LineSegment[] sides;
-        final boolean small;
+        /** Рамки кусков sides, см. {@link ObstacleSet#chunks}. */
+        final double[] chunks;
 
         Special(String id, String type, RestrictionRule rule, Geometry geometry, Geometry zone) {
             this.id = id;
@@ -467,8 +462,9 @@ public final class ObstacleSet {
             this.object = PreparedGeometryFactory.prepare(geometry);
             this.zone = new Zone(id, zone);
             this.margin = polygon ? new Zone(id, geometry.buffer(rule.getMarginM(), MARGIN_QUADRANT_SEGMENTS)) : null;
+            this.shape = polygon ? new Zone(id, geometry) : null;
             this.sides = segments(polygon ? geometry.getBoundary() : geometry);
-            this.small = polygon && geometry.getNumPoints() <= SMALL_POLYGON_POINTS;
+            this.chunks = chunks(sides);
         }
 
         /**
@@ -498,12 +494,9 @@ public final class ObstacleSet {
             return false;
         }
 
-        /** То же, что object.intersects(edge) для отрезка a–b, без подготовки JTS у линий и маленьких полигонов. */
-        boolean crossedBy(Coordinate a, Coordinate b, LineString edge) {
-            if (polygon && !small) {
-                return object.intersects(edge);
-            }
-            return polygon ? crosses(Arrays.asList(sides), a, b, true) : crosses(sidesNear(a, b), a, b, false);
+        /** То же, что object.intersects(отрезок a–b), без подготовки JTS: полигон — как зона, линия — по сторонам. */
+        boolean crossedBy(Coordinate a, Coordinate b) {
+            return polygon ? shape.hitsBox(a, b) && shape.intersects(a, b) : crosses(sidesNear(a, b), a, b);
         }
 
         /**
@@ -516,10 +509,16 @@ public final class ObstacleSet {
             double minY = Math.min(a.y, b.y);
             double maxY = Math.max(a.y, b.y);
             List<LineSegment> result = new ArrayList<>();
-            for (LineSegment side : sides) {
-                if (Math.max(side.p0.x, side.p1.x) >= minX && Math.min(side.p0.x, side.p1.x) <= maxX
-                        && Math.max(side.p0.y, side.p1.y) >= minY && Math.min(side.p0.y, side.p1.y) <= maxY) {
-                    result.add(side);
+            for (int c = 0; c < chunks.length; c += 4) {
+                if (chunks[c] > maxX || chunks[c + 2] < minX || chunks[c + 1] > maxY || chunks[c + 3] < minY) {
+                    continue;
+                }
+                for (int k = c / 4 * CHUNK, end = Math.min(sides.length, k + CHUNK); k < end; k++) {
+                    LineSegment side = sides[k];
+                    if (Math.max(side.p0.x, side.p1.x) >= minX && Math.min(side.p0.x, side.p1.x) <= maxX
+                            && Math.max(side.p0.y, side.p1.y) >= minY && Math.min(side.p0.y, side.p1.y) <= maxY) {
+                        result.add(side);
+                    }
                 }
             }
             return result;
@@ -714,14 +713,13 @@ public final class ObstacleSet {
         if (forbidGrid.hit(a, b, ignored)) {
             return Double.NaN;
         }
-        LineString edge = factory.createLineString(new Coordinate[] {a, b});
         List<Special> crossed = new ArrayList<>();
         for (Object item : specials.query(new Envelope(a, b))) {
             Special special = (Special) item;
             if (!special.zone.hitsBox(a, b) || ignored.contains(special.id) && touches(special, a, b)) {
                 continue;
             }
-            if (!special.crossedBy(a, b, edge)) {
+            if (!special.crossedBy(a, b)) {
                 if (special.zone.intersects(a, b)) {
                     return Double.NaN;
                 }
@@ -747,6 +745,7 @@ public final class ObstacleSet {
                 beforeB = Math.max(beforeB, extra * specialBeyond(special, b, a));
             }
         }
+        LineString edge = factory.createLineString(new Coordinate[] {a, b});
         return weight(edge.getLength(), spans(edge, crossed, Set.of())) + beforeA + beforeB;
     }
 
