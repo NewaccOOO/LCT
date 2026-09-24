@@ -1,8 +1,9 @@
 """Срез выхода города для проверки check18: окно 3×3 км вокруг середины новой сети варианта 1.
 
-Запуск: python3 scripts/city_cut.py <вход> <выход> <срез входа> <срез выхода> [полуширина окна, м]
+Запуск: python3 scripts/city_cut.py <вход> <выход> <срез входа> <срез выхода> [полуширина окна, м] [долгота широта]
+Долгота и широта задают центр окна вместо середины сети.
 В срез выхода попадают деревья, целиком лежащие в окне; сводка пересчитывается по ним. В срез входа — объекты
-в окне с запасом 200 м. Файлы читаются построчно: у входа и выхода по одной фиче на строку.
+в окне с запасом 200 м, существующая сеть и камеры целиком. Файлы читаются построчно: у входа и выхода по одной фиче на строку.
 """
 import json
 import math
@@ -46,10 +47,8 @@ def inside(box, points):
     return all(box[0] <= x <= box[2] and box[1] <= y <= box[3] for x, y in points)
 
 
-def main():
-    src, out, cut_src, cut_out = sys.argv[1:5]
-    half_m = float(sys.argv[5]) if len(sys.argv) > 5 else 1500
-    # центр окна — медиана начал новых участков варианта 1: источник может стоять далеко от подключений
+def network_middle(out):
+    """Медиана начал новых участков варианта 1: источник может стоять далеко от подключений."""
     xs, ys = [], []
     for f in features(out):
         p = f["properties"]
@@ -63,7 +62,13 @@ def main():
         sys.exit("в выходе нет участков варианта 1")
     xs.sort()
     ys.sort()
-    sx, sy = xs[len(xs) // 2], ys[len(ys) // 2]
+    return xs[len(xs) // 2], ys[len(ys) // 2]
+
+
+def main():
+    src, out, cut_src, cut_out = sys.argv[1:5]
+    half_m = float(sys.argv[5]) if len(sys.argv) > 5 else 1500
+    sx, sy = (float(sys.argv[6]), float(sys.argv[7])) if len(sys.argv) > 7 else network_middle(out)
     dx, dy = half_m / 62_000, half_m / 111_000
     box = (sx - dx, sy - dy, sx + dx, sy + dy)
     wide = (box[0] - MARGIN_DEG_LON, box[1] - MARGIN_DEG_LAT, box[2] + MARGIN_DEG_LON, box[3] + MARGIN_DEG_LAT)
@@ -76,7 +81,10 @@ def main():
         for f in features(src):
             p = f["properties"]
             pts = coords(f["geometry"])
-            if p.get("object_type") == "source" or any(wide[0] <= x <= wide[2] and wide[1] <= y <= wide[3] for x, y in pts):
+            # сеть и камеры берутся целиком: у трубы в километры обе вершины бывают вне окна, и без неё проверка не
+            # узнаёт камеру врезки на ней
+            if p.get("object_type") in ("source", "heat_network", "heat_chamber") \
+                    or any(wide[0] <= x <= wide[2] and wide[1] <= y <= wide[3] for x, y in pts):
                 dst.write(("" if first else ",\n") + json.dumps(f, ensure_ascii=False, separators=(",", ":")))
                 first = False
                 kept_in += 1

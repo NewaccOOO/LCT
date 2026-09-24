@@ -423,7 +423,8 @@ public final class VariantEnumerator {
     private Result city() {
         long started = System.nanoTime();
         List<ConnectionPoint> all = new ArrayList<>(connectionByOks.values());
-        DirectTies direct = new DirectTies(input, rules, obstacleIndex, finder, buildingByConnection);
+        assembler = new NetworkAssembler(input, rules, specials, oksById);
+        DirectTies direct = new DirectTies(input, rules, obstacleIndex, finder, buildingByConnection, assembler);
         List<ConnectionPoint> rest = new ArrayList<>();
         List<List<Tree>> directTrees = direct.connect(all, oksById, 2, rest);
         log.info("city: direct trees={} rest={} elapsed={}s", directTrees.get(0).size(), rest.size(),
@@ -454,7 +455,6 @@ public final class VariantEnumerator {
                 reach, rest.size() - near.size(), districts.size(), (System.nanoTime() - started) / 1_000_000_000L);
         List<List<Draft>> results = districts.isEmpty() ? List.of()
                 : solve(districts, started + CITY_DEADLINE_S * 1_000_000_000L);
-        assembler = new NetworkAssembler(input, rules, specials, oksById);
         int most = Math.max(directTrees.size(), results.stream().mapToInt(List::size).max().orElse(0));
         List<Variant> variants = new ArrayList<>();
         for (int k = 0; k < Math.min(MAX_VARIANTS, Math.max(most, 1)); k++) {
