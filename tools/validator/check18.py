@@ -9,14 +9,15 @@ import math
 import sys
 from collections import Counter, defaultdict
 
-import shapely
-from shapely import STRtree
-from shapely.geometry import LineString, Point
-
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from heatcheck.model import to_utm  # noqa: E402
-from shapely.geometry import shape  # noqa: E402
+
+import numpy as np
+import shapely
+from pyproj import Transformer
+from shapely import STRtree
+from shapely.geometry import LineString, Point, shape
+
+TO_UTM = Transformer.from_crs("EPSG:4326", "EPSG:32637", always_xy=True)
 
 RULES = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "rules", "rules.json")))
 DN = {d["dn"]: d for d in RULES["diameters"]}
@@ -30,6 +31,11 @@ K_SPECIAL = {"road": 1.6, "tram_tracks": 1.75, "gas_pipeline": 1.25, "power_cabl
 MARGIN = {"road": 3.0, "tram_tracks": 3.0, "gas_pipeline": 2.0, "power_cable": 2.0, "heat_network": 2.0}
 NODE_TOL = 0.05
 EPS = 0.01
+
+
+def to_utm(geom):
+    """Геометрия из EPSG:4326 в метры UTM 37N (EPSG:32637), как у сервиса."""
+    return shapely.transform(geom, lambda xy: np.column_stack(TO_UTM.transform(xy[:, 0], xy[:, 1])))
 
 
 def oks_clearance(dn):

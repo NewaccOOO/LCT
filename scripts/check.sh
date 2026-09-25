@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Гейты пакета rules-1809. Запуск из корня: scripts/gates/rules_1809.sh organizers|dense|city
+# Проверка решения по правилам 18.09. Запуск из корня: scripts/check.sh organizers|dense|city
 # organizers — оба датасета организаторов считаются, все точки подключены, tools/validator/check18.py без нарушений;
 # dense — сцены «густо» 50/100/200 считаются и проходят check18;
 # city — файл «город» считается целиком при куче 12 ГБ не дольше часа, срез выхода проходит check18, неподключённых нет.
 set -uo pipefail
-cd "$(dirname "$0")/../.."
-source scripts/gates/env.sh
+cd "$(dirname "$0")/.."
+source scripts/env.sh
 ensure_jar
 out=data/out/r18
 mkdir -p "$out"

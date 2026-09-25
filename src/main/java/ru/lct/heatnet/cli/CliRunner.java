@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -67,7 +68,13 @@ public class CliRunner implements ApplicationRunner {
                 return INVALID_INPUT;
             }
             Result result = pipeline.run(input);
-            Path output = Path.of(files.get(1));
+            Path output = Path.of(files.get(1)).toAbsolutePath();
+            // каталог выхода создаётся сам: в свежей копии репозитория data/out ещё нет
+            try {
+                Files.createDirectories(output.getParent());
+            } catch (IOException e) {
+                throw new UncheckedIOException("Не удалось создать каталог " + output.getParent(), e);
+            }
             long writing = System.nanoTime();
             GeoJsonStreamWriter.write(result, output);
             long written = System.nanoTime();

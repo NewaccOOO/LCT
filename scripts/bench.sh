@@ -3,7 +3,7 @@
 # Использование: scripts/bench.sh [метка]. Сцены генерируются, если их нет. Печатает таблицу и сумму S.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-source scripts/gates/env.sh
+source scripts/env.sh
 ensure_jar
 mkdir -p data/synth data/out/bench
 for seed in 1 2 3; do

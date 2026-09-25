@@ -1,15 +1,11 @@
 data/*
 !data/samples/
-!data/real/
-data/real/*
-!data/real/dataset.geojson
 target/
 .venv/
 __pycache__/
 .pytest_cache/
 .unlazy/
 .unlazy-hook-state.json
-.claude/settings.local.json
-.claude/worktrees/
+.claude/
 build/
 .gradle/
