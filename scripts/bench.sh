@@ -16,7 +16,7 @@ import json, subprocess, sys, time
 label = sys.argv[1]
 inputs = [("dataset", "data/real/dataset.geojson")] + [(f"medium-{s}", f"data/synth/medium-{s}.geojson") for s in (1, 2, 3)]
 total = 0.0
-print(f"{'сцена':10} {'S':>7} {'стоим':>7} {'участ':>6} {'камер':>6} {'врезк':>6} {'рекон':>6} {'длина':>6} {'сек':>5}")
+print(f"{'сцена':10} {'S':>7} {'стоим':>7} {'участ':>6} {'камер':>6} {'врезк':>6} {'штраф':>6} {'длина':>6} {'сек':>5}")
 for name, path in inputs:
     out = f"data/out/bench/{name}-{label}.geojson"
     t0 = time.monotonic()
@@ -26,6 +26,7 @@ for name, path in inputs:
     s = next(f["properties"] for f in data["features"] if f["properties"]["object_type"] == "variant_summary" and f["properties"]["rank"] == 1)
     total += s["score"]
     m = lambda k: s[k] / 1e6
-    print(f"{name:10} {s['score']:7.3f} {m('calculated_cost'):7.1f} {m('construction_cost'):6.1f} {m('chamber_construction_cost'):6.1f} {m('tie_in_cost'):6.1f} {m('reconstruction_cost')+m('chamber_reconstruction_cost'):6.1f} {s['length']:6.0f} {dt:5.0f}")
+    # поля сводки по правилам 18.09: врезки в существующие камеры и штраф за неподключённые вместо реконструкции
+    print(f"{name:10} {s['score']:7.3f} {m('calculated_cost'):7.1f} {m('construction_cost'):6.1f} {m('chamber_construction_cost'):6.1f} {m('existing_chamber_tie_in_cost'):6.1f} {m('unconnected_penalty'):6.1f} {s['new_network_length']:6.0f} {dt:5.0f}")
 print(f"сумма S: {total:.3f}")
 PY
