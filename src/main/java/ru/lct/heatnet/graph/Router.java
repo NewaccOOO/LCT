@@ -45,6 +45,8 @@ public final class Router {
     /** Предел состояний точного поиска: дальше перебор считается безнадёжным и маршрут не ищется. */
     private static final int EXACT_STATES = 100_000;
     private static final double HYPOT_TOL = 1e-15;
+    /** Запас предела перебора в routeToAny: на порядки больше ошибки округления суммы весов. */
+    private static final double CAP_TOL = 1e-9;
     private static final double MAX_TURN_COS = Math.cos(Math.toRadians(MAX_TURN_DEG));
     private static final double TURN_COS_TOL = 1e-9;
 
@@ -180,6 +182,15 @@ public final class Router {
             }
             double direct = obstacles.edgeWeight(t, source, ignored, false, false);
             double weight = Double.isNaN(direct) ? Double.POSITIVE_INFINITY : direct;
+            // цель выигрывает, только если её вес с надбавкой меньше лучшего, поэтому узлы дальше этого веса (с запасом
+            // на округление) не перебираются: без предела цель без прямой видимости обходила все узлы графа. Узел и
+            // цель выбираются те же, что без предела
+            double cap = bestWeight - extra;
+            cap += CAP_TOL * (1 + Math.abs(cap));
+            boolean capped = weight > cap;
+            if (capped) {
+                weight = cap;
+            }
             int via = -1;
             double[] toNodes = partialWeights(t, ignored);
             // узлы по возрастанию веса от источника: дальше текущего веса они не выиграют. Выбор тот же, что у
@@ -202,6 +213,9 @@ public final class Router {
                     weight = total;
                     via = v;
                 }
+            }
+            if (capped && via < 0) {
+                continue;
             }
             if (weight + extra < bestWeight) {
                 bestWeight = weight + extra;

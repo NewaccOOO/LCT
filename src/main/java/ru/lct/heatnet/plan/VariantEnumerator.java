@@ -936,7 +936,7 @@ public final class VariantEnumerator {
             }
         }
         log.info("search: done score={} drafts={} elapsed={}s dijkstra={} cached={} routers={} nodes={} {}", best.score(),
-                spent, (System.nanoTime() - started) / 1_000_000_000L, tables[0], tables[1], routers, nodes,
+                spent, String.format(Locale.ROOT, "%.2f", (System.nanoTime() - started) / 1e9), tables[0], tables[1], routers, nodes,
                 routeCache.stats());
         return best;
     }
