@@ -32,7 +32,10 @@ _TYPES = {t: r for t, r in RULES["restrictions"].items() if not t.startswith("_"
 FORBID = {t: r["clearance_m"] for t, r in _TYPES.items() if r["rule"] == "forbid"}
 K_SPECIAL = {t: r["k_special"] for t, r in _TYPES.items() if r["rule"] == "special"}
 MARGIN = {t: r["margin_m"] for t, r in _TYPES.items() if r["rule"] == "special"}
+MIN_ANGLE = {t: r["min_angle_deg"] for t, r in _TYPES.items() if r["rule"] == "special" and "min_angle_deg" in r}
 NODE_TOL = 0.05
+# допуск границ полосы спецпрохода: сервис прижимает границу спецучастка к узлу ближе 0,08 м
+ZONE_TOL = 0.1
 EPS = 0.01
 
 
@@ -102,6 +105,21 @@ def turn_deg(a, b, c):
     if nu == 0 or nv == 0:
         return 0.0
     return math.degrees(math.acos(max(-1.0, min(1.0, (ux * vx + uy * vy) / nu / nv))))
+
+
+def acute_deg(a, b, p, q):
+    """Острый угол между прямыми a–b и p–q, градусы."""
+    ux, uy, vx, vy = b[0] - a[0], b[1] - a[1], q[0] - p[0], q[1] - p[1]
+    return math.degrees(math.atan2(abs(ux * vy - uy * vx), abs(ux * vx + uy * vy)))
+
+
+def sides(g):
+    """Стороны всех колец полигона или звенья линии."""
+    if g.geom_type in ("Polygon", "MultiPolygon"):
+        g = g.boundary
+    for part in getattr(g, "geoms", [g]):
+        c = list(part.coords)
+        yield from zip(c, c[1:])
 
 
 def utm(raw):
@@ -527,6 +545,7 @@ def check_variant(inp, trees, vid, feats, rep):
             d = line.distance(rg)
             if d < FORBID[rt] + DN[dn]["width_m"] / 2 - EPS:
                 rep.add(f"B7 {'пересекает' if d == 0 else 'ближе отступа к'} {rt}", f"{p['id']} {d:.2f} м ({rt} {rid})")
+    check_specials(trees, segs, geo, adj, kinds, {n: node_geom(n)[0] for n in tie_nodes}, rep)
 
     # E. стоимость участков по правилам 18.09 (без надбавки за поворот)
     seg_cost_new = 0.0
@@ -593,6 +612,171 @@ def check_variant(inp, trees, vid, feats, rep):
                 tie_new_chambers=new_tie_chambers, existing_tie_ins=existing_tie_ins)
 
 
+def check_specials(trees, segs, geo, adj, kinds, ties, rep):
+    """B9–B15: спецпроходы, отступы от спецобъектов и существующей сети, пересечения новых участков между собой.
+
+    Зона спецпрохода объекта (п. 4, docs/interpretation.md): у полигона — его буфер на margin_m, если прогон
+    спецучастков (связные через узлы спецучастки) пересекает полигон; у линии — margin_m от точки пересечения с
+    прогоном в обе стороны. Пересечение сети в точке врезки (не дальше 0,5 м от врезки) пересечением не считается."""
+    if not segs:
+        return
+    sid_of = {id(s): str(s["properties"]["id"]) for s in segs}
+    line_of = {id(s): geo[sid_of[id(s)]] for s in segs}
+    nodes_of = {id(s): (str(s["properties"]["start_node_id"]), str(s["properties"]["end_node_id"])) for s in segs}
+    special = [s for s in segs if s["properties"]["laying_method"] == "special"]
+
+    def at_tie(pt):
+        return any(pt.distance(t) <= 0.5 for t in ties.values())
+
+    def crossings(line, rt, rg):
+        pts = [Point(c) for c in shapely.get_coordinates(line.intersection(rg))]
+        return [pt for pt in pts if not (rt == "heat_network" and at_tie(pt))]
+
+    run_of = {}
+    for s in special:
+        if id(s) in run_of:
+            continue
+        run, stack = [], [s]
+        while stack:
+            t = stack.pop()
+            if id(t) in run_of:
+                continue
+            run_of[id(t)] = run
+            run.append(line_of[id(t)])
+            stack += [u for n in nodes_of[id(t)] for u in adj[n]
+                      if u["properties"]["laying_method"] == "special" and id(u) not in run_of]
+    obj = {}
+    zones = {}
+    for s in special:
+        line = line_of[id(s)]
+        run = run_of[id(s)]
+        z = {}
+        for rid, rt, rg, _ in trees["spec_near"](line, max(MARGIN.values()) + ZONE_TOL):
+            obj[(rt, rid)] = rg
+            if rg.geom_type.endswith("Polygon"):
+                if any(part.intersects(rg) for part in run):
+                    z[(rt, rid)] = line.intersection(rg.buffer(MARGIN[rt] + ZONE_TOL))
+            elif rg.geom_type != "Point":
+                xs = [pt for part in run for pt in crossings(part, rt, rg)]
+                if xs:
+                    z[(rt, rid)] = line.intersection(shapely.union_all([x.buffer(MARGIN[rt] + ZONE_TOL) for x in xs]))
+        zones[id(s)] = {k: g for k, g in z.items() if g.length > ZONE_TOL}
+
+    for s in special:
+        sid, line = sid_of[id(s)], line_of[id(s)]
+        c = list(line.coords)
+        # B13: спецучасток только там, где трасса пересекает спецобъект или идёт по его полосе
+        if not zones[id(s)]:
+            rep.add("B13 специальный участок не пересекает спецобъект и не лежит в его полосе", f"{sid} {line.length:.1f} м")
+        else:
+            out = line.length - shapely.union_all(list(zones[id(s)].values())).length
+            if out > ZONE_TOL:
+                rep.add("B13 специальный участок выходит за полосу спецпрохода", f"{sid} вне полосы {out:.2f} м из {line.length:.2f}")
+        # B9: угол со стороной полигона или звеном линии в точке пересечения (п. 4, разъяснение 6)
+        for rid, rt, rg, _ in trees["spec_near"](line, 0.0):
+            if rt not in MIN_ANGLE:
+                continue
+            angles = [acute_deg(c[0], c[-1], p, q) for p, q in sides(rg) if LineString([p, q]).intersects(line)]
+            if angles and min(angles) < MIN_ANGLE[rt] - 0.01:
+                rep.add("B9 угол пересечения спецобъекта меньше min_angle_deg",
+                        f"{sid} {min(angles):.2f}° < {MIN_ANGLE[rt]}° ({rt} {rid})")
+
+    for node, lst in adj.items():
+        spec_here = [t for t in lst if t["properties"]["laying_method"] == "special"]
+        # B14: технический узел между спецучастками ставится только там, где меняется набор объектов (п. 4)
+        if kinds.get(node) == "technical_node" and len(lst) == 2 and len(spec_here) == 2 \
+                and set(zones[id(lst[0])]) == set(zones[id(lst[1])]):
+            rep.add("B14 одно пересечение разбито на несколько спецучастков без смены набора объектов",
+                    f"{node} {sorted(zones[id(lst[0])])}")
+        # B12: спецучасток кончается там, где кончается полоса: иначе соседний участок в полосе тоже special
+        for t in spec_here:
+            tc = list(line_of[id(t)].coords)
+            end = Point(tc[0] if nodes_of[id(t)][0] == node else tc[-1])
+            for key in zones[id(t)]:
+                rt, rid = key
+                rg = obj[key]
+                if rg.geom_type.endswith("Polygon"):
+                    d = rg.distance(end)
+                else:
+                    d = min((x.distance(end) for x in crossings(line_of[id(t)], rt, rg)), default=math.inf)
+                if d >= MARGIN[rt] - ZONE_TOL:
+                    continue
+                for s in lst:
+                    if s is not t and key not in zones.get(id(s), {}):
+                        rep.add("B12 спецпроход кончается внутри полосы margin_m",
+                                f"{sid_of[id(s)]} у узла {node}: {rt} {rid} в {d:.2f} м < {MARGIN[rt]}")
+
+    # звенья без отступа до объекта (ключи объектов по (id участка, номер звена)): прямая от врезки до сети, которая
+    # её касается, и прямое продолжение спецучастка через узел — хвост того же прямого пересечения. Прямая идёт через
+    # технические узлы, пока направление не меняется больше чем на 1°
+    free = defaultdict(set)
+
+    def along(node, prev, came, keys):
+        for s in adj[node]:
+            if s is came:
+                continue
+            c = list(line_of[id(s)].coords)
+            start = nodes_of[id(s)][0] == node
+            end, nb = (c[0], c[1]) if start else (c[-1], c[-2])
+            i = 0 if start else len(c) - 2
+            if prev is not None and turn_deg(prev, end, nb) >= 1.0 or keys <= free[(id(s), i)]:
+                continue
+            free[(id(s), i)] |= keys
+            other = nodes_of[id(s)][1] if start else nodes_of[id(s)][0]
+            if len(c) == 2 and kinds.get(other) == "technical_node":
+                along(other, end, s, keys)
+
+    for node, pt in ties.items():
+        along(node, None, None, {(rt, rid) for rid, rt, _, _ in trees["spec_near"](pt, 0.5) if rt == "heat_network"})
+    for t in special:
+        tc = list(line_of[id(t)].coords)
+        along(nodes_of[id(t)][0], tc[1], t, set(zones[id(t)]))
+        along(nodes_of[id(t)][1], tc[-2], t, set(zones[id(t)]))
+
+    # B10, B11: вне спецпрохода объекта участок держит отступ и объект не пересекает (п. 3.1, п. 4, разъяснение 7)
+    for s in segs:
+        p = s["properties"]
+        sid, line = sid_of[id(s)], line_of[id(s)]
+        c = list(line.coords)
+        w2 = DN[p["diameter"]]["width_m"] / 2
+        own = zones.get(id(s), {})
+        for rid, rt, rg, extra in trees["spec_near"](line, trees["spec_reach"] + w2):
+            key = (rt, rid)
+            if key in own:
+                continue
+            need = _TYPES[rt]["clearance_m"] + w2 + extra
+            pieces = [LineString(c[i:i + 2]) for i in range(len(c) - 1) if key not in free[(id(s), i)]]
+            d = min((pc.distance(rg) for pc in pieces), default=math.inf)
+            if d >= need - EPS:
+                continue
+            cat = "B11" if rt == "heat_network" else "B10"
+            what = "существующую сеть вне врезки" if rt == "heat_network" else rt
+            if d == 0:
+                rep.add(f"{cat} пересекает {what} не специальным участком", f"{sid} {p['laying_method']} ({rt} {rid})")
+            else:
+                rep.add(f"{cat} ближе отступа к {'существующей сети' if rt == 'heat_network' else rt} вне спецпрохода",
+                        f"{sid} {d:.2f} м < {need:.2f} ({rt} {rid})")
+
+    # B15: новые участки не пересекаются и не касаются вне общего узла (п. 2.1): ближе 1 мм вне круга 0,15 м
+    lines = [line_of[id(s)] for s in segs]
+    for s, line in zip(segs, lines):
+        if not line.is_simple:
+            rep.add("B15 участок пересекает сам себя", sid_of[id(s)])
+    left, right = STRtree(lines).query(lines, predicate="dwithin", distance=0.001)
+    for i, j in zip(left, right):
+        if i >= j:
+            continue
+        a, b = segs[i], segs[j]
+        ca = list(lines[i].coords)
+        shared = set(nodes_of[id(a)]) & set(nodes_of[id(b)])
+        rest = lines[i]
+        for n in shared:
+            rest = rest.difference(Point(ca[0] if nodes_of[id(a)][0] == n else ca[-1]).buffer(0.15))
+        if not rest.is_empty and rest.distance(lines[j]) < 0.001:
+            rep.add("B15 новые участки пересекаются или касаются вне общего узла",
+                    f"{sid_of[id(a)]} и {sid_of[id(b)]} {rest.distance(lines[j]) * 1000:.1f} мм")
+
+
 def trees_for(inp):
     oks_geoms = [g for _, g in inp["oks"]]
     t_oks = STRtree(oks_geoms)
@@ -622,7 +806,16 @@ def trees_for(inp):
         g = oks_by_id[oid]
         return [cp_ids[i] for i in t_cp.query(g, predicate="dwithin", distance=0.01)]
 
+    # спецобъекты вместе с существующей сетью (разъяснение 10): id, тип, геометрия, полуширина объекта для отступа
+    # (half_width_m у линий, половина ширины пары по ДУ у сети; у полигона отступ от границы)
+    spec = [(rid, rt, g, 0.0 if g.geom_type.endswith("Polygon") else _TYPES[rt].get("half_width_m", 0.0))
+            for rid, rt, g in inp["special"]]
+    spec += [(pid, "heat_network", g, DN.get(pdn, {"width_m": 0.0})["width_m"] / 2) for pid, g, pdn in inp["pipes"]]
+    t_spec = STRtree([o[2] for o in spec])
+
     return {
+        "spec_near": lambda g, d: [spec[i] for i in t_spec.query(g, predicate="dwithin", distance=d)],
+        "spec_reach": max(_TYPES[rt]["clearance_m"] + extra for _, rt, _, extra in spec) if spec else 0.0,
         "cps_in": cps_in,
         "oks_near": lambda g, d: [inp["oks"][i] for i in t_oks.query(g, predicate="dwithin", distance=d)],
         "forbid_near": lambda g, d: [inp["forbid"][i] for i in t_forbid.query(g, predicate="dwithin", distance=d)] if t_forbid else [],
