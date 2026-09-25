@@ -107,13 +107,23 @@ public final class VariantEnumerator {
      * Локальный поиск по разбиениям ОКС: сколько сборок черновика он может потратить (свойство heatnet.search.budget).
      * Предела по стенным часам нет: результат не зависит от скорости и загрузки машины.
      */
-    // 300 обрывали поиск на плотных сценах: «густо» 100 и 200 останавливаются по застою на ~440 сборках и дают S ниже
-    // на 0,5 и 0,9; датасет организаторов останавливается на 81, ему запас ничего не стоит
-    private static final int SEARCH_BUDGET = Integer.getInteger("heatnet.search.budget", 600);
+    // 300 обрывали поиск на плотных сценах; при застое 100 обрывали и 600: «густо» 100 и 200 доходили до 600 сборок
+    // с S 109,92 и 225,91, а с бюджетом 1000 сами останавливаются на 740 и 776 сборках с S 109,37 и 225,25.
+    // Датасет организаторов останавливается на 100 сборках, сценарии S00–S14 — не дальше 28, им запас ничего не стоит
+    private static final int SEARCH_BUDGET = Integer.getInteger("heatnet.search.budget", 1000);
     /**
      * Остановка после стольких сборок подряд без улучшения лучшего score (heatnet.search.stall). 0 — только budget.
      */
-    private static final int SEARCH_STALL = Integer.getInteger("heatnet.search.stall", 50);
+    // 50 останавливали «густо» 50/100/200 на S 54,08 / 110,13 / 225,95; со 100 выходит 53,19 / 109,37 / 225,25 за время
+    // ×1,22 на «густо-200» и ×1,3 на датасете организаторов: там поиск перебирает 100 черновиков вместо 52, а S тот же
+    // (прогоны подряд с застоем 50, 25.09.2026). S датасета организаторов и сценариев S00–S14 от застоя 50–200
+    // не зависит. При 75 «густо-200» даёт 225,91 за ×1,11, при 150 — 224,99 за ×1,37
+    private static final int SEARCH_STALL = Integer.getInteger("heatnet.search.stall", 100);
+    /**
+     * Застой в районах города (heatnet.city.stall). При 100 районы доходят до бюджета CITY_BUDGET: выход города
+     * меняется, а районы считаются на 10 % дольше, поэтому здесь прежние 50.
+     */
+    private static final int CITY_STALL = Integer.getInteger("heatnet.city.stall", 50);
     /** Деревья подмножества строятся не на всех кандидатах врезки, а на лучших по грубой оценке стоимости. */
     private static final int CANDIDATE_LIMIT = 6;
     /** Запас к прямой до ближайшей врезки при выборе диаметра графа по предельной длине: трасса длиннее прямой. */
@@ -830,6 +840,7 @@ public final class VariantEnumerator {
      * их число, других пределов нет, поэтому результат детерминирован. Возвращает лучший найденный черновик.
      */
     private Draft search(Draft start, int budget) {
+        int stall = district ? CITY_STALL : SEARCH_STALL;
         List<List<ConnectionPoint>> blocks = new ArrayList<>();
         for (Tree tree : start.trees) {
             blocks.add(new ArrayList<>(tree.connected()));
@@ -858,7 +869,7 @@ public final class VariantEnumerator {
                 if (spent >= budget) {
                     break;
                 }
-                if (SEARCH_STALL > 0 && sinceBestImprove >= SEARCH_STALL && spent >= firstScan) {
+                if (stall > 0 && sinceBestImprove >= stall && spent >= firstScan) {
                     break;
                 }
                 String key = move.key();
@@ -885,7 +896,7 @@ public final class VariantEnumerator {
                 if (current == best) {
                     break;
                 }
-                if (SEARCH_STALL > 0 && sinceBestImprove >= SEARCH_STALL && spent >= firstScan) {
+                if (stall > 0 && sinceBestImprove >= stall && spent >= firstScan) {
                     break;
                 }
                 blocks = bestBlocks;
@@ -907,7 +918,7 @@ public final class VariantEnumerator {
                 log.info("search: score={} trees={} drafts={} elapsed={}s", best.score(), blocks.size(), spent,
                         (System.nanoTime() - started) / 1_000_000_000L);
             }
-            if (SEARCH_STALL > 0 && sinceBestImprove >= SEARCH_STALL && spent >= firstScan) {
+            if (stall > 0 && sinceBestImprove >= stall && spent >= firstScan) {
                 log.info("search: stall stop drafts={} sinceBestImprove={}", spent, sinceBestImprove);
                 break;
             }
