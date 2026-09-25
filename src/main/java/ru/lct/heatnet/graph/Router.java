@@ -163,21 +163,72 @@ public final class Router {
 
     /** То же; {@code cut} — срезать углы пути у вершин зон, см. {@link #cutPass}. */
     public Route routeToAny(Point from, Collection<Point> targets, Set<String> ignored, boolean cut) {
-        Coordinate source = from.getCoordinate();
+        Choice choice = choose(from.getCoordinate(), targets, ignored, Double.POSITIVE_INFINITY);
+        return choice == null ? null : route(from, choice, ignored, cut);
+    }
+
+    /**
+     * Цель, которую выбирает {@link #routeToAny}: точка цели, узел графа перед ней (-1 — прямой отрезок) и вес с
+     * надбавкой. {@code tied} — другая цель списка дала тот же вес или могла его дать: при равенстве выбор зависит от
+     * порядка целей.
+     */
+    public static final class Choice {
+        final Coordinate target;
+        final int via;
+        final double weight;
+        final double extra;
+        final boolean tied;
+        /** Предшественники таблицы Дейкстры, по которым строится путь до via. */
+        final int[] pred;
+
+        Choice(Coordinate target, int via, double weight, double extra, boolean tied, int[] pred) {
+            this.target = target;
+            this.via = via;
+            this.weight = weight;
+            this.extra = extra;
+            this.tied = tied;
+            this.pred = pred;
+        }
+
+        public Coordinate target() {
+            return target;
+        }
+
+        public double weight() {
+            return weight;
+        }
+
+        public double extra() {
+            return extra;
+        }
+
+        public boolean tied() {
+            return tied;
+        }
+    }
+
+    /**
+     * Цель с наименьшим весом с надбавкой среди тех, чей вес меньше bound, при равенстве — первая по порядку; null —
+     * такой нет. Вес цели от других целей не зависит, поэтому выбор по части списка сравним с выбором по всему.
+     */
+    public Choice choose(Coordinate source, Collection<Point> targets, Set<String> ignored, double bound) {
         Table table = table(source, ignored);
         double[] dist = table.dist;
         int[] pred = table.pred;
         int[] order = table.order;
-        double bestWeight = Double.POSITIVE_INFINITY;
+        double bestWeight = bound;
         Coordinate bestTarget = null;
         int bestVia = -1;
         double bestExtra = 0;
+        boolean tied = false;
         for (Point target : targets) {
             Coordinate t = target.getCoordinate();
             double extra = target.getUserData() instanceof Double ? (Double) target.getUserData() : 0;
             // вес не меньше расстояния по прямой: цель дальше уже найденного веса не может выиграть, её веса до узлов
             // не считаются (это самая дорогая часть: цели дерева меняются с каждым черновиком и в кэш не попадают)
-            if (t.distance(source) + extra >= bestWeight) {
+            double lower = t.distance(source) + extra;
+            if (lower >= bestWeight) {
+                tied |= lower == bestWeight && bestTarget != null;
                 continue;
             }
             double direct = obstacles.edgeWeight(t, source, ignored, false, false);
@@ -222,24 +273,30 @@ public final class Router {
                 bestTarget = t;
                 bestVia = via;
                 bestExtra = extra;
+                tied = false;
+            } else if (weight + extra == bestWeight && bestTarget != null) {
+                tied = true;
             }
         }
-        if (bestTarget == null) {
-            return null;
-        }
+        return bestTarget == null ? null : new Choice(bestTarget, bestVia, bestWeight, bestExtra, tied, pred);
+    }
+
+    /** Маршрут до цели choice, выбранной {@link #choose} из точки from. */
+    public Route route(Point from, Choice choice, Set<String> ignored, boolean cut) {
+        Coordinate source = from.getCoordinate();
         List<Coordinate> coords = new ArrayList<>();
-        for (int v = bestVia; v >= 0; v = pred[v]) {
+        for (int v = choice.via; v >= 0; v = choice.pred[v]) {
             coords.add(0, nodes.get(v));
         }
         coords.add(0, source);
-        coords.add(bestTarget);
+        coords.add(choice.target);
         straighten(coords, ignored);
         if (cut) {
             cutCorners(coords, ignored);
         }
         LineString line = from.getFactory().createLineString(coords.toArray(new Coordinate[0]));
         List<SpecialSpan> spans = obstacles.spans(line, ignored);
-        return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), spans) + bestExtra, spans);
+        return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), spans) + choice.extra, spans);
     }
 
     /**

@@ -222,6 +222,12 @@ final class TreeBuilder {
         final Map<String, Exit> exitByConnection = new HashMap<>();
         /** Маршрут выходит из здания вдоль финального прямого участка, см. {@link #build}. */
         boolean fromPortalDirection;
+        /** Номер шага build, цели шага по ключу {@link #key} и цели, которых на прошлом шаге не было. */
+        int step;
+        Set<List<Double>> keys = Set.of();
+        List<Point> added = List.of();
+        /** Выбор цели по точке подключения и шаг, на котором он сделан, см. {@link #choice}. */
+        final Map<String, Chosen> chosen = new HashMap<>();
         /** Графы других Ду для веток, см. {@link #portal}; null — все ветки по графу дерева. */
         Graphs graphs;
 
@@ -239,9 +245,21 @@ final class TreeBuilder {
         Tree build(List<ConnectionPoint> connections) {
             List<ConnectionPoint> remaining = new ArrayList<>(connections);
             while (!remaining.isEmpty()) {
+                List<Point> targets = targets();
+                Set<List<Double>> previous = keys;
+                keys = new HashSet<>();
+                added = new ArrayList<>();
+                for (Point target : targets) {
+                    List<Double> key = key(target.getCoordinate(), extra(target));
+                    keys.add(key);
+                    if (!previous.contains(key)) {
+                        added.add(target);
+                    }
+                }
+                step++;
                 Attach best = null;
                 for (ConnectionPoint connection : remaining) {
-                    Attach attach = attach(connection, targets(), fromPortalDirection);
+                    Attach attach = attach(connection, targets, fromPortalDirection);
                     if (attach != null && (best == null || attach.weight < best.weight)) {
                         best = attach;
                     }
@@ -397,8 +415,13 @@ final class TreeBuilder {
             Router branchRouter = portal == null ? router : portal.router;
             Point start = portal == null ? connection.getGeometry() : factory.createPoint(portal.point);
             // маршруты со срезанными углами у вершин зон, см. Router#cutPass
-            Route route = portal == null || !fromPortalDirection ? branchRouter.routeToAny(start, targets, ignored, true)
-                    : branchRouter.routeExact(start, targets, ignored, connection.getGeometry().getCoordinate(), true);
+            Route route;
+            if (portal == null || !fromPortalDirection) {
+                Router.Choice choice = choice(connection, branchRouter, start.getCoordinate(), targets);
+                route = choice == null ? null : branchRouter.route(start, choice, ignored, true);
+            } else {
+                route = branchRouter.routeExact(start, targets, ignored, connection.getGeometry().getCoordinate(), true);
+            }
             if (route == null) {
                 return null;
             }
@@ -448,6 +471,33 @@ final class TreeBuilder {
                 return null;
             }
             return null;
+        }
+
+        /**
+         * Цель маршрута точки, как у {@link Router#routeToAny} по всем целям. Дерево на шаге только растёт: цели,
+         * которые остались с той же надбавкой, дают прежние веса, поэтому если прежняя лучшая цель на месте, достаточно
+         * сравнить её с лучшей из новых. При равных весах выбор зависит от порядка целей, и тогда, как и без прежнего
+         * выбора, цели перебираются все.
+         */
+        Router.Choice choice(ConnectionPoint connection, Router branchRouter, Coordinate start, List<Point> targets) {
+            Chosen previous = chosen.get(connection.getId());
+            Router.Choice choice;
+            if (previous == null || previous.step != step - 1 || previous.choice != null
+                    && (previous.choice.tied() || !keys.contains(key(previous.choice.target(), previous.choice.extra())))) {
+                choice = branchRouter.choose(start, targets, ignored, Double.POSITIVE_INFINITY);
+            } else {
+                double bound = previous.choice == null ? Double.POSITIVE_INFINITY : Math.nextUp(previous.choice.weight());
+                Router.Choice fresh = added.isEmpty() ? null : branchRouter.choose(start, added, ignored, bound);
+                if (fresh == null) {
+                    choice = previous.choice;
+                } else if (previous.choice == null || fresh.weight() < previous.choice.weight()) {
+                    choice = fresh;
+                } else {
+                    choice = branchRouter.choose(start, targets, ignored, Double.POSITIVE_INFINITY);
+                }
+            }
+            chosen.put(connection.getId(), new Chosen(choice, step));
+            return choice;
         }
 
         Attach attach(ConnectionPoint connection, List<Coordinate> head, List<Spot> spots, List<Piece> pieces, double weight,
@@ -800,6 +850,25 @@ final class TreeBuilder {
 
     static double deflectionDeg(Coordinate a, Coordinate b, Coordinate c) {
         return 180 - Math.toDegrees(Angle.angleBetween(a, b, c));
+    }
+
+    /** Выбор цели точки на шаге step, null — ни одна цель не достижима. */
+    private static final class Chosen {
+        final Router.Choice choice;
+        final int step;
+
+        Chosen(Router.Choice choice, int step) {
+            this.choice = choice;
+            this.step = step;
+        }
+    }
+
+    private static List<Double> key(Coordinate target, double extra) {
+        return List.of(target.x, target.y, extra);
+    }
+
+    private static double extra(Point target) {
+        return target.getUserData() instanceof Double ? (Double) target.getUserData() : 0;
     }
 
     private static boolean overlaps(List<SpecialSpan> spans, double from, double to) {
