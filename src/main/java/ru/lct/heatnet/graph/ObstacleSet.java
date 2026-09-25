@@ -900,6 +900,11 @@ public final class ObstacleSet {
         return false;
     }
 
+    /** Отрезок a–b задевает зону запрета не из ignored; объекты специального прохода не проверяются. */
+    public boolean forbidden(Coordinate a, Coordinate b, Set<String> ignored) {
+        return forbidGrid.hit(a, b, ignored, false);
+    }
+
     /** Прежняя зона запрета с углами JOIN_MITRE; строится при первом запросе, при гонке нитей — одинаковая. */
     private Area mitre(Zone zone) {
         Area area = zone.mitre;

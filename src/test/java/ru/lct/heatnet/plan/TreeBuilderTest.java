@@ -140,6 +140,57 @@ class TreeBuilderTest {
     }
 
     @Test
+    void exitFacesNeighbourByDiameterOfOwnPieceNotOfTreeGraph() {
+        // сосед в 12 м за ближней (южной) стеной, до восточной 5 м: по графу Ду500 (отступ 7,835 м) выход лёг бы в его зону, по Ду
+        // участка точки (5 т/ч, отступ около 5,2 м) проход есть, и финальный участок идёт от ближней стены
+        Geometry building = PlanFixture.rect(140, 40, 180, 80);
+        PlanFixture fixture = PlanFixture.trunk();
+        fixture.oks.add(new FutureOks("o-1", building, 5, 1.0));
+        fixture.connections.add(new ConnectionPoint("cp-o-1", point(175, 44), "o-1"));
+        fixture.existing.add(new ExistingOks("b-1", building));
+        fixture.existing.add(new ExistingOks("b-2", PlanFixture.rect(165, 20, 185, 28)));
+        InputData input = fixture.input();
+        TieInFinder finder = new TieInFinder(input, rules);
+        int graphDn = 500;
+        TieCandidate tie = finder.find(List.of(point(220, 0)), graphDn).stream()
+                .filter(c -> c.getExistingObjectId().equals("hn-2")).findFirst().orElseThrow();
+        TreeBuilder builder = builder(input, finder, VariantEnumerator.buildings(input));
+        TreeBuilder.Graphs graphs = new TreeBuilder.Graphs() {
+            @Override
+            public int leafDn(ConnectionPoint connection) {
+                return rules.diameterFor(5).getDn();
+            }
+
+            @Override
+            public ru.lct.heatnet.graph.ObstacleSet obstacles(int dn) {
+                return router(dn).obstacles();
+            }
+
+            @Override
+            public Router router(int dn) {
+                return new Router(input, rules, AREA, dn);
+            }
+        };
+
+        Tree wide = builder.build(new Router(input, rules, AREA, graphDn), graphDn, AREA, tie, fixture.connections, 0, 0, false, null);
+        Tree narrow = builder.build(new Router(input, rules, AREA, graphDn), graphDn, AREA, tie, fixture.connections, 0, 0, false, graphs);
+
+        assertTrue(wide.unconnected.isEmpty() && narrow.unconnected.isEmpty());
+        assertTrue(finalPiece(wide).getCoordinateN(0).y > 40, "по графу Ду500 выход не через южную стену: " + finalPiece(wide));
+        assertTrue(narrow.narrow, "ветка по графу Ду участка");
+        LineString piece = finalPiece(narrow);
+        assertEquals(175, piece.getCoordinateN(0).x, 1e-6);
+        assertTrue(piece.getCoordinateN(0).y < 40 && piece.getLength() < 10, "выход через южную стену: " + piece);
+    }
+
+    private static LineString finalPiece(Tree tree) {
+        Coordinate[] coords = tree.edges.stream().filter(edge -> edge.to.kind == Tree.Kind.CONNECTION).findFirst()
+                .orElseThrow().line.getCoordinates();
+        return PlanFixture.line(coords[coords.length - 2].x, coords[coords.length - 2].y,
+                coords[coords.length - 1].x, coords[coords.length - 1].y);
+    }
+
+    @Test
     void cutTreeKeepsEdgeFromTieInRoot() {
         // ствол с прямым углом вдали от препятствий: срезка заменяет угол хордой, ребро должно остаться у узла врезки
         PlanFixture fixture = PlanFixture.trunk().oks("o-1", 300, 60, 5);

@@ -67,6 +67,8 @@ final class Tree {
     /** Рамка и линии готового дерева, считаются один раз: дерево входит в сотни черновиков. */
     private volatile Envelope envelope;
     private volatile Geometry geometry;
+    /** Есть ветка по графу меньшего Ду, чем у дерева (TreeBuilder.Run#portal): отступы проверяются по Ду участков. */
+    boolean narrow;
 
     Tree(TieCandidate tie) {
         this.tie = tie;
