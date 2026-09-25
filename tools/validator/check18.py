@@ -30,6 +30,8 @@ SUMMARY = ["rank", "construction_cost", "chamber_construction_cost", "existing_c
 # типы ограничений и их числа из rules.json: запреты с отступом и спецпроходы с коэффициентом и полосой margin
 _TYPES = {t: r for t, r in RULES["restrictions"].items() if not t.startswith("_") and t != "oks_existing"}
 FORBID = {t: r["clearance_m"] for t, r in _TYPES.items() if r["rule"] == "forbid"}
+# тип, которого нет в rules.json, сервис считает запретом с отступом _fallback
+FALLBACK = RULES["restrictions"]["_fallback"]["clearance_m"]
 K_SPECIAL = {t: r["k_special"] for t, r in _TYPES.items() if r["rule"] == "special"}
 MARGIN = {t: r["margin_m"] for t, r in _TYPES.items() if r["rule"] == "special"}
 MIN_ANGLE = {t: r["min_angle_deg"] for t, r in _TYPES.items() if r["rule"] == "special" and "min_angle_deg" in r}
@@ -90,8 +92,8 @@ def near_side_blocked(cg, own, shells, dn, trees):
         elif any(og is not own and not og.equals(own) and ray.distance(og) < need - EPS
                  for _, og in trees["oks_near"](ray, need)):
             reasons.append("зона чужого здания")
-        elif any(ray.distance(rg) < FORBID[rt] + DN[dn]["width_m"] / 2 - EPS
-                 for _, rt, rg in trees["forbid_near"](ray, max(FORBID.values()) + DN[dn]["width_m"] / 2)):
+        elif any(ray.distance(rg) < FORBID.get(rt, FALLBACK) + DN[dn]["width_m"] / 2 - EPS
+                 for _, rt, rg in trees["forbid_near"](ray, max(FALLBACK, *FORBID.values()) + DN[dn]["width_m"] / 2)):
             reasons.append("запретная зона")
         else:
             return None
@@ -163,10 +165,10 @@ def load_input(path):
             g = utm(f["geometry"])
             if rt == "oks":
                 oks.append((str(p["id"]), g))
-            elif rt in FORBID:
-                forbid.append((str(p["id"]), rt, g))
             elif rt in K_SPECIAL:
                 special.append((str(p["id"]), rt, g))
+            elif rt in FORBID or rt not in RULES["restrictions"]:
+                forbid.append((str(p["id"]), rt, g))
     return dict(cps=cps, chambers=chambers, pipes=pipes, oks=oks, forbid=forbid, special=special, id_types=id_types)
 
 
@@ -541,9 +543,9 @@ def check_variant(inp, trees, vid, feats, rep):
         p = s["properties"]
         line = geo[str(p["id"])]
         dn = p["diameter"]
-        for rid, rt, rg in trees["forbid_near"](line, max(FORBID.values()) + DN[dn]["width_m"] / 2):
+        for rid, rt, rg in trees["forbid_near"](line, max(FALLBACK, *FORBID.values()) + DN[dn]["width_m"] / 2):
             d = line.distance(rg)
-            if d < FORBID[rt] + DN[dn]["width_m"] / 2 - EPS:
+            if d < FORBID.get(rt, FALLBACK) + DN[dn]["width_m"] / 2 - EPS:
                 rep.add(f"B7 {'пересекает' if d == 0 else 'ближе отступа к'} {rt}", f"{p['id']} {d:.2f} м ({rt} {rid})")
     check_specials(trees, segs, geo, adj, kinds, {n: node_geom(n)[0] for n in tie_nodes}, rep)
 
