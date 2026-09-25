@@ -13,6 +13,7 @@ import os
 
 import numpy as np
 import shapely
+import shapely.ops
 from pyproj import Transformer
 from shapely import STRtree
 from shapely.geometry import LineString, Point, shape
@@ -26,9 +27,11 @@ ALLOWED = {"heat_network", "heat_chamber", "technical_node", "variant_summary"}
 SUMMARY = ["rank", "construction_cost", "chamber_construction_cost", "existing_chamber_tie_in_count",
            "existing_chamber_tie_in_cost", "unconnected_penalty", "calculated_cost", "new_network_length",
            "score", "unconnected_oks_ids"]
-FORBID = {"park": 1.0, "social_area": 1.0, "prohibited_site": 1.0, "water": 1.0, "railway": 1.0}
-K_SPECIAL = {"road": 1.6, "tram_tracks": 1.75, "gas_pipeline": 1.25, "power_cable": 1.15, "heat_network": 1.05}
-MARGIN = {"road": 3.0, "tram_tracks": 3.0, "gas_pipeline": 2.0, "power_cable": 2.0, "heat_network": 2.0}
+# типы ограничений и их числа из rules.json: запреты с отступом и спецпроходы с коэффициентом и полосой margin
+_TYPES = {t: r for t, r in RULES["restrictions"].items() if not t.startswith("_") and t != "oks_existing"}
+FORBID = {t: r["clearance_m"] for t, r in _TYPES.items() if r["rule"] == "forbid"}
+K_SPECIAL = {t: r["k_special"] for t, r in _TYPES.items() if r["rule"] == "special"}
+MARGIN = {t: r["margin_m"] for t, r in _TYPES.items() if r["rule"] == "special"}
 NODE_TOL = 0.05
 EPS = 0.01
 
@@ -60,6 +63,39 @@ def crossing_near(line, chain, obj, margin):
     return False
 
 
+def near_side_blocked(cg, own, shells, dn, trees):
+    """Почему ближняя сторона здания закрыта для финального участка ДУ dn; None — открыта.
+
+    Луч от точки через ближайшую точку внешнего контура ведётся за зону отступа своего здания и дальше шагами до
+    30 м. Сторона открыта, если хоть одна точка выхода на луче лежит вне зоны своего здания, участок до неё не
+    задевает зоны чужих зданий и запретных объектов и пересекает своё здание одним куском."""
+    q = min((shapely.ops.nearest_points(sh, cg)[0] for sh in shells), key=lambda pt: pt.distance(cg))
+    dx, dy = q.x - cg.x, q.y - cg.y
+    length = math.hypot(dx, dy)
+    if length < 1e-6:
+        return "точка на границе"
+    dx, dy = dx / length, dy / length
+    need = oks_clearance(dn) + DN[dn]["width_m"] / 2
+    reasons = []
+    step = 0.5
+    t = length + need + 0.3
+    while t <= length + need + 30.3:
+        ray = LineString([(cg.x, cg.y), (cg.x + dx * t, cg.y + dy * t)])
+        pieces = [g for g in getattr(ray.intersection(own), "geoms", [ray.intersection(own)]) if g.length > 0.05]
+        if len(pieces) > 1 or Point(ray.coords[-1]).distance(own) < need - EPS:
+            reasons.append("луч снова входит в своё здание или его зону")
+        elif any(og is not own and not og.equals(own) and ray.distance(og) < need - EPS
+                 for _, og in trees["oks_near"](ray, need)):
+            reasons.append("зона чужого здания")
+        elif any(ray.distance(rg) < FORBID[rt] + DN[dn]["width_m"] / 2 - EPS
+                 for _, rt, rg in trees["forbid_near"](ray, max(FORBID.values()) + DN[dn]["width_m"] / 2)):
+            reasons.append("запретная зона")
+        else:
+            return None
+        t += step
+    return Counter(reasons).most_common(1)[0][0]
+
+
 def turn_deg(a, b, c):
     ux, uy, vx, vy = b[0] - a[0], b[1] - a[1], c[0] - b[0], c[1] - b[1]
     nu, nv = math.hypot(ux, uy), math.hypot(vx, vy)
@@ -87,12 +123,19 @@ def load_input(path):
     data = json.load(open(path))
     cps, chambers, pipes, oks, forbid, special = {}, {}, [], [], [], []
     id_types = {}
+    # формат раздела 12: расход у oks_future, точка ссылается на него через oks_id; у датасета организаторов расход
+    # у самой точки
+    future = {str(f["properties"].get("id")): f["properties"].get("flow_tph") for f in data["features"]
+              if f["properties"].get("object_type") == "oks_future"}
     for f in data["features"]:
         p = f["properties"]
         t = p.get("object_type")
         id_types[str(p.get("id"))] = type(p.get("id")).__name__
         if t == "oks_connection_point":
-            cps[str(p["id"])] = (utm(f["geometry"]), p["flow_tph"])
+            flow = p["flow_tph"] if "flow_tph" in p else future[str(p["oks_id"])]
+            cps[str(p["id"])] = (utm(f["geometry"]), flow)
+            if "oks_id" in p:
+                cps.setdefault(str(p["oks_id"]), cps[str(p["id"])])
         elif t == "heat_chamber":
             chambers[str(p["id"])] = utm(f["geometry"])
         elif t == "heat_network":
@@ -466,16 +509,23 @@ def check_variant(inp, trees, vid, feats, rep):
             to_edge = min(sh.distance(cg) for sh in shells)
             inside = piece.intersection(og).length
             if inside > to_edge + 1.0:
-                # ближайшая сторона бывает перекрыта зоной соседнего здания, тогда выход идёт через другую сторону
-                rep.add("i  финальный участок не от ближайшего внешнего контура (сторона перекрыта соседом)",
-                        f"{sid} внутри {inside:.1f} м, до границы {to_edge:.1f} м")
+                # другая сторона допустима, только если ближняя закрыта: луч через ближайшую точку контура упирается
+                # в чужую зону или снова входит в своё здание (п. 2.2, толкование в docs/interpretation.md)
+                dn = seg_by_id[sid]["properties"]["diameter"]
+                reason = near_side_blocked(cg, og, shells, dn, trees)
+                if reason:
+                    rep.add("i  финальный участок не от ближайшего внешнего контура (ближняя сторона закрыта)",
+                            f"{sid} внутри {inside:.1f} м, до границы {to_edge:.1f} м: {reason}")
+                else:
+                    rep.add("B8 финальный участок не от ближайшей границы, хотя ближняя сторона открыта",
+                            f"{sid} ДУ{dn} внутри {inside:.1f} м, до границы {to_edge:.1f} м")
     for s in segs:
         p = s["properties"]
         line = geo[str(p["id"])]
         dn = p["diameter"]
-        for rid, rt, rg in trees["forbid_near"](line, 1.0 + DN[dn]["width_m"] / 2):
+        for rid, rt, rg in trees["forbid_near"](line, max(FORBID.values()) + DN[dn]["width_m"] / 2):
             d = line.distance(rg)
-            if d < 1.0 + DN[dn]["width_m"] / 2 - EPS:
+            if d < FORBID[rt] + DN[dn]["width_m"] / 2 - EPS:
                 rep.add(f"B7 {'пересекает' if d == 0 else 'ближе отступа к'} {rt}", f"{p['id']} {d:.2f} м ({rt} {rid})")
 
     # E. стоимость участков по правилам 18.09 (без надбавки за поворот)

@@ -109,18 +109,15 @@ final class TreeBuilder {
         final Coordinate point;
         final Router router;
         final int anchor;
-        /** У выхода по Ду участка — выход по графу дерева на случай, если ветки от него нет; иначе null. */
-        final Exit wide;
 
-        Exit(Coordinate point, Router router, int anchor, Exit wide) {
+        Exit(Coordinate point, Router router, int anchor) {
             this.point = point;
             this.router = router;
             this.anchor = anchor;
-            this.wide = wide;
         }
     }
 
-    private static final Exit NO_EXIT = new Exit(null, null, Integer.MAX_VALUE, null);
+    private static final Exit NO_EXIT = new Exit(null, null, Integer.MAX_VALUE);
 
     /** Ду участка у точки подключения и графы других Ду той же области, см. {@link Run#portal}. */
     interface Graphs {
@@ -250,9 +247,9 @@ final class TreeBuilder {
                     }
                 }
                 if (best == null) {
-                    if (widen(remaining)) {
-                        continue;
-                    }
+                    // выход через другую сторону здания допустим только при закрытой ближней (п. 2.2), поэтому точку,
+                    // от выхода которой нет ветки к этому дереву, не переводят на дальнюю сторону: она уходит из дерева
+                    // и подключается отдельно
                     tree.unconnected.addAll(remaining);
                     break;
                 }
@@ -260,22 +257,6 @@ final class TreeBuilder {
                 remaining.remove(best.connection);
             }
             return tree;
-        }
-
-        /**
-         * Точки с выходом по Ду участка, от которого ветки к дереву нет (из узкого прохода поворот круче 90°),
-         * переходят на выход по графу дерева.
-         */
-        boolean widen(List<ConnectionPoint> remaining) {
-            boolean changed = false;
-            for (ConnectionPoint connection : remaining) {
-                Exit exit = exitByConnection.get(connection.getId());
-                if (exit != null && exit.wide != null) {
-                    exitByConnection.put(connection.getId(), exit.wide);
-                    changed = true;
-                }
-            }
-            return changed;
         }
 
         /**
@@ -305,7 +286,7 @@ final class TreeBuilder {
                 }
                 log.debug("portal: {} anchor {} by DN{} instead of {} by DN{}", id, tight.anchor, leaf,
                         wide == NO_EXIT ? "none" : wide.anchor, dn);
-                return new Exit(tight.point, graphs.router(leaf), tight.anchor, wide);
+                return new Exit(tight.point, graphs.router(leaf), tight.anchor);
             });
         }
 
@@ -358,7 +339,7 @@ final class TreeBuilder {
                     if (tries > 1) {
                         log.debug("portal: {} anchor {} of {}", connection.getId(), tries, anchors.size());
                     }
-                    return new Exit(exit, branchRouter, tries, null);
+                    return new Exit(exit, branchRouter, tries);
                 }
                 log.debug("portal: {} anchor {} rejected: forbid={} area={} once={} along={}", connection.getId(),
                         tries, inForbid, inArea, once, along);

@@ -1324,33 +1324,29 @@ public final class VariantEnumerator {
         // кандидатов, поэтому итог не зависит от расписания нитей. В районе города нити заняты районами.
         java.util.stream.Stream<TieCandidate> stream = district || !PARALLEL ? cheapest.stream() : cheapest.parallelStream();
         List<Option> options = stream.map(candidate -> {
-            Option best = null;
             // ветки к точкам, у которых по графу дерева закрыта ближняя сторона здания, идут по графу Ду своего
-            // участка; если сборка такое дерево отвергла, оно строится заново только по графу дерева
-            for (TreeBuilder.Graphs narrow : java.util.Arrays.asList(graphs, null)) {
-                Tree tree = builder.build(router, dn, area, candidate, subset, rules.chamberCost(dn) / metreRub,
-                        rules.tieInCost() / metreRub, fromPortalDirection, narrow);
-                if (tree.edges.isEmpty()) {
-                    log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
-                    return null;
-                }
-                // углы трассы срезаются по точному отступу, врезка переносится к стволу или ствол прокладывается к
-                // врезке у первой камеры; из того, что соберётся, берётся лучшее по score, вплоть до дерева как построено
-                Tree slid = slide ? slid(tree, router, dn, metreRub) : tree;
-                Tree rerooted = slide ? rerooted(tree, router, dn, metreRub) : tree;
-                // новый ствол подходит к своей трубе тоже наискось
-                rerooted = rerooted == tree ? tree : slid(rerooted, router, dn, metreRub);
-                for (Tree shape : new java.util.LinkedHashSet<>(List.of(slid, rerooted, tree))) {
-                    // срезка только укорачивает рёбра: несрезанное дерево собирается, если срезанное не собралось
-                    Tree cut = builder.cut(shape, router);
-                    Option option = cut == shape ? null : option(cut, label, verify, area, dn, region, tree.narrow);
-                    option = option != null ? option : option(shape, label, verify, area, dn, region, tree.narrow);
-                    if (option != null && (best == null || option.score < best.score)) {
-                        best = option;
-                    }
-                }
-                if (best != null || !tree.narrow) {
-                    break;
+            // участка. Если сборка такое дерево отвергла, заново по графу дерева оно не строится: там выход ушёл бы
+            // на дальнюю сторону при открытой ближней (п. 2.2)
+            Tree tree = builder.build(router, dn, area, candidate, subset, rules.chamberCost(dn) / metreRub,
+                    rules.tieInCost() / metreRub, fromPortalDirection, graphs);
+            if (tree.edges.isEmpty()) {
+                log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
+                return null;
+            }
+            // углы трассы срезаются по точному отступу, врезка переносится к стволу или ствол прокладывается к
+            // врезке у первой камеры; из того, что соберётся, берётся лучшее по score, вплоть до дерева как построено
+            Tree slid = slide ? slid(tree, router, dn, metreRub) : tree;
+            Tree rerooted = slide ? rerooted(tree, router, dn, metreRub) : tree;
+            // новый ствол подходит к своей трубе тоже наискось
+            rerooted = rerooted == tree ? tree : slid(rerooted, router, dn, metreRub);
+            Option best = null;
+            for (Tree shape : new java.util.LinkedHashSet<>(List.of(slid, rerooted, tree))) {
+                // срезка только укорачивает рёбра: несрезанное дерево собирается, если срезанное не собралось
+                Tree cut = builder.cut(shape, router);
+                Option option = cut == shape ? null : option(cut, label, verify, area, dn, region, tree.narrow);
+                option = option != null ? option : option(shape, label, verify, area, dn, region, tree.narrow);
+                if (option != null && (best == null || option.score < best.score)) {
+                    best = option;
                 }
             }
             return best;
