@@ -11,12 +11,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.locationtech.jts.algorithm.Angle;
+import org.locationtech.jts.algorithm.locate.SimplePointInAreaLocator;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineSegment;
 import org.locationtech.jts.geom.LineString;
+import org.locationtech.jts.geom.Location;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.linearref.LengthIndexedLine;
 import org.slf4j.Logger;
@@ -35,7 +37,8 @@ import ru.lct.heatnet.model.ExistingOks;
  *
  * <p>Точка подключения внутри полигона ОКС достижима только финальным прямым участком от ближайшей границы полигона
  * (приложение 18.09, п. 2.2): маршрут ищется от точки выхода на луче «точка → ближайшая граница» сразу за зоной
- * отступа, а сам участок точка–выход проверяется без отступа к своему полигону, см. {@link Run#portal}.
+ * отступа, а сам участок точка–выход проверяется без отступа к своему полигону, но из его зоны отступа выходит один
+ * раз, см. {@link Run#portal} и {@link #leavesZoneOnce}.
  */
 final class TreeBuilder {
     private static final Logger log = LoggerFactory.getLogger(TreeBuilder.class);
@@ -73,8 +76,10 @@ final class TreeBuilder {
     private final SpecialObjects specials;
     /** Полигон ОКС, в котором лежит точка подключения, по id точки; точки вне полигонов в карте нет. */
     private final Map<String, ExistingOks> buildingByConnection;
-    /** leavesOnce по зданию и концам отрезка: те же точки выхода проверяются в каждом дереве перебора. */
+    /** leavesOnce по зданию, концам отрезка и отступу: те же точки выхода проверяются в каждом дереве перебора. */
     private final Map<List<Object>, Boolean> leavesOnceCache = new java.util.concurrent.ConcurrentHashMap<>();
+    /** leavesZoneOnce так же: финальные отрезки одни и те же во всех деревьях перебора. */
+    private final Map<List<Object>, Boolean> leavesZoneOnceCache = new java.util.concurrent.ConcurrentHashMap<>();
     private static final GeometryFactory GEOMETRY = new GeometryFactory();
     private final GeometryFactory factory = GEOMETRY;
 
@@ -205,13 +210,20 @@ final class TreeBuilder {
     }
 
     /**
-     * Финальный участок от cp до exit выходит из своего здания один раз и дальше в него не входит (приложение
-     * 18.09, п. 2.2: участок «от ближайшей границы до точки», а полигон ОКС непроходим). Луч через ближайшую
-     * точку контура П-образного здания иначе пересекал бы второе крыло.
+     * Финальный участок от cp до exit выходит из своего здания и из его зоны отступа clearance по одному разу и дальше
+     * в них не входит (приложение 18.09, п. 2.2: участок «от ближайшей границы до точки», полигон ОКС непроходим, а
+     * отступ к нему снят только с части участка в зоне перед границей). Луч через ближайшую точку контура
+     * П-образного здания иначе пересекал бы второе крыло или проходил у выступа ближе отступа.
      */
-    private boolean leavesOnce(ExistingOks building, Coordinate cp, Coordinate exit) {
-        return leavesOnceCache.computeIfAbsent(List.of(building.getId(), cp.x, cp.y, exit.x, exit.y),
-                key -> leavesOnce(building.getGeometry(), cp, exit));
+    private boolean leavesOnce(ExistingOks building, Coordinate cp, Coordinate exit, double clearance) {
+        return leavesOnceCache.computeIfAbsent(List.of(building.getId(), cp.x, cp.y, exit.x, exit.y, clearance),
+                key -> leavesOnce(building.getGeometry(), cp, exit, clearance));
+    }
+
+    /** {@link #leavesZoneOnce(Geometry, Coordinate, Coordinate, double)} по зданию точки. */
+    boolean leavesZoneOnce(ExistingOks building, Coordinate cp, Coordinate exit, double clearance) {
+        return leavesZoneOnceCache.computeIfAbsent(List.of(building.getId(), cp.x, cp.y, exit.x, exit.y, clearance),
+                key -> leavesZoneOnce(building.getGeometry(), cp, exit, clearance));
     }
 
     /**
@@ -246,7 +258,8 @@ final class TreeBuilder {
         return true;
     }
 
-    static boolean leavesOnce(Geometry building, Coordinate cp, Coordinate exit) {
+    /** {@link #leavesOnce(ExistingOks, Coordinate, Coordinate, double)} по геометрии здания. */
+    static boolean leavesOnce(Geometry building, Coordinate cp, Coordinate exit, double clearance) {
         Geometry inside = building.intersection(GEOMETRY.createLineString(new Coordinate[] {cp, exit}));
         int pieces = 0;
         for (int i = 0; i < inside.getNumGeometries(); i++) {
@@ -254,7 +267,88 @@ final class TreeBuilder {
                 pieces++;
             }
         }
-        return pieces == 1;
+        return pieces == 1 && leavesZoneOnce(building, cp, exit, clearance);
+    }
+
+    /**
+     * Отрезок cp–exit, вышедший из зоны отступа clearance вокруг здания, в неё не возвращается. Части отрезка ближе
+     * clearance к сторонам контура идут кусками, а промежуток между ними лежит целиком в здании или целиком вне
+     * зоны; за промежутком вне здания кусков быть не должно.
+     */
+    static boolean leavesZoneOnce(Geometry building, Coordinate cp, Coordinate exit, double clearance) {
+        List<double[]> spans = new ArrayList<>();
+        Geometry boundary = building.getBoundary();
+        for (int g = 0; g < boundary.getNumGeometries(); g++) {
+            Coordinate[] ring = boundary.getGeometryN(g).getCoordinates();
+            for (int k = 0; k + 1 < ring.length; k++) {
+                double[] span = near(cp, exit, ring[k], ring[k + 1], clearance);
+                if (span != null) {
+                    spans.add(span);
+                }
+            }
+        }
+        spans.sort(Comparator.comparingDouble(span -> span[0]));
+        LineSegment line = new LineSegment(cp, exit);
+        double reach = 0;
+        for (double[] span : spans) {
+            if (span[0] > reach) {
+                Coordinate gap = line.pointAlong((reach + span[0]) / 2 / line.getLength());
+                if (SimplePointInAreaLocator.locate(gap, building) == Location.EXTERIOR) {
+                    return false;
+                }
+            }
+            reach = Math.max(reach, span[1]);
+        }
+        return true;
+    }
+
+    /**
+     * Часть отрезка p–q ближе distance к стороне a–b: от и до в метрах от p, null — такой нет. Полоса вокруг стороны —
+     * прямоугольник вдоль неё и круги у концов; она выпукла, поэтому её часть на отрезке — один кусок от самого
+     * раннего начала до самого позднего конца частей этих трёх фигур.
+     */
+    static double[] near(Coordinate p, Coordinate q, Coordinate a, Coordinate b, double distance) {
+        double length = p.distance(q);
+        double ux = (q.x - p.x) / length;
+        double uy = (q.y - p.y) / length;
+        double from = Double.POSITIVE_INFINITY;
+        double to = Double.NEGATIVE_INFINITY;
+        for (Coordinate end : new Coordinate[] {a, b}) {
+            // |p + t·u − end|² < distance²
+            double wx = p.x - end.x;
+            double wy = p.y - end.y;
+            double half = ux * wx + uy * wy;
+            double disc = half * half - wx * wx - wy * wy + distance * distance;
+            if (disc > 0) {
+                from = Math.min(from, -half - Math.sqrt(disc));
+                to = Math.max(to, -half + Math.sqrt(disc));
+            }
+        }
+        double side = a.distance(b);
+        if (side > 0) {
+            double vx = (b.x - a.x) / side;
+            double vy = (b.y - a.y) / side;
+            // проекция на сторону в [0, side], расстояние от её прямой меньше distance
+            double[] along = between((p.x - a.x) * vx + (p.y - a.y) * vy, ux * vx + uy * vy, 0, side);
+            double[] across = between(vx * (p.y - a.y) - vy * (p.x - a.x), vx * uy - vy * ux, -distance, distance);
+            if (along != null && across != null && Math.max(along[0], across[0]) < Math.min(along[1], across[1])) {
+                from = Math.min(from, Math.max(along[0], across[0]));
+                to = Math.max(to, Math.min(along[1], across[1]));
+            }
+        }
+        from = Math.max(from, 0);
+        to = Math.min(to, length);
+        return from < to ? new double[] {from, to} : null;
+    }
+
+    /** Значения t, при которых start + t·rate лежит в [low, high]; null — таких нет. */
+    private static double[] between(double start, double rate, double low, double high) {
+        if (rate == 0) {
+            return start >= low && start <= high ? new double[] {Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY} : null;
+        }
+        double first = (low - start) / rate;
+        double second = (high - start) / rate;
+        return new double[] {Math.min(first, second), Math.max(first, second)};
     }
 
     private final class Run {
@@ -371,7 +465,7 @@ final class TreeBuilder {
         /**
          * Выход на луче от точки подключения через ближайшую точку границы полигона, сразу за зоной отступа zones,
          * дальше, пока выход лежит в чужой зоне запрета. Если участок до такого выхода недопустим или снова входит в
-         * своё здание, пробуются ближайшие точки других сторон полигона. NO_EXIT — выхода нет.
+         * своё здание или его зону отступа, пробуются ближайшие точки других сторон полигона. NO_EXIT — выхода нет.
          */
         Exit exit(ConnectionPoint connection, ExistingOks building, ObstacleSet zones, Router branchRouter) {
             Coordinate cp = connection.getGeometry().getCoordinate();
@@ -411,7 +505,7 @@ final class TreeBuilder {
                 boolean inForbid = zones.insideForbid(exit);
                 boolean inArea = area.contains(exit);
                 // пересечение с полигоном здания дорогое (у квартала сотни вершин): только после дешёвых проверок
-                boolean once = !inForbid && inArea && leavesOnce(building, cp, exit);
+                boolean once = !inForbid && inArea && leavesOnce(building, cp, exit, zones.oksClearance());
                 double weight = !once ? Double.NaN : zones.edgeWeight(cp, exit, own);
                 if (!Double.isNaN(weight)) {
                     if (tries > 1) {
