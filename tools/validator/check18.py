@@ -43,6 +43,12 @@ EPS = 0.01
 # форма трассы (п. 5): поворот — вершина с отклонением от 3°, короткое звено между поворотами — до 10 м
 TURN_DEG = 3.0
 SHORT_LINK_M = 10.0
+# запасы замены в B16–B18 как у сервиса, толкование п. 5 (Router: CUT_MARGIN_M, CUT_APART_M, MAX_TURN_DEG,
+# CUT_PIECE_M): отступ до зон с запасом сверх нормы, зазор до других участков новой сети, поворот и звено
+CUT_MARGIN_M = 0.15
+CUT_APART_M = 0.5
+MAX_TURN_DEG = 89.9
+CUT_PIECE_M = 1.05
 # --no-shape отключает B16–B18: так старые категории сверяются с прежними прогонами
 SHAPE = "--no-shape" not in sys.argv
 
@@ -814,10 +820,11 @@ def extend_cross(p1, p2, q1, q2):
 def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, rep):
     """B16–B18: лишние вершины, двойные повороты и зигзаги внутри участка (п. 5).
 
-    Замена возможна, если новая геометрия проходит те же проверки, что и выход, по правилу без запаса: отступы до
-    ОКС, запретных зон и спецобъектов по ДУ участка (существующая сеть у врезки не мешает звену от врезки), нет
-    касаний с другими участками и с собой, повороты в вершинах и технических узлах не больше 90°, звенья между
-    вершинами не короче 1 м. Вершины финального участка к точке (точка выхода) и спецучастки не меняются."""
+    Замена возможна, если новая геометрия держит запасы сервиса (толкование п. 5): отступы до ОКС, запретных зон и
+    спецобъектов по ДУ участка с запасом CUT_MARGIN_M (существующая сеть у врезки не мешает звену от врезки), не
+    ближе CUT_APART_M к другим участкам новой сети (у отрезков из общего узла — у дальних концов), не пересекает
+    себя, повороты в вершинах и технических узлах не круче MAX_TURN_DEG, новые звенья не короче CUT_PIECE_M.
+    Вершины финального участка к точке (точка выхода) и спецучастки не меняются."""
     lines = [geo[str(s["properties"]["id"])] for s in segs]
     tree = STRtree(lines)
     tie_keys = {n: {(rt, rid) for rid, rt, _, _ in trees["spec_near"](pt, 0.5) if rt == "heat_network"}
@@ -841,38 +848,47 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, rep):
         if not LineString(new).is_simple:
             return "участок пересекает сам себя"
         for i in range(max(1, changed[0]), min(len(new) - 1, changed[-1] + 2)):
-            if turn_deg(new[i - 1], new[i], new[i + 1]) > 90.0:
-                return f"поворот {turn_deg(new[i - 1], new[i], new[i + 1]):.1f}° > 90°"
-        if changed[0] == 0 and node_turn(segs[k], start, new[0], new[1]) > 90.0 \
-                or changed[-1] == len(new) - 2 and node_turn(segs[k], end, new[-1], new[-2]) > 90.0:
-            return "поворот в техническом узле > 90°"
+            if turn_deg(new[i - 1], new[i], new[i + 1]) > MAX_TURN_DEG:
+                return f"поворот {turn_deg(new[i - 1], new[i], new[i + 1]):.1f}° > {MAX_TURN_DEG}°"
+        if changed[0] == 0 and node_turn(segs[k], start, new[0], new[1]) > MAX_TURN_DEG \
+                or changed[-1] == len(new) - 2 and node_turn(segs[k], end, new[-1], new[-2]) > MAX_TURN_DEG:
+            return f"поворот в техническом узле > {MAX_TURN_DEG}°"
         for i in changed:
             link = LineString(new[i:i + 2])
-            if 1 <= i < len(new) - 2 and link.length < 1.0:
-                return f"звено {link.length:.2f} м < 1 м"
-            for oid, og in trees["all_oks_near"](link, need):
-                if link.distance(og) < need - EPS:
-                    return f"отступ до ОКС {oid}"
-            for rid, rt, rg in trees["forbid_near"](link, forbid_reach + w2):
-                if link.distance(rg) < FORBID.get(rt, FALLBACK) + w2 - EPS:
-                    return f"отступ до {rt} {rid}"
+            if link.length < CUT_PIECE_M:
+                return f"звено {link.length:.2f} м < {CUT_PIECE_M} м"
+            for oid, og in trees["all_oks_near"](link, need + CUT_MARGIN_M):
+                if link.distance(og) < need + CUT_MARGIN_M:
+                    return f"отступ до ОКС {oid} {link.distance(og):.2f} м < {need:.2f} + {CUT_MARGIN_M} м"
+            for rid, rt, rg in trees["forbid_near"](link, forbid_reach + w2 + CUT_MARGIN_M):
+                if link.distance(rg) < FORBID.get(rt, FALLBACK) + w2 + CUT_MARGIN_M:
+                    return (f"отступ до {rt} {rid} {link.distance(rg):.2f} м < "
+                            f"{FORBID.get(rt, FALLBACK) + w2:.2f} + {CUT_MARGIN_M} м")
             exempt = set()
             if i == 0:
                 exempt |= tie_keys.get(start, set())
             if i == len(new) - 2:
                 exempt |= tie_keys.get(end, set())
-            for rid, rt, rg, extra in trees["spec_near"](link, trees["spec_reach"] + w2):
-                if (rt, rid) not in exempt and link.distance(rg) < _TYPES[rt]["clearance_m"] + w2 + extra - EPS:
-                    return f"отступ до {rt} {rid}"
-            # касание других участков вне круга 0,15 м у своих узлов, как в B15
-            rest = link
-            if i == 0:
-                rest = rest.difference(Point(new[0]).buffer(0.15))
-            if i == len(new) - 2:
-                rest = rest.difference(Point(new[-1]).buffer(0.15))
-            for j in tree.query(link, predicate="dwithin", distance=0.001):
-                if j != k and not rest.is_empty and rest.distance(lines[j]) < 0.001:
-                    return f"касается участка {segs[j]['properties']['id']}"
+            for rid, rt, rg, extra in trees["spec_near"](link, trees["spec_reach"] + w2 + CUT_MARGIN_M):
+                norm = _TYPES[rt]["clearance_m"] + w2 + extra
+                if (rt, rid) not in exempt and link.distance(rg) < norm + CUT_MARGIN_M:
+                    return f"отступ до {rt} {rid} {link.distance(rg):.2f} м < {norm:.2f} + {CUT_MARGIN_M} м"
+            # зазор до других участков по отрезкам; отрезки из общего узла расходятся от него, у них зазор меряется
+            # у дальних концов, как Router.apart в сервисе
+            ab = new[i:i + 2]
+            for j in tree.query(link, predicate="dwithin", distance=CUT_APART_M):
+                if j == k:
+                    continue
+                oc = list(lines[j].coords)
+                for q in zip(oc, oc[1:]):
+                    ends = [(x, y) for x in (0, 1) for y in (0, 1) if math.dist(ab[x], q[y]) <= NODE_TOL]
+                    if ends:
+                        x, y = ends[0]
+                        gap = min(LineString(q).distance(Point(ab[1 - x])), link.distance(Point(q[1 - y])))
+                    else:
+                        gap = link.distance(LineString(q))
+                    if gap < CUT_APART_M:
+                        return f"ближе {CUT_APART_M} м к участку {segs[j]['properties']['id']} ({gap:.2f} м)"
         return None
 
     for k, s in enumerate(segs):
@@ -916,8 +932,8 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, rep):
                 cross = extend_cross(c[j - 1], c[j], c[m], c[m + 1])
                 if fixed & set(range(j, m + 1)):
                     why = "в цепочке точка выхода финального участка"
-                elif abs(total) > 90.0:
-                    why = f"сумма поворотов {abs(total):.1f}° > 90°"
+                elif abs(total) > MAX_TURN_DEG:
+                    why = f"сумма поворотов {abs(total):.1f}° > {MAX_TURN_DEG}°"
                 elif cross is None:
                     why = "продолженные отрезки не пересекаются"
                 else:
