@@ -49,6 +49,10 @@ public final class Router {
     /** Сколько средних прямых окна может остаться при замене поворотов, см. {@link #sharpenWindow}. */
     private static final int SHARPEN_LINES = 3;
     private static final double SHARPEN_EPS = 1e-9;
+    /** Точность поворота лучей в {@link #bend}: 0,3 мм поперёк звена 30 м. */
+    private static final double BEND_EPS_RAD = 1e-5;
+    /** Предел поочерёдных поворотов лучей в {@link #bend}: они сходятся за несколько кругов. */
+    private static final int BEND_ROUNDS = 20;
     /** Вершина ближе этого к границе специальной части стоит на ней, см. {@link #drop}. */
     private static final double SPAN_EPS_M = 1e-3;
     private static final double UNKNOWN = Double.NEGATIVE_INFINITY;
@@ -819,10 +823,12 @@ public final class Router {
      * зигзагов и ступенек). Пока что-то меняется: (А) убирается вершина, если её соседей по обычному участку можно
      * соединить прямой, см. {@link #drop}; (В) так же убираются две вершины со звеном короче SHORT_LINK_M между ними;
      * (Б) повороты подряд в одну сторону со звеньями короче SHORT_LINK_M заменяются наименьшим числом поворотов в
-     * пересечениях продолженных отрезков, см. {@link #sharpenWindow}. Замена проверяется по зонам zones (Ду графа или
-     * ребра дерева) как хорда {@link #cutPass}: область, где взяты препятствия, отступы с запасом CUT_MARGIN_M, без
-     * спецпрохода, не ближе CUT_APART_M к apart (отрезкам других рёбер дерева) и к своей ломаной, повороты до
-     * MAX_TURN_DEG, звенья от CUT_PIECE_M. Вершины убираются раньше замены поворотов: так трасса короче. Вершина
+     * пересечениях продолженных отрезков, см. {@link #sharpenWindow}; (Г) у готовых вариантов два соседних поворота в
+     * одну сторону при звене любой длины заменяет одна вершина, если путь не длиннее, см. {@link #bend}. Замена
+     * проверяется по зонам zones (Ду графа или ребра дерева) как хорда {@link #cutPass}: область, где взяты
+     * препятствия, отступы с запасом CUT_MARGIN_M, без спецпрохода, не ближе CUT_APART_M к apart (отрезкам других
+     * рёбер дерева) и к своей ломаной, повороты до MAX_TURN_DEG, звенья от CUT_PIECE_M. Вершины убираются раньше
+     * замены поворотов: так трасса короче. Вершина
      * {@code keep} (точка выхода из здания) остаётся на месте: финальный участок идёт от ближайшей границы;
      * спецпроход остаётся прежним прямым участком. Каждый шаг уменьшает число вершин вне границ специальных частей,
      * поэтому цикл конечен. true — coords заменены.
@@ -839,13 +845,23 @@ public final class Router {
      */
     public boolean sharpen(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
             List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
+        return sharpen(zones, coords, ignored, keep, apart, before, after, false);
+    }
+
+    /**
+     * {@link #sharpen} у ребра дерева, при {@code bends} — и с шагом (Г), см. {@link #bend}. Шаг (Г) делает только
+     * проход готовых вариантов: на каждом маршруте и дереве поиска он стоил бы времени, а длину только уменьшает.
+     */
+    public boolean sharpen(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
+            List<LineSegment> apart, Coordinate before, List<Coordinate> after, boolean bends) {
         List<LineSegment> others = apart == null ? List.of() : apart;
         boolean changed = false;
         while (coords.size() > 2) {
             List<SpecialSpan> spans = zones.spans(factory.createLineString(coords.toArray(new Coordinate[0])), ignored);
             if (!drop(zones, coords, 1, keep, spans, ignored, others, before, after)
                     && !drop(zones, coords, 2, keep, spans, ignored, others, before, after)
-                    && !merge(zones, coords, held(coords, keep, spans), spans, ignored, others)) {
+                    && !merge(zones, coords, held(coords, keep, spans), spans, ignored, others)
+                    && !(bends && bend(zones, coords, held(coords, keep, spans), spans, ignored, others, before, after))) {
                 break;
             }
             changed = true;
@@ -1005,9 +1021,30 @@ public final class Router {
         Coordinate b = shape.get(join + 1);
         if (a.distance(b) < CUT_PIECE_M || join >= 1 && !turnAllowed(shape.get(join - 1), a, b)
                 || join + 2 < n && !turnAllowed(a, b, shape.get(join + 2))
-                || join == 0 && before != null && !turnAllowed(before, a, b)
-                || join + 2 == n && after.stream().anyMatch(c -> !turnAllowed(a, b, c))
-                || !zones.covers(a, b) || !zones.plain(a, b, ignored, CUT_MARGIN_M)
+                || !startFits(shape, join, before) || !endFits(shape, join, after)) {
+            return false;
+        }
+        return pieceFits(zones, shape, join, ignored, apart);
+    }
+
+    /** Поворот к вершине before соседнего ребра в начале нового отрезка join не круче MAX_TURN_DEG. */
+    private static boolean startFits(List<Coordinate> shape, int join, Coordinate before) {
+        return join != 0 || before == null || turnAllowed(before, shape.get(0), shape.get(1));
+    }
+
+    /** Повороты к вершинам after соседних рёбер в конце нового отрезка join не круче MAX_TURN_DEG. */
+    private static boolean endFits(List<Coordinate> shape, int join, List<Coordinate> after) {
+        int n = shape.size();
+        return join + 2 != n || after.stream().allMatch(c -> turnAllowed(shape.get(n - 2), shape.get(n - 1), c));
+    }
+
+    /** Проверки нового отрезка join из {@link #removalFits} без поворотов. */
+    private boolean pieceFits(ObstacleSet zones, List<Coordinate> shape, int join, Set<String> ignored,
+            List<LineSegment> apart) {
+        int n = shape.size();
+        Coordinate a = shape.get(join);
+        Coordinate b = shape.get(join + 1);
+        if (a.distance(b) < CUT_PIECE_M || !zones.covers(a, b) || !zones.plain(a, b, ignored, CUT_MARGIN_M)
                 || along(zones, shape, join, ignored)) {
             return false;
         }
@@ -1068,6 +1105,153 @@ public final class Router {
     }
 
     /**
+     * (Г) Два соседних поворота в одну сторону при звене любой длины заменяет одна вершина в лучшей точке, если путь
+     * с ней не длиннее прежнего (толкование п. 5): такой двойной поворот ничем не обоснован. Вершина — пересечение
+     * лучей из соседей пары, которые поворачиваются от прежних отрезков к хорде между соседями: путь от этого только
+     * короче, а звено луча, который стоит на месте, лишь укорачивается от своего конца, и его проверки
+     * {@link #removalFits} не ломаются. Лучи поворачиваются по очереди до края допустимого, пока поворот растёт;
+     * поворот в новой вершине — сумма пары без поворотов лучей, он проверяется в конце и не меньше MIN_TURN_DEG.
+     * Сосед пары — вершина или граница специальной части, как у {@link #drop}. Удерживаемые вершины не заменяются,
+     * пары у специальных частей не трогаются. true — coords заменены.
+     */
+    private boolean bend(ObstacleSet zones, List<Coordinate> coords, boolean[] held, List<SpecialSpan> spans,
+            Set<String> ignored, List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
+        int n = coords.size();
+        double[] turns = turns(coords);
+        double[] at = new double[n];
+        for (int v = 1; v < n; v++) {
+            at[v] = at[v - 1] + coords.get(v - 1).distance(coords.get(v));
+        }
+        for (int j = 1; j + 2 < n; j++) {
+            if (held[j] || held[j + 1] || Math.abs(turns[j]) < MIN_TURN_DEG || Math.abs(turns[j + 1]) < MIN_TURN_DEG
+                    || turns[j] * turns[j + 1] <= 0) {
+                continue;
+            }
+            // сосед пары — вершина или граница специальной части на соседнем отрезке, как у drop
+            double from = at[j - 1];
+            double to = at[j + 2];
+            for (SpecialSpan span : spans) {
+                if (span.getToM() > from && span.getToM() < at[j]) {
+                    from = span.getToM();
+                }
+                if (span.getFromM() < to && span.getFromM() > at[j + 1]) {
+                    to = span.getFromM();
+                }
+            }
+            if (overlapsSpan(spans, from, to)) {
+                continue;
+            }
+            List<Coordinate> shape = new ArrayList<>(coords.subList(0, j));
+            boolean start = from > at[j - 1] + SPAN_EPS_M;
+            boolean end = to < at[j + 2] - SPAN_EPS_M;
+            if (start) {
+                shape.add(toward(coords.get(j), coords.get(j - 1), at[j] - from));
+            }
+            int x = shape.size();
+            shape.add(null);
+            if (end) {
+                shape.add(toward(coords.get(j + 1), coords.get(j + 2), to - at[j + 1]));
+            }
+            shape.addAll(coords.subList(j + 2, n));
+            // сосед внутри участка остаётся поворотом от MIN_TURN_DEG; у узла и границы специальной части излом любой
+            boolean[] kept = {!start && j >= 2 && !overlapsSpan(spans, from - SPAN_EPS_M, from + SPAN_EPS_M),
+                !end && j + 3 < n && !overlapsSpan(spans, to - SPAN_EPS_M, to + SPAN_EPS_M)};
+            if (bent(zones, shape, x, coords.get(j), coords.get(j + 1), kept, Math.abs(turns[j] + turns[j + 1]),
+                    to - from, ignored, apart, before, after)) {
+                coords.clear();
+                coords.addAll(shape);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Ставит в shape на место x (между соседями пары) вершину в лучшей точке, см. {@link #bend}; false — такой
+     * вершины нет или путь с ней длиннее length (прежний путь между соседями через вершины пары p и q). kept — у
+     * какого соседа излом остаётся не меньше MIN_TURN_DEG, total — сумма поворотов пары, градусы.
+     */
+    private boolean bent(ObstacleSet zones, List<Coordinate> shape, int x, Coordinate p, Coordinate q, boolean[] kept,
+            double total, double length, Set<String> ignored, List<LineSegment> apart, Coordinate before,
+            List<Coordinate> after) {
+        Coordinate[] ends = {shape.get(x - 1), shape.get(x + 1)};
+        double[] base = {heading(ends[0], p), heading(ends[1], q)};
+        double[] room = {Angle.normalize(heading(ends[0], ends[1]) - base[0]),
+            Angle.normalize(heading(ends[1], ends[0]) - base[1])};
+        double spare = Math.toRadians(total - MIN_TURN_DEG);
+        double[] turn = new double[2];
+        boolean moved = true;
+        for (int round = 0; moved && round < BEND_ROUNDS; round++) {
+            moved = false;
+            for (int side = 0; side < 2; side++) {
+                if (!bendFits(zones, shape, x, side, kept, ends, base, room, turn, ignored, apart, before, after)) {
+                    continue;
+                }
+                double was = turn[side];
+                double lo = was;
+                double hi = Math.min(Math.abs(room[side]), spare - turn[1 - side]);
+                turn[side] = hi;
+                if (bendFits(zones, shape, x, side, kept, ends, base, room, turn, ignored, apart, before, after)) {
+                    lo = hi;
+                }
+                while (hi - lo > BEND_EPS_RAD) {
+                    turn[side] = (lo + hi) / 2;
+                    if (bendFits(zones, shape, x, side, kept, ends, base, room, turn, ignored, apart, before, after)) {
+                        lo = turn[side];
+                    } else {
+                        hi = turn[side];
+                    }
+                }
+                turn[side] = lo;
+                moved |= lo > was + BEND_EPS_RAD;
+            }
+        }
+        boolean fits = bendFits(zones, shape, x, 0, kept, ends, base, room, turn, ignored, apart, before, after)
+                && bendFits(zones, shape, x, 1, kept, ends, base, room, turn, ignored, apart, before, after)
+                && turnAllowed(ends[0], shape.get(x), ends[1]);
+        Coordinate at = shape.get(x);
+        return fits && ends[0].distance(at) + at.distance(ends[1]) <= length + SHARPEN_EPS;
+    }
+
+    /**
+     * Вершина на пересечении лучей из ends с поворотами turn от направлений base к хорде (знак room) ставится в
+     * shape на место x, и звено side (0 — от ends[0], 1 — к ends[1]) годится по {@link #removalFits}, а излом соседа
+     * на его конце не меньше MIN_TURN_DEG, если так сказано в kept.
+     */
+    private boolean bendFits(ObstacleSet zones, List<Coordinate> shape, int x, int side, boolean[] kept, Coordinate[] ends,
+            double[] base, double[] room, double[] turn, Set<String> ignored, List<LineSegment> apart,
+            Coordinate before, List<Coordinate> after) {
+        double a = base[0] + Math.signum(room[0]) * turn[0];
+        double b = base[1] + Math.signum(room[1]) * turn[1];
+        double ux = Math.cos(a);
+        double uy = Math.sin(a);
+        double vx = Math.cos(b);
+        double vy = Math.sin(b);
+        double den = ux * vy - uy * vx;
+        double wx = ends[1].x - ends[0].x;
+        double wy = ends[1].y - ends[0].y;
+        double s = (wx * vy - wy * vx) / den;
+        double r = (wx * uy - wy * ux) / den;
+        if (!(s > 0 && r > 0)) {
+            return false;
+        }
+        shape.set(x, new Coordinate(ends[0].x + s * ux, ends[0].y + s * uy));
+        int join = x - 1 + side;
+        // поворот в новой вершине убывает с поворотом лучей и проверяется в конце, см. bent
+        boolean outer = side == 0 ? join < 1 || turnAllowed(shape.get(join - 1), shape.get(join), shape.get(x))
+                && (!kept[0] || deflectionDeg(shape.get(join - 1), shape.get(join), shape.get(x)) >= MIN_TURN_DEG)
+                : join + 2 >= shape.size() || turnAllowed(shape.get(x), shape.get(join + 1), shape.get(join + 2))
+                && (!kept[1] || deflectionDeg(shape.get(x), shape.get(join + 1), shape.get(join + 2)) >= MIN_TURN_DEG);
+        return outer && startFits(shape, join, before) && endFits(shape, join, after)
+                && pieceFits(zones, shape, join, ignored, apart);
+    }
+
+    /** Направление от a к b, радианы. */
+    private static double heading(Coordinate a, Coordinate b) {
+        return Math.atan2(b.y - a.y, b.x - a.x);
+    }
+
+    /**
      * Цепочки {первая, последняя вершина} из двух и больше поворотов (от MIN_TURN_DEG) подряд в одну сторону со
      * звеньями короче SHORT_LINK_M между ними; held — вершины, которые цепочку разрывают (null — таких нет).
      */
@@ -1087,6 +1271,17 @@ public final class Router {
             v = w + 1;
         }
         return chains;
+    }
+
+    /** В ломаной есть два соседних поворота от MIN_TURN_DEG в одну сторону, см. {@link #bend}. */
+    public static boolean paired(Coordinate[] coords) {
+        double[] turns = turns(Arrays.asList(coords));
+        for (int v = 1; v + 2 < coords.length; v++) {
+            if (Math.abs(turns[v]) >= MIN_TURN_DEG && Math.abs(turns[v + 1]) >= MIN_TURN_DEG && turns[v] * turns[v + 1] > 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Повороты ломаной в вершинах со знаком (плюс — влево), 0 у концов; для {@link #chains}. */

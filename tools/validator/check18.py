@@ -865,6 +865,8 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
     ближе CUT_APART_M к другим участкам новой сети (у отрезков из общего узла — у дальних концов), не пересекает
     себя, повороты в вершинах, а на пути точки и в камерах и технических узлах (path_pairs) не круче MAX_TURN_DEG,
     новые звенья не короче CUT_PIECE_M. Вершины финального участка к точке (точка выхода) и спецучастки не меняются.
+    Два соседних поворота в одну сторону со звеном от SHORT_LINK_M — тоже B17, если их заменяет одна вершина в лучшей
+    точке (one_bend) и путь с ней не длиннее прежнего.
 
     B20: поворот круче 90° на пути точки в техническом узле — нарушение; в камере ветвления — нарушение, если его
     снимает правка у камеры с теми же запасами (сдвиг камеры вдоль первого звена участка или излом звена у камеры, см.
@@ -947,6 +949,102 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
                     return f"ближе {CUT_APART_M} м к участку {segs[j]['properties']['id']} ({gap:.2f} м)"
         return None
 
+    def one_bend(k, c, j, m):
+        """Кратчайшая одна вершина X вместо вершин j..m участка k с запасами blocked и длина прежнего пути:
+        ((длина c[j-1]→X→c[m+1], X) или None, длина c[j-1]..c[m+1]). Поиск как у аудиторов: сетка в эллипсе с фокусами
+        в соседях c[j-1], c[m+1], где сумма расстояний до фокусов не больше прежней длины плюс её излишка над хордой,
+        затем спуск по длине от лучших допустимых точек сетки до шага 2 мм. Соседи внутри участка остаются поворотами
+        от TURN_DEG. Запасы считаются сразу для всех точек, blocked подтверждает найденную."""
+        p = segs[k]["properties"]
+        s = segs[k]
+        w2 = DN[p["diameter"]]["width_m"] / 2
+        need = oks_clearance(p["diameter"]) + w2
+        a, b = np.array(c[j - 1]), np.array(c[m + 1])
+        d = math.dist(a, b)
+        cur = sum(math.dist(c[i], c[i + 1]) for i in range(j - 1, m + 1))
+        half = cur - d / 2
+        minor = math.sqrt(half * half - d * d / 4)
+        e1 = (b - a) / d
+        e2 = np.array([-e1[1], e1[0]])
+        step = max(minor / 20, 0.02)
+        u, v = np.meshgrid(np.arange(-half, half, step), np.arange(-minor, minor, step))
+        inside = (u / half) ** 2 + (v / minor) ** 2 <= 1
+        grid = (a + b) / 2 + np.outer(u[inside], e1) + np.outer(v[inside], e2)
+        region = shapely.MultiPoint(grid).convex_hull if len(grid) > 2 else LineString([a, b])
+        start, end = str(p["start_node_id"]), str(p["end_node_id"])
+        first, last = j == 1, m + 2 == len(c)
+        # препятствия: геометрия, норма с запасом и какое звено (A→X — 0, X→B — 1) освобождено от неё у врезки
+        obstacles = [(og, need + CUT_MARGIN_M, ()) for _, og in trees["all_oks_near"](region, need + CUT_MARGIN_M)]
+        obstacles += [(rg, FORBID.get(rt, FALLBACK) + w2 + CUT_MARGIN_M, ())
+                      for _, rt, rg in trees["forbid_near"](region, forbid_reach + w2 + CUT_MARGIN_M)]
+        for rid, rt, rg, extra in trees["spec_near"](region, trees["spec_reach"] + w2 + CUT_MARGIN_M):
+            free = [0] if first and (rt, rid) in tie_keys.get(start, set()) else []
+            free += [1] if last and (rt, rid) in tie_keys.get(end, set()) else []
+            obstacles.append((rg, _TYPES[rt]["clearance_m"] + w2 + extra + CUT_MARGIN_M, free))
+        others = [q for jj in tree.query(region, predicate="dwithin", distance=CUT_APART_M) if jj != k
+                  for oc in [list(lines[jj].coords)] for q in zip(oc, oc[1:])]
+        # повороты на пути точки в узлах, если меняется первое или последнее звено участка
+        path_nb = {e: [next_to(geo, o, node) for cs, ps in path_pairs.get(node, [])
+                       for o in [ps if cs is s else cs if ps is s else None] if o is not None]
+                   for e, node, on in ((0, start, first), (1, end, last)) if on}
+        before = [c[j - 2]] if j >= 2 else path_nb.get(0, [])
+        after = [c[m + 2]] if m + 2 < len(c) else path_nb.get(1, [])
+
+        def turns_at(prev, pt, nxt):
+            u1, u2 = pt - prev, nxt - pt
+            cos = (u1 * u2).sum(-1) / np.linalg.norm(u1, axis=-1) / np.linalg.norm(u2, axis=-1)
+            return np.degrees(np.arccos(np.clip(cos, -1, 1)))
+
+        def fit(xs):
+            """Маска точек xs, в которых X держит отступы, зазор, повороты, изломы соседей и длину звеньев."""
+            la, lb = np.linalg.norm(xs - a, axis=1), np.linalg.norm(xs - b, axis=1)
+            ok = (la >= CUT_PIECE_M) & (lb >= CUT_PIECE_M) & (turns_at(a, xs, b) <= MAX_TURN_DEG)
+            for q in before:
+                ok &= turns_at(np.array(q), a, xs) <= MAX_TURN_DEG
+            for q in after:
+                ok &= turns_at(np.array(q), b, xs) <= MAX_TURN_DEG
+            # сосед внутри участка остаётся поворотом: вершина с изломом меньше 3° запрещена
+            if j >= 2:
+                ok &= turns_at(np.array(c[j - 2]), a, xs) >= TURN_DEG
+            if m + 2 < len(c):
+                ok &= turns_at(np.array(c[m + 2]), b, xs) >= TURN_DEG
+            links = [shapely.linestrings(np.stack([np.broadcast_to(a, xs.shape), xs], 1)),
+                     shapely.linestrings(np.stack([xs, np.broadcast_to(b, xs.shape)], 1))]
+            for g, norm, free in obstacles:
+                for e in (0, 1):
+                    if e not in free:
+                        ok &= shapely.distance(links[e], g) >= norm
+            pts = shapely.points(xs)
+            for q in others:
+                for e, node in ((0, a), (1, b)):
+                    near = [y for y in (0, 1) if math.dist(node, q[y]) <= NODE_TOL]
+                    if near:
+                        gap = np.minimum(shapely.distance(pts, LineString(q)),
+                                         shapely.distance(links[e], Point(q[1 - near[0]])))
+                    else:
+                        gap = shapely.distance(links[e], LineString(q))
+                    ok &= gap >= CUT_APART_M
+            return ok
+
+        length = lambda xs: np.linalg.norm(xs - a, axis=1) + np.linalg.norm(xs - b, axis=1)
+        good = grid[fit(grid)] if len(grid) else grid
+        dirs = np.array([(math.cos(t), math.sin(t)) for t in np.arange(16) * math.pi / 8])
+        best = None
+        for x in good[np.argsort(length(good))[:3]]:
+            h = step
+            while h > 0.002:
+                cand = x + h * dirs
+                cand = cand[fit(cand)]
+                lc = length(cand)
+                if len(cand) and lc.min() < length(x[None])[0]:
+                    x = cand[lc.argmin()]
+                else:
+                    h /= 2
+            lx = length(x[None])[0]
+            if best is None or lx < best[0]:
+                best = (lx, tuple(x))
+        return best, cur
+
     for k, s in enumerate(segs):
         p = s["properties"]
         sid = str(p["id"])
@@ -1004,6 +1102,27 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
                 if first:
                     rep.add("i  двойной поворот нельзя заменить одним (B17)", first)
             chain = []
+
+        # Б2. два соседних поворота в одну сторону со звеном от 10 м: лишние, если их заменяет одна вершина в лучшей
+        # точке и путь с ней не длиннее прежнего
+        for (j, a), (m, b) in zip(turns, turns[1:]):
+            if a * b < 0 or along[m] - along[j] < SHORT_LINK_M:
+                continue
+            text = f"{sid} вершины {j}–{m} повороты {a:.1f}° и {b:.1f}° на {along[m] - along[j]:.1f} м"
+            if fixed & set(range(j, m + 1)):
+                rep.add("i  два поворота одной вершиной не заменить (B17)", f"{text}: точка выхода финального участка")
+                continue
+            best, cur = one_bend(k, c, j, m)
+            new = None if best is None else c[:j] + [best[1]] + c[m + 1:]
+            why = "нет допустимой вершины" if best is None else blocked(k, new, [j - 1, j])
+            if why is None and best[0] > cur:
+                why = f"одна вершина длиннее на {best[0] - cur:.3f} м"
+            if why is None:
+                rep.add("B17 два поворота в одну сторону заменяет одна вершина, путь не длиннее",
+                        f"{text} → {turn_deg(c[j - 1], best[1], c[m + 1]):.1f}° в {best[1][0]:.2f}, "
+                        f"{best[1][1]:.2f}, путь {best[0] - cur:+.3f} м")
+            else:
+                rep.add("i  два поворота одной вершиной не заменить (B17)", f"{text}: {why}")
 
         # В. два поворота в разные стороны меньше 30° со звеном короче 10 м: зигзаг, если их можно убрать оба
         for (j, a), (m, b) in zip(turns, turns[1:]):
