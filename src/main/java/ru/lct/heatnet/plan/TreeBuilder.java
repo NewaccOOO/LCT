@@ -789,6 +789,7 @@ final class TreeBuilder {
     Tree cut(Tree tree, Router router) {
         Tree result = new Tree(tree.tie);
         result.unconnected.addAll(tree.unconnected);
+        result.narrow = tree.narrow;
         boolean changed = false;
         for (Tree.Edge edge : tree.edges) {
             List<LineSegment> others = new ArrayList<>();

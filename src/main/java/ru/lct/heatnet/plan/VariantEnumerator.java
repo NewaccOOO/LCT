@@ -166,6 +166,14 @@ public final class VariantEnumerator {
             : Set.of(System.getProperty("heatnet.city.only").split(","));
 
     private static final long CITY_CACHE_MB = 64;
+    /**
+     * Перенос камер ветвления в деревьях выбранных вариантов (heatnet.relay), см. {@link JunctionMover}: сколько лучших
+     * по оценке точек пробуется сборкой у камеры, если общий перенос не удался, и сколько проходов по камерам дерева.
+     * Перенос в лучших деревьях подмножеств внутри поиска давал датасет хуже, а сборок деревьев на 7 % больше.
+     */
+    private static final boolean RELAY = Boolean.parseBoolean(System.getProperty("heatnet.relay", "true"));
+    private static final int RELAY_TRIES = 3;
+    private static final int RELAY_PASSES = 3;
     /** Пул для деревьев подмножеств, см. {@link #prefetch}; нити демоны, как у пула чтения. */
     private static final ExecutorService PREFETCH_POOL = Executors.newFixedThreadPool(
             Runtime.getRuntime().availableProcessors(), task -> {
@@ -185,6 +193,7 @@ public final class VariantEnumerator {
     /** Полигон ОКС, в котором лежит точка подключения, по id точки. */
     private final Map<String, ExistingOks> buildingByConnection;
     private final TreeBuilder builder;
+    private final JunctionMover mover;
     private NetworkAssembler assembler;
     private final GeometryFactory factory = new GeometryFactory();
     private final Map<String, FutureOks> oksById = new LinkedHashMap<>();
@@ -194,10 +203,13 @@ public final class VariantEnumerator {
     private static final class Option {
         final Tree tree;
         final double score;
+        /** score без округления, см. {@link #exact(Variant)}. */
+        final double exact;
 
-        Option(Tree tree, double score) {
+        Option(Tree tree, double score, double exact) {
             this.tree = tree;
             this.score = score;
+            this.exact = exact;
         }
     }
 
@@ -366,6 +378,7 @@ public final class VariantEnumerator {
             }
         }
         this.builder = new TreeBuilder(finder.nodeLimit(), networkById, specials, buildingByConnection);
+        this.mover = new JunctionMover(rules, specials, buildingByConnection, oksById);
     }
 
     /**
@@ -423,6 +436,9 @@ public final class VariantEnumerator {
             return city();
         }
         List<Draft> picked = picked();
+        if (RELAY) {
+            picked = relaid(picked);
+        }
         List<Variant> variants = new ArrayList<>();
         for (int i = 0; i < picked.size(); i++) {
             Draft draft = picked.get(i);
@@ -1356,6 +1372,130 @@ public final class VariantEnumerator {
     }
 
     /**
+     * Выбранные варианты с перенесёнными камерами ветвления, по возрастанию score. Варианты независимы и считаются
+     * параллельно. Перенос не берётся, если с ним вариант совпал бы по трассе с уже взятым, а без него не совпадал
+     * (R-11).
+     */
+    private List<Draft> relaid(List<Draft> picked) {
+        long started = System.nanoTime();
+        List<Draft> moved = picked.parallelStream().map(this::relaid).collect(Collectors.toList());
+        List<Draft> result = new ArrayList<>();
+        for (int i = 0; i < picked.size(); i++) {
+            Draft draft = moved.get(i);
+            for (int j = 0; j < i && draft != picked.get(i); j++) {
+                if (sameRoute(draft, result.get(j)) && !sameRoute(picked.get(i), picked.get(j))) {
+                    draft = picked.get(i);
+                }
+            }
+            result.add(draft);
+        }
+        log.info("relay: variants={} moved={} elapsed={}s", picked.size(), result.stream().filter(d -> !picked.contains(d)).count(),
+                String.format(Locale.ROOT, "%.3f", (System.nanoTime() - started) / 1e9));
+        result.sort(Comparator.comparingDouble(Draft::score));
+        return result;
+    }
+
+    /** Черновик с перенесёнными камерами ветвления у деревьев, если так он лучше по точному score; иначе прежний. */
+    private Draft relaid(Draft draft) {
+        List<Tree> trees = new ArrayList<>();
+        for (Tree tree : draft.trees) {
+            List<ConnectionPoint> subset = tree.connected();
+            Option start = null;
+            Region region = null;
+            int dn = 0;
+            String label = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(","));
+            if (!JunctionMover.junctions(tree).isEmpty()) {
+                // дерево с камерами ветвления — от двух ОКС, его строит основной перебор computeOptions: граф по
+                // расходу подмножества со ступенью запаса, область группы
+                region = regionByConnection.get(subset.get(0).getId());
+                Diameter byFlow = rules.diameterFor(flow(subset));
+                Diameter step = rules.nextDiameter(byFlow.getDn());
+                dn = Math.min(region.dn, step != null ? step.getDn() : byFlow.getDn());
+                start = option(tree, label, false, region.area, dn, region, tree.narrow);
+            }
+            trees.add(start == null ? tree : relaid(start, region.router(dn, region.area), dn, label, region).tree);
+        }
+        for (int i = 0; i < trees.size(); i++) {
+            List<Tree> others = new ArrayList<>(trees);
+            others.remove(i);
+            if (!compatible(trees.get(i), others)) {
+                trees.set(i, draft.trees.get(i));
+            }
+        }
+        try {
+            Variant variant = assembler.assemble("0", 0, trees, draft.unconnected);
+            return exact(variant) < exact(draft.variant) ? new Draft(trees, draft.unconnected, variant) : draft;
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            return draft;
+        }
+    }
+
+    /**
+     * Дерево с камерами ветвления, перенесёнными в окрестность ({@link JunctionMover}). Оценка переноса почти всегда
+     * совпадает со сборкой, поэтому сначала все камеры переносятся в лучшие по оценке точки и дерево собирается один
+     * раз. Если оно не собралось или не лучше, у каждой камеры сборкой пробуются до RELAY_TRIES точек и берётся
+     * первая, где точный score меньше. Проходы по камерам повторяются, пока что-то переносится, но не больше
+     * RELAY_PASSES.
+     */
+    private Option relaid(Option start, Router router, int dn, String label, Region region) {
+        Tree tree = start.tree;
+        // камера, которую не удалось перенести, пропускается, пока её рёбра прежние
+        Map<Tree.Node, List<Tree.Edge>> stuck = new IdentityHashMap<>();
+        for (int pass = 0; pass < RELAY_PASSES; pass++) {
+            boolean moved = false;
+            for (int j = 0; j < JunctionMover.junctions(tree).size(); j++) {
+                Tree.Node junction = JunctionMover.junctions(tree).get(j);
+                List<Tree.Edge> around = JunctionMover.incident(tree, junction);
+                if (around.equals(stuck.get(junction))) {
+                    continue;
+                }
+                List<Tree> moves = mover.moves(tree, junction, router.obstacles(), region.area, dn, 1);
+                if (moves.isEmpty()) {
+                    stuck.put(junction, around);
+                } else {
+                    tree = moves.get(0);
+                    moved = true;
+                }
+            }
+            if (!moved) {
+                break;
+            }
+        }
+        if (tree == start.tree) {
+            return start;
+        }
+        Option all = option(tree, label, false, region.area, dn, region, tree.narrow);
+        if (all != null && all.exact < start.exact - IMPROVE_EPS) {
+            return all;
+        }
+        Option best = start;
+        for (int pass = 0; pass < RELAY_PASSES; pass++) {
+            boolean moved = false;
+            for (int j = 0; j < JunctionMover.junctions(best.tree).size(); j++) {
+                Tree.Node junction = JunctionMover.junctions(best.tree).get(j);
+                for (Tree candidate : mover.moves(best.tree, junction, router.obstacles(), region.area, dn, RELAY_TRIES)) {
+                    Option option = option(candidate, label, false, region.area, dn, region, candidate.narrow);
+                    if (option != null && option.exact < best.exact - IMPROVE_EPS) {
+                        best = option;
+                        moved = true;
+                        break;
+                    }
+                }
+            }
+            if (!moved) {
+                break;
+            }
+        }
+        return best;
+    }
+
+    /** S варианта без округления до трёх знаков: переносы камер меняют его в четвёртом знаке. */
+    private double exact(Variant variant) {
+        VariantSummary summary = variant.getSummary();
+        return rules.score(summary.getCalculatedCost(), summary.getNewNetworkLength());
+    }
+
+    /**
      * Дерево с врезкой, перенесённой к вершине ствола: кандидаты врезки — проекции точек подключения, и ствол
      * подходит к сети наискось или тянется к дальней врезке мимо ближней трубы (гипотеза Q12). У каждой вершины
      * ствола пробуются проекция на трубу прежней врезки и кандидаты врезки самой вершины; берётся врезка, у которой
@@ -1423,6 +1563,7 @@ public final class VariantEnumerator {
         }
         Tree result = new Tree(tie);
         result.unconnected.addAll(tree.unconnected);
+        result.narrow = tree.narrow;
         Coordinate[] line = new Coordinate[coords.length - from + 1];
         line[0] = tie.getPoint().getCoordinate();
         System.arraycopy(coords, from, line, 1, coords.length - from);
@@ -1479,6 +1620,7 @@ public final class VariantEnumerator {
         line[line.length - 1] = trunk.to.point;
         Tree result = new Tree(tie);
         result.unconnected.addAll(tree.unconnected);
+        result.narrow = tree.narrow;
         for (Tree.Edge edge : tree.edges) {
             result.edges.add(edge == trunk ? new Tree.Edge(result.root, trunk.to, factory.createLineString(line)) : edge);
         }
@@ -1505,7 +1647,7 @@ public final class VariantEnumerator {
             int maxDn = alone.getSegments().stream().mapToInt(NewSegment::getDiameter).max().orElse(graphDn);
             boolean check = verify || maxDn > graphDn;
             boolean holds = narrow ? forbidClear(tree, alone, area, region) : !check || clearanceHolds(tree, alone, area, region);
-            return holds ? new Option(tree, alone.getSummary().getScore()) : null;
+            return holds ? new Option(tree, alone.getSummary().getScore(), exact(alone)) : null;
         } catch (IllegalStateException | IllegalArgumentException e) {
             // дерево нарушает правила при сборке (предельная длина, отступ участка, число поворотов): кандидат отбрасывается
             log.debug("options: subset={} tie={} отброшено: {}", label, tree.tie.nodeKey(), e.getMessage());
