@@ -7,13 +7,11 @@ import static ru.lct.heatnet.plan.PlanFixture.GEOMETRY;
 import static ru.lct.heatnet.plan.PlanFixture.point;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
-import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.LinearRing;
 import org.locationtech.jts.geom.Polygon;
@@ -26,13 +24,10 @@ import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.rules.Rules;
 
 class VariantEnumeratorTest {
-    /** Как в правиле variants валидатора: врезка дальше этого от всех врезок другого варианта делает их разными. */
-    private static final double OTHER_TIE_M = 20;
-
     private final Rules rules = Rules.load();
 
     @Test
-    void variantsAreRankedAndDifferByTieInsOrPartition() {
+    void variantsAreRankedAndDifferByRoute() {
         PlanFixture fixture = PlanFixture.trunk().oks("o-1", 100, 150, 5).oks("o-2", 500, 150, 5);
 
         Result result = new VariantEnumerator(fixture.input(), rules).run();
@@ -49,7 +44,7 @@ class VariantEnumeratorTest {
             }
             for (int j = 0; j < i; j++) {
                 assertTrue(differ(variants.get(j), variant), "варианты " + variants.get(j).getId() + " и " + variant.getId()
-                        + " не различаются врезками и разбиением");
+                        + " совпадают по трассе");
             }
         }
     }
@@ -187,51 +182,16 @@ class VariantEnumeratorTest {
         assertEquals(Set.of(Set.of("a", "b"), Set.of("c", "d", "e")), ids);
     }
 
+    /** Как у сервиса и check18 (разд. 6): у одного из двух не больше 90 % длины меньшего в полосе 1 м от другого. */
     private static boolean differ(Variant a, Variant b) {
-        return farTie(a, b) || farTie(b, a) || !partition(a).equals(partition(b));
+        Geometry lineA = lines(a);
+        Geometry lineB = lines(b);
+        double inside = Math.min(lineA.intersection(lineB.buffer(1)).getLength(), lineB.intersection(lineA.buffer(1)).getLength());
+        return inside <= 0.9 * Math.min(lineA.getLength(), lineB.getLength());
     }
 
-    /** Узлы врезки: начала участков, в которые не входит ни один участок, с их точками. */
-    private static Map<String, Coordinate> ties(Variant variant) {
-        Set<String> ends = new HashSet<>();
-        variant.getSegments().forEach(s -> ends.add(s.getEndNodeId()));
-        Map<String, Coordinate> ties = new HashMap<>();
-        for (NewSegment segment : variant.getSegments()) {
-            if (!ends.contains(segment.getStartNodeId())) {
-                ties.put(segment.getStartNodeId(), segment.getGeometry().getCoordinateN(0));
-            }
-        }
-        return ties;
-    }
-
-    private static boolean farTie(Variant mine, Variant other) {
-        for (Coordinate tie : ties(mine).values()) {
-            if (ties(other).values().stream().allMatch(t -> t.distance(tie) > OTHER_TIE_M)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** Точки подключения, достижимые от каждой врезки. */
-    private static Set<Set<String>> partition(Variant variant) {
-        Map<String, List<NewSegment>> outgoing = new HashMap<>();
-        variant.getSegments().forEach(s -> outgoing.computeIfAbsent(s.getStartNodeId(), k -> new ArrayList<>()).add(s));
-        Set<Set<String>> result = new HashSet<>();
-        for (String tie : ties(variant).keySet()) {
-            Set<String> reached = new HashSet<>();
-            List<String> queue = new ArrayList<>(List.of(tie));
-            for (int i = 0; i < queue.size(); i++) {
-                for (NewSegment segment : outgoing.getOrDefault(queue.get(i), List.of())) {
-                    queue.add(segment.getEndNodeId());
-                    if (segment.getEndNodeId().startsWith("cp-")) {
-                        reached.add(segment.getEndNodeId());
-                    }
-                }
-            }
-            result.add(reached);
-        }
-        return result;
+    private static Geometry lines(Variant variant) {
+        return GEOMETRY.buildGeometry(variant.getSegments().stream().map(NewSegment::getGeometry).collect(Collectors.toList()));
     }
 
     private static LinearRing ring(double x1, double y1, double x2, double y2) {

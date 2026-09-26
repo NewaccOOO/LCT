@@ -5,6 +5,7 @@
 E — стоимость и сводка), строки «i» — справочные. В конце CHECK18 OK и код 0, если нарушений нет. B16–B18 и B21 —
 форма трассы (п. 5), B20 — поворот круче 90° на пути точки в камере или техническом узле (п. 2.1, разъяснение 5),
 --no-shape их отключает. B19 — финальный участок снова заходит в зону отступа своего здания (п. 2.2).
+Строка «i» у пар вариантов — доля расхождения трасс (разд. 6): варианты различны от 10 %, как у сервиса.
 """
 import json
 import math
@@ -61,6 +62,10 @@ TURN_STEP_M = 0.1
 TURN_MAX_M = 10.0
 BEND_STEP_DEG = 0.5
 TURN_TOLERANCE_S = 0.002
+# разд. 6: варианты одинаковы, если у каждого больше 90 % длины меньшего лежит в полосе 1 м от другого
+# (VariantEnumerator.sameRoute); доля расхождения — 1 минус меньшая из этих длин, делённая на длину меньшего
+SAME_ROUTE_M = 1.0
+SAME_ROUTE_SHARE = 0.9
 # --no-shape отключает B16–B18, B20 и B21: так старые категории сверяются с прежними прогонами
 SHAPE = "--no-shape" not in sys.argv
 
@@ -1261,6 +1266,15 @@ def trees_for(inp):
     }
 
 
+def divergence(a, b):
+    """Доля расхождения трасс двух вариантов по разд. 6, см. SAME_ROUTE_SHARE."""
+    shorter = min(a.length, b.length)
+    if shorter == 0:
+        return 0.0 if a.length == b.length else 1.0
+    inside = min(a.intersection(b.buffer(SAME_ROUTE_M)).length, b.intersection(a.buffer(SAME_ROUTE_M)).length)
+    return max(0.0, 1 - inside / shorter)
+
+
 def main():
     inp = load_input(sys.argv[1])
     out = json.load(open(sys.argv[2]))
@@ -1281,6 +1295,17 @@ def main():
             print(f"  {key}: {rep.count[key]}  {rep.sample.get(key, [])}")
             if not key.startswith("i "):
                 bad += rep.count[key]
+    nets = {vid: shapely.union_all([to_utm(shape(f["geometry"])) for f in feats
+                                     if f["properties"]["object_type"] == "heat_network"]) for vid, feats in variants.items()}
+    vids = sorted(nets)
+    pairs = []
+    for i, a in enumerate(vids):
+        for b in vids[i + 1:]:
+            share = divergence(nets[a], nets[b])
+            pairs.append(f"{a}-{b} {100 * share:.1f} %" + (" совпадают" if share < 1 - SAME_ROUTE_SHARE else ""))
+    if pairs:
+        print(f"  i  расхождение трасс пар вариантов, различны от {100 * (1 - SAME_ROUTE_SHARE):.0f} % (разд. 6): "
+              + ", ".join(pairs))
     if bad:
         print(f"CHECK18 VIOLATIONS {bad}")
         sys.exit(1)
