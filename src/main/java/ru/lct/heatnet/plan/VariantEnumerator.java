@@ -1341,9 +1341,12 @@ public final class VariantEnumerator {
             rerooted = rerooted == tree ? tree : slid(rerooted, router, dn, metreRub);
             Option best = null;
             for (Tree shape : new java.util.LinkedHashSet<>(List.of(slid, rerooted, tree))) {
-                // срезка только укорачивает рёбра: несрезанное дерево собирается, если срезанное не собралось
+                // сначала дерево со срезанными углами; если оно не собралось — несрезанное с выпрямленными дугами и
+                // зигзагами, и только потом дерево как построено
                 Tree cut = builder.cut(shape, router);
                 Option option = cut == shape ? null : option(cut, label, verify, area, dn, region, tree.narrow);
+                Tree sharp = option == null ? builder.cut(shape, router, 0) : shape;
+                option = option == null && sharp != shape ? option(sharp, label, verify, area, dn, region, tree.narrow) : option;
                 option = option != null ? option : option(shape, label, verify, area, dn, region, tree.narrow);
                 if (option != null && (best == null || option.score < best.score)) {
                     best = option;

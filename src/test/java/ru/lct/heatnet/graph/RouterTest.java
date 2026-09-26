@@ -86,6 +86,27 @@ class RouterTest {
     }
 
     @Test
+    void cutRouteAroundRoundParkHasNoArcs() {
+        // обход скруглённого парка по вершинам зоны — дуга из мелких поворотов в одну сторону; после выпрямления
+        // остаются прямые с чёткими поворотами
+        Geometry park = point(0, 0).buffer(30, 8);
+        Router router = router(List.of(new Restriction("park-1", park, "park")), List.of());
+
+        Route plain = router.routeToAny(point(-40, 20), List.of(point(20, -40)), Set.of(), false);
+        Route cut = router.routeToAny(point(-40, 20), List.of(point(20, -40)), Set.of(), true);
+
+        assertFalse(Router.shapeFaults(List.of(plain.getGeometry().getCoordinates())).isEmpty(), plain.getGeometry().toString());
+        Coordinate[] coords = cut.getGeometry().getCoordinates();
+        assertTrue(Router.shapeFaults(List.of(coords)).isEmpty(), cut.getGeometry().toString());
+        double clearance = rules.restriction("park").clearanceM(DN) + halfWidth;
+        assertTrue(cut.getGeometry().distance(park) >= clearance, "до парка " + cut.getGeometry().distance(park));
+        for (int i = 1; i + 1 < coords.length; i++) {
+            assertTrue(Router.deflectionDeg(coords[i - 1], coords[i], coords[i + 1]) <= Router.MAX_TURN_DEG, cut.getGeometry().toString());
+            assertTrue(coords[i].distance(coords[i + 1]) >= 1, "звено " + i + ": " + cut.getGeometry());
+        }
+    }
+
+    @Test
     void routeAroundThinWallTurnsNoSteeperThanNinetyDegrees() {
         // тонкая стена между точкой и целью: обход её конца без ограничения дал бы разворот почти на 180°
         Geometry wall = rect(-1, -60, 1, 60);

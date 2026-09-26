@@ -782,32 +782,46 @@ final class TreeBuilder {
     }
 
     /**
-     * Дерево с углами рёбер, срезанными хордами ({@link Router#cutPass}): хорда не ближе CUT_APART_M к другим
-     * рёбрам, точка выхода из здания остаётся на месте — финальный участок идёт от ближайшей границы. Узлы и
-     * топология дерева прежние; без срезов возвращается то же дерево.
+     * Дерево с углами рёбер, срезанными хордами ({@link Router#cutPass}), и выпрямленными дугами и зигзагами
+     * ({@link Router#sharpen}): новые куски не ближе CUT_APART_M к другим рёбрам, точка выхода из здания остаётся на
+     * месте — финальный участок идёт от ближайшей границы. Узлы и топология дерева прежние; без изменений
+     * возвращается то же дерево.
      */
     Tree cut(Tree tree, Router router) {
+        return cut(tree, router, CUT_PASSES);
+    }
+
+    /** То же с числом проходов срезки passes; 0 — только выпрямление дуг и зигзагов. */
+    Tree cut(Tree tree, Router router, int passes) {
         Tree result = new Tree(tree.tie);
         result.unconnected.addAll(tree.unconnected);
         boolean changed = false;
+        // рёбра, уже срезанные на этом дереве, сравниваются в новом виде: выпрямление дуги уводит ребро наружу
+        List<LineString> lines = new ArrayList<>();
         for (Tree.Edge edge : tree.edges) {
+            lines.add(edge.line);
+        }
+        for (int e = 0; e < tree.edges.size(); e++) {
+            Tree.Edge edge = tree.edges.get(e);
             List<LineSegment> others = new ArrayList<>();
-            for (Tree.Edge other : tree.edges) {
-                Coordinate[] coords = other.line.getCoordinates();
-                for (int i = 0; other != edge && i + 1 < coords.length; i++) {
+            for (int o = 0; o < lines.size(); o++) {
+                Coordinate[] coords = lines.get(o).getCoordinates();
+                for (int i = 0; o != e && i + 1 < coords.length; i++) {
                     others.add(new LineSegment(coords[i], coords[i + 1]));
                 }
             }
             List<Coordinate> coords = new ArrayList<>(Arrays.asList(edge.line.getCoordinates()));
             Coordinate exit = edge.to.kind == Tree.Kind.CONNECTION && buildingByConnection.containsKey(edge.to.connection.getId())
                     && coords.size() > 2 ? coords.get(coords.size() - 2) : null;
-            for (int pass = 0; pass < CUT_PASSES && router.cutPass(coords, tree.tie.getIgnored(), exit, others); pass++) {
+            for (int pass = 0; pass < passes && router.cutPass(coords, tree.tie.getIgnored(), exit, others); pass++) {
                 changed = true;
             }
+            changed |= router.sharpen(coords, tree.tie.getIgnored(), exit, others);
+            lines.set(e, factory.createLineString(coords.toArray(new Coordinate[0])));
             // у нового дерева свой узел врезки: ребро от прежнего degree(root) не считает, и ёмкость общей камеры
             // врезки (VariantEnumerator#compatible) не проверялась бы
             Tree.Node from = edge.from == tree.root ? result.root : edge.from;
-            result.edges.add(new Tree.Edge(from, edge.to, factory.createLineString(coords.toArray(new Coordinate[0]))));
+            result.edges.add(new Tree.Edge(from, edge.to, lines.get(e)));
         }
         return changed ? result : tree;
     }

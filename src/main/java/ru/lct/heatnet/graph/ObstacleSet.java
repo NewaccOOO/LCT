@@ -81,6 +81,9 @@ public final class ObstacleSet {
     /** Отступ оси новой сети от полигона ОКС: отступ правила плюс полуширина пары. */
     private final double oksClearance;
     private final List<Coordinate> nodes = new ArrayList<>();
+    /** Область и коридор, в которых взяты препятствия: за ними отрезок проверить не по чему. */
+    private final Envelope area;
+    private final PreparedGeometry inside;
     /**
      * По шесть чисел на узел: сам узел и его соседи по кольцу зоны (x, y узла, предыдущего и следующего), у точек
      * вдоль дорог соседей нет (NaN): ребро полезно, только если касается зоны. Массив вместо объектов: касание
@@ -707,7 +710,8 @@ public final class ObstacleSet {
     /** То же с кэшем расчёта для буферов зон (null — без кэша). */
     public ObstacleSet(ObstacleIndex index, Rules rules, Envelope area, int dn, Geometry corridor, RouteCache cache) {
         this.cache = cache;
-        PreparedGeometry inside = corridor == null ? null : PreparedGeometryFactory.prepare(corridor);
+        this.area = area;
+        inside = corridor == null ? null : PreparedGeometryFactory.prepare(corridor);
         double halfWidth = rules.diameter(dn).getWidthM() / 2;
         List<Zone> forbid = new ArrayList<>();
         // объекты и отступы зон узлов: буферы строятся потом параллельно, см. nodeZones
@@ -898,6 +902,12 @@ public final class ObstacleSet {
             }
         }
         return false;
+    }
+
+    /** Отрезок a–b лежит в области и коридоре, где взяты препятствия. */
+    public boolean covers(Coordinate a, Coordinate b) {
+        return area.contains(a) && area.contains(b)
+                && (inside == null || inside.covers(factory.createLineString(new Coordinate[] {a, b})));
     }
 
     /** Отрезок a–b задевает зону запрета не из ignored; объекты специального прохода не проверяются. */
