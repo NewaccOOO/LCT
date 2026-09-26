@@ -194,6 +194,25 @@ public final class VariantEnumerator {
     private static final class Option {
         final Tree tree;
         final double score;
+        /** В дереве есть ветка со звеном после выхода из здания, см. {@link #plain}. */
+        boolean linked;
+        /** Точка осталась без сети из-за поворота в точке выхода, см. {@link Tree#turnStuck}. */
+        boolean turnStuck;
+        /**
+         * Дерево той же врезки, где такие точки присоединены со звеном после выхода; строится, только когда черновик
+         * выбрал это дерево, см. {@link #draft}. null — строить нечего.
+         */
+        java.util.function.Supplier<Option> withLinks;
+        private Option linkedOption;
+        private boolean linkedBuilt;
+
+        synchronized Option linkedOption() {
+            if (!linkedBuilt) {
+                linkedOption = withLinks.get();
+                linkedBuilt = true;
+            }
+            return linkedOption;
+        }
 
         Option(Tree tree, double score) {
             this.tree = tree;
@@ -1082,9 +1101,16 @@ public final class VariantEnumerator {
             Tree chosen = null;
             // с другой врезкой ищем от первого отличного дерева, а если все дальше несовместимы — с начала списка
             for (int k = 0; k < options.size() && chosen == null; k++) {
-                Tree tree = options.get((start + k) % options.size()).tree;
-                if (compatible(tree, accepted)) {
-                    chosen = tree;
+                Option option = options.get((start + k) % options.size());
+                if (compatible(option.tree, accepted)) {
+                    chosen = option.tree;
+                    // точки, которые дерево оставило из-за поворота у выхода, подключаются поодиночке; дерево со
+                    // звеном после выхода берётся, только если оно дешевле такого подключения
+                    Option linked = option.withLinks == null ? null : option.linkedOption();
+                    if (linked != null && compatible(linked.tree, accepted)
+                            && separately(linked, slide) < separately(option, slide) - IMPROVE_EPS) {
+                        chosen = linked.tree;
+                    }
                 }
             }
             if (chosen == null) {
@@ -1110,6 +1136,17 @@ public final class VariantEnumerator {
             // несколько деревьев в одной камере по отдельности собирались, а вместе нет: разбиение пропускается
             return null;
         }
+    }
+
+    /** Score дерева, если его неподключённые точки подключить поодиночке лучшим деревом каждой. */
+    private double separately(Option option, boolean slide) {
+        double score = option.score;
+        for (ConnectionPoint left : option.tree.unconnected) {
+            double penalty = rules.score(rules.penalty(oksById.get(left.getOksId()).getFlowTph()), 0);
+            List<Option> single = options(List.of(left), slide);
+            score += (single.isEmpty() ? penalty : Math.min(penalty, single.get(0).score)) - penalty;
+        }
+        return score;
     }
 
     /**
@@ -1216,18 +1253,18 @@ public final class VariantEnumerator {
             int ownDn = rules.diameterFor(oksById.get(subset.get(0).getOksId()).getFlowTph()).getDn();
             if (ownDn < blockDn) {
                 List<TieCandidate> own = candidates(points, flow, ownDn);
-                if (detour(options, points.get(0), own)) {
+                if (detour(plain(options), points.get(0), own)) {
                     // D-7: с запасом по диаметру маршрута нет или он в обход, а отступы для Ду по расходу меньше и
                     // могут пропустить короче: повтор с этим Ду, отступы и предельная длина — по фактическому Ду
                     options.addAll(options(region, ownDn, region.area, subset, true, own, false, slide));
                 }
             }
-            if (incomplete(options) && !district) {
+            if (incomplete(plain(options)) && !district) {
                 // обход может не поместиться в область вокруг ОКС и кандидатов: последняя попытка на широкой области
                 options.addAll(options(region, blockDn, region.wideArea, subset, false,
                         candidates(points, flow, blockDn), false, slide));
             }
-            if (incomplete(options)) {
+            if (incomplete(plain(options))) {
                 // маршрута нет из-за поворота в точке выхода из здания круче 90°: трасса вдоль финального участка
                 // длиннее, но неподключение при доступном маршруте запрещено (п. 2.5). Область широкая: обход
                 // в тесной застройке выходит за прямоугольник вокруг точки и кандидатов
@@ -1236,13 +1273,14 @@ public final class VariantEnumerator {
             }
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
-        if (!options.isEmpty() && alternativeIndex(options) == 0) {
+        List<Option> plain = plain(options);
+        if (!plain.isEmpty() && alternativeIndex(plain) == 0) {
             // все ближайшие кандидаты дают ту же врезку, а вариантов нужно не меньше двух (правило variants):
             // пробуется та же сеть дальше OTHER_TIE_M от лучшей врезки
-            List<TieCandidate> along = finder.along(options.get(0).tree.tie, blockDn, OTHER_TIE_M);
+            List<TieCandidate> along = finder.along(plain.get(0).tree.tie, blockDn, OTHER_TIE_M);
             options.addAll(options(region, blockDn, region.area, subset, false, along, false, slide));
             options.sort(Comparator.comparingDouble(option -> option.score));
-            if (alternativeIndex(options) == 0) {
+            if (alternativeIndex(plain(options)) == 0) {
                 // сдвиг к стволу вернул врезку к лучшей: другую врезку для второго варианта даёт дерево без сдвига
                 options.addAll(options(region, blockDn, region.area, subset, false, along, false, false));
                 options.sort(Comparator.comparingDouble(option -> option.score));
@@ -1273,6 +1311,14 @@ public final class VariantEnumerator {
             }
         }
         return result;
+    }
+
+    /**
+     * Деревья без звена после выхода. Нужны ли запасные попытки (граф Ду точки, широкая область, врезки дальше по
+     * сети), решается по ним, как до звена: иначе дальнее дерево со звеном отменяло попытку, которая дала бы лучшее.
+     */
+    private static List<Option> plain(List<Option> options) {
+        return options.stream().filter(option -> !option.linked).collect(Collectors.toList());
     }
 
     private static boolean incomplete(List<Option> options) {
@@ -1323,12 +1369,12 @@ public final class VariantEnumerator {
         // деревья кандидатов независимы, граф и кэш общие и потокобезопасны; порядок результатов — порядок
         // кандидатов, поэтому итог не зависит от расписания нитей. В районе города нити заняты районами.
         java.util.stream.Stream<TieCandidate> stream = district || !PARALLEL ? cheapest.stream() : cheapest.parallelStream();
-        List<Option> options = stream.map(candidate -> {
+        java.util.function.BiFunction<TieCandidate, Boolean, Option> shaped = (candidate, link) -> {
             // ветки к точкам, у которых по графу дерева закрыта ближняя сторона здания, идут по графу Ду своего
             // участка. Если сборка такое дерево отвергла, заново по графу дерева оно не строится: там выход ушёл бы
             // на дальнюю сторону при открытой ближней (п. 2.2)
             Tree tree = builder.build(router, dn, area, candidate, subset, rules.chamberCost(dn) / metreRub,
-                    rules.tieInCost() / metreRub, fromPortalDirection, graphs);
+                    rules.tieInCost() / metreRub, fromPortalDirection, graphs, link);
             if (tree.edges.isEmpty()) {
                 log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
                 return null;
@@ -1353,6 +1399,20 @@ public final class VariantEnumerator {
                 if (option != null && (best == null || option.score < best.score)) {
                     best = option;
                 }
+            }
+            if (best != null) {
+                best.linked = tree.linked;
+                best.turnStuck = tree.turnStuck;
+            }
+            return best;
+        };
+        // звено после выхода сразу — только у одиночной точки: в дереве нескольких точек оно присоединяло точки, которые
+        // дешевле подключить отдельно, и поиск по разбиениям уходил от лучших черновиков («густо-200» хуже на 1,2)
+        boolean link = subset.size() == 1;
+        List<Option> options = stream.map(candidate -> {
+            Option best = shaped.apply(candidate, link);
+            if (best != null && best.turnStuck) {
+                best.withLinks = () -> shaped.apply(candidate, true);
             }
             return best;
         }).filter(Objects::nonNull).collect(Collectors.toList());

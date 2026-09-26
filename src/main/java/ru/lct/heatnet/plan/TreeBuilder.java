@@ -58,6 +58,13 @@ final class TreeBuilder {
     private static final int PORTAL_TRIES = 8;
     /** Проходы срезки углов рёбер, см. {@link #cut}. */
     static final int CUT_PASSES = 2;
+    /**
+     * Звено после выхода из здания, см. {@link #exitLink}: поворот в точке выхода и длины звена по порядку попыток;
+     * heatnet.exitLink=false — без звена, выход как в v0.8.1.
+     */
+    private static final boolean EXIT_LINK = Boolean.parseBoolean(System.getProperty("heatnet.exitLink", "true"));
+    private static final double EXIT_LINK_DEG = 80;
+    private static final double[] EXIT_LINK_M = {1.5, 3, 6};
 
     private final int nodeLimit;
     private final Map<String, LineString> networkById;
@@ -93,6 +100,8 @@ final class TreeBuilder {
         final Coordinate target;
         /** Ветка построена по графу меньшего Ду, чем у дерева, см. {@link Run#portal}. */
         final boolean narrow;
+        /** Ветка со звеном после выхода, см. {@link #exitLink}. */
+        boolean linked;
 
         Attach(ConnectionPoint connection, Coordinate[] branch, Spot spot, double weight, Coordinate target, boolean narrow) {
             this.connection = connection;
@@ -176,7 +185,18 @@ final class TreeBuilder {
      */
     Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
             double chamberPenaltyM, double tieInPenaltyM, boolean fromPortalDirection, Graphs graphs) {
+        return build(router, dn, area, tie, connections, chamberPenaltyM, tieInPenaltyM, fromPortalDirection, graphs, false);
+    }
+
+    /**
+     * То же; {@code link} — ветку, которую отбраковал поворот круче 90° в точке выхода из здания, присоединять со
+     * звеном после выхода ({@link #exitLink}). Без него такая точка уходит в {@link Tree#unconnected}, а дерево
+     * помечается {@link Tree#turnStuck}.
+     */
+    Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
+            double chamberPenaltyM, double tieInPenaltyM, boolean fromPortalDirection, Graphs graphs, boolean link) {
         Run run = new Run(router, dn, area, tie, chamberPenaltyM, tieInPenaltyM);
+        run.link = link;
         run.fromPortalDirection = fromPortalDirection;
         run.graphs = graphs;
         return run.build(connections);
@@ -242,6 +262,10 @@ final class TreeBuilder {
             this.tieInPenaltyM = tieInPenaltyM;
         }
 
+        /** Звено после выхода разрешено, см. {@link #build}; turned — на шаге его не хватило какой-то точке. */
+        boolean link;
+        boolean turned;
+
         Tree build(List<ConnectionPoint> connections) {
             List<ConnectionPoint> remaining = new ArrayList<>(connections);
             while (!remaining.isEmpty()) {
@@ -257,6 +281,7 @@ final class TreeBuilder {
                     }
                 }
                 step++;
+                turned = false;
                 Attach best = null;
                 for (ConnectionPoint connection : remaining) {
                     Attach attach = attach(connection, targets, fromPortalDirection);
@@ -264,6 +289,7 @@ final class TreeBuilder {
                         best = attach;
                     }
                 }
+                tree.turnStuck |= best == null && turned;
                 if (best == null) {
                     // выход через другую сторону здания допустим только при закрытой ближней (п. 2.2), поэтому точку,
                     // от выхода которой нет ветки к этому дереву, не переводят на дальнюю сторону: она уходит из дерева
@@ -438,8 +464,37 @@ final class TreeBuilder {
                 }
             }
             Set<String> firstIgnored = firstIgnored(connection);
-            Coordinate target = coords[coords.length - 1];
             List<Piece> pieces = pieces();
+            Attach attach = attach(connection, coords, route.getWeight(), firstIgnored, pieces, branchRouter);
+            if (attach != null || portal == null || !EXIT_LINK
+                    || deflectionDeg(coords[0], coords[1], coords[2]) <= Router.MAX_TURN_DEG) {
+                return attach;
+            }
+            if (!link) {
+                turned = true;
+                return null;
+            }
+            // маршрут от выхода уходит назад к стене круче 90°: звено из двух поворотов до 90° после выхода,
+            // финальный участок от ближайшей границы тот же (п. 2.1, 2.2)
+            for (double length : EXIT_LINK_M) {
+                Coordinate[] linked = exitLink(coords, length);
+                if (linked == null || !area.contains(linked[2])) {
+                    continue;
+                }
+                double extra = linked[1].distance(linked[2]) + linked[2].distance(linked[3]) - coords[1].distance(coords[2]);
+                attach = attach(connection, linked, route.getWeight() + extra, firstIgnored, pieces, branchRouter);
+                if (attach != null) {
+                    attach.linked = true;
+                    return attach;
+                }
+            }
+            return null;
+        }
+
+        /** Присоединение по маршруту coords от точки подключения: ветка до первого касания дерева. */
+        Attach attach(ConnectionPoint connection, Coordinate[] coords, double weight, Set<String> firstIgnored,
+                List<Piece> pieces, Router branchRouter) {
+            Coordinate target = coords[coords.length - 1];
             for (int i = 0; i + 1 < coords.length; i++) {
                 Coordinate touch = firstTouch(coords[i], coords[i + 1], pieces);
                 if (touch == null) {
@@ -447,7 +502,7 @@ final class TreeBuilder {
                 }
                 List<Coordinate> head = new ArrayList<>(Arrays.asList(coords).subList(0, i + 1));
                 List<Spot> spots = spots(pieces, touch);
-                Attach direct = attach(connection, head, spots, pieces, route.getWeight(), target, firstIgnored, branchRouter);
+                Attach direct = attach(connection, head, spots, pieces, weight, target, firstIgnored, branchRouter);
                 double length = coords[i].distance(coords[i + 1]);
                 if (direct != null || length == 0) {
                     // отрезок нулевой длины: точка подключения лежит на дереве, обойти касание не из чего
@@ -461,8 +516,7 @@ final class TreeBuilder {
                     for (int side : new int[] {1, -1}) {
                         List<Coordinate> around = new ArrayList<>(head);
                         around.add(new Coordinate(touch.x + side * shift * nx, touch.y + side * shift * ny));
-                        Attach aside = attach(connection, around, spots, pieces, route.getWeight(), target, firstIgnored,
-                                branchRouter);
+                        Attach aside = attach(connection, around, spots, pieces, weight, target, firstIgnored, branchRouter);
                         if (aside != null) {
                             return aside;
                         }
@@ -744,6 +798,7 @@ final class TreeBuilder {
 
         void apply(Attach attach) {
             tree.narrow |= attach.narrow;
+            tree.linked |= attach.linked;
             Spot spot = attach.spot;
             Tree.Node at = spot.node;
             if (at == null) {
@@ -856,6 +911,35 @@ final class TreeBuilder {
         Coordinate[] coords = new LengthIndexedLine(line).extractLine(from, to).getCoordinates();
         coords[junctionAtStart ? 0 : coords.length - 1] = junction;
         return factory.createLineString(coords);
+    }
+
+    /**
+     * Маршрут coords (точка подключения, выход, ...) со звеном после выхода: из выхода под EXIT_LINK_DEG к
+     * финальному участку в сторону следующей вершины на length метров, оттуда к ней. Поворот в выходе 80°, в конце
+     * звена — остаток до направления на следующую вершину. null — выход совпал с точкой подключения.
+     */
+    static Coordinate[] exitLink(Coordinate[] coords, double length) {
+        Coordinate cp = coords[0];
+        Coordinate exit = coords[1];
+        Coordinate next = coords[2];
+        double dx = exit.x - cp.x;
+        double dy = exit.y - cp.y;
+        double norm = Math.hypot(dx, dy);
+        if (norm < 1e-9) {
+            return null;
+        }
+        dx /= norm;
+        dy /= norm;
+        double side = dx * (next.y - exit.y) - dy * (next.x - exit.x) >= 0 ? 1 : -1;
+        double angle = Math.toRadians(EXIT_LINK_DEG) * side;
+        double ux = dx * Math.cos(angle) - dy * Math.sin(angle);
+        double uy = dx * Math.sin(angle) + dy * Math.cos(angle);
+        Coordinate[] linked = new Coordinate[coords.length + 1];
+        linked[0] = cp;
+        linked[1] = exit;
+        linked[2] = new Coordinate(exit.x + ux * length, exit.y + uy * length);
+        System.arraycopy(coords, 2, linked, 3, coords.length - 2);
+        return linked;
     }
 
     /** Удаляет вершины с отклонением меньше 3° и у подотрезков короче метра, если спрямлённый отрезок допустим. */
