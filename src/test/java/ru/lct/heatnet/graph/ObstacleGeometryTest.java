@@ -24,12 +24,15 @@ class ObstacleGeometryTest {
 
     @Test
     void hitsBoxMatchesRectangleLineIntersector() {
-        for (int i = 0; i < 50_000; i++) {
-            Envelope box = new Envelope(lattice(), lattice(), lattice(), lattice());
-            Coordinate a = new Coordinate(lattice(), lattice());
-            Coordinate b = i % 3 == 0 ? new Coordinate(a) : new Coordinate(lattice(), lattice());
-            assertEquals(new RectangleLineIntersector(box).intersects(a, b), ObstacleSet.hitsBox(box, a, b),
-                    box + " " + a + " " + b);
+        // та же решётка в координатах города: там знак произведения в double чаще спорный, и отвечает точный путь
+        for (double shift : new double[] {0, 6_180_000.3}) {
+            for (int i = 0; i < 50_000; i++) {
+                Envelope box = new Envelope(shift + lattice(), shift + lattice(), shift + lattice(), shift + lattice());
+                Coordinate a = new Coordinate(shift + lattice(), shift + lattice());
+                Coordinate b = i % 3 == 0 ? new Coordinate(a) : new Coordinate(shift + lattice(), shift + lattice());
+                assertEquals(new RectangleLineIntersector(box).intersects(a, b), ObstacleSet.hitsBox(box, a, b),
+                        box + " " + a + " " + b);
+            }
         }
     }
 

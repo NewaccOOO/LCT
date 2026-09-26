@@ -169,41 +169,53 @@ public final class Router {
             nodeXY[2 * i] = nodes.get(i).x;
             nodeXY[2 * i + 1] = nodes.get(i).y;
         }
-        List<List<Integer>> to = new ArrayList<>();
-        List<List<Double>> weight = new ArrayList<>();
-        for (int i = 0; i < n; i++) {
-            to.add(new ArrayList<>());
-            weight.add(new ArrayList<>());
-        }
         // перебор O(n²) пар, но геометрия проверяется только у рёбер, касательных к зонам в обоих концах; пары
-        // считаются параллельно по i в ObstacleSet.PARTS, каждая нить пишет только свои списки, симметричные рёбра
-        // добавляются потом
+        // считаются параллельно по i в ObstacleSet.PARTS, каждая нить пишет только свою строку рёбер к j < i,
+        // симметричные рёбра добавляются потом
+        int[][] rowTo = new int[n][];
+        double[][] rowWeight = new double[n][];
         ObstacleSet.PARTS.submit(() -> java.util.stream.IntStream.range(0, n).parallel().forEach(i -> {
             double x = nodeXY[2 * i];
             double y = nodeXY[2 * i + 1];
+            int[] to = new int[i];
+            double[] weight = new double[i];
+            int count = 0;
+            ObstacleSet.Hint hint = ObstacleSet.hint();
             for (int j = 0; j < i; j++) {
                 if (!obstacles.tangent(i, nodeXY[2 * j], nodeXY[2 * j + 1]) || !obstacles.tangent(j, x, y)) {
                     continue;
                 }
-                double w = obstacles.edgeWeight(nodes.get(i), nodes.get(j), Set.of(), true, true);
+                double w = obstacles.edgeWeight(nodes.get(i), nodes.get(j), Set.of(), true, true, hint);
                 if (!Double.isNaN(w)) {
-                    to.get(i).add(j);
-                    weight.get(i).add(w);
+                    to[count] = j;
+                    weight[count++] = w;
                 }
             }
+            rowTo[i] = Arrays.copyOf(to, count);
+            rowWeight[i] = Arrays.copyOf(weight, count);
         })).join();
+        // у узла сначала рёбра к меньшим номерам по возрастанию, затем к большим по возрастанию
+        int[] degree = new int[n];
         for (int i = 0; i < n; i++) {
-            for (int k = 0, count = to.get(i).size(); k < count; k++) {
-                int j = to.get(i).get(k);
-                to.get(j).add(i);
-                weight.get(j).add(weight.get(i).get(k));
+            degree[i] += rowTo[i].length;
+            for (int j : rowTo[i]) {
+                degree[j]++;
             }
         }
         adjacency = new int[n][];
         adjacencyWeight = new double[n][];
+        int[] filled = new int[n];
         for (int i = 0; i < n; i++) {
-            adjacency[i] = to.get(i).stream().mapToInt(Integer::intValue).toArray();
-            adjacencyWeight[i] = weight.get(i).stream().mapToDouble(Double::doubleValue).toArray();
+            adjacency[i] = Arrays.copyOf(rowTo[i], degree[i]);
+            adjacencyWeight[i] = Arrays.copyOf(rowWeight[i], degree[i]);
+            filled[i] = rowTo[i].length;
+        }
+        for (int i = 0; i < n; i++) {
+            for (int k = 0; k < rowTo[i].length; k++) {
+                int j = rowTo[i][k];
+                adjacency[j][filled[j]] = i;
+                adjacencyWeight[j][filled[j]++] = rowWeight[i][k];
+            }
         }
         edgeStart = new int[n + 1];
         for (int i = 0; i < n; i++) {
@@ -315,6 +327,7 @@ public final class Router {
             }
             int via = -1;
             double[] toNodes = partialWeights(t, ignored);
+            ObstacleSet.Hint hint = ObstacleSet.hint();
             // узлы по возрастанию веса от источника: дальше текущего веса они не выиграют. Выбор тот же, что у
             // перебора по номерам: наименьший вес, при равенстве — прямой отрезок, затем меньший номер узла. Таблица
             // досчитывается до очередного узла, только когда перебор до него дошёл
@@ -329,7 +342,7 @@ public final class Router {
                     continue;
                 }
                 if (toNodes[v] == UNKNOWN) {
-                    toNodes[v] = obstacles.tangent(v, t) ? obstacles.edgeWeight(t, nodes.get(v), ignored, false, true) : Double.NaN;
+                    toNodes[v] = obstacles.tangent(v, t) ? obstacles.edgeWeight(t, nodes.get(v), ignored, false, true, hint) : Double.NaN;
                 }
                 double total = dist[v] + toNodes[v];
                 if ((total < weight || total == weight && via >= 0 && v < via)
@@ -667,8 +680,9 @@ public final class Router {
     private double[] nodeWeights(Coordinate c, Set<String> ignored) {
         return cache.computeIfAbsent(List.of(this, "weights", c.x, c.y, ignored), 8L * nodes.size(), () -> {
             double[] weights = new double[nodes.size()];
+            ObstacleSet.Hint hint = ObstacleSet.hint();
             for (int v = 0; v < weights.length; v++) {
-                weights[v] = obstacles.tangent(v, c) ? obstacles.edgeWeight(c, nodes.get(v), ignored, false, true) : Double.NaN;
+                weights[v] = obstacles.tangent(v, c) ? obstacles.edgeWeight(c, nodes.get(v), ignored, false, true, hint) : Double.NaN;
             }
             return weights;
         });

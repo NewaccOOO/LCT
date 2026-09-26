@@ -355,6 +355,29 @@ class RouterTest {
     }
 
     @Test
+    void hintKeepsEdgeWeights() {
+        // объект, запретивший прошлое ребро строки, проверяется первым: запрет и вес те же, что без подсказки
+        Router router = router(List.of(new Restriction("park-1", rect(-60, -40, -20, 0), "park"),
+                new Restriction("park-2", rect(20, 10, 70, 40), "park"),
+                new Restriction("road-1", rect(-200, 50, 200, 70), "road"),
+                new Restriction("gas-1", line(-200, -80, 200, -60), "gas_pipeline")), List.of());
+        ObstacleSet obstacles = router.obstacles();
+        List<Coordinate> nodes = obstacles.nodes();
+        for (Set<String> ignored : List.of(Set.<String>of(), Set.of("park-1", "gas-1"))) {
+            for (int i = 0; i < nodes.size(); i++) {
+                ObstacleSet.Hint hint = ObstacleSet.hint();
+                for (int j = 0; j < i; j++) {
+                    Coordinate a = nodes.get(i);
+                    Coordinate b = nodes.get(j);
+                    boolean aNode = ignored.isEmpty();
+                    assertEquals(obstacles.edgeWeight(a, b, ignored, aNode, true),
+                            obstacles.edgeWeight(a, b, ignored, aNode, true, hint), a + " " + b);
+                }
+            }
+        }
+    }
+
+    @Test
     void graphNodeNearLineCrossingCarriesSpecialPartBeforeIt() {
         // узел в 1 м от оси газопровода: отсчёт margin_m 2 м от пересечения продолжается за узел ещё на 1 м
         Router router = router(List.of(new Restriction("gas-1", line(-100, 0, 100, 0), "gas_pipeline")), List.of());
