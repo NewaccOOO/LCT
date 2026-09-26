@@ -69,6 +69,12 @@ public final class ObstacleSet {
     private static final int CHUNK = 8;
     /** Оценка памяти буфера на вершину исходной геометрии: Coordinate и ссылка на неё. */
     private static final long ZONE_BYTES = 48;
+    /**
+     * Пул частей набора зон и графа области ({@link #nodeZones}, рёбра в Router). Набор строится под замком кэша
+     * области (VariantEnumerator.Region), а нити общего пула ждут этот замок: части в общем пуле некому было бы
+     * собрать, и сборка вставала. Нити этого пула замков кэша не берут.
+     */
+    static final java.util.concurrent.ForkJoinPool PARTS = new java.util.concurrent.ForkJoinPool();
     private static final BufferParameters ZONE_BUFFER = new BufferParameters(
             BufferParameters.DEFAULT_QUADRANT_SEGMENTS, BufferParameters.CAP_SQUARE,
             BufferParameters.JOIN_MITRE, BufferParameters.DEFAULT_MITRE_LIMIT);
@@ -1265,17 +1271,13 @@ public final class ObstacleSet {
     }
 
     /**
-     * Зоны узлов объектов в их порядке. Буферы независимы и строятся параллельно: граф области строится в основной
-     * нити, пока остальные ждут, а буферы сложных зданий были главной его ценой на датасете организаторов. В нити
-     * общего пула — последовательно: набор зон строится под замком карты (Region.obstacles), и нить, ожидая свои
-     * части, могла бы взять задачу, которая просит тот же набор.
+     * Зоны узлов объектов в их порядке. Буферы независимы и строятся параллельно в {@link #PARTS}: граф области
+     * строится, пока остальные ждут, а буферы сложных зданий были главной его ценой на датасете организаторов.
      */
     private List<Geometry> nodeZones(List<Geometry> objects, List<Double> distances) {
-        java.util.stream.IntStream indices = java.util.stream.IntStream.range(0, objects.size());
-        if (!(Thread.currentThread() instanceof java.util.concurrent.ForkJoinWorkerThread)) {
-            indices = indices.parallel();
-        }
-        return indices.mapToObj(i -> nodeZone(objects.get(i), distances.get(i))).collect(java.util.stream.Collectors.toList());
+        return PARTS.submit(() -> java.util.stream.IntStream.range(0, objects.size()).parallel()
+                .mapToObj(i -> nodeZone(objects.get(i), distances.get(i)))
+                .collect(java.util.stream.Collectors.toList())).join();
     }
 
     /** Отступ зоны узлов от объекта с учётом упрощения, см. {@link #nodeZone}. */

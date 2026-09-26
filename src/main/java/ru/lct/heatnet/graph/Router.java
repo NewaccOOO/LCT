@@ -117,8 +117,9 @@ public final class Router {
             weight.add(new ArrayList<>());
         }
         // перебор O(n²) пар, но геометрия проверяется только у рёбер, касательных к зонам в обоих концах; пары
-        // считаются параллельно по i, каждая нить пишет только свои списки, симметричные рёбра добавляются потом
-        java.util.stream.IntStream.range(0, n).parallel().forEach(i -> {
+        // считаются параллельно по i в ObstacleSet.PARTS, каждая нить пишет только свои списки, симметричные рёбра
+        // добавляются потом
+        ObstacleSet.PARTS.submit(() -> java.util.stream.IntStream.range(0, n).parallel().forEach(i -> {
             double x = nodeXY[2 * i];
             double y = nodeXY[2 * i + 1];
             for (int j = 0; j < i; j++) {
@@ -131,7 +132,7 @@ public final class Router {
                     weight.get(i).add(w);
                 }
             }
-        });
+        })).join();
         for (int i = 0; i < n; i++) {
             for (int k = 0, count = to.get(i).size(); k < count; k++) {
                 int j = to.get(i).get(k);
