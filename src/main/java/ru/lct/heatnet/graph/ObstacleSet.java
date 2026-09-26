@@ -1008,16 +1008,18 @@ public final class ObstacleSet {
     }
 
     /**
-     * Отрезок a–b обычный: не пересекает объектов специального прохода и держит отступы с запасом margin. Так
+     * Отрезок a–b обычный: не пересекает объектов специального прохода и держит отступы правил с запасом margin. Так
      * проверяется хорда срезки угла: трасса у самой зоны графа не прошла бы проверку отступов, когда сборка
-     * поднимает Ду по длине на ступень, а запас как у узлов графа эту ступень покрывает.
+     * поднимает Ду по длине на ступень, а запас эту ступень покрывает. Зона уже шире отступа на SIMPLIFY_M, поэтому
+     * к ней добавляется margin без него: иначе запас больше заданного и форма трассы держит лишние вершины (п. 5).
      */
     public boolean plain(Coordinate a, Coordinate b, Set<String> ignored, double margin) {
+        double extra = margin - SIMPLIFY_M;
         Envelope envelope = new Envelope(a, b);
         envelope.expandBy(margin);
         for (Object item : forbidZones.query(envelope)) {
             Zone zone = (Zone) item;
-            if (!ignored.contains(zone.id) && zone.intersects(a, b, margin, false)) {
+            if (!ignored.contains(zone.id) && zone.intersects(a, b, extra, false)) {
                 return false;
             }
         }
@@ -1026,7 +1028,7 @@ public final class ObstacleSet {
             if (ignored.contains(special.id) && touches(special, a, b)) {
                 continue;
             }
-            if (special.crossedBy(a, b) || special.zone.intersects(a, b, margin, false)) {
+            if (special.crossedBy(a, b) || special.zone.intersects(a, b, extra, false)) {
                 return false;
             }
         }

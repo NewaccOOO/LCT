@@ -50,6 +50,18 @@ class RouterTest {
     }
 
     @Test
+    void plainCountsMarginFromRuleClearance() {
+        // зона шире нормы на 0,05 м, а запас формы трассы 0,15 м отсчитывается от нормы, иначе вершины с запасом
+        // прямой 0,15–0,2 м остаются лишними (п. 5)
+        Geometry park = rect(-50, -20, 50, 20);
+        ObstacleSet zones = router(List.of(new Restriction("park-1", park, "park")), List.of()).obstacles();
+        double y = 20 + rules.restriction("park").clearanceM(DN) + halfWidth;
+
+        assertTrue(zones.plain(new Coordinate(-60, y + 0.17), new Coordinate(60, y + 0.17), Set.of(), 0.15));
+        assertFalse(zones.plain(new Coordinate(-60, y + 0.13), new Coordinate(60, y + 0.13), Set.of(), 0.15));
+    }
+
+    @Test
     void routePassesBetweenDiagonalCornersCloserThanMitreZones() {
         // углы двух парков по диагонали в 3,2 м: круглые зоны отступа не смыкаются, а зоны с углами JOIN_MITRE
         // смыкались и закрывали проход

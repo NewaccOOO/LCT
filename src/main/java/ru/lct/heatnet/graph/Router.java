@@ -38,8 +38,10 @@ public final class Router {
     private static final int CUT_PASSES = 2;
     private static final int CUT_STEPS = 6;
     private static final double CUT_APART_M = 0.5;
-    /** Запас хорды к отступу, как у узлов графа: сборка может поднять Ду по длине на ступень, см. ObstacleSet#plain. */
+    /** Запас формы к отступу: сборка может поднять Ду по длине на ступень, см. ObstacleSet#plain. */
     private static final double CUT_MARGIN_M = 0.15;
+    /** Запас хорды срезки к отступу, как у зоны узлов графа, см. {@link #chord}. */
+    private static final double CHORD_MARGIN_M = 0.2;
     /** Подотрезок после срезки не короче метра с запасом: check18 видит 1,00 м после округления координат как 0,999. */
     private static final double CUT_PIECE_M = 1.05;
     /** Короткое звено между поворотами, см. {@link #sharpen}: 10 м с запасом на округление координат выхода. */
@@ -1211,14 +1213,14 @@ public final class Router {
     }
 
     /**
-     * Хорда среза cut у вершины cur обычная (без спецпрохода), держит отступы с запасом CUT_MARGIN_M и не ближе
+     * Хорда среза cut у вершины cur обычная (без спецпрохода), держит отступы с запасом CHORD_MARGIN_M и не ближе
      * CUT_APART_M к отрезкам apart.
      */
     private boolean chord(ObstacleSet zones, Coordinate cur, Coordinate prev, Coordinate next, double cut,
             Set<String> ignored, List<LineSegment> apart) {
         Coordinate a = toward(cur, prev, cut);
         Coordinate b = toward(cur, next, cut);
-        if (!zones.plain(a, b, ignored, CUT_MARGIN_M)) {
+        if (!zones.plain(a, b, ignored, CHORD_MARGIN_M)) {
             return false;
         }
         LineSegment chord = new LineSegment(a, b);
