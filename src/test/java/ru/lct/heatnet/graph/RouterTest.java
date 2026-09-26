@@ -68,8 +68,8 @@ class RouterTest {
     }
 
     @Test
-    void cutRouteHugsCornerKeepingClearance() {
-        // обход угла через вершину зоны JOIN_MITRE длиннее: срезка заменяет её хордами у самого отступа
+    void cutRouteAtParkCornerKeepsOneTurn() {
+        // срезка у угла зоны даёт хорду короче 10 м: её два поворота форма заменяет прежним углом (п. 5)
         Geometry park = rect(-50, -50, 0, 0);
         Router router = router(List.of(new Restriction("park-1", park, "park")), List.of());
 
@@ -77,7 +77,8 @@ class RouterTest {
         Route cut = router.routeToAny(point(-40, 5), List.of(point(5, -40)), Set.of(), true);
 
         double clearance = rules.restriction("park").clearanceM(DN) + halfWidth;
-        assertTrue(cut.getLength() < plain.getLength() - 0.1, cut.getLength() + " против " + plain.getLength());
+        assertTrue(cut.getLength() <= plain.getLength() + EPS, cut.getLength() + " против " + plain.getLength());
+        assertEquals(3, cut.getGeometry().getNumPoints(), cut.getGeometry().toString());
         assertTrue(cut.getGeometry().distance(park) >= clearance, "до парка " + cut.getGeometry().distance(park));
         Coordinate[] coords = cut.getGeometry().getCoordinates();
         for (int i = 0; i + 1 < coords.length; i++) {
@@ -86,24 +87,43 @@ class RouterTest {
     }
 
     @Test
-    void cutRouteAroundRoundParkHasNoArcs() {
-        // обход скруглённого парка по вершинам зоны — дуга из мелких поворотов в одну сторону; после выпрямления
-        // остаются прямые с чёткими поворотами
+    void cutRouteAroundRoundParkHasNoDoubleTurns() {
+        // обход скруглённого парка по вершинам зоны — цепочка мелких поворотов в одну сторону; после доводки формы
+        // два поворота подряд со звеном короче 10 м остаются, только если одним поворотом их не заменить (больше 90°)
         Geometry park = point(0, 0).buffer(30, 8);
         Router router = router(List.of(new Restriction("park-1", park, "park")), List.of());
 
         Route plain = router.routeToAny(point(-40, 20), List.of(point(20, -40)), Set.of(), false);
         Route cut = router.routeToAny(point(-40, 20), List.of(point(20, -40)), Set.of(), true);
 
-        assertFalse(Router.shapeFaults(List.of(plain.getGeometry().getCoordinates())).isEmpty(), plain.getGeometry().toString());
+        List<Coordinate> before = List.of(plain.getGeometry().getCoordinates());
+        assertFalse(Router.chains(before, Router.turns(before), null).isEmpty(), plain.getGeometry().toString());
         Coordinate[] coords = cut.getGeometry().getCoordinates();
-        assertTrue(Router.shapeFaults(List.of(coords)).isEmpty(), cut.getGeometry().toString());
+        double[] turns = Router.turns(List.of(coords));
+        for (int[] chain : Router.chains(List.of(coords), turns, null)) {
+            for (int v = chain[0]; v < chain[1]; v++) {
+                assertTrue(Math.abs(turns[v] + turns[v + 1]) > Router.MAX_TURN_DEG, cut.getGeometry().toString());
+            }
+        }
         double clearance = rules.restriction("park").clearanceM(DN) + halfWidth;
         assertTrue(cut.getGeometry().distance(park) >= clearance, "до парка " + cut.getGeometry().distance(park));
         for (int i = 1; i + 1 < coords.length; i++) {
             assertTrue(Router.deflectionDeg(coords[i - 1], coords[i], coords[i + 1]) <= Router.MAX_TURN_DEG, cut.getGeometry().toString());
             assertTrue(coords[i].distance(coords[i + 1]) >= 1, "звено " + i + ": " + cut.getGeometry());
         }
+    }
+
+    @Test
+    void sharpenDropsVertexOnlyWhereNeighboursSeeEachOther() {
+        // (А): вершину, соседей которой соединяет прямая с отступом, форма убирает; вершина у угла парка нужна
+        Geometry park = rect(-50, -50, 0, 0);
+        Router router = router(List.of(new Restriction("park-1", park, "park")), List.of());
+        List<Coordinate> detour = new ArrayList<>(List.of(new Coordinate(-40, 30), new Coordinate(0, 40), new Coordinate(40, 30)));
+        List<Coordinate> around = new ArrayList<>(List.of(new Coordinate(-40, 10), new Coordinate(10, 10), new Coordinate(15, -40)));
+
+        assertTrue(router.sharpen(router.obstacles(), detour, Set.of(), null, null));
+        assertEquals(2, detour.size(), detour.toString());
+        assertFalse(router.sharpen(router.obstacles(), around, Set.of(), null, null), around.toString());
     }
 
     @Test

@@ -42,19 +42,13 @@ public final class Router {
     private static final double CUT_MARGIN_M = 0.15;
     /** Подотрезок после срезки не короче метра с запасом: check18 видит 1,00 м после округления координат как 0,999. */
     private static final double CUT_PIECE_M = 1.05;
-    /**
-     * Форма трассы, см. {@link #sharpen}: поворот меньше SMALL_TURN_DEG мелкий; ARC_TURNS мелких подряд в одну сторону —
-     * дуга, два мелких в разные стороны со звеном короче ZIGZAG_M — зигзаг. Пороги 30° и 10 м с запасом на
-     * округление координат выхода.
-     */
-    private static final double SMALL_TURN_DEG = 30.1;
-    private static final int ARC_TURNS = 3;
-    private static final double ZIGZAG_M = 10.05;
-    /** Сколько средних прямых окна может остаться при выпрямлении, см. {@link #sharpenWindow}. */
+    /** Короткое звено между поворотами, см. {@link #sharpen}: 10 м с запасом на округление координат выхода. */
+    private static final double SHORT_LINK_M = 10.05;
+    /** Сколько средних прямых окна может остаться при замене поворотов, см. {@link #sharpenWindow}. */
     private static final int SHARPEN_LINES = 3;
     private static final double SHARPEN_EPS = 1e-9;
-    /** Сдвиги окна {влево, вправо}, если окно вершин дуги или зигзага не выпрямилось. */
-    private static final int[][] WINDOW_SHIFTS = {{0, 0}, {1, 0}, {0, 1}, {1, 1}, {1, -1}, {-1, 1}};
+    /** Вершина ближе этого к границе специальной части стоит на ней, см. {@link #drop}. */
+    private static final double SPAN_EPS_M = 1e-3;
     private static final double UNKNOWN = Double.NEGATIVE_INFINITY;
     /** Предел состояний точного поиска: дальше перебор считается безнадёжным и маршрут не ищется. */
     private static final int EXACT_STATES = 100_000;
@@ -666,21 +660,18 @@ public final class Router {
     }
 
     /**
-     * Срезка углов маршрута: до CUT_PASSES проходов {@link #cutPass}, второй срезает углы хорд первого; дуги и зигзаги,
-     * которые остались от срезки и от обхода скруглённых зданий, выпрямляются {@link #sharpen}.
+     * Срезка углов маршрута: до CUT_PASSES проходов {@link #cutPass}, второй срезает углы хорд первого; затем форма
+     * доводится {@link #sharpen}.
      */
     private void cutCorners(List<Coordinate> coords, Set<String> ignored) {
-        for (int pass = 0; pass < CUT_PASSES && cutPass(coords, ignored, null, null); pass++) {
+        for (int pass = 0; pass < CUT_PASSES && cutPass(obstacles, coords, ignored, null, null); pass++) {
             // проход уже заменил вершины в coords
         }
-        if (shapeFaults(coords).isEmpty()) {
-            return;
-        }
-        // маршрут между теми же точками строится за расчёт десятки раз, а выпрямление без apart зависит только от ломаной
+        // маршрут между теми же точками строится за расчёт десятки раз, а форма без apart зависит только от ломаной
         List<Coordinate> sharp = cache.computeIfAbsent(List.of(this, "sharpen", new ArrayList<>(coords), ignored),
                 48L * coords.size(), () -> {
                     List<Coordinate> copy = new ArrayList<>(coords);
-                    sharpen(copy, ignored, null, null);
+                    sharpen(obstacles, copy, ignored, null, null);
                     return copy;
                 });
         coords.clear();
@@ -688,20 +679,27 @@ public final class Router {
     }
 
     /**
-     * Выпрямление дуг и зигзагов ломаной (приложение 18.09: без изломов, зигзагов и ступенек). Окно — вершины дуги или
-     * зигзага, см. {@link #shapeFaults}; повороты окна заменяются меньшим числом, см. {@link #sharpenWindow}. Если окно
-     * не выпрямляется, пробуется окно, сдвинутое или расширенное на вершину. Вершина {@code keep} (точка выхода из
-     * здания) и вершины ближе MIN_PIECE_M к специальным частям остаются на месте: финальный участок идёт от ближайшей
-     * границы, спецпроход — один прямой участок. {@code apart} — отрезки других рёбер дерева, от которых новые куски не
-     * ближе CUT_APART_M, как хорды {@link #cutPass}. true — coords заменены.
+     * Строгая форма ломаной (приложение 18.09, разд. 5: прямые отрезки с поворотами, без необоснованных изломов,
+     * зигзагов и ступенек). Пока что-то меняется: (А) убирается вершина, если её соседей по обычному участку можно
+     * соединить прямой, см. {@link #drop}; (В) так же убираются две вершины со звеном короче SHORT_LINK_M между ними;
+     * (Б) повороты подряд в одну сторону со звеньями короче SHORT_LINK_M заменяются наименьшим числом поворотов в
+     * пересечениях продолженных отрезков, см. {@link #sharpenWindow}. Замена проверяется по зонам zones (Ду графа или
+     * ребра дерева) как хорда {@link #cutPass}: область, где взяты препятствия, отступы с запасом CUT_MARGIN_M, без
+     * спецпрохода, не ближе CUT_APART_M к apart (отрезкам других рёбер дерева) и к своей ломаной, повороты до
+     * MAX_TURN_DEG, звенья от CUT_PIECE_M. Вершины убираются раньше замены поворотов: так трасса короче. Вершина
+     * {@code keep} (точка выхода из здания) остаётся на месте: финальный участок идёт от ближайшей границы;
+     * спецпроход остаётся прежним прямым участком. Каждый шаг уменьшает число вершин вне границ специальных частей,
+     * поэтому цикл конечен. true — coords заменены.
      */
-    public boolean sharpen(List<Coordinate> coords, Set<String> ignored, Coordinate keep, List<LineSegment> apart) {
+    public boolean sharpen(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
+            List<LineSegment> apart) {
+        List<LineSegment> others = apart == null ? List.of() : apart;
         boolean changed = false;
-        // каждое выпрямление убирает хотя бы одну вершину, поэтому цикл конечен
-        for (List<int[]> faults = shapeFaults(coords); !faults.isEmpty(); faults = shapeFaults(coords)) {
-            List<SpecialSpan> spans = obstacles.spans(factory.createLineString(coords.toArray(new Coordinate[0])), ignored);
-            boolean[] held = held(coords, keep, spans);
-            if (!sharpenAny(coords, faults, held, spans, ignored, apart)) {
+        while (coords.size() > 2) {
+            List<SpecialSpan> spans = zones.spans(factory.createLineString(coords.toArray(new Coordinate[0])), ignored);
+            if (!drop(zones, coords, 1, keep, spans, ignored, others)
+                    && !drop(zones, coords, 2, keep, spans, ignored, others)
+                    && !merge(zones, coords, held(coords, keep, spans), spans, ignored, others)) {
                 break;
             }
             changed = true;
@@ -709,7 +707,7 @@ public final class Router {
         return changed;
     }
 
-    /** Вершины, которые выпрямление не двигает: keep и вершины ближе MIN_PIECE_M к специальным частям. */
+    /** Вершины, которые замена поворотов не двигает: keep и вершины ближе MIN_PIECE_M к специальным частям. */
     private static boolean[] held(List<Coordinate> coords, Coordinate keep, List<SpecialSpan> spans) {
         boolean[] held = new boolean[coords.size()];
         double at = 0;
@@ -721,94 +719,201 @@ public final class Router {
     }
 
     /**
-     * Выпрямляет первое окно, которое удаётся: вершины дуги или зигзага между удерживаемыми, если не вышло — то же
-     * окно, сдвинутое или расширенное на вершину. true — coords заменены.
+     * Убирает count вершин подряд (две — только со звеном короче SHORT_LINK_M между ними), соединяя прямой соседей
+     * по обычному участку; из подходящих — с наибольшим выигрышем длины. Сосед — вершина или граница специальной
+     * части на соседнем отрезке: там сборка ставит технический узел, граница становится вершиной, а специальная часть
+     * остаётся на прежней прямой (узлы для пересечения дорог стоят в сантиметрах от полосы margin_m, и вершина у узла
+     * иначе осталась бы лишней). Сосед, у которого после этого излом меньше MIN_TURN_DEG, убирается вместе с ними,
+     * если он не на границе специальной части. Вершина keep и вершины в специальных частях и на их границах не
+     * убираются. true — coords заменены.
      */
-    private boolean sharpenAny(List<Coordinate> coords, List<int[]> faults, boolean[] held, List<SpecialSpan> spans,
-            Set<String> ignored, List<LineSegment> apart) {
+    private boolean drop(ObstacleSet zones, List<Coordinate> coords, int count, Coordinate keep,
+            List<SpecialSpan> spans, Set<String> ignored, List<LineSegment> apart) {
         int n = coords.size();
-        for (int[] fault : faults) {
-            for (int a = fault[0]; a <= fault[1]; a++) {
-                if (held[a]) {
-                    continue;
+        double[] at = new double[n];
+        for (int v = 1; v < n; v++) {
+            at[v] = at[v - 1] + coords.get(v - 1).distance(coords.get(v));
+        }
+        List<Removal> removals = new ArrayList<>();
+        for (int v = 1; v + count < n; v++) {
+            Removal removal = count == 2 && coords.get(v).distance(coords.get(v + 1)) >= SHORT_LINK_M ? null
+                    : removal(coords, at, spans, keep, v, v + count - 1);
+            if (removal != null) {
+                removals.add(removal);
+            }
+        }
+        removals.sort(Comparator.comparingDouble(removal -> -removal.saving));
+        for (Removal removal : removals) {
+            if (removalFits(zones, removal.shape, removal.join, ignored, apart)) {
+                coords.clear();
+                coords.addAll(removal.shape);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Ломаная без убранных вершин: новый отрезок начинается в её вершине join, трасса короче на saving. */
+    private static final class Removal {
+        final List<Coordinate> shape;
+        final int join;
+        final double saving;
+
+        Removal(List<Coordinate> shape, int join, double saving) {
+            this.shape = shape;
+            this.join = join;
+            this.saving = saving;
+        }
+    }
+
+    /** Ломаная без вершин lo..hi, см. {@link #drop}, или null — их убрать нельзя. */
+    private static Removal removal(List<Coordinate> coords, double[] at, List<SpecialSpan> spans, Coordinate keep,
+            int lo, int hi) {
+        int n = coords.size();
+        while (true) {
+            for (int v = lo; v <= hi; v++) {
+                if (coords.get(v) == keep || overlapsSpan(spans, at[v] - SPAN_EPS_M, at[v] + SPAN_EPS_M)) {
+                    return null;
                 }
-                int b = a;
-                while (b < fault[1] && !held[b + 1]) {
-                    b++;
+            }
+            // граница специальной части на отрезке перед lo и после hi
+            double from = at[lo - 1];
+            double to = at[hi + 1];
+            for (SpecialSpan span : spans) {
+                if (span.getToM() > from && span.getToM() < at[lo]) {
+                    from = span.getToM();
                 }
-                for (int[] shift : WINDOW_SHIFTS) {
-                    int from = a - shift[0];
-                    int to = b + shift[1];
-                    boolean free = from >= 1 && to <= n - 2 && from < to;
-                    for (int v = from; free && v <= to; v++) {
-                        free = !held[v];
-                    }
-                    if (free && sharpenWindow(coords, from, to, spans, ignored, apart)) {
-                        return true;
-                    }
+                if (span.getFromM() < to && span.getFromM() > at[hi]) {
+                    to = span.getFromM();
                 }
-                a = b;
+            }
+            boolean start = from > at[lo - 1] + SPAN_EPS_M;
+            boolean end = to < at[hi + 1] - SPAN_EPS_M;
+            Coordinate a = start ? toward(coords.get(lo), coords.get(lo - 1), at[lo] - from) : coords.get(lo - 1);
+            Coordinate b = end ? toward(coords.get(hi), coords.get(hi + 1), to - at[hi]) : coords.get(hi + 1);
+            // сосед с изломом меньше MIN_TURN_DEG, кроме границы и узла на ней, уходит вместе с вершинами
+            if (!start && lo >= 2 && !overlapsSpan(spans, at[lo - 1] - SPAN_EPS_M, at[lo - 1] + SPAN_EPS_M)
+                    && deflectionDeg(coords.get(lo - 2), a, b) < MIN_TURN_DEG) {
+                lo--;
+                continue;
+            }
+            if (!end && hi + 2 < n && !overlapsSpan(spans, at[hi + 1] - SPAN_EPS_M, at[hi + 1] + SPAN_EPS_M)
+                    && deflectionDeg(a, b, coords.get(hi + 2)) < MIN_TURN_DEG) {
+                hi++;
+                continue;
+            }
+            List<Coordinate> shape = new ArrayList<>(coords.subList(0, lo));
+            if (start) {
+                shape.add(a);
+            }
+            int join = shape.size() - 1;
+            if (end) {
+                shape.add(b);
+            }
+            shape.addAll(coords.subList(hi + 1, n));
+            return new Removal(shape, join, to - from - a.distance(b));
+        }
+    }
+
+    /**
+     * Новый отрезок join ломаной shape годится, см. {@link #sharpen}: он обычный (специальные части ломаной до него
+     * и после не заходят в него), а повороты на его концах не круче MAX_TURN_DEG.
+     */
+    private boolean removalFits(ObstacleSet zones, List<Coordinate> shape, int join, Set<String> ignored,
+            List<LineSegment> apart) {
+        int n = shape.size();
+        Coordinate a = shape.get(join);
+        Coordinate b = shape.get(join + 1);
+        if (a.distance(b) < CUT_PIECE_M || join >= 1 && !turnAllowed(shape.get(join - 1), a, b)
+                || join + 2 < n && !turnAllowed(a, b, shape.get(join + 2))
+                || !zones.covers(a, b) || !zones.plain(a, b, ignored, CUT_MARGIN_M)
+                || join == 0 && zones.alongIgnored(a, b, ignored)
+                || join + 2 == n && zones.alongIgnored(b, a, ignored)) {
+            return false;
+        }
+        double from = 0;
+        for (int k = 0; k < join; k++) {
+            from += shape.get(k).distance(shape.get(k + 1));
+        }
+        double to = from + a.distance(b);
+        for (SpecialSpan span : zones.spans(factory.createLineString(shape.toArray(new Coordinate[0])), ignored)) {
+            if (span.getFromM() < to - SPAN_EPS_M && span.getToM() > from + SPAN_EPS_M) {
+                return false;
+            }
+        }
+        List<LineSegment> own = new ArrayList<>(apart);
+        for (int k = 0; k + 1 < n; k++) {
+            if (Math.abs(k - join) > 1) {
+                own.add(new LineSegment(shape.get(k), shape.get(k + 1)));
+            }
+        }
+        return apart(new LineSegment(a, b), own);
+    }
+
+    /**
+     * Заменяет первую цепочку поворотов в одну сторону со звеньями короче SHORT_LINK_M, которую удаётся заменить
+     * меньшим числом поворотов, см. {@link #sharpenWindow}; у длинной цепочки, где перебор прямых ограничен, — хотя
+     * бы пару поворотов одним. Удерживаемые вершины цепочку разрывают. true — coords заменены.
+     */
+    private boolean merge(ObstacleSet zones, List<Coordinate> coords, boolean[] held, List<SpecialSpan> spans,
+            Set<String> ignored, List<LineSegment> apart) {
+        for (int[] chain : chains(coords, turns(coords), held)) {
+            int v = chain[0];
+            int w = chain[1];
+            if (sharpenWindow(zones, coords, v, w, spans, ignored, apart)) {
+                return true;
+            }
+            for (int u = v; w - v > SHARPEN_LINES && u < w; u++) {
+                if (sharpenWindow(zones, coords, u, u + 1, spans, ignored, apart)) {
+                    return true;
+                }
             }
         }
         return false;
     }
 
     /**
-     * Дуги и зигзаги ломаной как отрезки номеров вершин {от, до}, пересекающиеся слиты: дуга — ARC_TURNS и больше
-     * мелких поворотов подряд в одну сторону, зигзаг — два мелких поворота подряд в разные стороны со звеном короче
-     * ZIGZAG_M между ними.
+     * Цепочки {первая, последняя вершина} из двух и больше поворотов (от MIN_TURN_DEG) подряд в одну сторону со
+     * звеньями короче SHORT_LINK_M между ними; held — вершины, которые цепочку разрывают (null — таких нет).
      */
-    static List<int[]> shapeFaults(List<Coordinate> coords) {
+    static List<int[]> chains(List<Coordinate> coords, double[] turns, boolean[] held) {
         int n = coords.size();
-        double[] turns = new double[n];
-        for (int v = 1; v + 1 < n; v++) {
-            turns[v] = turnDeg(coords.get(v - 1), coords.get(v), coords.get(v), coords.get(v + 1));
-        }
-        List<int[]> faults = new ArrayList<>();
+        List<int[]> chains = new ArrayList<>();
         for (int v = 1; v + 1 < n; ) {
             int w = v;
-            while (w + 2 < n && small(turns[v]) && small(turns[w + 1]) && turns[w + 1] * turns[v] > 0) {
+            while (w + 2 < n && Math.abs(turns[v]) >= MIN_TURN_DEG && Math.abs(turns[w + 1]) >= MIN_TURN_DEG
+                    && turns[w + 1] * turns[v] > 0 && coords.get(w).distance(coords.get(w + 1)) < SHORT_LINK_M
+                    && (held == null || !held[v] && !held[w + 1])) {
                 w++;
             }
-            if (w - v + 1 >= ARC_TURNS) {
-                faults.add(new int[] {v, w});
+            if (w > v) {
+                chains.add(new int[] {v, w});
             }
             v = w + 1;
         }
-        for (int v = 1; v + 2 < n; v++) {
-            if (turns[v] * turns[v + 1] < 0 && small(turns[v]) && small(turns[v + 1])
-                    && coords.get(v).distance(coords.get(v + 1)) < ZIGZAG_M) {
-                faults.add(new int[] {v, v + 1});
-            }
-        }
-        faults.sort(Comparator.comparingInt(fault -> fault[0]));
-        List<int[]> merged = new ArrayList<>();
-        for (int[] fault : faults) {
-            int[] last = merged.isEmpty() ? null : merged.get(merged.size() - 1);
-            if (last != null && fault[0] <= last[1]) {
-                last[1] = Math.max(last[1], fault[1]);
-            } else {
-                merged.add(fault.clone());
-            }
-        }
-        return merged;
+        return chains;
     }
 
-    private static boolean small(double turn) {
-        return Math.abs(turn) < SMALL_TURN_DEG;
+    /** Повороты ломаной в вершинах со знаком (плюс — влево), 0 у концов; для {@link #chains}. */
+    static double[] turns(List<Coordinate> coords) {
+        double[] turns = new double[coords.size()];
+        for (int v = 1; v + 1 < coords.size(); v++) {
+            turns[v] = turnDeg(coords.get(v - 1), coords.get(v), coords.get(v), coords.get(v + 1));
+        }
+        return turns;
     }
 
     /**
-     * Выпрямление окна вершин i..j: из прямых отрезков i-1 (вход), j (выход) и части средних остаются продолжения до
-     * пересечения соседних, поворот в пересечении — сумма поворотов между ними. Один поворот — пересечение входа и
-     * выхода, два — через продолжение одной средней прямой. Сначала сравниваются по длине варианты с одним и двумя
-     * поворотами, потом с тремя и четырьмя. Вариант годится, если повороты от MIN_TURN_DEG до MAX_TURN_DEG, звенья не
-     * короче CUT_PIECE_M, у новых вершин нет дуг и зигзагов, убранные части прежних отрезков не ближе MIN_PIECE_M к
-     * специальным частям, а куски за пределами прежних отрезков лежат в области графа, обычные с запасом
-     * CUT_MARGIN_M и не ближе CUT_APART_M к apart и к своей ломаной. true — coords заменены самым коротким.
+     * Замена поворотов окна вершин i..j меньшим числом: из прямых отрезков i-1 (вход), j (выход) и части средних
+     * остаются продолжения до пересечения соседних, поворот в пересечении — сумма поворотов между ними. Один поворот —
+     * пересечение входа и выхода, два — через продолжение одной средней прямой, и так до SHARPEN_LINES средних.
+     * Варианты идут по числу поворотов, при равном — по длине. Вариант годится, если повороты от MIN_TURN_DEG до
+     * MAX_TURN_DEG, звенья не короче CUT_PIECE_M, убранные части прежних отрезков не ближе MIN_PIECE_M к специальным
+     * частям, а куски за пределами прежних отрезков лежат в области графа, обычные с запасом CUT_MARGIN_M и не ближе
+     * CUT_APART_M к apart и к своей ломаной. true — coords заменены первым годным.
      */
-    private boolean sharpenWindow(List<Coordinate> coords, int i, int j, List<SpecialSpan> spans, Set<String> ignored,
-            List<LineSegment> apart) {
+    private boolean sharpenWindow(ObstacleSet zones, List<Coordinate> coords, int i, int j, List<SpecialSpan> spans,
+            Set<String> ignored, List<LineSegment> apart) {
         for (int k = i - 1; k <= j; k++) {
             if (coords.get(k).equals2D(coords.get(k + 1))) {
                 return false;
@@ -816,13 +921,11 @@ public final class Router {
         }
         int most = Math.min(SHARPEN_LINES, j - i - 1);
         Map<List<Integer>, Boolean> pieces = new HashMap<>();
-        for (int low = 0, high = Math.min(1, most); low <= most; low = high + 1, high = low) {
+        for (int count = 0; count <= most; count++) {
             List<int[]> sets = new ArrayList<>();
-            for (int count = low; count <= high; count++) {
-                int[] kept = new int[count + 2];
-                kept[0] = i - 1;
-                keptLines(i, j, kept, 1, sets);
-            }
+            int[] lines = new int[count + 2];
+            lines[0] = i - 1;
+            keptLines(i, j, lines, 1, sets);
             List<List<Coordinate>> shapes = new ArrayList<>();
             List<int[]> shapeLines = new ArrayList<>();
             List<Double> lengths = new ArrayList<>();
@@ -841,7 +944,7 @@ public final class Router {
             }
             Arrays.sort(order, Comparator.comparingDouble(lengths::get));
             for (int k : order) {
-                if (fits(coords, shapes.get(k), i, j, shapeLines.get(k), spans, ignored, apart, pieces)) {
+                if (fits(zones, coords, shapes.get(k), i, j, shapeLines.get(k), spans, ignored, apart, pieces)) {
                     List<Coordinate> shape = shapes.get(k);
                     coords.clear();
                     coords.addAll(shape);
@@ -887,8 +990,8 @@ public final class Router {
     }
 
     /**
-     * Длина нового окна shape или NaN, если звено идёт против своей прямой, короче CUT_PIECE_M (крайнее — короче
-     * прежнего, если прежнее было короче) или у новых вершин остались дуги и зигзаги.
+     * Длина нового окна shape или NaN, если звено идёт против своей прямой или короче CUT_PIECE_M (крайнее — короче
+     * прежнего, если прежнее было короче).
      */
     private static double windowLength(List<Coordinate> coords, List<Coordinate> shape, int i, int[] kept) {
         double length = 0;
@@ -904,18 +1007,12 @@ public final class Router {
             }
             length += along;
         }
-        int last = i + kept.length - 2;
-        for (int[] fault : shapeFaults(shape)) {
-            if (fault[0] <= last && fault[1] >= i) {
-                return Double.NaN;
-            }
-        }
         return length;
     }
 
     /** Проверки окна shape, которые дороже формы: специальные части и новые куски, см. {@link #sharpenWindow}. */
-    private boolean fits(List<Coordinate> coords, List<Coordinate> shape, int i, int j, int[] kept, List<SpecialSpan> spans,
-            Set<String> ignored, List<LineSegment> apart, Map<List<Integer>, Boolean> pieces) {
+    private boolean fits(ObstacleSet zones, List<Coordinate> coords, List<Coordinate> shape, int i, int j, int[] kept,
+            List<SpecialSpan> spans, Set<String> ignored, List<LineSegment> apart, Map<List<Integer>, Boolean> pieces) {
         // убранные части прежних отрезков окна не ближе MIN_PIECE_M к специальным частям: те остаются прежними
         double at = 0;
         for (int k = 0; k + 1 < i; k++) {
@@ -957,7 +1054,7 @@ public final class Router {
             if (clear == null) {
                 clear = true;
                 for (Coordinate[] part : parts) {
-                    clear &= obstacles.covers(part[0], part[1]) && obstacles.plain(part[0], part[1], ignored, CUT_MARGIN_M)
+                    clear &= zones.covers(part[0], part[1]) && zones.plain(part[0], part[1], ignored, CUT_MARGIN_M)
                             && apart(new LineSegment(part[0], part[1]), apart == null ? List.of() : apart);
                 }
                 pieces.put(key, clear);
@@ -997,9 +1094,24 @@ public final class Router {
         return parts;
     }
 
+    /**
+     * Отрезок не ближе CUT_APART_M к others. Отрезки из общего конца (узла дерева) расходятся от него, поэтому у них
+     * зазор проверяется у дальних концов.
+     */
     private static boolean apart(LineSegment segment, List<LineSegment> others) {
         for (LineSegment other : others) {
-            if (segment.distance(other) < CUT_APART_M) {
+            Coordinate far = null;
+            Coordinate otherFar = null;
+            for (int k = 0; k < 2; k++) {
+                for (int h = 0; h < 2; h++) {
+                    if (segment.getCoordinate(k).equals2D(other.getCoordinate(h))) {
+                        far = segment.getCoordinate(1 - k);
+                        otherFar = other.getCoordinate(1 - h);
+                    }
+                }
+            }
+            if (far == null ? segment.distance(other) < CUT_APART_M
+                    : other.distance(far) < CUT_APART_M || segment.distance(otherFar) < CUT_APART_M) {
                 return false;
             }
         }
@@ -1020,16 +1132,18 @@ public final class Router {
      * d·√2 от него, а отступ меряется до самого здания. Вершина заменяется хордой между точками на соседних
      * отрезках, самой далёкой от вершины, при которой хорда допустима и не пересекает объектов специального прохода.
      * Вершина берёт не больше половины соседних отрезков, поэтому срезки не перекрываются, а подотрезки остаются не
-     * короче метра; вершины у специальных частей не трогаются: спецпроход — один прямой участок. {@code keep} —
-     * вершина, которую не трогать, или null; {@code apart} — отрезки других рёбер дерева, к которым хорда, как и к
-     * своей ломаной вне вершины, не ближе CUT_APART_M; без apart срез кэшируется по тройке вершин. true — что-то
-     * срезано, coords заменены.
+     * короче метра; вершины у специальных частей не трогаются: спецпроход — один прямой участок. Два поворота у
+     * короткой хорды {@link #sharpen} потом заменит одним, если он годится. {@code zones} — зоны Ду, по которым
+     * проверяется хорда: графа или ребра дерева; {@code keep} — вершина, которую не трогать, или null; {@code apart} —
+     * отрезки других рёбер дерева, к которым хорда, как и к своей ломаной вне вершины, не ближе CUT_APART_M; без
+     * apart срез кэшируется по тройке вершин. true — что-то срезано, coords заменены.
      */
-    public boolean cutPass(List<Coordinate> coords, Set<String> ignored, Coordinate keep, List<LineSegment> apart) {
+    public boolean cutPass(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
+            List<LineSegment> apart) {
         if (coords.size() < 3) {
             return false;
         }
-        List<SpecialSpan> spans = obstacles.spans(factory.createLineString(coords.toArray(new Coordinate[0])), ignored);
+        List<SpecialSpan> spans = zones.spans(factory.createLineString(coords.toArray(new Coordinate[0])), ignored);
         List<Coordinate> result = new ArrayList<>(List.of(coords.get(0)));
         double at = 0;
         for (int i = 1; i + 1 < coords.size(); i++) {
@@ -1047,8 +1161,8 @@ public final class Router {
                     || overlapsSpan(spans, at - before - MIN_PIECE_M, at + after + MIN_PIECE_M)) {
                 cut = 0;
             } else if (apart == null) {
-                cut = cache.computeIfAbsent(List.of(this, "cut", prev.x, prev.y, cur.x, cur.y, next.x, next.y, ignored),
-                        8, () -> longestCut(prev, cur, next, least, room, ignored, List.of()));
+                cut = cache.computeIfAbsent(List.of(zones, "cut", prev.x, prev.y, cur.x, cur.y, next.x, next.y, ignored),
+                        8, () -> longestCut(zones, prev, cur, next, least, room, ignored, List.of()));
             } else {
                 List<LineSegment> near = new ArrayList<>(apart);
                 for (int k = 0; k + 1 < coords.size(); k++) {
@@ -1056,7 +1170,7 @@ public final class Router {
                         near.add(new LineSegment(coords.get(k), coords.get(k + 1)));
                     }
                 }
-                cut = longestCut(prev, cur, next, least, room, ignored, near);
+                cut = longestCut(zones, prev, cur, next, least, room, ignored, near);
             }
             if (cut > 0) {
                 result.add(toward(cur, prev, cut));
@@ -1075,19 +1189,19 @@ public final class Router {
     }
 
     /** Наибольший срез от least до room, при котором хорда годится; 0 — даже least не годится. */
-    private double longestCut(Coordinate prev, Coordinate cur, Coordinate next, double least, double room, Set<String> ignored,
-            List<LineSegment> apart) {
-        if (chord(cur, prev, next, room, ignored, apart)) {
+    private double longestCut(ObstacleSet zones, Coordinate prev, Coordinate cur, Coordinate next, double least,
+            double room, Set<String> ignored, List<LineSegment> apart) {
+        if (chord(zones, cur, prev, next, room, ignored, apart)) {
             return room;
         }
-        if (!chord(cur, prev, next, least, ignored, apart)) {
+        if (!chord(zones, cur, prev, next, least, ignored, apart)) {
             return 0.0;
         }
         double low = least;
         double high = room;
         for (int k = 0; k < CUT_STEPS; k++) {
             double mid = (low + high) / 2;
-            if (chord(cur, prev, next, mid, ignored, apart)) {
+            if (chord(zones, cur, prev, next, mid, ignored, apart)) {
                 low = mid;
             } else {
                 high = mid;
@@ -1100,10 +1214,11 @@ public final class Router {
      * Хорда среза cut у вершины cur обычная (без спецпрохода), держит отступы с запасом CUT_MARGIN_M и не ближе
      * CUT_APART_M к отрезкам apart.
      */
-    private boolean chord(Coordinate cur, Coordinate prev, Coordinate next, double cut, Set<String> ignored, List<LineSegment> apart) {
+    private boolean chord(ObstacleSet zones, Coordinate cur, Coordinate prev, Coordinate next, double cut,
+            Set<String> ignored, List<LineSegment> apart) {
         Coordinate a = toward(cur, prev, cut);
         Coordinate b = toward(cur, next, cut);
-        if (!obstacles.plain(a, b, ignored, CUT_MARGIN_M)) {
+        if (!zones.plain(a, b, ignored, CUT_MARGIN_M)) {
             return false;
         }
         LineSegment chord = new LineSegment(a, b);

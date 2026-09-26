@@ -57,7 +57,7 @@ final class TreeBuilder {
     /** Сколько точек границы пробуется как начало финального участка: ближайшая, затем ближайшие точки сторон. */
     private static final int PORTAL_TRIES = 8;
     /** Проходы срезки углов рёбер, см. {@link #cut}. */
-    private static final int CUT_PASSES = 2;
+    static final int CUT_PASSES = 2;
 
     private final int nodeLimit;
     private final Map<String, LineString> networkById;
@@ -119,9 +119,9 @@ final class TreeBuilder {
 
     private static final Exit NO_EXIT = new Exit(null, null, Integer.MAX_VALUE);
 
-    /** Ду участка у точки подключения и графы других Ду той же области, см. {@link Run#portal}. */
+    /** Ду по расходу точек подключения и графы других Ду той же области, см. {@link Run#portal} и {@link #cut}. */
     interface Graphs {
-        int leafDn(ConnectionPoint connection);
+        int dn(List<ConnectionPoint> connections);
 
         ObstacleSet obstacles(int dn);
 
@@ -294,7 +294,7 @@ final class TreeBuilder {
                 if (graphs == null || wide.anchor == 1) {
                     return wide;
                 }
-                int leaf = graphs.leafDn(connection);
+                int leaf = graphs.dn(List.of(connection));
                 if (leaf >= dn) {
                     return wide;
                 }
@@ -782,19 +782,19 @@ final class TreeBuilder {
     }
 
     /**
-     * Дерево с углами рёбер, срезанными хордами ({@link Router#cutPass}), и выпрямленными дугами и зигзагами
-     * ({@link Router#sharpen}): новые куски не ближе CUT_APART_M к другим рёбрам, точка выхода из здания остаётся на
-     * месте — финальный участок идёт от ближайшей границы. Узлы и топология дерева прежние; без изменений
-     * возвращается то же дерево.
+     * Дерево с углами рёбер, срезанными хордами ({@link Router#cutPass}) в passes проходов (0 — без срезки), и
+     * доведённой формой ({@link Router#sharpen}): новые куски не ближе CUT_APART_M к другим рёбрам, точка выхода из
+     * здания остаётся на месте — финальный участок идёт от ближайшей границы. Ребро проверяется по зонам Ду расхода
+     * точек ниже него, если этот Ду меньше Ду графа dn: проверка сдаваемых участков меряет отступы по Ду участка, и
+     * лишняя по ней вершина не должна остаться из-за зон ствола. Такое дерево помечается narrow, и сборка проверяет
+     * его отступы по Ду участков; graphs null — все рёбра по зонам графа. Узлы и топология дерева прежние; без
+     * изменений возвращается то же дерево.
      */
-    Tree cut(Tree tree, Router router) {
-        return cut(tree, router, CUT_PASSES);
-    }
-
-    /** То же с числом проходов срезки passes; 0 — только выпрямление дуг и зигзагов. */
-    Tree cut(Tree tree, Router router, int passes) {
+    Tree cut(Tree tree, Router router, int dn, Graphs graphs, int passes) {
         Tree result = new Tree(tree.tie);
         result.unconnected.addAll(tree.unconnected);
+        result.narrow = tree.narrow;
+        Map<Tree.Node, List<ConnectionPoint>> below = new IdentityHashMap<>();
         boolean changed = false;
         // рёбра, уже срезанные на этом дереве, сравниваются в новом виде: выпрямление дуги уводит ребро наружу
         List<LineString> lines = new ArrayList<>();
@@ -813,10 +813,16 @@ final class TreeBuilder {
             List<Coordinate> coords = new ArrayList<>(Arrays.asList(edge.line.getCoordinates()));
             Coordinate exit = edge.to.kind == Tree.Kind.CONNECTION && buildingByConnection.containsKey(edge.to.connection.getId())
                     && coords.size() > 2 ? coords.get(coords.size() - 2) : null;
-            for (int pass = 0; pass < passes && router.cutPass(coords, tree.tie.getIgnored(), exit, others); pass++) {
-                changed = true;
+            int edgeDn = graphs == null ? dn : graphs.dn(below(tree, edge.to, below));
+            ObstacleSet zones = edgeDn < dn ? graphs.obstacles(edgeDn) : router.obstacles();
+            boolean edgeChanged = false;
+            Set<String> ignored = tree.tie.getIgnored();
+            for (int pass = 0; pass < passes && router.cutPass(zones, coords, ignored, exit, others); pass++) {
+                edgeChanged = true;
             }
-            changed |= router.sharpen(coords, tree.tie.getIgnored(), exit, others);
+            edgeChanged |= router.sharpen(zones, coords, ignored, exit, others);
+            result.narrow |= edgeChanged && edgeDn < dn;
+            changed |= edgeChanged;
             lines.set(e, factory.createLineString(coords.toArray(new Coordinate[0])));
             // у нового дерева свой узел врезки: ребро от прежнего degree(root) не считает, и ёмкость общей камеры
             // врезки (VariantEnumerator#compatible) не проверялась бы
@@ -824,6 +830,25 @@ final class TreeBuilder {
             result.edges.add(new Tree.Edge(from, edge.to, lines.get(e)));
         }
         return changed ? result : tree;
+    }
+
+    /** Точки подключения в поддереве узла node, по узлам в memo. */
+    private static List<ConnectionPoint> below(Tree tree, Tree.Node node, Map<Tree.Node, List<ConnectionPoint>> memo) {
+        List<ConnectionPoint> known = memo.get(node);
+        if (known != null) {
+            return known;
+        }
+        List<ConnectionPoint> result = new ArrayList<>();
+        if (node.kind == Tree.Kind.CONNECTION) {
+            result.add(node.connection);
+        }
+        for (Tree.Edge edge : tree.edges) {
+            if (edge.from == node) {
+                result.addAll(below(tree, edge.to, memo));
+            }
+        }
+        memo.put(node, result);
+        return result;
     }
 
     /** Часть полилинии; конец у камеры ветвления ставится ровно в её точку. */

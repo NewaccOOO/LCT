@@ -157,7 +157,7 @@ class TreeBuilderTest {
         TreeBuilder builder = builder(input, finder, VariantEnumerator.buildings(input));
         TreeBuilder.Graphs graphs = new TreeBuilder.Graphs() {
             @Override
-            public int leafDn(ConnectionPoint connection) {
+            public int dn(List<ConnectionPoint> connections) {
                 return rules.diameterFor(5).getDn();
             }
 
@@ -192,7 +192,7 @@ class TreeBuilderTest {
 
     @Test
     void cutTreeKeepsEdgeFromTieInRoot() {
-        // ствол с прямым углом вдали от препятствий: срезка заменяет угол хордой, ребро должно остаться у узла врезки
+        // ствол с прямым углом вдали от препятствий: срезка и форма спрямляют угол, ребро должно остаться у узла врезки
         PlanFixture fixture = PlanFixture.trunk().oks("o-1", 300, 60, 5);
         InputData input = fixture.input();
         TieInFinder finder = new TieInFinder(input, rules);
@@ -202,9 +202,10 @@ class TreeBuilderTest {
         tree.edges.add(new Tree.Edge(tree.root, Tree.Node.connection(fixture.connection("o-1")), PlanFixture.GEOMETRY.createLineString(
                 new Coordinate[] {tie.getPoint().getCoordinate(), new Coordinate(200, 60), new Coordinate(300, 60)})));
 
-        Tree cut = builder(input, finder).cut(tree, new Router(input, rules, AREA, DN));
+        Tree cut = builder(input, finder).cut(tree, new Router(input, rules, AREA, DN), DN, null, TreeBuilder.CUT_PASSES);
 
-        assertTrue(cut != tree && cut.edges.get(0).line.getNumPoints() > 3, "угол срезан: " + cut.edges.get(0).line);
+        assertTrue(cut != tree && cut.edges.get(0).line.getLength() < tree.edges.get(0).line.getLength() - 1,
+                "угол спрямлён: " + cut.edges.get(0).line);
         assertEquals(1, cut.degree(cut.root), "ребро от узла врезки срезанного дерева");
     }
 
