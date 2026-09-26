@@ -2489,8 +2489,8 @@ public final class VariantEnumerator {
                 }
                 Map<Tree.Edge, Double> priceRub = new IdentityHashMap<>();
                 dnByEdge.forEach((edge, dn) -> priceRub.put(edge, rules.diameter(dn).getNewRubM() + rules.lengthWorthRub()));
-                // у дерева без камер ветвления S нужна, только если врезку есть куда сдвинуть
-                double before = JunctionMover.junctions(tree).isEmpty() ? Double.NaN : unitScore(unit);
+                // S узла собирается, только когда есть сдвиг, который проходит проверки: у большинства деревьев его нет
+                double before = Double.NaN;
                 for (TreeBuilder.Slide slide : builder.unkinks(tree, edge -> region.obstacles(dnByEdge.get(edge), area),
                         dnByEdge, priceRub, 0)) {
                     if (!tried.add(List.of(slide.junction.point.x, slide.junction.point.y, slide.point.x, slide.point.y))) {
@@ -2506,6 +2506,7 @@ public final class VariantEnumerator {
                     for (Tree other : unit) {
                         attempt.add(other == tree ? changed : other);
                     }
+                    before = Double.isNaN(before) ? unitScore(unit) : before;
                     if (!(unitScore(attempt) <= before + UNKINK_EPS) || thicker(tree, unit, changed, attempt)) {
                         continue;
                     }
@@ -2534,11 +2535,13 @@ public final class VariantEnumerator {
 
     /**
      * Деревья варианта без поворотов круче MAX_TURN_DEG в камерах ветвления на пути точки к врезке (п. 2.1, разъяснение
-     * 5), которые снимает сдвиг камеры вдоль первого звена одного из её рёбер ({@link TreeBuilder#turnSlides}). Поиск
-     * таких поворотов не проверяет, проход правит готовые варианты. Рёбра камеры доводятся до строгой формы, где
-     * убранная вершина не делает поворот в камере круче ({@link #sharpened}). Сдвиг берётся, если таких поворотов в
-     * дереве стало меньше, S узла врезки вырос не больше TURN_TOLERANCE_S, Ду рёбер не выросли, а дерево не касается
-     * других; дальше повороты ищутся на новом дереве. Места, которые проход не снял, пишутся в лог.
+     * 5), которые снимает правка у камеры: сдвиг камеры вдоль первого звена одного из её рёбер
+     * ({@link TreeBuilder#turnSlides}) или излом звена ребра у камеры ({@link TreeBuilder#bends}); правки пробуются по
+     * возрастанию цены рёбер. Поиск таких поворотов не проверяет, проход правит готовые варианты. Рёбра камеры
+     * доводятся до строгой формы, где убранная вершина не делает поворот в камере круче ({@link #sharpened}). Правка
+     * берётся, если таких поворотов в дереве стало меньше, S узла врезки вырос не больше TURN_TOLERANCE_S, Ду рёбер не
+     * выросли, а дерево не касается других; дальше повороты ищутся на новом дереве. Места, которые проход не снял,
+     * пишутся в лог.
      */
     private List<Tree> turned(List<Tree> trees) {
         long started = System.nanoTime();
