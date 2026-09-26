@@ -210,6 +210,19 @@ final class NetworkAssembler {
         return new Build(variantId, rank, trees, unconnected, counters).run();
     }
 
+    /** Ду каждого ребра деревьев, как его назначит сборка: по расходу и предельной длине (п. 2.3). */
+    Map<Tree.Edge, Integer> diameters(List<Tree> trees) {
+        Build build = new Build("0", 0, trees, List.of(), new Counters());
+        for (String root : build.units.keySet()) {
+            build.plan(root);
+        }
+        Map<Tree.Edge, Integer> result = new java.util.IdentityHashMap<>();
+        for (Edge edge : build.edges) {
+            result.put(edge.source, build.dnByEdge.get(edge.id));
+        }
+        return result;
+    }
+
     /** Сводка по частям варианта, собранным отдельно с общими счётчиками. */
     VariantSummary summary(String variantId, int rank, List<NewSegment> segments, List<NewChamber> chambers,
             int existingTieIns, List<FutureOks> unconnected) {

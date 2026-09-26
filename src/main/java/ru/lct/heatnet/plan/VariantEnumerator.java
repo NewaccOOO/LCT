@@ -84,6 +84,8 @@ public final class VariantEnumerator {
     private static final int MAX_VARIANTS = 3;
     /** Деревья кандидатов врезки считаются параллельно (heatnet.search.parallel); false — в одну нить, тот же выход. */
     private static final boolean PARALLEL = Boolean.parseBoolean(System.getProperty("heatnet.search.parallel", "true"));
+    /** Рёбра выбранных вариантов прокладываются заново по графу своего Ду (heatnet.search.reroute), см. rerouted. */
+    private static final boolean REROUTE = Boolean.parseBoolean(System.getProperty("heatnet.search.reroute", "true"));
     /**
      * В районе города граф строится в коридоре (heatnet.city.corridor) — объединении полос вдоль прямых от точек
      * к кандидатам врезки шириной CORRIDOR_SHARE их длины, но не уже CITY_MARGIN_M с каждой стороны: у дальних
@@ -426,7 +428,17 @@ public final class VariantEnumerator {
         List<Variant> variants = new ArrayList<>();
         for (int i = 0; i < picked.size(); i++) {
             Draft draft = picked.get(i);
-            variants.add(assembler.assemble(String.valueOf(i + 1), i + 1, draft.trees, draft.unconnected));
+            Variant variant = null;
+            if (REROUTE) {
+                try {
+                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, rerouted(draft), draft.unconnected);
+                } catch (IllegalStateException | IllegalArgumentException e) {
+                    // узлы врезки собирались по отдельности, а вместе нет: вариант как найден поиском
+                    log.info("rerouted: вариант {} не собран: {}", i + 1, e.getMessage());
+                }
+            }
+            variants.add(variant != null ? variant
+                    : assembler.assemble(String.valueOf(i + 1), i + 1, draft.trees, draft.unconnected));
         }
         return new Result(variants, input.getNumericIds());
     }
@@ -1557,6 +1569,172 @@ public final class VariantEnumerator {
             }
         }
         return true;
+    }
+
+    /**
+     * Рёбра деревьев варианта, проложенные заново по графу фактического Ду ребра между теми же узлами: граф блока
+     * строится по Ду ствола со ступенью запаса, и тонкая ветка обходит здания с отступом толстой трубы. Выход из
+     * здания ставится по тому же Ду, ближе к стене. Рёбра дерева заменяются все сразу, а если так его узел врезки
+     * не собирается, по одному. Замена принимается, если S узла ниже, дерево не ближе TREES_APART_M к другим, а Ду
+     * рёбер не выше прежних: маршрут держит отступы графа, по которому проложен.
+     */
+    private List<Tree> rerouted(Draft draft) {
+        long started = System.nanoTime();
+        List<Tree> result = new ArrayList<>(draft.trees);
+        Map<Tree.Edge, Integer> dnByEdge = assembler.diameters(result);
+        List<int[]> edges = new ArrayList<>();
+        for (int t = 0; t < result.size(); t++) {
+            for (int e = 0; e < result.get(t).edges.size(); e++) {
+                edges.add(new int[] {t, e});
+            }
+        }
+        // рёбра независимы, графы только читаются; новые графы и зоны здесь не строятся
+        java.util.stream.Stream<int[]> stream = PARALLEL ? edges.parallelStream() : edges.stream();
+        List<LineString> lines = stream.map(at -> {
+            Tree tree = draft.trees.get(at[0]);
+            Tree.Edge edge = tree.edges.get(at[1]);
+            return rerouted(tree, edge, dnByEdge.get(edge));
+        }).collect(Collectors.toList());
+        Map<String, Double> scoreByRoot = new HashMap<>();
+        int taken = 0;
+        for (int t = 0, k = 0; t < result.size(); k += result.get(t).edges.size(), t++) {
+            Map<Integer, LineString> fresh = new LinkedHashMap<>();
+            for (int e = 0; e < result.get(t).edges.size(); e++) {
+                if (lines.get(k + e) != null) {
+                    fresh.put(e, lines.get(k + e));
+                }
+            }
+            List<Map<Integer, LineString>> changes = new ArrayList<>(fresh.isEmpty() ? List.of() : List.of(fresh));
+            for (int e : fresh.size() > 1 ? fresh.keySet() : Set.<Integer>of()) {
+                changes.add(Map.of(e, fresh.get(e)));
+            }
+            for (Map<Integer, LineString> change : changes) {
+                Tree tree = result.get(t);
+                Tree changed = replaced(tree, change);
+                if (!apart(change.values(), result, tree)) {
+                    continue;
+                }
+                // деревья других узлов врезки на S и Ду узла не влияют
+                List<Tree> unit = new ArrayList<>();
+                List<Tree> attempt = new ArrayList<>();
+                for (Tree other : result) {
+                    if (other.root.key.equals(tree.root.key)) {
+                        unit.add(other);
+                        attempt.add(other == tree ? changed : other);
+                    }
+                }
+                double before = scoreByRoot.computeIfAbsent(tree.root.key, key -> unitScore(unit));
+                double after = unitScore(attempt);
+                if (!(after < before - IMPROVE_EPS) || thicker(tree, unit, changed, attempt)) {
+                    continue;
+                }
+                scoreByRoot.put(tree.root.key, after);
+                result.set(t, changed);
+                taken += change.size();
+                if (change == fresh) {
+                    break;
+                }
+            }
+        }
+        log.info("rerouted: edges={} elapsed={}ms", taken, (System.nanoTime() - started) / 1_000_000);
+        return result;
+    }
+
+    /** Новые рёбра дерева tree не ближе TREES_APART_M к другим деревьям варианта. */
+    private static boolean apart(java.util.Collection<LineString> lines, List<Tree> trees, Tree tree) {
+        for (LineString line : lines) {
+            for (Tree other : trees) {
+                // рамки дальше порога — геометрии тем более
+                if (other != tree && near(line.getEnvelopeInternal(), other.envelope())
+                        && geometry(other).distance(line) <= TREES_APART_M) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /** S узла врезки из деревьев {@code unit} без штрафа; NaN — узел не собирается. */
+    private double unitScore(List<Tree> unit) {
+        try {
+            VariantSummary summary = assembler.assemble("0", 0, unit, List.of()).getSummary();
+            return rules.score(summary.getCalculatedCost(), summary.getNewNetworkLength());
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            log.debug("rerouted: {} не собрано: {}", unit.get(0).root.key, e.getMessage());
+            return Double.NaN;
+        }
+    }
+
+    /** Ду какого-то ребра дерева {@code changed} в узле {@code after} выше, чем у {@code tree} в узле {@code before}. */
+    private boolean thicker(Tree tree, List<Tree> before, Tree changed, List<Tree> after) {
+        Map<Tree.Edge, Integer> dnBefore = assembler.diameters(before);
+        Map<Tree.Edge, Integer> dnAfter = assembler.diameters(after);
+        for (int e = 0; e < tree.edges.size(); e++) {
+            if (dnAfter.get(changed.edges.get(e)) > dnBefore.get(tree.edges.get(e))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Ребро по графу своего Ду {@code dn} или ближайшего большего из уже построенных для области дерева: новый граф
+     * ради одного ребра не строится. null — такого графа нет, прямое ребро, маршрут не легче прежнего или от врезки
+     * идёт вдоль её трубы.
+     */
+    private LineString rerouted(Tree tree, Tree.Edge edge, int dn) {
+        Coordinate[] old = edge.line.getCoordinates();
+        Region region = regionByConnection.get(tree.connected().get(0).getId());
+        Envelope area = region.area.contains(tree.envelope()) ? region.area : region.wideArea;
+        if (old.length == 2 || !area.contains(tree.envelope())) {
+            // прямое ребро короче любого маршрута, а графов вне области нет
+            return null;
+        }
+        Router router = null;
+        for (Diameter graph = rules.diameter(dn); router == null && graph != null;
+                graph = rules.nextDiameter(graph.getDn())) {
+            router = region.routers.get(graph.getDn() + "@" + area);
+        }
+        if (router == null) {
+            return null;
+        }
+        Set<String> ignored = tree.tie.getIgnored();
+        boolean portal = edge.to.kind == Tree.Kind.CONNECTION
+                && buildingByConnection.containsKey(edge.to.connection.getId());
+        double before = ObstacleSet.weight(edge.line.getLength(), router.obstacles().spans(edge.line, ignored));
+        Coordinate end = portal ? old[old.length - 2] : old[old.length - 1];
+        Coordinate closer = portal ? builder.exit(router, dn, area, tree.tie, edge.to.connection) : null;
+        for (Coordinate exit : closer == null || closer.equals2D(end) ? List.of(end) : List.of(closer, end)) {
+            Route route = router.routeToAny(factory.createPoint(old[0]), List.of(factory.createPoint(exit)), ignored,
+                    true);
+            double tail = portal ? exit.distance(old[old.length - 1]) : 0;
+            if (route == null || route.getWeight() + tail >= before - IMPROVE_EPS) {
+                continue;
+            }
+            Coordinate[] path = route.getGeometry().getCoordinates();
+            Coordinate[] line = portal ? java.util.Arrays.copyOf(path, path.length + 1) : path;
+            line[0] = old[0];
+            line[path.length - 1] = exit;
+            line[line.length - 1] = old[old.length - 1];
+            if (edge.from == tree.root && !builder.leavesNetwork(new LineSegment(line[1], line[0]), ignored)) {
+                continue;
+            }
+            return factory.createLineString(line);
+        }
+        return null;
+    }
+
+    /** Дерево с рёбрами, заменёнными по номеру; остальные рёбра те же. */
+    private static Tree replaced(Tree tree, Map<Integer, LineString> lines) {
+        Tree result = new Tree(tree.tie);
+        result.unconnected.addAll(tree.unconnected);
+        for (int e = 0; e < tree.edges.size(); e++) {
+            Tree.Edge edge = tree.edges.get(e);
+            Tree.Node from = edge.from == tree.root ? result.root : edge.from;
+            LineString line = lines.getOrDefault(e, edge.line);
+            result.edges.add(from == edge.from && line == edge.line ? edge : new Tree.Edge(from, edge.to, line));
+        }
+        return result;
     }
 
     /**
