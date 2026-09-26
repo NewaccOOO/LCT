@@ -139,6 +139,19 @@ class RouterTest {
     }
 
     @Test
+    void looseFindsZigzagVertexThatSharpenKeeps() {
+        // зигзаг +4° и −5° на 1,2 м над углом парка: без одной вершины излом другой меньше 3°, без обеих прямая ближе
+        // отступа к парку — форма его не убирает, а проверщик считает вершину лишней
+        Router router = router(List.of(new Restriction("park-1", rect(-5, -50, 0, 0), "park")), List.of());
+        double a = rules.restriction("park").clearanceM(DN) + halfWidth + 0.4;
+        List<Coordinate> zigzag = new ArrayList<>(List.of(new Coordinate(-40, a + 39.4 * Math.tan(Math.toRadians(4))),
+                new Coordinate(-0.6, a), new Coordinate(0.6, a), new Coordinate(40, a - 39.4 * Math.tan(Math.toRadians(5)))));
+
+        assertFalse(router.sharpen(router.obstacles(), zigzag, Set.of(), null, null), zigzag.toString());
+        assertTrue(router.loose(router.obstacles(), zigzag, Set.of(), null, null));
+    }
+
+    @Test
     void routeAroundThinWallTurnsNoSteeperThanNinetyDegrees() {
         // тонкая стена между точкой и целью: обход её конца без ограничения дал бы разворот почти на 180°
         Geometry wall = rect(-1, -60, 1, 60);

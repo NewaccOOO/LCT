@@ -710,6 +710,31 @@ public final class Router {
         return changed;
     }
 
+    /**
+     * Есть вершина, которую {@link #sharpen} оставил, хотя без неё одной соседей можно соединить прямой по тем же
+     * проверкам: тогда излом соседа меньше MIN_TURN_DEG, а без соседа прямая уже не проходит. Проверщик формы
+     * считает такую вершину лишней. Аргументы — как у {@link #sharpen}; вершина keep и вершины в специальных частях
+     * не проверяются.
+     */
+    public boolean loose(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
+            List<LineSegment> apart) {
+        List<LineSegment> others = apart == null ? List.of() : apart;
+        List<SpecialSpan> spans = zones.spans(factory.createLineString(coords.toArray(new Coordinate[0])), ignored);
+        double at = 0;
+        for (int v = 1; v + 1 < coords.size(); v++) {
+            at += coords.get(v - 1).distance(coords.get(v));
+            if (coords.get(v) == keep || overlapsSpan(spans, at - SPAN_EPS_M, at + SPAN_EPS_M)) {
+                continue;
+            }
+            List<Coordinate> shape = new ArrayList<>(coords);
+            shape.remove(v);
+            if (removalFits(zones, shape, v - 1, ignored, others)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Вершины, которые замена поворотов не двигает: keep и вершины ближе MIN_PIECE_M к специальным частям. */
     private static boolean[] held(List<Coordinate> coords, Coordinate keep, List<SpecialSpan> spans) {
         boolean[] held = new boolean[coords.size()];

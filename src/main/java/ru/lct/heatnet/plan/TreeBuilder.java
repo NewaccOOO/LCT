@@ -212,6 +212,38 @@ final class TreeBuilder {
                 key -> leavesOnce(building.getGeometry(), cp, exit));
     }
 
+    /**
+     * Точка выхода финального прямого участка из здания точки по зонам графа {@code router}, как у ветки дерева
+     * врезки {@code tie} в области {@code area}, см. {@link Run#exit}; null — точка не в здании или выхода нет.
+     */
+    Coordinate exit(Router router, int dn, Envelope area, TieCandidate tie, ConnectionPoint connection) {
+        ExistingOks building = buildingByConnection.get(connection.getId());
+        if (building == null) {
+            return null;
+        }
+        Exit exit = new Run(router, dn, area, tie, 0, 0).exit(connection, building, router.obstacles(), router);
+        return exit == NO_EXIT ? null : exit.point;
+    }
+
+    /**
+     * Отрезок tail, который кончается во врезке, не идёт вдоль участков {@code ignored}, которых врезка касается:
+     * дальше 0,5 м от неё он их не пересекает.
+     */
+    boolean leavesNetwork(LineSegment tail, Set<String> ignored) {
+        double skip = TieInFinder.TOUCH_M / tail.getLength();
+        if (skip >= 1) {
+            return false;
+        }
+        LineString away = factory.createLineString(new Coordinate[] {tail.p0, tail.pointAlong(1 - skip)});
+        for (String id : ignored) {
+            LineString network = networkById.get(id);
+            if (network != null && network.intersects(away)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     static boolean leavesOnce(Geometry building, Coordinate cp, Coordinate exit) {
         Geometry inside = building.intersection(GEOMETRY.createLineString(new Coordinate[] {cp, exit}));
         int pieces = 0;
@@ -780,20 +812,8 @@ final class TreeBuilder {
             return spot.node != tree.root || leavesNetwork(tail);
         }
 
-        /** Отрезок от врезки не идёт вдоль участков, которых врезка касается: дальше 0,5 м он их не пересекает. */
         boolean leavesNetwork(LineSegment tail) {
-            double skip = TieInFinder.TOUCH_M / tail.getLength();
-            if (skip >= 1) {
-                return false;
-            }
-            LineString away = factory.createLineString(new Coordinate[] {tail.p0, tail.pointAlong(1 - skip)});
-            for (String id : ignored) {
-                LineString network = networkById.get(id);
-                if (network != null && network.intersects(away)) {
-                    return false;
-                }
-            }
-            return true;
+            return TreeBuilder.this.leavesNetwork(tail, ignored);
         }
 
         void apply(Attach attach) {
