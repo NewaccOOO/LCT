@@ -64,9 +64,9 @@ final class TreeBuilder {
      * Звено после выхода из здания, см. {@link #exitLink}: поворот в точке выхода и длины звена по порядку попыток;
      * heatnet.exitLink=false — без звена, выход как в v0.8.1.
      */
-    private static final boolean EXIT_LINK = Boolean.parseBoolean(System.getProperty("heatnet.exitLink", "true"));
+    static final boolean EXIT_LINK = Boolean.parseBoolean(System.getProperty("heatnet.exitLink", "true"));
     private static final double EXIT_LINK_DEG = 80;
-    private static final double[] EXIT_LINK_M = {1.5, 3, 6};
+    static final double[] EXIT_LINK_M = {1.5, 3, 6};
 
     private final int nodeLimit;
     private final Map<String, LineString> networkById;

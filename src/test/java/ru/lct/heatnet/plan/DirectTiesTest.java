@@ -43,4 +43,44 @@ class DirectTiesTest {
         assertEquals(300.5, tree.root.point.x, 1e-6);
         assertEquals(0, tree.root.point.y, 1e-6);
     }
+
+    @Test
+    void pointDoesNotLeaveThroughFarSideWhenNearSideIsOpen() {
+        // точка в метре от верхней стороны здания, сеть снизу: от ближней стороны к трубе поворот круче 90°, а звено
+        // после выхода задевает своё здание; через дальнюю нижнюю сторону прямой участок нарушил бы п. 2.2
+        PlanFixture fixture = PlanFixture.trunk().oks("1", 300, 59, 10);
+        Geometry building = PlanFixture.rect(290, 20, 310, 60);
+        fixture.existing.add(new ExistingOks("b-1", building));
+        InputData input = fixture.input();
+        ConnectionPoint connection = fixture.connection("1");
+        Map<String, FutureOks> oksById = Map.of("1", fixture.oks.get(0));
+        List<ConnectionPoint> rest = new ArrayList<>();
+
+        direct(input, oksById, Map.of(connection.getId(), new ExistingOks("b-1", building)))
+                .connect(List.of(connection), oksById, 1, rest);
+
+        assertEquals(List.of(connection), rest);
+    }
+
+    @Test
+    void secondPointDoesNotReuseLineOfFirst() {
+        // обе точки над одной точкой трубы: участок второй лёг бы на участок первой из той же камеры (п. 5)
+        PlanFixture fixture = PlanFixture.trunk().oks("1", 300, 30, 10).oks("2", 300, 60, 10);
+        InputData input = fixture.input();
+        Map<String, FutureOks> oksById = Map.of("1", fixture.oks.get(0), "2", fixture.oks.get(1));
+        List<ConnectionPoint> rest = new ArrayList<>();
+
+        List<Tree> trees = direct(input, oksById, Map.of())
+                .connect(List.of(fixture.connection("1"), fixture.connection("2")), oksById, 1, rest).get(0);
+
+        assertTrue(rest.isEmpty(), "точка осталась без прямого подключения");
+        assertEquals(2, trees.size());
+        assertTrue(trees.get(0).geometry().distance(trees.get(1).geometry()) > VariantEnumerator.TREES_APART_M,
+                "участки двух точек касаются");
+    }
+
+    private DirectTies direct(InputData input, Map<String, FutureOks> oksById, Map<String, ExistingOks> buildings) {
+        return new DirectTies(input, rules, new ObstacleIndex(input, rules), new TieInFinder(input, rules), buildings,
+                new NetworkAssembler(input, rules, new SpecialObjects(input, rules), oksById));
+    }
 }

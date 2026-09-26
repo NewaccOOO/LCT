@@ -76,11 +76,11 @@ public final class VariantEnumerator {
     private static final double SAME_ROUTE_M = 1.0;
     /** Дерево ОКС идёт в обход, если оно длиннее прямой до ближайшего кандидата врезки больше чем во столько раз. */
     private static final double DETOUR_RATIO = 1.1;
-    private static final double TREES_APART_M = 0.5;
+    static final double TREES_APART_M = 0.5;
     /** Сдвиг врезки к стволу берётся, если ствол короче хотя бы на столько, см. slid. */
     private static final double SLIDE_MIN_M = 1.0;
-    private static final double SHARED_ROOT_CLIP_M = 0.15;
-    private static final double SHARED_ROOT_APART_M = 0.01;
+    static final double SHARED_ROOT_CLIP_M = 0.15;
+    static final double SHARED_ROOT_APART_M = 0.01;
     private static final int MAX_VARIANTS = 3;
     /** Сдвиги врезки вдоль трубы от проекции камеры ветвления, м, см. {@link #absorbed}. */
     private static final double[] ABSORB_SHIFTS_M = {0, -2, 2, -4, 4, -8, 8, -16, 16};
@@ -198,6 +198,12 @@ public final class VariantEnumerator {
     private final RouteCache routeCache;
     /** Расчёт одного района города: кандидаты врезки только в радиусе CITY_REACH_M. */
     private final boolean district;
+    /**
+     * Прямые подключения города для района парами «номер набора → дерево» (null вне районов): дерево района не
+     * касается их и не переполняет их камеры, см. {@link #compatible}. Иначе сборка отбросила бы такое дерево района
+     * вместе с его точками.
+     */
+    private STRtree direct;
     private final SpecialObjects specials;
     /** Полигон ОКС, в котором лежит точка подключения, по id точки. */
     private final Map<String, ExistingOks> buildingByConnection;
@@ -556,18 +562,26 @@ public final class VariantEnumerator {
             }
         }
         List<List<ConnectionPoint>> districts = districts(near);
+        // деревья обоих наборов прямых подключений: черновик района идёт во все варианты
+        STRtree directIndex = new STRtree();
+        for (int k = 0; k < directTrees.size(); k++) {
+            for (Tree tree : directTrees.get(k)) {
+                directIndex.insert(tree.envelope(), Map.entry(k, tree));
+            }
+        }
+        directIndex.build();
         // ближние к сети районы первыми: их графы меньше, и до срока успевает больше точек
         districts.sort(Comparator.comparingDouble(district -> district.stream()
                 .mapToDouble(connection -> toNetwork.get(connection.getId())).min().orElse(0)));
         log.info("city: oks={} direct={} beyond {} m: {} districts={} elapsed={}s", all.size(), all.size() - rest.size(),
                 reach, rest.size() - near.size(), districts.size(), (System.nanoTime() - started) / 1_000_000_000L);
         List<List<Draft>> results = districts.isEmpty() ? List.of()
-                : solve(districts, started + CITY_DEADLINE_S * 1_000_000_000L);
+                : solve(districts, directIndex, started + CITY_DEADLINE_S * 1_000_000_000L);
         int most = Math.max(directTrees.size(), results.stream().mapToInt(List::size).max().orElse(0));
         List<Variant> variants = new ArrayList<>();
         for (int k = 0; k < Math.min(MAX_VARIANTS, Math.max(most, 1)); k++) {
             List<Tree> trees = new ArrayList<>(directTrees.get(Math.min(k, directTrees.size() - 1)));
-            List<Tree> districtTrees = joined(results, k);
+            List<Tree> districtTrees = joined(results, k, trees);
             trees.addAll(districtTrees);
             Variant variant = assembleParts(String.valueOf(k + 1), k + 1, trees, missing(trees));
             variants.add(variant);
@@ -690,7 +704,7 @@ public final class VariantEnumerator {
      * Черновики районов по возрастанию score в порядке списка; район, расчёт которого упал или не начался до
      * {@code deadlineNanos}, остаётся без черновиков.
      */
-    private List<List<Draft>> solve(List<List<ConnectionPoint>> districts, long deadlineNanos) {
+    private List<List<Draft>> solve(List<List<ConnectionPoint>> districts, STRtree directIndex, long deadlineNanos) {
         ExecutorService pool = Executors.newFixedThreadPool(CITY_THREADS);
         long started = System.nanoTime();
         AtomicInteger done = new AtomicInteger();
@@ -710,6 +724,7 @@ public final class VariantEnumerator {
                     }
                     long districtStarted = System.nanoTime();
                     VariantEnumerator district = district(connections);
+                    district.direct = directIndex;
                     List<Draft> drafts = district.picked();
                     int trees = drafts.isEmpty() ? 0 : drafts.get(0).trees.size();
                     log.info("city: district {} oks={} trees={} {} elapsed={}s", index, connections.size(), trees,
@@ -773,10 +788,17 @@ public final class VariantEnumerator {
         return new VariantEnumerator(part, rules, finder, obstacleIndex, specials, buildingByConnection, CITY_CACHE_MB, true);
     }
 
-    /** Деревья k-х черновиков районов, кроме задевающих уже принятые деревья соседних районов. */
-    private List<Tree> joined(List<List<Draft>> results, int k) {
+    /**
+     * Деревья k-х черновиков районов, кроме задевающих уже принятые деревья соседних районов и прямые подключения
+     * варианта {@code ties} или переполняющих общую с ними камеру: новые участки не пересекаются вне общего узла
+     * (п. 5). Районы считаются без деревьев соседей, а место в камере у наборов прямых подключений разное.
+     */
+    private List<Tree> joined(List<List<Draft>> results, int k, List<Tree> ties) {
         List<Tree> accepted = new ArrayList<>();
         Quadtree index = new Quadtree();
+        for (Tree tree : ties) {
+            index.insert(geometry(tree).getEnvelopeInternal(), tree);
+        }
         int dropped = 0;
         for (List<Draft> drafts : results) {
             if (drafts.isEmpty()) {
@@ -801,7 +823,7 @@ public final class VariantEnumerator {
             }
         }
         if (dropped > 0) {
-            log.info("city: variant {} dropped {} trees touching other districts", k + 1, dropped);
+            log.info("city: variant {} dropped {} trees touching other districts or direct ties", k + 1, dropped);
         }
         return accepted;
     }
@@ -2479,6 +2501,13 @@ public final class VariantEnumerator {
     private boolean compatible(Tree tree, List<Tree> accepted) {
         Geometry geometry = geometry(tree);
         int rootDegree = tree.degree(tree.root);
+        if (direct != null) {
+            int used = directDegree(tree, geometry);
+            if (used < 0) {
+                return false;
+            }
+            rootDegree += used;
+        }
         for (Tree other : accepted) {
             if (other.root.key.equals(tree.root.key)) {
                 rootDegree += other.degree(other.root);
@@ -2511,6 +2540,32 @@ public final class VariantEnumerator {
         } catch (IllegalStateException | IllegalArgumentException e) {
             return false;
         }
+    }
+
+    /**
+     * Участки прямых подключений в камере врезки дерева района, наибольшее по наборам; -1 — дерево ближе
+     * TREES_APART_M к прямому подключению другой врезки или у общей врезки касается его вне круга SHARED_ROOT_CLIP_M.
+     */
+    private int directDegree(Tree tree, Geometry geometry) {
+        Envelope around = new Envelope(geometry.getEnvelopeInternal());
+        around.expandBy(TREES_APART_M);
+        int[] degree = new int[2];
+        for (Object item : direct.query(around)) {
+            @SuppressWarnings("unchecked")
+            Map.Entry<Integer, Tree> entry = (Map.Entry<Integer, Tree>) item;
+            Tree other = entry.getValue();
+            if (other.root.key.equals(tree.root.key)) {
+                degree[entry.getKey()] += other.degree(other.root);
+                Geometry clip = factory.createPoint(tree.root.point).buffer(SHARED_ROOT_CLIP_M);
+                if (geometry.difference(clip).distance(other.geometry().difference(clip)) <= SHARED_ROOT_APART_M) {
+                    return -1;
+                }
+            } else if (near(geometry.getEnvelopeInternal(), other.envelope())
+                    && geometry.distance(other.geometry()) <= TREES_APART_M) {
+                return -1;
+            }
+        }
+        return Math.max(degree[0], degree[1]);
     }
 
     /**
