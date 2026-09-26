@@ -136,6 +136,8 @@ public final class VariantEnumerator {
     /** Слияния и переносы пробуются только между блоками, ближайшими друг к другу по точкам подключения. */
     private static final int NEAREST_BLOCKS = 2;
     private static final double IMPROVE_EPS = 1e-6;
+    /** Сдвиг камеры, снимающий излом, не хуже по S с этим запасом на округление, см. {@link #unkinked(List)}. */
+    private static final double UNKINK_EPS = 1e-9;
     /** Сдвиг камер ветвления в деревьях выбранных вариантов (heatnet.slide.junctions), см. {@link #shifted(Draft)}. */
     private static final boolean SLIDE_JUNCTIONS =
             Boolean.parseBoolean(System.getProperty("heatnet.slide.junctions", "true"));
@@ -511,10 +513,17 @@ public final class VariantEnumerator {
             Variant variant = null;
             if (REROUTE) {
                 try {
-                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, rerouted(draft), draft.unconnected);
+                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, unkinked(rerouted(draft)), draft.unconnected);
                 } catch (IllegalStateException | IllegalArgumentException e) {
                     // узлы врезки собирались по отдельности, а вместе нет: вариант как найден поиском
                     log.info("rerouted: вариант {} не собран: {}", i + 1, e.getMessage());
+                }
+            }
+            if (variant == null) {
+                try {
+                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, unkinked(draft.trees), draft.unconnected);
+                } catch (IllegalStateException | IllegalArgumentException e) {
+                    log.info("unkinked: вариант {} не собран: {}", i + 1, e.getMessage());
                 }
             }
             variants.add(variant != null ? variant
@@ -2414,6 +2423,100 @@ public final class VariantEnumerator {
             this.router = router;
             this.zones = zones;
         }
+    }
+
+    /**
+     * Деревья варианта без изломов у камер ветвления, которые снимает сдвиг камеры вдоль её ребра
+     * ({@link TreeBuilder#unkinks}, п. 5). Рёбра камеры проверяются по зонам своего Ду, как в {@link #rerouted},
+     * и доводятся до строгой формы ({@link #sharpened}). Сдвиг берётся, если S узла врезки не растёт, Ду рёбер не
+     * растут, а дерево не касается других; дальше изломы ищутся на новом дереве. Каждый сдвиг убирает вершину,
+     * поэтому цикл конечен.
+     */
+    private List<Tree> unkinked(List<Tree> trees) {
+        long started = System.nanoTime();
+        List<Tree> result = new ArrayList<>(trees);
+        int taken = 0;
+        for (int t = 0; t < result.size(); t++) {
+            Tree first = result.get(t);
+            if (JunctionMover.junctions(first).isEmpty()) {
+                continue;
+            }
+            Region region = regionByConnection.get(first.connected().get(0).getId());
+            Envelope area = region.area.contains(first.envelope()) ? region.area : region.wideArea;
+            // сдвиг, который не взят, у той же камеры не пробуется снова
+            Set<List<Double>> tried = new HashSet<>();
+            for (boolean moved = area.contains(first.envelope()); moved; ) {
+                moved = false;
+                Tree tree = result.get(t);
+                List<Tree> unit = new ArrayList<>();
+                for (Tree other : result) {
+                    if (other.root.key.equals(tree.root.key)) {
+                        unit.add(other);
+                    }
+                }
+                Map<Tree.Edge, Integer> dnByEdge;
+                try {
+                    dnByEdge = assembler.diameters(unit);
+                } catch (IllegalStateException | IllegalArgumentException e) {
+                    break;
+                }
+                Map<Tree.Edge, Double> priceRub = new IdentityHashMap<>();
+                dnByEdge.forEach((edge, dn) -> priceRub.put(edge, rules.diameter(dn).getNewRubM() + rules.lengthWorthRub()));
+                double before = unitScore(unit);
+                for (TreeBuilder.Slide slide : builder.unkinks(tree, edge -> region.obstacles(dnByEdge.get(edge), area),
+                        dnByEdge, priceRub, 0)) {
+                    if (!tried.add(List.of(slide.junction.point.x, slide.junction.point.y, slide.point.x, slide.point.y))) {
+                        continue;
+                    }
+                    Tree changed = unkinked(tree, slide, dnByEdge, region, area);
+                    List<Tree> others = new ArrayList<>(result);
+                    others.remove(t);
+                    if (changed == null || !compatible(changed, others)) {
+                        continue;
+                    }
+                    List<Tree> attempt = new ArrayList<>();
+                    for (Tree other : unit) {
+                        attempt.add(other == tree ? changed : other);
+                    }
+                    if (!(unitScore(attempt) <= before + UNKINK_EPS) || thicker(tree, unit, changed, attempt)) {
+                        continue;
+                    }
+                    result.set(t, changed);
+                    taken++;
+                    moved = true;
+                    break;
+                }
+            }
+        }
+        log.info("unkinked: moves={} elapsed={}ms", taken, (System.nanoTime() - started) / 1_000_000);
+        return result;
+    }
+
+    /** Дерево со сдвигом камеры slide и рёбрами камеры в строгой форме или null, см. {@link #unkinked(List)}. */
+    private Tree unkinked(Tree tree, TreeBuilder.Slide slide, Map<Tree.Edge, Integer> dnByEdge, Region region,
+            Envelope area) {
+        Tree moved = builder.moved(tree, slide);
+        Map<Integer, LineString> change = new LinkedHashMap<>();
+        Map<Integer, Fresh> found = new HashMap<>();
+        for (int e = 0; e < tree.edges.size(); e++) {
+            if (!slide.lines.containsKey(tree.edges.get(e))) {
+                continue;
+            }
+            int dn = dnByEdge.get(tree.edges.get(e));
+            // форму доводят зоны Ду ребра, а граф только исполняет доводку: берётся уже построенный
+            Router router = null;
+            for (Diameter graph = rules.diameter(dn); router == null && graph != null; graph = rules.nextDiameter(graph.getDn())) {
+                router = region.routers.get(graph.getDn() + "@" + area);
+            }
+            if (router == null) {
+                return null;
+            }
+            LineString line = moved.edges.get(e).line;
+            change.put(e, line);
+            found.put(e, new Fresh(line, router, region.obstacles(dn, area)));
+        }
+        Map<Integer, LineString> sharp = sharpened(moved, change, found);
+        return sharp == null ? null : replaced(moved, sharp);
     }
 
     /** Дерево с рёбрами, заменёнными по номеру; остальные рёбра те же. */

@@ -1042,9 +1042,14 @@ final class TreeBuilder {
     private boolean spotAllowed(Tree.Edge edge, double position, List<Double> vertices, List<SpecialSpan> spans,
             ObstacleSet zones, int dn) {
         double length = edge.line.getLength();
-        if (position < MIN_PIECE_M || position > length - MIN_PIECE_M) {
-            return false;
-        }
+        return position >= MIN_PIECE_M && position <= length - MIN_PIECE_M
+                && placeAllowed(edge, position, vertices, spans, zones, dn);
+    }
+
+    /** {@link #spotAllowed} без метра от концов ребра: сдвиг камеры по своему ребру уводит её от прежнего места. */
+    private boolean placeAllowed(Tree.Edge edge, double position, List<Double> vertices, List<SpecialSpan> spans,
+            ObstacleSet zones, int dn) {
+        double length = edge.line.getLength();
         if (edge.to.kind == Tree.Kind.CONNECTION && position > length - CONNECTION_GAP_M) {
             return false;
         }
@@ -1237,6 +1242,132 @@ final class TreeBuilder {
             rest -= straight.get(out);
         }
         return gain < bound ? new Slide(gain, in.to, point, lines) : null;
+    }
+
+    /**
+     * Сдвиги камер ветвления, которые убирают вершину ребра у камеры (п. 5: без необоснованных изломов). Камера идёт
+     * вдоль первого звена своего ребра rail до продолжения звена ребра s за его вершиной у камеры, и эта вершина
+     * уходит. Ребро rail только короче, остальные рёбра идут от нового места прямой к своей первой вершине. Новые
+     * звенья обычные с запасом {@link Router#CUT_MARGIN_M} по зонам Ду своего ребра ({@code zones}), не короче
+     * {@link Router#CUT_PIECE_M} и не ближе к другим рёбрам дерева, чем допускает {@link Router#apart}. Повороты в
+     * вершинах и в камере от ребра к родителю не круче MAX_TURN_DEG, место камеры проверяет {@link #placeAllowed} по
+     * наибольшему Ду рёбер камеры ({@code dnByEdge}). Финальный участок в здание не меняется: у s за точкой выхода
+     * только продолжается его прямая, а ребро, которое входит в здание прямо от камеры, сдвигать камеру не даёт.
+     * gain — изменение цены рёбер по {@code priceRub}, сдвиги с gain больше maxGainRub не берутся. Порядок — по gain.
+     */
+    List<Slide> unkinks(Tree tree, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
+            Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub) {
+        Set<String> ignored = tree.tie.getIgnored();
+        List<Slide> found = new ArrayList<>();
+        for (Tree.Node junction : JunctionMover.junctions(tree)) {
+            List<Tree.Edge> incident = JunctionMover.incident(tree, junction);
+            Map<Tree.Edge, Coordinate[]> from = new IdentityHashMap<>();
+            int dn = 0;
+            for (Tree.Edge edge : incident) {
+                from.put(edge, JunctionMover.fromJunction(edge, junction));
+                dn = Math.max(dn, dnByEdge.get(edge));
+            }
+            for (Tree.Edge s : incident) {
+                Coordinate[] cs = from.get(s);
+                if (cs.length < 3 || deflectionDeg(cs[0], cs[1], cs[2]) < MIN_TURN_DEG) {
+                    continue;
+                }
+                for (Tree.Edge rail : incident) {
+                    Coordinate[] ct = from.get(rail);
+                    Coordinate point = rail == s ? null : kinkPoint(cs[2], cs[1], ct[0], ct[1]);
+                    if (point == null || point.distance(ct[1]) < Router.CUT_PIECE_M) {
+                        continue;
+                    }
+                    double position = rail.from == junction ? point.distance(ct[0])
+                            : rail.line.getLength() - point.distance(ct[0]);
+                    ObstacleSet railZones = zones.apply(rail);
+                    if (!placeAllowed(rail, position, vertexPositions(rail.line), railZones.spans(rail.line, ignored),
+                            railZones, dn)) {
+                        continue;
+                    }
+                    Slide slide = unkink(tree, junction, incident, from, s, rail, point, zones, priceRub, ignored);
+                    if (slide != null && slide.gain <= maxGainRub) {
+                        found.add(slide);
+                    }
+                }
+            }
+        }
+        found.sort(Comparator.comparingDouble(slide -> slide.gain));
+        return found;
+    }
+
+    /** Сдвиг камеры junction в point на ребре rail, который убирает вершину s у камеры, см. {@link #unkinks}; null — нельзя. */
+    private Slide unkink(Tree tree, Tree.Node junction, List<Tree.Edge> incident, Map<Tree.Edge, Coordinate[]> from,
+            Tree.Edge s, Tree.Edge rail, Coordinate point, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
+            Map<Tree.Edge, Double> priceRub, Set<String> ignored) {
+        Map<Tree.Edge, Coordinate[]> fresh = new IdentityHashMap<>();
+        for (Tree.Edge edge : incident) {
+            Coordinate[] c = from.get(edge);
+            int skip = edge == s ? 2 : 1;
+            Coordinate[] line = new Coordinate[c.length - skip + 1];
+            line[0] = point;
+            System.arraycopy(c, skip, line, 1, c.length - skip);
+            fresh.put(edge, line);
+            Tree.Node far = edge.from == junction ? edge.to : edge.from;
+            boolean inside = far.kind == Tree.Kind.CONNECTION && buildingByConnection.containsKey(far.connection.getId());
+            ObstacleSet edgeZones = zones.apply(edge);
+            if (edge == s) {
+                // новое только продолжение прямой звена за вершину: у ребра в здание — до точки выхода
+                if (!edgeZones.covers(point, c[1]) || !edgeZones.plain(point, c[1], ignored, Router.CUT_MARGIN_M)) {
+                    return null;
+                }
+            } else if (edge != rail && (inside && c.length == 2 || point.distance(c[1]) < Router.CUT_PIECE_M
+                    || c.length > 2 && deflectionDeg(point, c[1], c[2]) > Router.MAX_TURN_DEG
+                    || !edgeZones.covers(point, c[1]) || !edgeZones.plain(point, c[1], ignored, Router.CUT_MARGIN_M))) {
+                return null;
+            }
+        }
+        for (Tree.Edge edge : incident) {
+            if (edge.to == junction) {
+                for (Tree.Edge out : incident) {
+                    if (out != edge && deflectionDeg(fresh.get(edge)[1], point, fresh.get(out)[1]) > Router.MAX_TURN_DEG) {
+                        return null;
+                    }
+                }
+            }
+        }
+        // новые звенья от камеры не ближе CUT_APART_M к отрезкам других рёбер дерева в новом виде
+        for (Tree.Edge edge : incident) {
+            if (edge == rail) {
+                continue;
+            }
+            LineSegment link = new LineSegment(point, fresh.get(edge)[1]);
+            List<LineSegment> others = new ArrayList<>();
+            for (Tree.Edge other : tree.edges) {
+                Coordinate[] c = fresh.containsKey(other) ? fresh.get(other) : other.line.getCoordinates();
+                for (int i = 0; other != edge && i + 1 < c.length; i++) {
+                    others.add(new LineSegment(c[i], c[i + 1]));
+                }
+            }
+            if (!Router.apart(link, others)) {
+                return null;
+            }
+        }
+        double gain = 0;
+        Map<Tree.Edge, Coordinate[]> lines = new IdentityHashMap<>();
+        for (Tree.Edge edge : incident) {
+            Coordinate[] line = fresh.get(edge);
+            gain += price(priceRub, edge) * (length(line) - edge.line.getLength());
+            lines.put(edge, edge.from == junction ? line : JunctionMover.reversed(line));
+        }
+        return new Slide(gain, junction, point, lines);
+    }
+
+    /** Точка звена c–u (не на концах) на прямой w–v по ту сторону от w, где v; null — такой нет. */
+    private static Coordinate kinkPoint(Coordinate w, Coordinate v, Coordinate c, Coordinate u) {
+        LineSegment kink = new LineSegment(w, v);
+        LineSegment link = new LineSegment(c, u);
+        Coordinate point = kink.lineIntersection(link);
+        if (point == null) {
+            return null;
+        }
+        double along = link.projectionFactor(point);
+        return along > 0 && along < 1 && kink.projectionFactor(point) > 0 ? point : null;
     }
 
     /** Длина ветки out от point прямой к ближайшей по длине вершине, без проверок: нижняя оценка shortcut. */
