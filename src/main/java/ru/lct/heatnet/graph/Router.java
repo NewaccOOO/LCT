@@ -227,6 +227,13 @@ public final class Router {
         return obstacles;
     }
 
+    /** Значение по ключу key этого маршрутизатора из общего кэша расчёта или посчитанное compute, см. {@link RouteCache}. */
+    public <T> T cached(List<Object> key, long bytes, java.util.function.Supplier<T> compute) {
+        List<Object> own = new ArrayList<>(key);
+        own.add(0, this);
+        return cache.computeIfAbsent(own, bytes, compute);
+    }
+
     /** Кратчайший по весу маршрут или {@code null}, если пути нет. */
     public Route route(Point from, Point to, Set<String> ignored) {
         return routeToAny(from, List.of(to), ignored);
@@ -369,20 +376,43 @@ public final class Router {
 
     /** Маршрут до цели choice, выбранной {@link #choose} из точки from. */
     public Route route(Point from, Choice choice, Set<String> ignored, boolean cut) {
-        Coordinate source = from.getCoordinate();
-        List<Coordinate> coords = new ArrayList<>();
+        List<Coordinate> path = new ArrayList<>();
         for (int v = choice.via; v >= 0; v = choice.pred[v]) {
-            coords.add(0, nodes.get(v));
+            path.add(0, nodes.get(v));
         }
-        coords.add(0, source);
-        coords.add(choice.target);
-        straighten(coords, ignored);
-        if (cut) {
-            cutCorners(coords, ignored);
+        path.add(0, from.getCoordinate());
+        path.add(choice.target);
+        return shaped(from, path, ignored, cut, choice.extra);
+    }
+
+    /** Ломаная маршрута после спрямления и срезки углов и её специальные части. */
+    private static final class Shape {
+        final Coordinate[] coords;
+        final List<SpecialSpan> spans;
+
+        Shape(Coordinate[] coords, List<SpecialSpan> spans) {
+            this.coords = coords;
+            this.spans = spans;
         }
-        LineString line = from.getFactory().createLineString(coords.toArray(new Coordinate[0]));
-        List<SpecialSpan> spans = obstacles.spans(line, ignored);
-        return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), spans) + choice.extra, spans);
+    }
+
+    /**
+     * Маршрут по пути path графа: спрямление, срезка углов при cut, специальные части. Форма зависит только от пути, а
+     * путь до той же цели дерево запрашивает на каждом шаге, поэтому она берётся из кэша. Массив линии у каждого
+     * маршрута свой: вызывающий может заменить в нём вершины.
+     */
+    private Route shaped(Point from, List<Coordinate> path, Set<String> ignored, boolean cut, double extra) {
+        Shape shape = cache.computeIfAbsent(List.of(this, "route", path, ignored, cut), 96L * path.size(), () -> {
+            List<Coordinate> coords = new ArrayList<>(path);
+            straighten(coords, ignored);
+            if (cut) {
+                cutCorners(coords, ignored);
+            }
+            Coordinate[] line = coords.toArray(new Coordinate[0]);
+            return new Shape(line, obstacles.spans(factory.createLineString(line), ignored));
+        });
+        LineString line = from.getFactory().createLineString(shape.coords.clone());
+        return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), shape.spans) + extra, shape.spans);
     }
 
     /**
@@ -397,19 +427,22 @@ public final class Router {
         Exact search = cache.computeIfAbsent(List.of(this, "exact", source.x, source.y, ignored, incoming.x, incoming.y),
                 64L * nodes.size(), () -> exactStates(source, ignored, incoming));
         // даже без состояний цель бывает видна из точки выхода напрямую
-        return exactBest(start, targets, ignored, incoming, search.dist, search.came, cut);
+        return exactBest(start, targets, ignored, incoming, search, cut);
     }
 
     /**
-     * Состояния точного поиска: вес до каждой пары «узел, предшественник» и путь к ней: came по номеру состояния
-     * (см. {@link #stateIndex}) — ключ состояния, из которого пришли, -1 — из точки запроса.
+     * Состояния точного поиска: ключи пар «узел, предшественник» (см. {@link #state}) и веса до них в порядке, в
+     * котором их обходила HashMap&lt;Long, Double&gt; прежнего поиска, и путь к ним: came по номеру состояния (см.
+     * {@link #stateIndex}) — ключ состояния, из которого пришли, -1 — из точки запроса.
      */
     private static final class Exact {
-        final Map<Long, Double> dist;
+        final long[] keys;
+        final double[] weights;
         final long[] came;
 
-        Exact(Map<Long, Double> dist, long[] came) {
-            this.dist = dist;
+        Exact(long[] keys, double[] weights, long[] came) {
+            this.keys = keys;
+            this.weights = weights;
             this.came = came;
         }
     }
@@ -417,24 +450,34 @@ public final class Router {
     private Exact exactStates(Coordinate source, Set<String> ignored, Coordinate incoming) {
         int n = nodes.size();
         double[] toNode = nodeWeights(source, ignored);
-        // dist отдаёт состояния exactBest в своём порядке обхода, а поиск только читает веса: чтение идёт из копии
-        // в массиве, у HashMap<Long, Double> оно было половиной времени поиска. Состояние (w, v) — ребро графа v→w,
-        // его номер edgeStart[v] + k; начальное состояние (v, -1) — номер edges + v
-        Map<Long, Double> dist = new HashMap<>();
+        // веса в массиве по номеру состояния: (w, v) — ребро графа v→w, номер edgeStart[v] + k; начальное (v, -1) —
+        // номер edges + v. exactBest перебирает состояния в порядке обхода HashMap, в которую их раньше клали по мере
+        // нахождения (при равных весах выбор зависит от порядка), поэтому ключи пишутся в порядке первого веса, а
+        // порядок обхода считается в конце, см. hashOrder: сама HashMap<Long, Double> была половиной времени поиска
         int edges = edgeStart[n];
         double[] known = new double[edges + n];
         Arrays.fill(known, Double.POSITIVE_INFINITY);
         long[] came = new long[edges + n];
         Arrays.fill(came, -1);
-        // вес состояния-ребра задаётся один раз: веса рёбер не отрицательны, состояния извлекаются по неубыванию веса,
-        // и позже пришедший вес не меньше записанного. Проверка у ребра с весом всегда ложна, поэтому такие рёбра
-        // пропускаются, см. open
-        int[] skip = new int[edges + 1];
-        Arrays.setAll(skip, e -> e);
+        long[] keys = new long[edges + n];
+        int[] found = new int[edges + n];
+        int count = 0;
+        // ребро, уже достигнутое из узла, легче не станет: веса рёбер неотрицательны, и состояния узла приходят из кучи
+        // по возрастанию веса. Поэтому у узла v перебираются только ещё не достигнутые рёбра, их k по возрастанию
+        // лежат в pending с edgeStart[v], left[v] — сколько их
+        int[] pending = new int[edges];
+        int[] left = new int[n];
+        for (int v = 0; v < n; v++) {
+            left[v] = adjacency[v].length;
+            for (int k = 0; k < left[v]; k++) {
+                pending[edgeStart[v] + k] = k;
+            }
+        }
         Heap heap = new Heap();
         for (int v = 0; v < n; v++) {
             if (!Double.isNaN(toNode[v]) && turnAllowed(incoming, source, nodes.get(v))) {
-                dist.put(state(v, -1, n), toNode[v]);
+                keys[count] = state(v, -1, n);
+                found[count++] = edges + v;
                 known[edges + v] = toNode[v];
                 heap.add(toNode[v], v, -1, edges + v);
             }
@@ -442,7 +485,7 @@ public final class Router {
         for (int expanded = 0; !heap.isEmpty(); expanded++) {
             if (expanded > EXACT_STATES) {
                 LOG.debug("routeExact: предел состояний {} при {} узлах", EXACT_STATES, n);
-                return new Exact(Map.of(), new long[0]);
+                return new Exact(new long[0], new double[0], new long[0]);
             }
             heap.poll();
             double reached = heap.key;
@@ -453,42 +496,86 @@ public final class Router {
             }
             double beforeX = p < 0 ? source.x : nodeXY[2 * p];
             double beforeY = p < 0 ? source.y : nodeXY[2 * p + 1];
-            for (int edge = open(skip, edgeStart[v]); edge < edgeStart[v + 1]; edge = open(skip, edge + 1)) {
-                int k = edge - edgeStart[v];
+            int kept = 0;
+            for (int i = 0; i < left[v]; i++) {
+                int k = pending[edgeStart[v] + i];
                 int w = adjacency[v][k];
                 double weight = reached + adjacencyWeight[v][k];
-                // поворот дороже сравнения весов, а нужен только ребру, которое улучшает состояние
+                int edge = edgeStart[v] + k;
                 if (weight < known[edge] - 1e-9
                         && turnAllowed(beforeX, beforeY, nodeXY[2 * v], nodeXY[2 * v + 1], nodeXY[2 * w], nodeXY[2 * w + 1])) {
-                    long next = state(w, v, n);
-                    dist.put(next, weight);
+                    keys[count] = state(w, v, n);
+                    found[count++] = edge;
                     known[edge] = weight;
                     came[edge] = state(v, p, n);
                     heap.add(weight, w, v, edge);
-                    skip[edge] = edge + 1;
+                } else {
+                    pending[edgeStart[v] + kept++] = k;
                 }
             }
+            left[v] = kept;
         }
-        LOG.debug("routeExact: узлов {}, состояний {}", n, dist.size());
-        return new Exact(dist, came);
+        LOG.debug("routeExact: узлов {}, состояний {}", n, count);
+        int[] order = hashOrder(keys, count);
+        long[] ordered = new long[count];
+        double[] weights = new double[count];
+        for (int i = 0; i < count; i++) {
+            ordered[i] = keys[order[i]];
+            weights[i] = known[found[order[i]]];
+        }
+        return new Exact(ordered, weights, came);
     }
 
     /**
-     * Первое ребро с номером не меньше e, у которого в точном поиске ещё нет веса. skip[e] == e — у ребра e веса нет,
-     * иначе у рёбер от e до skip[e] вес уже есть. Каждый вызов вдвое сокращает пройденную цепочку, поэтому пропуск
-     * почти бесплатен.
+     * Порядок обхода HashMap&lt;Long, V&gt;, созданной без параметров, после вставки keys[0..count) по порядку без
+     * удалений: номера ключей в keys. У HashMap JDK 8–21 это корзины hash(key) &amp; (ёмкость - 1) по возрастанию, в
+     * корзине — порядок вставки: таблица с 16 корзин удваивается, когда ключей больше трёх четвертей ёмкости, и при
+     * удвоении список корзины делится с сохранением порядка. Корзина, в которой список дорос бы до дерева
+     * (TREEIFY_THRESHOLD = 8), обходится иначе, тогда порядок берётся у настоящей HashMap.
      */
-    private static int open(int[] skip, int e) {
-        while (skip[e] != e) {
-            skip[e] = skip[skip[e]];
-            e = skip[e];
+    static int[] hashOrder(long[] keys, int count) {
+        int capacity = 16;
+        int[] load = new int[capacity];
+        for (int i = 0; i < count; i++) {
+            if (load[spread(keys[i]) & (capacity - 1)]++ >= 8) {
+                Map<Long, Integer> map = new HashMap<>();
+                for (int k = 0; k < count; k++) {
+                    map.put(keys[k], k);
+                }
+                return map.values().stream().mapToInt(Integer::intValue).toArray();
+            }
+            if (i + 1 > capacity / 4 * 3) {
+                capacity *= 2;
+                load = new int[capacity];
+                for (int k = 0; k <= i; k++) {
+                    load[spread(keys[k]) & (capacity - 1)]++;
+                }
+            }
         }
-        return e;
+        // устойчивая сортировка подсчётом по корзине
+        int[] start = new int[capacity + 1];
+        for (int i = 0; i < count; i++) {
+            start[(spread(keys[i]) & (capacity - 1)) + 1]++;
+        }
+        for (int b = 0; b < capacity; b++) {
+            start[b + 1] += start[b];
+        }
+        int[] order = new int[count];
+        for (int i = 0; i < count; i++) {
+            order[start[spread(keys[i]) & (capacity - 1)]++] = i;
+        }
+        return order;
+    }
+
+    /** hash(key) у HashMap для Long: старшие биты hashCode подмешаны к младшим. */
+    private static int spread(long key) {
+        int h = Long.hashCode(key);
+        return h ^ (h >>> 16);
     }
 
     /** Лучшая цель по состояниям точного поиска и маршрут до неё. */
     private Route exactBest(Point start, Collection<Point> targets, Set<String> ignored, Coordinate incoming,
-            Map<Long, Double> dist, long[] came, boolean cut) {
+            Exact search, boolean cut) {
         int n = nodes.size();
         Coordinate source = start.getCoordinate();
         double bestWeight = Double.POSITIVE_INFINITY;
@@ -508,11 +595,13 @@ public final class Router {
                 }
             }
             double[] toNodes = partialWeights(t, ignored);
-            for (Map.Entry<Long, Double> state : dist.entrySet()) {
-                int v = (int) (state.getKey() / (n + 1));
-                int p = (int) (state.getKey() % (n + 1));
+            for (int i = 0; i < search.keys.length; i++) {
+                long key = search.keys[i];
+                double reached = search.weights[i];
+                int v = (int) (key / (n + 1));
+                int p = (int) (key % (n + 1));
                 Coordinate before = p == n ? source : nodes.get(p);
-                if (state.getValue() + nodes.get(v).distance(t) + extra >= bestWeight
+                if (reached + nodes.get(v).distance(t) + extra >= bestWeight
                         || !turnAllowed(before, nodes.get(v), t)) {
                     continue;
                 }
@@ -520,10 +609,10 @@ public final class Router {
                     toNodes[v] = obstacles.tangent(v, t) ? obstacles.edgeWeight(t, nodes.get(v), ignored, false, true)
                             : Double.NaN;
                 }
-                if (!Double.isNaN(toNodes[v]) && state.getValue() + toNodes[v] + extra < bestWeight) {
-                    bestWeight = state.getValue() + toNodes[v] + extra;
+                if (!Double.isNaN(toNodes[v]) && reached + toNodes[v] + extra < bestWeight) {
+                    bestWeight = reached + toNodes[v] + extra;
                     bestTarget = t;
-                    bestState = state.getKey();
+                    bestState = key;
                     bestExtra = extra;
                 }
             }
@@ -532,18 +621,12 @@ public final class Router {
             return null;
         }
         List<Coordinate> coords = new ArrayList<>();
-        for (long state = bestState; state >= 0; state = came[stateIndex(state, n)]) {
+        for (long state = bestState; state >= 0; state = search.came[stateIndex(state, n)]) {
             coords.add(0, nodes.get((int) (state / (n + 1))));
         }
         coords.add(0, source);
         coords.add(bestTarget);
-        straighten(coords, ignored);
-        if (cut) {
-            cutCorners(coords, ignored);
-        }
-        LineString line = start.getFactory().createLineString(coords.toArray(new Coordinate[0]));
-        List<SpecialSpan> spans = obstacles.spans(line, ignored);
-        return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), spans) + bestExtra, spans);
+        return shaped(start, coords, ignored, cut, bestExtra);
     }
 
     /**
@@ -727,15 +810,8 @@ public final class Router {
         for (int pass = 0; pass < CUT_PASSES && cutPass(obstacles, coords, ignored, null, null); pass++) {
             // проход уже заменил вершины в coords
         }
-        // маршрут между теми же точками строится за расчёт десятки раз, а форма без apart зависит только от ломаной
-        List<Coordinate> sharp = cache.computeIfAbsent(List.of(this, "sharpen", new ArrayList<>(coords), ignored),
-                48L * coords.size(), () -> {
-                    List<Coordinate> copy = new ArrayList<>(coords);
-                    sharpen(obstacles, copy, ignored, null, null);
-                    return copy;
-                });
-        coords.clear();
-        coords.addAll(sharp);
+        // повторы того же пути отсекает кэш формы маршрута в shaped, своего кэша доводке не нужно
+        sharpen(obstacles, coords, ignored, null, null);
     }
 
     /**

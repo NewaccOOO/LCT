@@ -1454,7 +1454,8 @@ public final class VariantEnumerator {
                 Tree cut = builder.cut(shape, router, dn, graphs, TreeBuilder.CUT_PASSES);
                 Option option = cut == shape ? null
                         : option(cut, label, verify, area, dn, region, tree.narrow || cut.narrow);
-                Tree sharp = option == null ? builder.cut(shape, router, dn, graphs, 0) : shape;
+                // срезка без изменений значит, что и доводка их не даст: она уже прошла с теми же рёбрами
+                Tree sharp = option == null && cut != shape ? builder.cut(shape, router, dn, graphs, 0) : shape;
                 option = option == null && sharp != shape
                         ? option(sharp, label, verify, area, dn, region, tree.narrow || sharp.narrow) : option;
                 option = option != null ? option : option(shape, label, verify, area, dn, region, tree.narrow);
