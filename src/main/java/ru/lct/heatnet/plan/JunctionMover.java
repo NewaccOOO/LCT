@@ -235,7 +235,8 @@ final class JunctionMover {
                 for (int i = laid.containsKey(edge) ? 1 : 0; edge != entry.getKey() && i + 1 < coords.length; i++) {
                     LineSegment other = new LineSegment(coords[i], coords[i + 1]);
                     boolean adjacent = other.p0.equals2D(fresh.p1) || other.p1.equals2D(fresh.p1);
-                    if (!adjacent && fresh.distance(other) < APART_M) {
+                    if (!adjacent && !Router.apart(fresh.p0, fresh.p1, other.p0, other.p1, APART_M)
+                            && fresh.distance(other) < APART_M) {
                         return false;
                     }
                 }

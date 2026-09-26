@@ -657,7 +657,7 @@ final class TreeBuilder {
             }
             for (Piece piece : pieces) {
                 LineSegment segment = piece.segment;
-                if (route.distance(segment) > TOUCH_M) {
+                if (Router.apart(p, q, segment.p0, segment.p1, TOUCH_M) || route.distance(segment) > TOUCH_M) {
                     continue;
                 }
                 List<Coordinate> hits = new ArrayList<>();
@@ -788,7 +788,8 @@ final class TreeBuilder {
             for (int i = 0; i < last; i++) {
                 LineSegment segment = new LineSegment(clipped[i], clipped[i + 1]);
                 for (Piece piece : pieces) {
-                    if (segment.distance(piece.segment) <= APART_M) {
+                    if (!Router.apart(clipped[i], clipped[i + 1], piece.segment.p0, piece.segment.p1, APART_M)
+                            && segment.distance(piece.segment) <= APART_M) {
                         return false;
                     }
                 }

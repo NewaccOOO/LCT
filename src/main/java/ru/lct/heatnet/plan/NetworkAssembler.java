@@ -75,7 +75,7 @@ final class NetworkAssembler {
     private static final double MIN_SPLIT_DEG = 30.5;
     /** Полоса по x вокруг точки пересечения, где ищутся точки врезки: TOUCH_M с запасом на округление. */
     private static final double TIE_BAND_M = TieInFinder.TOUCH_M + 1e-6;
-    /** Запас к порогу расстояния при отсеве пар отрезков по рамкам, см. apart. */
+    /** Запас к порогу расстояния в полосе по x при поиске близких узлов. */
     private static final double GAP_EPS_M = 1e-6;
     /** Начала выходных ID: префикс варианта «v…_» и ID сводки. */
     private static final String OUTPUT_PREFIX = "v";
@@ -520,7 +520,7 @@ final class NetworkAssembler {
                 }
                 for (int i = 0; i + 1 < coords.length; i++) {
                     for (int j = i + 2; j + 1 < coords.length; j++) {
-                        if (!apart(coords[i], coords[i + 1], coords[j], coords[j + 1], TOUCH_APART_M) && new LineSegment(
+                        if (!Router.apart(coords[i], coords[i + 1], coords[j], coords[j + 1], TOUCH_APART_M) && new LineSegment(
                                 coords[i], coords[i + 1]).distance(new LineSegment(coords[j], coords[j + 1])) <= TOUCH_APART_M) {
                             throw new IllegalStateException("Участок " + segment.getId() + " касается сам себя");
                         }
@@ -951,16 +951,6 @@ final class NetworkAssembler {
         return false;
     }
 
-    /**
-     * Рамки отрезков p–q и r–s разнесены по x или y больше чем на limit с запасом на округление: тогда и расстояние
-     * между отрезками больше limit, и его не нужно считать. Проверки касаний перебирают все пары отрезков участков.
-     */
-    private static boolean apart(Coordinate p, Coordinate q, Coordinate r, Coordinate s, double limit) {
-        double gap = limit + GAP_EPS_M;
-        return Math.min(r.x, s.x) - Math.max(p.x, q.x) > gap || Math.min(p.x, q.x) - Math.max(r.x, s.x) > gap
-                || Math.min(r.y, s.y) - Math.max(p.y, q.y) > gap || Math.min(p.y, q.y) - Math.max(r.y, s.y) > gap;
-    }
-
     /** Конец одной линии совпадает с концом другой. */
     private static boolean sharedEnd(Coordinate[] a, Coordinate[] b) {
         Coordinate a0 = a[0];
@@ -970,11 +960,11 @@ final class NetworkAssembler {
         return a0.equals2D(b0) || a0.equals2D(b1) || a1.equals2D(b0) || a1.equals2D(b1);
     }
 
-    /** {@link #apart(Coordinate, Coordinate, Coordinate, Coordinate, double)} для всех пар отрезков линий a и b. */
+    /** {@link Router#apart(Coordinate, Coordinate, Coordinate, Coordinate, double)} для всех пар отрезков линий a и b. */
     private static boolean apart(Coordinate[] a, Coordinate[] b, double limit) {
         for (int i = 0; i + 1 < a.length; i++) {
             for (int j = 0; j + 1 < b.length; j++) {
-                if (!apart(a[i], a[i + 1], b[j], b[j + 1], limit)) {
+                if (!Router.apart(a[i], a[i + 1], b[j], b[j + 1], limit)) {
                     return false;
                 }
             }

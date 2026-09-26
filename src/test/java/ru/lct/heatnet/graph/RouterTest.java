@@ -16,6 +16,7 @@ import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.LineSegment;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
 import ru.lct.heatnet.model.InputData;
@@ -187,6 +188,27 @@ class RouterTest {
         assertEquals(ahead.getCoordinate(), first);
         double deflection = Router.deflectionDeg(new Coordinate(0, -30), exit.getCoordinate(), first);
         assertTrue(deflection <= Router.MAX_TURN_DEG, "поворот в точке выхода " + deflection + "°");
+    }
+
+    @Test
+    void apartByBoxesOnlyWhenDistanceIsBeyondLimit() {
+        // координаты UTM: отсев по рамкам отвергает пару, только если JTS тоже насчитал бы больше порога
+        Random random = new Random(1);
+        int apart = 0;
+        for (int k = 0; k < 100_000; k++) {
+            double x = 400_000 + random.nextDouble() * 5;
+            double y = 6_200_000 + random.nextDouble() * 5;
+            Coordinate p = new Coordinate(x, y);
+            Coordinate q = new Coordinate(x + random.nextGaussian(), y + random.nextGaussian());
+            Coordinate r = new Coordinate(x + random.nextGaussian() * 3, y + random.nextGaussian() * 3);
+            Coordinate s = random.nextBoolean() ? r : new Coordinate(r.x + random.nextGaussian(), r.y + random.nextGaussian());
+            double limit = random.nextDouble();
+            if (Router.apart(p, q, r, s, limit)) {
+                apart++;
+                assertTrue(new LineSegment(p, q).distance(new LineSegment(r, s)) > limit);
+            }
+        }
+        assertTrue(apart > 10_000, "отсев почти не срабатывает: " + apart);
     }
 
     @Test

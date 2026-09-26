@@ -1047,19 +1047,44 @@ public final class ObstacleSet {
      * от ближайшей к end точки пересечения продолжается через узел.
      */
     private double specialBeyond(Special special, Coordinate end, Coordinate other) {
+        double margin = special.rule.getMarginM();
+        Geometry geometry = special.object.getGeometry();
+        // объект или сторона дальше margin_m по рамке: ответ ноль, расстояние и пересечение не нужны
+        Envelope box = geometry.getEnvelopeInternal();
+        if (Router.apart(end, end, new Coordinate(box.getMinX(), box.getMinY()),
+                new Coordinate(box.getMaxX(), box.getMaxY()), margin)) {
+            return 0;
+        }
         double nearest = Double.POSITIVE_INFINITY;
-        if (special.polygon) {
-            nearest = special.object.getGeometry().distance(factory.createPoint(end));
-        } else {
-            LineIntersector intersector = new RobustLineIntersector();
+        if (!special.polygon) {
+            LineIntersector intersector = null;
             for (LineSegment side : special.sidesNear(end, other)) {
+                if (Router.apart(end, end, side.p0, side.p1, margin)) {
+                    continue;
+                }
+                if (intersector == null) {
+                    intersector = new RobustLineIntersector();
+                }
                 intersector.computeIntersection(end, other, side.p0, side.p1);
                 for (int k = 0; k < intersector.getIntersectionNum(); k++) {
                     nearest = Math.min(nearest, end.distance(intersector.getIntersection(k)));
                 }
             }
+        } else if (geometry instanceof Polygon && ((Polygon) geometry).getNumInteriorRing() == 0) {
+            // как DistanceOp у полигона без дыр: внутри или на границе ноль, иначе ближайшая сторона
+            if (special.shape.contains(end)) {
+                nearest = 0;
+            }
+            for (int k = 0; nearest > 0 && k < special.sides.length; k++) {
+                LineSegment side = special.sides[k];
+                if (!Router.apart(end, end, side.p0, side.p1, margin)) {
+                    nearest = Math.min(nearest, Distance.pointToSegment(end, side.p0, side.p1));
+                }
+            }
+        } else {
+            nearest = geometry.distance(factory.createPoint(end));
         }
-        return Math.max(0, special.rule.getMarginM() - nearest);
+        return Math.max(0, margin - nearest);
     }
 
     /**

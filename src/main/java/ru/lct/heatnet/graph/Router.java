@@ -59,6 +59,8 @@ public final class Router {
     private static final double CAP_TOL = 1e-9;
     private static final double MAX_TURN_COS = Math.cos(Math.toRadians(MAX_TURN_DEG));
     private static final double TURN_COS_TOL = 1e-9;
+    /** Запас к порогу расстояния при отсеве пар отрезков по рамкам, см. apart. */
+    private static final double GAP_EPS_M = 1e-6;
 
     private final ObstacleSet obstacles;
     private final GeometryFactory factory = new GeometryFactory();
@@ -1142,6 +1144,10 @@ public final class Router {
      */
     private static boolean apart(LineSegment segment, List<LineSegment> others) {
         for (LineSegment other : others) {
+            // у отрезков с общим концом рамки пересекаются, так что отсев не мешает проверке дальних концов
+            if (apart(segment.p0, segment.p1, other.p0, other.p1, CUT_APART_M)) {
+                continue;
+            }
             Coordinate far = null;
             Coordinate otherFar = null;
             for (int k = 0; k < 2; k++) {
@@ -1265,7 +1271,7 @@ public final class Router {
         }
         LineSegment chord = new LineSegment(a, b);
         for (LineSegment segment : apart) {
-            if (chord.distance(segment) < CUT_APART_M) {
+            if (!apart(a, b, segment.p0, segment.p1, CUT_APART_M) && chord.distance(segment) < CUT_APART_M) {
                 return false;
             }
         }
@@ -1350,6 +1356,17 @@ public final class Router {
             }
         }
         return deflectionDeg(new Coordinate(ax, ay), new Coordinate(bx, by), new Coordinate(cx, cy)) <= MAX_TURN_DEG;
+    }
+
+    /**
+     * Рамки отрезков p–q и r–s разнесены по x или y больше чем на limit с запасом на округление: тогда и расстояние
+     * между отрезками, и от конца одного до другого больше limit, и его не нужно считать. Проверки зазоров
+     * перебирают все пары отрезков, а почти все пары далеко.
+     */
+    public static boolean apart(Coordinate p, Coordinate q, Coordinate r, Coordinate s, double limit) {
+        double gap = limit + GAP_EPS_M;
+        return Math.min(r.x, s.x) - Math.max(p.x, q.x) > gap || Math.min(p.x, q.x) - Math.max(r.x, s.x) > gap
+                || Math.min(r.y, s.y) - Math.max(p.y, q.y) > gap || Math.min(p.y, q.y) - Math.max(r.y, s.y) > gap;
     }
 
     /** Изменение направления в вершине b пути a–b–c, градусы; 0 — по прямой. */

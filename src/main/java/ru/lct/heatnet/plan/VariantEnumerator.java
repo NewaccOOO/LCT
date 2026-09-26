@@ -1706,11 +1706,13 @@ public final class VariantEnumerator {
                 LineSegment segment = new LineSegment(at, coords[k]);
                 boolean apart = true;
                 for (LineSegment other : others) {
-                    apart &= segment.distance(other) >= TREES_APART_M;
+                    apart &= Router.apart(at, coords[k], other.p0, other.p1, TREES_APART_M)
+                            || segment.distance(other) >= TREES_APART_M;
                 }
                 // отрезки ствола до вершины k уходят вместе с прежней врезкой, отрезок из k смежный
                 for (int i = k + 1; i + 1 < coords.length; i++) {
-                    apart &= segment.distance(new LineSegment(coords[i], coords[i + 1])) >= TREES_APART_M;
+                    apart &= Router.apart(at, coords[k], coords[i], coords[i + 1], TREES_APART_M)
+                            || segment.distance(new LineSegment(coords[i], coords[i + 1])) >= TREES_APART_M;
                 }
                 if (apart) {
                     best = straight + rest + tiePenalty(candidate, dn, metreRub);
@@ -1932,12 +1934,14 @@ public final class VariantEnumerator {
         }
         LineSegment segment = new LineSegment(line[0], line[1]);
         for (LineSegment other : others) {
-            if (segment.distance(other) < TREES_APART_M) {
+            if (!Router.apart(line[0], line[1], other.p0, other.p1, TREES_APART_M)
+                    && segment.distance(other) < TREES_APART_M) {
                 return false;
             }
         }
         for (int i = 2; i + 1 < line.length; i++) {
-            if (segment.distance(new LineSegment(line[i], line[i + 1])) < TREES_APART_M) {
+            if (!Router.apart(line[0], line[1], line[i], line[i + 1], TREES_APART_M)
+                    && segment.distance(new LineSegment(line[i], line[i + 1])) < TREES_APART_M) {
                 return false;
             }
         }
@@ -1953,7 +1957,8 @@ public final class VariantEnumerator {
         }
         for (int i = 0; i + 1 < a.length; i++) {
             for (int j = i == 0 ? 1 : 0; j + 1 < b.length; j++) {
-                if (new LineSegment(a[i], a[i + 1]).distance(new LineSegment(b[j], b[j + 1])) < TREES_APART_M) {
+                if (!Router.apart(a[i], a[i + 1], b[j], b[j + 1], TREES_APART_M)
+                        && new LineSegment(a[i], a[i + 1]).distance(new LineSegment(b[j], b[j + 1])) < TREES_APART_M) {
                     return false;
                 }
             }
