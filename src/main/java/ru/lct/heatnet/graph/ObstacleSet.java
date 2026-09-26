@@ -96,6 +96,11 @@ public final class ObstacleSet {
      * проверяется для каждой пары узлов графа.
      */
     private final double[] around;
+    /**
+     * Последний расчёт {@link #spans(LineString, Set)} в нити: вершины, ignored и части. Спрямление, срезка углов и
+     * доводка формы считают части одной и той же ломаной подряд, пока она не меняется.
+     */
+    private final ThreadLocal<Object[]> lastSpans = new ThreadLocal<>();
 
     /**
      * Зона отступа: точки ближе distance к объекту. Расстояние считается точно, как у правила и check18, а не по
@@ -1088,6 +1093,13 @@ public final class ObstacleSet {
      * специальной части, если оно у начала или конца линии.
      */
     public List<SpecialSpan> spans(LineString line, Set<String> ignored) {
+        Coordinate[] coords = line.getCoordinates();
+        Object[] last = lastSpans.get();
+        if (last != null && Arrays.equals(coords, (Coordinate[]) last[0]) && ignored.equals(last[1])) {
+            @SuppressWarnings("unchecked")
+            List<SpecialSpan> known = (List<SpecialSpan>) last[2];
+            return known;
+        }
         List<Special> crossed = new ArrayList<>();
         for (Object item : specials.query(line.getEnvelopeInternal())) {
             Special special = (Special) item;
@@ -1095,7 +1107,10 @@ public final class ObstacleSet {
                 crossed.add(special);
             }
         }
-        return spans(line, crossed, ignored);
+        List<SpecialSpan> result = spans(line, crossed, ignored);
+        // копии: вызывающий может потом заменить вершины в массиве линии или поменять набор
+        lastSpans.set(new Object[] {coords.clone(), new java.util.HashSet<>(ignored), result});
+        return result;
     }
 
     public static double weight(double length, List<SpecialSpan> spans) {

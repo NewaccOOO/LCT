@@ -850,45 +850,78 @@ final class TreeBuilder {
      * изменений возвращается то же дерево.
      */
     Tree cut(Tree tree, Router router, int dn, Graphs graphs, int passes) {
+        Map<Tree.Node, List<ConnectionPoint>> below = new IdentityHashMap<>();
+        List<LineString> lines = new ArrayList<>();
+        List<Boolean> exits = new ArrayList<>();
+        List<ObstacleSet> zones = new ArrayList<>();
+        boolean[] narrow = new boolean[tree.edges.size()];
+        long points = 0;
+        for (Tree.Edge edge : tree.edges) {
+            int edgeDn = graphs == null ? dn : graphs.dn(below(tree, edge.to, below));
+            narrow[lines.size()] = edgeDn < dn;
+            zones.add(edgeDn < dn ? graphs.obstacles(edgeDn) : router.obstacles());
+            exits.add(edge.to.kind == Tree.Kind.CONNECTION && buildingByConnection.containsKey(edge.to.connection.getId())
+                    && edge.line.getNumPoints() > 2);
+            lines.add(edge.line);
+            points += edge.line.getNumPoints();
+        }
+        Set<String> ignored = tree.tie.getIgnored();
+        // срезка зависит только от линий рёбер, их зон и точек выхода, а одно и то же дерево приходит сюда много раз:
+        // ствол, проложенный заново от первой камеры, у разных кандидатов врезки один и тот же
+        Cut cut = router.cached(List.of("treeCut", passes, ignored, lines, exits, zones), 128 * points,
+                () -> cut(router, lines, exits, zones, ignored, passes));
         Tree result = new Tree(tree.tie);
         result.unconnected.addAll(tree.unconnected);
         result.narrow = tree.narrow;
-        Map<Tree.Node, List<ConnectionPoint>> below = new IdentityHashMap<>();
         boolean changed = false;
-        // рёбра, уже срезанные на этом дереве, сравниваются в новом виде: выпрямление дуги уводит ребро наружу
-        List<LineString> lines = new ArrayList<>();
-        for (Tree.Edge edge : tree.edges) {
-            lines.add(edge.line);
-        }
         for (int e = 0; e < tree.edges.size(); e++) {
             Tree.Edge edge = tree.edges.get(e);
+            result.narrow |= cut.changed[e] && narrow[e];
+            changed |= cut.changed[e];
+            // у нового дерева свой узел врезки: ребро от прежнего degree(root) не считает, и ёмкость общей камеры
+            // врезки (VariantEnumerator#compatible) не проверялась бы
+            Tree.Node from = edge.from == tree.root ? result.root : edge.from;
+            result.edges.add(new Tree.Edge(from, edge.to, factory.createLineString(cut.lines[e].clone())));
+        }
+        return changed ? result : tree;
+    }
+
+    /** Вершины рёбер после срезки и доводки и какие рёбра изменились, см. {@link #cut}. */
+    private static final class Cut {
+        final Coordinate[][] lines;
+        final boolean[] changed;
+
+        Cut(Coordinate[][] lines, boolean[] changed) {
+            this.lines = lines;
+            this.changed = changed;
+        }
+    }
+
+    /** Срезка и доводка рёбер lines по зонам zones; exits — у ребра точка выхода из здания перед последней вершиной. */
+    private Cut cut(Router router, List<LineString> lines, List<Boolean> exits, List<ObstacleSet> zones,
+            Set<String> ignored, int passes) {
+        // рёбра, уже срезанные на этом дереве, сравниваются в новом виде: выпрямление дуги уводит ребро наружу
+        List<LineString> current = new ArrayList<>(lines);
+        Coordinate[][] result = new Coordinate[lines.size()][];
+        boolean[] changed = new boolean[lines.size()];
+        for (int e = 0; e < lines.size(); e++) {
             List<LineSegment> others = new ArrayList<>();
-            for (int o = 0; o < lines.size(); o++) {
-                Coordinate[] coords = lines.get(o).getCoordinates();
+            for (int o = 0; o < current.size(); o++) {
+                Coordinate[] coords = current.get(o).getCoordinates();
                 for (int i = 0; o != e && i + 1 < coords.length; i++) {
                     others.add(new LineSegment(coords[i], coords[i + 1]));
                 }
             }
-            List<Coordinate> coords = new ArrayList<>(Arrays.asList(edge.line.getCoordinates()));
-            Coordinate exit = edge.to.kind == Tree.Kind.CONNECTION && buildingByConnection.containsKey(edge.to.connection.getId())
-                    && coords.size() > 2 ? coords.get(coords.size() - 2) : null;
-            int edgeDn = graphs == null ? dn : graphs.dn(below(tree, edge.to, below));
-            ObstacleSet zones = edgeDn < dn ? graphs.obstacles(edgeDn) : router.obstacles();
-            boolean edgeChanged = false;
-            Set<String> ignored = tree.tie.getIgnored();
-            for (int pass = 0; pass < passes && router.cutPass(zones, coords, ignored, exit, others); pass++) {
-                edgeChanged = true;
+            List<Coordinate> coords = new ArrayList<>(Arrays.asList(lines.get(e).getCoordinates()));
+            Coordinate exit = exits.get(e) ? coords.get(coords.size() - 2) : null;
+            for (int pass = 0; pass < passes && router.cutPass(zones.get(e), coords, ignored, exit, others); pass++) {
+                changed[e] = true;
             }
-            edgeChanged |= router.sharpen(zones, coords, ignored, exit, others);
-            result.narrow |= edgeChanged && edgeDn < dn;
-            changed |= edgeChanged;
-            lines.set(e, factory.createLineString(coords.toArray(new Coordinate[0])));
-            // у нового дерева свой узел врезки: ребро от прежнего degree(root) не считает, и ёмкость общей камеры
-            // врезки (VariantEnumerator#compatible) не проверялась бы
-            Tree.Node from = edge.from == tree.root ? result.root : edge.from;
-            result.edges.add(new Tree.Edge(from, edge.to, lines.get(e)));
+            changed[e] |= router.sharpen(zones.get(e), coords, ignored, exit, others);
+            result[e] = coords.toArray(new Coordinate[0]);
+            current.set(e, factory.createLineString(result[e]));
         }
-        return changed ? result : tree;
+        return new Cut(result, changed);
     }
 
     /** Точки подключения в поддереве узла node, по узлам в memo. */

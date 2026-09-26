@@ -171,6 +171,28 @@ class ObstacleGeometryTest {
     }
 
     @Test
+    void hashOrderMatchesHashMap() {
+        for (int round = 0; round < 400; round++) {
+            // ключи состояний точного поиска node·(n+1)+pred; в каждом десятом наборе ключи с одним hashCode, корзина
+            // дорастает до дерева
+            int n = 20 + random.nextInt(2000);
+            java.util.Set<Long> unique = new java.util.LinkedHashSet<>();
+            int size = random.nextInt(round % 2 == 0 ? 300 : 60_000);
+            for (int i = 0; i < size; i++) {
+                long j = random.nextInt(1000);
+                unique.add(round % 10 == 9 && i % 3 == 0 ? j << 32 | j : (long) random.nextInt(n) * (n + 1) + random.nextInt(n + 1));
+            }
+            long[] keys = unique.stream().mapToLong(Long::longValue).toArray();
+            java.util.Map<Long, Integer> map = new java.util.HashMap<>();
+            for (int k = 0; k < keys.length; k++) {
+                map.put(keys[k], k);
+            }
+            org.junit.jupiter.api.Assertions.assertArrayEquals(map.values().stream().mapToInt(Integer::intValue).toArray(),
+                    Router.hashOrder(keys, keys.length), "round " + round);
+        }
+    }
+
+    @Test
     void gridIndexMatchesFloor() {
         ObstacleSet.ZoneGrid grid = new ObstacleSet.ZoneGrid(List.of(new ObstacleSet.Zone("z", object(), 1)));
         double[] values = {0, -0.0, 0.5, -0.5, -1, -1e-300, 1e-300, 3e9, -3e9, -2147483648.5, Double.NaN,
