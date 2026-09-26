@@ -76,16 +76,73 @@ public final class Router {
     private final java.util.concurrent.atomic.AtomicLong tableRequests = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong tableHits = new java.util.concurrent.atomic.AtomicLong();
 
-    /** Таблица Дейкстры от точки запроса: расстояния до узлов, предшественники и узлы по возрастанию расстояния. */
-    private static final class Table {
+    /**
+     * Таблица Дейкстры от точки запроса: расстояния до узлов, предшественники и узлы по возрастанию расстояния.
+     * Считается по мере надобности, см. {@link #settle}: choose на наборах доходит до 20–40 % узлов. Шаги поиска те же,
+     * что у полного расчёта, только с паузами, поэтому первые settled узлов в order, их dist и pred совпадают с полной
+     * таблицей. Узел, попавший в order, больше не меняется: веса рёбер не отрицательны, и более короткого пути до него
+     * поиск уже не найдёт.
+     */
+    private final class Table {
         final double[] dist;
         final int[] pred;
         final int[] order;
+        // копия координат, а не ссылка на Coordinate: вызывающий может изменить точку, а поиск продолжится позже
+        private final double sourceX;
+        private final double sourceY;
+        private int settled;
+        private boolean[] done;
+        private Heap heap = new Heap();
 
-        Table(double[] dist, int[] pred, int[] order) {
+        Table(Coordinate source, double[] dist) {
+            int n = dist.length;
+            sourceX = source.x;
+            sourceY = source.y;
             this.dist = dist;
-            this.pred = pred;
-            this.order = order;
+            pred = new int[n];
+            Arrays.fill(pred, -1);
+            order = new int[n];
+            done = new boolean[n];
+            for (int v = 0; v < n; v++) {
+                if (!Double.isNaN(dist[v])) {
+                    heap.add(dist[v], v, 0, 0);
+                } else {
+                    dist[v] = Double.POSITIVE_INFINITY;
+                }
+            }
+        }
+
+        /** Продолжает поиск, пока узлов в order меньше count и есть куда идти; возвращает число узлов в order. */
+        synchronized int settle(int count) {
+            while (settled < count && heap != null) {
+                if (heap.isEmpty()) {
+                    heap = null;
+                    done = null;
+                    break;
+                }
+                heap.poll();
+                int v = heap.node;
+                if (done[v] || heap.key > dist[v]) {
+                    continue;
+                }
+                done[v] = true;
+                order[settled++] = v;
+                double beforeX = pred[v] < 0 ? sourceX : nodeXY[2 * pred[v]];
+                double beforeY = pred[v] < 0 ? sourceY : nodeXY[2 * pred[v] + 1];
+                for (int k = 0; k < adjacency[v].length; k++) {
+                    int w = adjacency[v][k];
+                    double candidate = dist[v] + adjacencyWeight[v][k];
+                    // ponytail: поворот считается по предшественнику узла, а не по состоянию (узел, направление): путь
+                    // может быть не кратчайшим среди путей с поворотами до 90°, зато таблица остаётся O(узлов)
+                    if (candidate < dist[w]
+                            && turnAllowed(beforeX, beforeY, nodeXY[2 * v], nodeXY[2 * v + 1], nodeXY[2 * w], nodeXY[2 * w + 1])) {
+                        dist[w] = candidate;
+                        pred[w] = v;
+                        heap.add(candidate, w, 0, 0);
+                    }
+                }
+            }
+            return settled;
         }
     }
 
@@ -234,6 +291,7 @@ public final class Router {
         int bestVia = -1;
         double bestExtra = 0;
         boolean tied = false;
+        int ready = 0;
         for (Point target : targets) {
             Coordinate t = target.getCoordinate();
             double extra = target.getUserData() instanceof Double ? (Double) target.getUserData() : 0;
@@ -258,8 +316,10 @@ public final class Router {
             int via = -1;
             double[] toNodes = partialWeights(t, ignored);
             // узлы по возрастанию веса от источника: дальше текущего веса они не выиграют. Выбор тот же, что у
-            // перебора по номерам: наименьший вес, при равенстве — прямой отрезок, затем меньший номер узла
-            for (int v : order) {
+            // перебора по номерам: наименьший вес, при равенстве — прямой отрезок, затем меньший номер узла. Таблица
+            // досчитывается до очередного узла, только когда перебор до него дошёл
+            for (int i = 0; i < ready || (ready = table.settle(i + 1)) > i; i++) {
+                int v = order[i];
                 if (dist[v] > weight) {
                     break;
                 }
@@ -353,6 +413,11 @@ public final class Router {
         Arrays.fill(known, Double.POSITIVE_INFINITY);
         long[] came = new long[edges + n];
         Arrays.fill(came, -1);
+        // вес состояния-ребра задаётся один раз: веса рёбер не отрицательны, состояния извлекаются по неубыванию веса,
+        // и позже пришедший вес не меньше записанного. Проверка у ребра с весом всегда ложна, поэтому такие рёбра
+        // пропускаются, см. open
+        int[] skip = new int[edges + 1];
+        Arrays.setAll(skip, e -> e);
         Heap heap = new Heap();
         for (int v = 0; v < n; v++) {
             if (!Double.isNaN(toNode[v]) && turnAllowed(incoming, source, nodes.get(v))) {
@@ -375,24 +440,37 @@ public final class Router {
             }
             double beforeX = p < 0 ? source.x : nodeXY[2 * p];
             double beforeY = p < 0 ? source.y : nodeXY[2 * p + 1];
-            for (int k = 0; k < adjacency[v].length; k++) {
+            for (int edge = open(skip, edgeStart[v]); edge < edgeStart[v + 1]; edge = open(skip, edge + 1)) {
+                int k = edge - edgeStart[v];
                 int w = adjacency[v][k];
-                if (!turnAllowed(beforeX, beforeY, nodeXY[2 * v], nodeXY[2 * v + 1], nodeXY[2 * w], nodeXY[2 * w + 1])) {
-                    continue;
-                }
                 double weight = reached + adjacencyWeight[v][k];
-                int edge = edgeStart[v] + k;
-                if (weight < known[edge] - 1e-9) {
+                // поворот дороже сравнения весов, а нужен только ребру, которое улучшает состояние
+                if (weight < known[edge] - 1e-9
+                        && turnAllowed(beforeX, beforeY, nodeXY[2 * v], nodeXY[2 * v + 1], nodeXY[2 * w], nodeXY[2 * w + 1])) {
                     long next = state(w, v, n);
                     dist.put(next, weight);
                     known[edge] = weight;
                     came[edge] = state(v, p, n);
                     heap.add(weight, w, v, edge);
+                    skip[edge] = edge + 1;
                 }
             }
         }
         LOG.debug("routeExact: узлов {}, состояний {}", n, dist.size());
         return new Exact(dist, came);
+    }
+
+    /**
+     * Первое ребро с номером не меньше e, у которого в точном поиске ещё нет веса. skip[e] == e — у ребра e веса нет,
+     * иначе у рёбер от e до skip[e] вес уже есть. Каждый вызов вдвое сокращает пройденную цепочку, поэтому пропуск
+     * почти бесплатен.
+     */
+    private static int open(int[] skip, int e) {
+        while (skip[e] != e) {
+            skip[e] = skip[skip[e]];
+            e = skip[e];
+        }
+        return e;
     }
 
     /** Лучшая цель по состояниям точного поиска и маршрут до неё. */
@@ -561,46 +639,9 @@ public final class Router {
             tableHits.incrementAndGet();
             return cached;
         }
-        int n = nodes.size();
-        double[] dist = nodeWeights(source, ignored).clone();
-        int[] pred = new int[n];
-        Arrays.fill(pred, -1);
-        boolean[] done = new boolean[n];
-        int[] order = new int[n];
-        int settled = 0;
-        Heap heap = new Heap();
-        for (int v = 0; v < n; v++) {
-            if (!Double.isNaN(dist[v])) {
-                heap.add(dist[v], v, 0, 0);
-            } else {
-                dist[v] = Double.POSITIVE_INFINITY;
-            }
-        }
-        while (!heap.isEmpty()) {
-            heap.poll();
-            int v = heap.node;
-            if (done[v] || heap.key > dist[v]) {
-                continue;
-            }
-            done[v] = true;
-            order[settled++] = v;
-            double beforeX = pred[v] < 0 ? source.x : nodeXY[2 * pred[v]];
-            double beforeY = pred[v] < 0 ? source.y : nodeXY[2 * pred[v] + 1];
-            for (int k = 0; k < adjacency[v].length; k++) {
-                int w = adjacency[v][k];
-                double candidate = dist[v] + adjacencyWeight[v][k];
-                // ponytail: поворот считается по предшественнику узла, а не по состоянию (узел, направление): путь
-                // может быть не кратчайшим среди путей с поворотами до 90°, зато таблица остаётся O(узлов)
-                if (candidate < dist[w]
-                        && turnAllowed(beforeX, beforeY, nodeXY[2 * v], nodeXY[2 * v + 1], nodeXY[2 * w], nodeXY[2 * w + 1])) {
-                    dist[w] = candidate;
-                    pred[w] = v;
-                    heap.add(candidate, w, 0, 0);
-                }
-            }
-        }
-        Table table = new Table(dist, pred, Arrays.copyOf(order, settled));
-        cache.put(key, table, 16L * n);
+        Table table = new Table(source, nodeWeights(source, ignored).clone());
+        // dist, pred и order — 16 байт на узел; куча приостановленного поиска на плотных наборах добавляет около 30
+        cache.put(key, table, 48L * nodes.size());
         return table;
     }
 
