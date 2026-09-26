@@ -1,8 +1,9 @@
 """Проверка выхода по техническому приложению и разъяснениям от 18.09.2026.
 
-Запуск из корня: uv run --project tools python tools/validator/check18.py <вход.geojson> <выход.geojson>
+Запуск из корня: uv run --project tools python tools/validator/check18.py <вход.geojson> <выход.geojson> [--no-shape]
 Печатает нарушения по категориям (A — состав и ссылки, B — геометрия и отступы, C — расходы и ДУ, D — камеры,
-E — стоимость и сводка), строки «i» — справочные. В конце CHECK18 OK и код 0, если нарушений нет.
+E — стоимость и сводка), строки «i» — справочные. В конце CHECK18 OK и код 0, если нарушений нет. B16–B18 — форма
+трассы (п. 5), --no-shape их отключает.
 """
 import json
 import math
@@ -39,6 +40,17 @@ NODE_TOL = 0.05
 # допуск границ полосы спецпрохода: сервис прижимает границу спецучастка к узлу ближе 0,08 м
 ZONE_TOL = 0.1
 EPS = 0.01
+# форма трассы (п. 5): поворот — вершина с отклонением от 3°, короткое звено между поворотами — до 10 м
+TURN_DEG = 3.0
+SHORT_LINK_M = 10.0
+# запасы замены в B16–B18 как у сервиса, толкование п. 5 (Router: CUT_MARGIN_M, CUT_APART_M, MAX_TURN_DEG,
+# CUT_PIECE_M): отступ до зон с запасом сверх нормы, зазор до других участков новой сети, поворот и звено
+CUT_MARGIN_M = 0.15
+CUT_APART_M = 0.5
+MAX_TURN_DEG = 89.9
+CUT_PIECE_M = 1.05
+# --no-shape отключает B16–B18: так старые категории сверяются с прежними прогонами
+SHAPE = "--no-shape" not in sys.argv
 
 
 def to_utm(geom):
@@ -141,7 +153,7 @@ class Report:
 
 def load_input(path):
     data = json.load(open(path))
-    cps, chambers, pipes, oks, forbid, special = {}, {}, [], [], [], []
+    cps, chambers, pipes, oks, forbid, special, buildings = {}, {}, [], [], [], [], []
     id_types = {}
     # формат раздела 12: расход у oks_future, точка ссылается на него через oks_id; у датасета организаторов расход
     # у самой точки
@@ -156,6 +168,9 @@ def load_input(path):
             cps[str(p["id"])] = (utm(f["geometry"]), flow)
             if "oks_id" in p:
                 cps.setdefault(str(p["oks_id"]), cps[str(p["id"])])
+        elif t in ("oks_existing", "oks_future"):
+            # формат раздела 12: здания — отдельные объекты; старые категории их не проверяют, B16–B18 обходят
+            buildings.append((str(p["id"]), utm(f["geometry"])))
         elif t == "heat_chamber":
             chambers[str(p["id"])] = utm(f["geometry"])
         elif t == "heat_network":
@@ -169,7 +184,8 @@ def load_input(path):
                 special.append((str(p["id"]), rt, g))
             elif rt in FORBID or rt not in RULES["restrictions"]:
                 forbid.append((str(p["id"]), rt, g))
-    return dict(cps=cps, chambers=chambers, pipes=pipes, oks=oks, forbid=forbid, special=special, id_types=id_types)
+    return dict(cps=cps, chambers=chambers, pipes=pipes, oks=oks, forbid=forbid, special=special, id_types=id_types,
+                buildings=buildings)
 
 
 def check_variant(inp, trees, vid, feats, rep):
@@ -547,7 +563,10 @@ def check_variant(inp, trees, vid, feats, rep):
             d = line.distance(rg)
             if d < FORBID.get(rt, FALLBACK) + DN[dn]["width_m"] / 2 - EPS:
                 rep.add(f"B7 {'пересекает' if d == 0 else 'ближе отступа к'} {rt}", f"{p['id']} {d:.2f} м ({rt} {rid})")
-    check_specials(trees, segs, geo, adj, kinds, {n: node_geom(n)[0] for n in tie_nodes}, rep)
+    ties = {n: node_geom(n)[0] for n in tie_nodes}
+    check_specials(trees, segs, geo, adj, kinds, ties, rep)
+    if SHAPE:
+        check_shape(trees, segs, geo, adj, kinds, final_piece, ties, rep)
 
     # E. стоимость участков по правилам 18.09 (без надбавки за поворот)
     seg_cost_new = 0.0
@@ -779,6 +798,172 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
                     f"{sid_of[id(a)]} и {sid_of[id(b)]} {rest.distance(lines[j]) * 1000:.1f} мм")
 
 
+def signed_turn(a, b, c):
+    """Отклонение в вершине b со знаком: плюс — влево, минус — вправо."""
+    cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
+    return math.copysign(turn_deg(a, b, c), cross)
+
+
+def extend_cross(p1, p2, q1, q2):
+    """Точка, где прямая p1→p2, продолженная вперёд, встречает прямую q2→q1, продолженную назад; None, если нет."""
+    d1x, d1y = p2[0] - p1[0], p2[1] - p1[1]
+    d2x, d2y = q1[0] - q2[0], q1[1] - q2[1]
+    den = d1x * d2y - d1y * d2x
+    if abs(den) < 1e-9:
+        return None
+    wx, wy = q2[0] - p1[0], q2[1] - p1[1]
+    t = (wx * d2y - wy * d2x) / den
+    u = (wx * d1y - wy * d1x) / den
+    return (p1[0] + t * d1x, p1[1] + t * d1y) if t > 0 and u > 0 else None
+
+
+def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, rep):
+    """B16–B18: лишние вершины, двойные повороты и зигзаги внутри участка (п. 5).
+
+    Замена возможна, если новая геометрия держит запасы сервиса (толкование п. 5): отступы до ОКС, запретных зон и
+    спецобъектов по ДУ участка с запасом CUT_MARGIN_M (существующая сеть у врезки не мешает звену от врезки), не
+    ближе CUT_APART_M к другим участкам новой сети (у отрезков из общего узла — у дальних концов), не пересекает
+    себя, повороты в вершинах и технических узлах не круче MAX_TURN_DEG, новые звенья не короче CUT_PIECE_M.
+    Вершины финального участка к точке (точка выхода) и спецучастки не меняются."""
+    lines = [geo[str(s["properties"]["id"])] for s in segs]
+    tree = STRtree(lines)
+    tie_keys = {n: {(rt, rid) for rid, rt, _, _ in trees["spec_near"](pt, 0.5) if rt == "heat_network"}
+                for n, pt in ties.items()}
+    forbid_reach = max(FALLBACK, *FORBID.values())
+
+    def node_turn(s, node, pt, nb):
+        """Поворот в техническом узле между соседним участком и звеном pt→nb; в других узлах поворот не считается."""
+        if kinds.get(node) != "technical_node" or len(adj[node]) != 2:
+            return 0.0
+        oc = list(geo[str(next(t for t in adj[node] if t is not s)["properties"]["id"])].coords)
+        prev = oc[1] if Point(oc[0]).distance(geo[node]) <= NODE_TOL else oc[-2]
+        return turn_deg(prev, pt, nb)
+
+    def blocked(k, new, changed):
+        """Почему геометрия new вместо участка k недопустима; None — допустима. changed — номера новых звеньев."""
+        p = segs[k]["properties"]
+        start, end = str(p["start_node_id"]), str(p["end_node_id"])
+        w2 = DN[p["diameter"]]["width_m"] / 2
+        need = oks_clearance(p["diameter"]) + w2
+        if not LineString(new).is_simple:
+            return "участок пересекает сам себя"
+        for i in range(max(1, changed[0]), min(len(new) - 1, changed[-1] + 2)):
+            if turn_deg(new[i - 1], new[i], new[i + 1]) > MAX_TURN_DEG:
+                return f"поворот {turn_deg(new[i - 1], new[i], new[i + 1]):.1f}° > {MAX_TURN_DEG}°"
+        if changed[0] == 0 and node_turn(segs[k], start, new[0], new[1]) > MAX_TURN_DEG \
+                or changed[-1] == len(new) - 2 and node_turn(segs[k], end, new[-1], new[-2]) > MAX_TURN_DEG:
+            return f"поворот в техническом узле > {MAX_TURN_DEG}°"
+        for i in changed:
+            link = LineString(new[i:i + 2])
+            if link.length < CUT_PIECE_M:
+                return f"звено {link.length:.2f} м < {CUT_PIECE_M} м"
+            for oid, og in trees["all_oks_near"](link, need + CUT_MARGIN_M):
+                if link.distance(og) < need + CUT_MARGIN_M:
+                    return f"отступ до ОКС {oid} {link.distance(og):.2f} м < {need:.2f} + {CUT_MARGIN_M} м"
+            for rid, rt, rg in trees["forbid_near"](link, forbid_reach + w2 + CUT_MARGIN_M):
+                if link.distance(rg) < FORBID.get(rt, FALLBACK) + w2 + CUT_MARGIN_M:
+                    return (f"отступ до {rt} {rid} {link.distance(rg):.2f} м < "
+                            f"{FORBID.get(rt, FALLBACK) + w2:.2f} + {CUT_MARGIN_M} м")
+            exempt = set()
+            if i == 0:
+                exempt |= tie_keys.get(start, set())
+            if i == len(new) - 2:
+                exempt |= tie_keys.get(end, set())
+            for rid, rt, rg, extra in trees["spec_near"](link, trees["spec_reach"] + w2 + CUT_MARGIN_M):
+                norm = _TYPES[rt]["clearance_m"] + w2 + extra
+                if (rt, rid) not in exempt and link.distance(rg) < norm + CUT_MARGIN_M:
+                    return f"отступ до {rt} {rid} {link.distance(rg):.2f} м < {norm:.2f} + {CUT_MARGIN_M} м"
+            # зазор до других участков по отрезкам; отрезки из общего узла расходятся от него, у них зазор меряется
+            # у дальних концов, как Router.apart в сервисе
+            ab = new[i:i + 2]
+            for j in tree.query(link, predicate="dwithin", distance=CUT_APART_M):
+                if j == k:
+                    continue
+                oc = list(lines[j].coords)
+                for q in zip(oc, oc[1:]):
+                    ends = [(x, y) for x in (0, 1) for y in (0, 1) if math.dist(ab[x], q[y]) <= NODE_TOL]
+                    if ends:
+                        x, y = ends[0]
+                        gap = min(LineString(q).distance(Point(ab[1 - x])), link.distance(Point(q[1 - y])))
+                    else:
+                        gap = link.distance(LineString(q))
+                    if gap < CUT_APART_M:
+                        return f"ближе {CUT_APART_M} м к участку {segs[j]['properties']['id']} ({gap:.2f} м)"
+        return None
+
+    for k, s in enumerate(segs):
+        p = s["properties"]
+        sid = str(p["id"])
+        c = list(lines[k].coords)
+        if p["laying_method"] == "special" or len(c) < 3:
+            continue
+        fixed = {i for i in range(1, len(c) - 1) if sid in final_piece and tuple(c[i]) in final_piece[sid][1].coords}
+        along = [0.0]
+        for a, b in zip(c, c[1:]):
+            along.append(along[-1] + math.dist(a, b))
+
+        # А. вершина лишняя, если соседей можно соединить прямой
+        for i in range(1, len(c) - 1):
+            if i in fixed:
+                continue
+            why = blocked(k, c[:i] + c[i + 1:], [i - 1])
+            if why is None:
+                rep.add("B16 лишняя вершина: соседей можно соединить прямой",
+                        f"{sid} вершина {i} {turn_deg(c[i - 1], c[i], c[i + 1]):.1f}°")
+            else:
+                rep.add("i  вершину убрать нельзя (B16)", f"{sid} вершина {i}: {why}")
+
+        turns = [(i, signed_turn(c[i - 1], c[i], c[i + 1])) for i in range(1, len(c) - 1)]
+        turns = [(i, a) for i, a in turns if abs(a) >= TURN_DEG]
+
+        # Б. цепочка поворотов в одну сторону со звеньями короче 10 м: ищется её часть, которую заменяет один поворот
+        # в точке пересечения продолженных крайних отрезков; сначала вся цепочка, потом короче
+        chain = []
+        for (i, a), nxt in zip(turns, turns[1:] + [None]):
+            chain.append((i, a))
+            if nxt is not None and nxt[1] * a > 0 and along[nxt[0]] - along[i] < SHORT_LINK_M:
+                continue
+            runs = sorted(((x, y) for x in range(len(chain)) for y in range(x + 1, len(chain))),
+                          key=lambda r: r[0] - r[1])
+            first = None
+            for x, y in runs:
+                j, m = chain[x][0], chain[y][0]
+                total = sum(signed_turn(c[v - 1], c[v], c[v + 1]) for v in range(j, m + 1))
+                cross = extend_cross(c[j - 1], c[j], c[m], c[m + 1])
+                if fixed & set(range(j, m + 1)):
+                    why = "в цепочке точка выхода финального участка"
+                elif abs(total) > MAX_TURN_DEG:
+                    why = f"сумма поворотов {abs(total):.1f}° > {MAX_TURN_DEG}°"
+                elif cross is None:
+                    why = "продолженные отрезки не пересекаются"
+                else:
+                    why = blocked(k, c[:j] + [cross] + c[m + 1:], [j - 1, j])
+                angles = [round(t[1], 1) for t in chain[x:y + 1]]
+                text = f"{sid} вершины {j}–{m} повороты {angles} на {along[m] - along[j]:.1f} м"
+                if why is None:
+                    rep.add("B17 двойной поворот можно заменить одним", f"{text} → {abs(total):.1f}°")
+                    break
+                first = first or f"{text}: {why}"
+            else:
+                if first:
+                    rep.add("i  двойной поворот нельзя заменить одним (B17)", first)
+            chain = []
+
+        # В. два поворота в разные стороны меньше 30° со звеном короче 10 м: зигзаг, если их можно убрать оба
+        for (j, a), (m, b) in zip(turns, turns[1:]):
+            if a * b > 0 or along[m] - along[j] >= SHORT_LINK_M or max(abs(a), abs(b)) >= 30.0:
+                continue
+            if fixed & set(range(j, m + 1)):
+                why = "точка выхода финального участка"
+            else:
+                why = blocked(k, c[:j] + c[m + 1:], [j - 1])
+            text = f"{sid} вершины {j}–{m} повороты {a:.1f}° и {b:.1f}° на {along[m] - along[j]:.1f} м"
+            if why is None:
+                rep.add("B18 зигзаг можно спрямить", text)
+            else:
+                rep.add("i  зигзаг нельзя спрямить (B18)", f"{text}: {why}")
+
+
 def trees_for(inp):
     oks_geoms = [g for _, g in inp["oks"]]
     t_oks = STRtree(oks_geoms)
@@ -814,12 +999,15 @@ def trees_for(inp):
             for rid, rt, g in inp["special"]]
     spec += [(pid, "heat_network", g, DN.get(pdn, {"width_m": 0.0})["width_m"] / 2) for pid, g, pdn in inp["pipes"]]
     t_spec = STRtree([o[2] for o in spec])
+    all_oks = inp["oks"] + inp["buildings"]
+    t_all_oks = STRtree([g for _, g in all_oks])
 
     return {
         "spec_near": lambda g, d: [spec[i] for i in t_spec.query(g, predicate="dwithin", distance=d)],
         "spec_reach": max(_TYPES[rt]["clearance_m"] + extra for _, rt, _, extra in spec) if spec else 0.0,
         "cps_in": cps_in,
         "oks_near": lambda g, d: [inp["oks"][i] for i in t_oks.query(g, predicate="dwithin", distance=d)],
+        "all_oks_near": lambda g, d: [all_oks[i] for i in t_all_oks.query(g, predicate="dwithin", distance=d)],
         "forbid_near": lambda g, d: [inp["forbid"][i] for i in t_forbid.query(g, predicate="dwithin", distance=d)] if t_forbid else [],
         "special_near": lambda g, d: [inp["special"][i] for i in t_special.query(g, predicate="dwithin", distance=d)] if t_special else [],
         "pipes_near": lambda g: [inp["pipes"][i][1] for i in t_pipes.query(g, predicate="dwithin", distance=2.5)],
