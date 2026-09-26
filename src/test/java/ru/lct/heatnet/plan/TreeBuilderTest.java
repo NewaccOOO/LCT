@@ -140,6 +140,26 @@ class TreeBuilderTest {
     }
 
     @Test
+    void exitLinkSplitsTurnSteeperThan90IntoTwoAllowedTurns() {
+        // маршрут от выхода уходит назад к стене на 0,41° круче перпендикуляра, как у точки 4 датасета
+        Coordinate cp = new Coordinate(0, 0);
+        Coordinate exit = new Coordinate(0, 10);
+        Coordinate next = new Coordinate(-20, 10 - 20 * Math.tan(Math.toRadians(0.41)));
+        Coordinate[] route = {cp, exit, next, new Coordinate(-60, 30)};
+        assertTrue(TreeBuilder.deflectionDeg(cp, exit, next) > Router.MAX_TURN_DEG);
+
+        Coordinate[] linked = TreeBuilder.exitLink(route, 1.5);
+
+        assertEquals(route.length + 1, linked.length);
+        assertEquals(exit, linked[1], "финальный участок точка–выход тот же");
+        assertEquals(1.5, exit.distance(linked[2]), 1e-9);
+        for (int i = 1; i + 1 < linked.length; i++) {
+            double turn = TreeBuilder.deflectionDeg(linked[i - 1], linked[i], linked[i + 1]);
+            assertTrue(turn >= TreeBuilder.MIN_TURN_DEG && turn <= Router.MAX_TURN_DEG, "поворот " + turn + "° в вершине " + i);
+        }
+    }
+
+    @Test
     void exitFacesNeighbourByDiameterOfOwnPieceNotOfTreeGraph() {
         // сосед в 12 м за ближней (южной) стеной, до восточной 5 м: по графу Ду500 (отступ 7,835 м) выход лёг бы в его зону, по Ду
         // участка точки (5 т/ч, отступ около 5,2 м) проход есть, и финальный участок идёт от ближней стены

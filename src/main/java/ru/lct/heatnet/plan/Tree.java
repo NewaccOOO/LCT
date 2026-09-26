@@ -69,6 +69,10 @@ final class Tree {
     private volatile Geometry geometry;
     /** Есть ветка по графу меньшего Ду, чем у дерева (TreeBuilder.Run#portal): отступы проверяются по Ду участков. */
     boolean narrow;
+    /** Есть ветка со звеном после выхода из здания (TreeBuilder#exitLink). */
+    boolean linked;
+    /** Точка осталась без сети, потому что маршрут от её выхода уходит круче 90°, а звено после выхода не пробовалось. */
+    boolean turnStuck;
 
     Tree(TieCandidate tie) {
         this.tie = tie;
