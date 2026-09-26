@@ -279,6 +279,39 @@ class TreeBuilderTest {
         assertTrue(moved.length() < tree.length() - 1, "длина " + moved.length() + " против " + tree.length());
     }
 
+    @Test
+    void tieSlidesAlongPipeToDropVertexNotNeededForClearance() {
+        // ветка от врезки на трубе ломается на 10,5° в 1,5 м перед поворотом на 80°: прямая от врезки к дальней вершине
+        // дала бы там 90,3°, а от места на 0,8 м левее по трубе — не круче 89,9° и короче прежней ветки
+        PlanFixture fixture = PlanFixture.trunk().oks("o-1", 340, 96, 5);
+        InputData input = fixture.input();
+        TieInFinder finder = new TieInFinder(input, rules);
+        TieCandidate tie = finder.find(List.of(point(300, 60)), DN).stream()
+                .filter(c -> c.getExistingObjectId().equals("hn-2")).findFirst().orElseThrow();
+        Coordinate root = tie.getPoint().getCoordinate();
+        double bend = Math.toRadians(10.5);
+        Coordinate kink = new Coordinate(root.x, root.y + 95);
+        Coordinate turn = new Coordinate(kink.x + 1.5 * Math.sin(bend), kink.y + 1.5 * Math.cos(bend));
+        Tree tree = new Tree(tie);
+        tree.edges.add(new Tree.Edge(tree.root, Tree.Node.connection(fixture.connection("o-1")), PlanFixture.GEOMETRY
+                .createLineString(new Coordinate[] {root, kink, turn, new Coordinate(turn.x + 40, turn.y - 0.35)})));
+        Map<Tree.Edge, Double> priceRub = Map.of(tree.edges.get(0), 1.0);
+        TreeBuilder builder = builder(input, finder);
+        Router router = new Router(input, rules, AREA, DN);
+
+        assertEquals(null, builder.retie(tree, tree.edges.get(0), new Coordinate(root.x - 0.1, root.y), priceRub, 0),
+                "поворот круче 89,9°");
+        TieCandidate moved = finder.shifted(tie, root, -0.8, DN);
+        TreeBuilder.Slide slide = builder.retie(tree, tree.edges.get(0), moved.getPoint().getCoordinate(), priceRub, 0);
+
+        assertTrue(slide != null && slide.gain < 0, "сдвиг дешевле");
+        assertEquals(3, slide.lines.get(tree.edges.get(0)).length, "вершина излома ушла");
+        assertTrue(builder.retieClear(tree, slide, moved.getIgnored(), edge -> router.obstacles()));
+        Tree retied = builder.moved(tree, slide, moved);
+        assertEquals(root.x - 0.8, retied.root.point.x, 1e-9);
+        assertEquals(moved.nodeKey(), retied.root.key);
+    }
+
     private TreeBuilder builder(InputData input, TieInFinder finder) {
         return builder(input, finder, Map.of());
     }

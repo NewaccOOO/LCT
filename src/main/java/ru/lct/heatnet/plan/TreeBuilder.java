@@ -1358,6 +1358,67 @@ final class TreeBuilder {
         return new Slide(gain, junction, point, lines);
     }
 
+    /**
+     * Сдвиг новой камеры врезки на трубе в point, который убирает первую вершину ребра s от врезки (п. 5): s идёт
+     * прямой от point к своей второй вершине, остальные рёбра врезки — к своей первой. Здесь только дешёвые проверки
+     * новых звеньев, как у {@link #unkink}: не короче CUT_PIECE_M, поворот в следующей вершине не круче MAX_TURN_DEG,
+     * у ребра в здание звено от выхода к точке остаётся; остальное проверяет {@link #retieClear}. null — нельзя или
+     * gain больше maxGainRub.
+     */
+    Slide retie(Tree tree, Tree.Edge s, Coordinate point, Map<Tree.Edge, Double> priceRub, double maxGainRub) {
+        Map<Tree.Edge, Coordinate[]> lines = new IdentityHashMap<>();
+        double gain = 0;
+        for (Tree.Edge edge : tree.edges) {
+            if (edge.from != tree.root) {
+                continue;
+            }
+            Coordinate[] c = edge.line.getCoordinates();
+            int skip = edge == s ? 2 : 1;
+            boolean inside = edge.to.kind == Tree.Kind.CONNECTION && buildingByConnection.containsKey(edge.to.connection.getId());
+            if (c.length - skip < (inside ? 2 : 1)) {
+                return null;
+            }
+            Coordinate[] line = new Coordinate[c.length - skip + 1];
+            line[0] = point;
+            System.arraycopy(c, skip, line, 1, c.length - skip);
+            if (point.distance(line[1]) < Router.CUT_PIECE_M
+                    || line.length > 2 && deflectionDeg(point, line[1], line[2]) > Router.MAX_TURN_DEG) {
+                return null;
+            }
+            lines.put(edge, line);
+            gain += price(priceRub, edge) * (length(line) - edge.line.getLength());
+        }
+        return gain <= maxGainRub ? new Slide(gain, tree.root, point, lines) : null;
+    }
+
+    /**
+     * Новые звенья сдвига врезки slide ({@link #retie}) обычные с запасом {@link Router#CUT_MARGIN_M} по зонам Ду
+     * своего ребра, уходят от сети у новой врезки ({@link #leavesNetwork}, ignored — её участки) и не ближе к другим
+     * рёбрам дерева, чем допускает {@link Router#apart}.
+     */
+    boolean retieClear(Tree tree, Slide slide, Set<String> ignored, java.util.function.Function<Tree.Edge, ObstacleSet> zones) {
+        Coordinate point = slide.point;
+        for (Map.Entry<Tree.Edge, Coordinate[]> entry : slide.lines.entrySet()) {
+            Coordinate next = entry.getValue()[1];
+            ObstacleSet edgeZones = zones.apply(entry.getKey());
+            if (!edgeZones.covers(point, next) || !edgeZones.plain(point, next, ignored, Router.CUT_MARGIN_M)
+                    || !leavesNetwork(new LineSegment(next, point), ignored)) {
+                return false;
+            }
+            List<LineSegment> others = new ArrayList<>();
+            for (Tree.Edge other : tree.edges) {
+                Coordinate[] c = slide.lines.containsKey(other) ? slide.lines.get(other) : other.line.getCoordinates();
+                for (int i = 0; other != entry.getKey() && i + 1 < c.length; i++) {
+                    others.add(new LineSegment(c[i], c[i + 1]));
+                }
+            }
+            if (!Router.apart(new LineSegment(point, next), others)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** Точка звена c–u (не на концах) на прямой w–v по ту сторону от w, где v; null — такой нет. */
     private static Coordinate kinkPoint(Coordinate w, Coordinate v, Coordinate c, Coordinate u) {
         LineSegment kink = new LineSegment(w, v);
@@ -1459,11 +1520,16 @@ final class TreeBuilder {
 
     /** Дерево tree со сдвигом slide, найденным для него {@link #slides}. */
     Tree moved(Tree tree, Slide slide) {
+        return moved(tree, slide, tree.tie);
+    }
+
+    /** Дерево tree со сдвигом slide и врезкой tie: у сдвига врезки ({@link #retie}) она новая, у камеры — прежняя. */
+    Tree moved(Tree tree, Slide slide, TieCandidate tie) {
         Tree.Node junction = slide.junction;
-        Tree result = new Tree(tree.tie);
+        Tree result = new Tree(tie);
         result.unconnected.addAll(tree.unconnected);
         result.narrow = tree.narrow;
-        Tree.Node at = Tree.Node.junction(slide.point);
+        Tree.Node at = junction == tree.root ? result.root : Tree.Node.junction(slide.point);
         for (Tree.Edge edge : tree.edges) {
             Coordinate[] line = slide.lines.get(edge);
             Tree.Node from = edge.from == tree.root ? result.root : edge.from == junction ? at : edge.from;

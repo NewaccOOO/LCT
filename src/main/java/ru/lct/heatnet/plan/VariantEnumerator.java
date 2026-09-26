@@ -32,6 +32,7 @@ import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.index.quadtree.Quadtree;
 import org.locationtech.jts.index.strtree.STRtree;
+import org.locationtech.jts.linearref.LengthIndexedLine;
 import ru.lct.heatnet.graph.ObstacleIndex;
 import ru.lct.heatnet.graph.ObstacleSet;
 import ru.lct.heatnet.graph.Route;
@@ -138,6 +139,9 @@ public final class VariantEnumerator {
     private static final double IMPROVE_EPS = 1e-6;
     /** Сдвиг камеры, снимающий излом, не хуже по S с этим запасом на округление, см. {@link #unkinked(List)}. */
     private static final double UNKINK_EPS = 1e-9;
+    /** Сдвиги новой камеры врезки вдоль трубы, снимающие излом у неё: шаг и наибольший, см. {@link #retied}. */
+    private static final double RETIE_STEP_M = 0.1;
+    private static final double RETIE_MAX_M = 5;
     /** Сдвиг камер ветвления в деревьях выбранных вариантов (heatnet.slide.junctions), см. {@link #shifted(Draft)}. */
     private static final boolean SLIDE_JUNCTIONS =
             Boolean.parseBoolean(System.getProperty("heatnet.slide.junctions", "true"));
@@ -2427,10 +2431,10 @@ public final class VariantEnumerator {
 
     /**
      * Деревья варианта без изломов у камер ветвления, которые снимает сдвиг камеры вдоль её ребра
-     * ({@link TreeBuilder#unkinks}, п. 5). Рёбра камеры проверяются по зонам своего Ду, как в {@link #rerouted},
-     * и доводятся до строгой формы ({@link #sharpened}). Сдвиг берётся, если S узла врезки не растёт, Ду рёбер не
-     * растут, а дерево не касается других; дальше изломы ищутся на новом дереве. Каждый сдвиг убирает вершину,
-     * поэтому цикл конечен.
+     * ({@link TreeBuilder#unkinks}, п. 5), и у новой камеры врезки на трубе, которые снимает её сдвиг вдоль трубы
+     * ({@link #retied}). Рёбра камеры проверяются по зонам своего Ду, как в {@link #rerouted}, и доводятся до строгой
+     * формы ({@link #sharpened}). Сдвиг берётся, если S узла врезки не растёт, Ду рёбер не растут, а дерево не
+     * касается других; дальше изломы ищутся на новом дереве. Каждый сдвиг убирает вершину, поэтому цикл конечен.
      */
     private List<Tree> unkinked(List<Tree> trees) {
         long started = System.nanoTime();
@@ -2438,13 +2442,14 @@ public final class VariantEnumerator {
         int taken = 0;
         for (int t = 0; t < result.size(); t++) {
             Tree first = result.get(t);
-            if (JunctionMover.junctions(first).isEmpty()) {
+            if (JunctionMover.junctions(first).isEmpty() && first.tie.isChamber()) {
                 continue;
             }
             Region region = regionByConnection.get(first.connected().get(0).getId());
             Envelope area = region.area.contains(first.envelope()) ? region.area : region.wideArea;
             // сдвиг, который не взят, у той же камеры не пробуется снова
             Set<List<Double>> tried = new HashSet<>();
+            boolean retieTried = false;
             for (boolean moved = area.contains(first.envelope()); moved; ) {
                 moved = false;
                 Tree tree = result.get(t);
@@ -2462,13 +2467,14 @@ public final class VariantEnumerator {
                 }
                 Map<Tree.Edge, Double> priceRub = new IdentityHashMap<>();
                 dnByEdge.forEach((edge, dn) -> priceRub.put(edge, rules.diameter(dn).getNewRubM() + rules.lengthWorthRub()));
-                double before = unitScore(unit);
+                // у дерева без камер ветвления S нужна, только если врезку есть куда сдвинуть
+                double before = JunctionMover.junctions(tree).isEmpty() ? Double.NaN : unitScore(unit);
                 for (TreeBuilder.Slide slide : builder.unkinks(tree, edge -> region.obstacles(dnByEdge.get(edge), area),
                         dnByEdge, priceRub, 0)) {
                     if (!tried.add(List.of(slide.junction.point.x, slide.junction.point.y, slide.point.x, slide.point.y))) {
                         continue;
                     }
-                    Tree changed = unkinked(tree, slide, dnByEdge, region, area);
+                    Tree changed = unkinked(tree, slide, tree.tie, dnByEdge, region, area);
                     List<Tree> others = new ArrayList<>(result);
                     others.remove(t);
                     if (changed == null || !compatible(changed, others)) {
@@ -2486,16 +2492,97 @@ public final class VariantEnumerator {
                     moved = true;
                     break;
                 }
+                // врезка сдвигается, когда у камер ветвления сдвигов больше нет: одна попытка на дерево
+                if (!moved && !retieTried && unit.size() == 1) {
+                    retieTried = true;
+                    List<Tree> others = new ArrayList<>(result);
+                    others.remove(t);
+                    Tree changed = retied(tree, dnByEdge, priceRub, region, area, others);
+                    if (changed != null) {
+                        result.set(t, changed);
+                        taken++;
+                        moved = true;
+                    }
+                }
             }
         }
         log.info("unkinked: moves={} elapsed={}ms", taken, (System.nanoTime() - started) / 1_000_000);
         return result;
     }
 
-    /** Дерево со сдвигом камеры slide и рёбрами камеры в строгой форме или null, см. {@link #unkinked(List)}. */
-    private Tree unkinked(Tree tree, TreeBuilder.Slide slide, Map<Tree.Edge, Integer> dnByEdge, Region region,
-            Envelope area) {
-        Tree moved = builder.moved(tree, slide);
+    /**
+     * Дерево, у которого новая камера врезки на трубе сдвинута вдоль трубы до RETIE_MAX_M с шагом RETIE_STEP_M так, что
+     * уходит первая вершина её ребра с изломом ({@link TreeBuilder#retie}); null — такого сдвига нет. Излом снимается,
+     * если эта вершина не нужна для отступов: прямая от врезки к следующей вершине обычная. Место врезки даёт
+     * {@link TieInFinder#shifted}: у камеры не дальше 10 м врезка идёт в неё, и такой сдвиг не берётся. Сдвиги
+     * пробуются по возрастанию цены рёбер и берутся, как у камер ветвления, если S узла из одного дерева tree не
+     * растёт; others — деревья других узлов врезки.
+     */
+    private Tree retied(Tree tree, Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, Region region,
+            Envelope area, List<Tree> others) {
+        if (tree.tie.isChamber()) {
+            return null;
+        }
+        int dn = 0;
+        List<Tree.Edge> kinked = new ArrayList<>();
+        for (Tree.Edge edge : tree.edges) {
+            Coordinate[] c = edge.line.getCoordinates();
+            if (edge.from == tree.root) {
+                dn = Math.max(dn, dnByEdge.get(edge));
+                // вершина, без которой прямая от врезки задевает зоны, обоснована: места врезки не перебираются
+                if (c.length > 2 && TreeBuilder.deflectionDeg(c[0], c[1], c[2]) >= TreeBuilder.MIN_TURN_DEG
+                        && region.obstacles(dnByEdge.get(edge), area)
+                                .plain(c[0], c[2], tree.tie.getIgnored(), Router.CUT_MARGIN_M)) {
+                    kinked.add(edge);
+                }
+            }
+        }
+        List<Integer> steps = new ArrayList<>();
+        List<TreeBuilder.Slide> slides = new ArrayList<>();
+        LineString pipe = kinked.isEmpty() ? null : finder.pipe(tree.tie);
+        LengthIndexedLine axis = pipe == null ? null : new LengthIndexedLine(pipe);
+        double at = axis == null ? 0 : axis.project(tree.root.point);
+        for (int step = -(int) (RETIE_MAX_M / RETIE_STEP_M); axis != null && step <= RETIE_MAX_M / RETIE_STEP_M; step++) {
+            Coordinate point = axis.extractPoint(at + step * RETIE_STEP_M);
+            for (Tree.Edge s : kinked) {
+                TreeBuilder.Slide slide = step == 0 ? null : builder.retie(tree, s, point, priceRub, 0);
+                if (slide != null) {
+                    steps.add(step);
+                    slides.add(slide);
+                }
+            }
+        }
+        Integer[] order = new Integer[slides.size()];
+        for (int k = 0; k < order.length; k++) {
+            order[k] = k;
+        }
+        java.util.Arrays.sort(order, Comparator.comparingDouble(k -> slides.get(k).gain));
+        double before = Double.NaN;
+        for (int k : order) {
+            TreeBuilder.Slide slide = slides.get(k);
+            // место врезки как у поиска: у концов трубы и у камеры не дальше 10 м оно другое, такой сдвиг не берётся
+            TieCandidate tie = finder.shifted(tree.tie, tree.root.point, steps.get(k) * RETIE_STEP_M, dn);
+            if (tie == null || tie.isChamber() || !tie.getExistingObjectId().equals(tree.tie.getExistingObjectId())
+                    || tie.getPoint().getCoordinate().distance(slide.point) > 1e-6
+                    || !builder.retieClear(tree, slide, tie.getIgnored(), edge -> region.obstacles(dnByEdge.get(edge), area))) {
+                continue;
+            }
+            Tree changed = unkinked(tree, slide, tie, dnByEdge, region, area);
+            if (changed == null || !compatible(changed, others)) {
+                continue;
+            }
+            before = Double.isNaN(before) ? unitScore(List.of(tree)) : before;
+            if (unitScore(List.of(changed)) <= before + UNKINK_EPS && !thicker(tree, List.of(tree), changed, List.of(changed))) {
+                return changed;
+            }
+        }
+        return null;
+    }
+
+    /** Дерево со сдвигом slide камеры и врезкой tie, рёбра камеры в строгой форме, или null, см. {@link #unkinked(List)}. */
+    private Tree unkinked(Tree tree, TreeBuilder.Slide slide, TieCandidate tie, Map<Tree.Edge, Integer> dnByEdge,
+            Region region, Envelope area) {
+        Tree moved = builder.moved(tree, slide, tie);
         Map<Integer, LineString> change = new LinkedHashMap<>();
         Map<Integer, Fresh> found = new HashMap<>();
         for (int e = 0; e < tree.edges.size(); e++) {
