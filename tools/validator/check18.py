@@ -2,8 +2,8 @@
 
 Запуск из корня: uv run --project tools python tools/validator/check18.py <вход.geojson> <выход.geojson> [--no-shape]
 Печатает нарушения по категориям (A — состав и ссылки, B — геометрия и отступы, C — расходы и ДУ, D — камеры,
-E — стоимость и сводка), строки «i» — справочные. В конце CHECK18 OK и код 0, если нарушений нет. B16–B18 — форма
-трассы (п. 5), --no-shape их отключает.
+E — стоимость и сводка), строки «i» — справочные. В конце CHECK18 OK и код 0, если нарушений нет. B16–B18 и B21 —
+форма трассы (п. 5), --no-shape их отключает.
 """
 import json
 import math
@@ -49,7 +49,11 @@ CUT_MARGIN_M = 0.15
 CUT_APART_M = 0.5
 MAX_TURN_DEG = 89.9
 CUT_PIECE_M = 1.05
-# --no-shape отключает B16–B18: так старые категории сверяются с прежними прогонами
+# место камеры ветвления в B21 как у сервиса (TreeBuilder.spotAllowed, SpecialObjects.near): не ближе 3 м по участку
+# к точке подключения, отступ от объектов специального прохода и сети с запасом 0,1 м
+CHAMBER_GAP_M = 3.0
+CHAMBER_NEAR_M = 0.1
+# --no-shape отключает B16–B18 и B21: так старые категории сверяются с прежними прогонами
 SHAPE = "--no-shape" not in sys.argv
 
 
@@ -566,7 +570,7 @@ def check_variant(inp, trees, vid, feats, rep):
     ties = {n: node_geom(n)[0] for n in tie_nodes}
     check_specials(trees, segs, geo, adj, kinds, ties, rep)
     if SHAPE:
-        check_shape(trees, segs, geo, adj, kinds, final_piece, ties, rep)
+        check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, rep)
 
     # E. стоимость участков по правилам 18.09 (без надбавки за поворот)
     seg_cost_new = 0.0
@@ -817,14 +821,19 @@ def extend_cross(p1, p2, q1, q2):
     return (p1[0] + t * d1x, p1[1] + t * d1y) if t > 0 and u > 0 else None
 
 
-def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, rep):
-    """B16–B18: лишние вершины, двойные повороты и зигзаги внутри участка (п. 5).
+def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, rep):
+    """B16–B18, B21: лишние вершины, двойные повороты и зигзаги внутри участка, изломы у камер ветвления (п. 5).
 
     Замена возможна, если новая геометрия держит запасы сервиса (толкование п. 5): отступы до ОКС, запретных зон и
     спецобъектов по ДУ участка с запасом CUT_MARGIN_M (существующая сеть у врезки не мешает звену от врезки), не
     ближе CUT_APART_M к другим участкам новой сети (у отрезков из общего узла — у дальних концов), не пересекает
     себя, повороты в вершинах и технических узлах не круче MAX_TURN_DEG, новые звенья не короче CUT_PIECE_M.
-    Вершины финального участка к точке (точка выхода) и спецучастки не меняются."""
+    Вершины финального участка к точке (точка выхода) и спецучастки не меняются.
+
+    B21: вершина рядом с новой камерой ветвления лишняя, если камеру можно сдвинуть вдоль одного её участка на
+    продолжение следующего звена и S от этого не растёт. Новые звенья от камеры держат те же запасы, поворот в камере
+    по пути от точки к врезке не круче MAX_TURN_DEG, камера не ближе CHAMBER_GAP_M по участку к точке подключения и не
+    ближе отступа с запасом CHAMBER_NEAR_M к объектам специального прохода и сети."""
     lines = [geo[str(s["properties"]["id"])] for s in segs]
     tree = STRtree(lines)
     tie_keys = {n: {(rt, rid) for rid, rt, _, _ in trees["spec_near"](pt, 0.5) if rt == "heat_network"}
@@ -839,8 +848,11 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, rep):
         prev = oc[1] if Point(oc[0]).distance(geo[node]) <= NODE_TOL else oc[-2]
         return turn_deg(prev, pt, nb)
 
-    def blocked(k, new, changed):
-        """Почему геометрия new вместо участка k недопустима; None — допустима. changed — номера новых звеньев."""
+    def blocked(k, new, changed, moved=None, min_piece=CUT_PIECE_M, apart=True):
+        """Почему геометрия new вместо участка k недопустима; None — допустима. changed — номера новых звеньев,
+        moved — новые координаты других участков по номеру, min_piece — наименьшее новое звено, apart — проверять
+        зазор до других участков."""
+        moved = moved or {}
         p = segs[k]["properties"]
         start, end = str(p["start_node_id"]), str(p["end_node_id"])
         w2 = DN[p["diameter"]]["width_m"] / 2
@@ -855,8 +867,8 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, rep):
             return f"поворот в техническом узле > {MAX_TURN_DEG}°"
         for i in changed:
             link = LineString(new[i:i + 2])
-            if link.length < CUT_PIECE_M:
-                return f"звено {link.length:.2f} м < {CUT_PIECE_M} м"
+            if link.length < min_piece:
+                return f"звено {link.length:.2f} м < {min_piece} м"
             for oid, og in trees["all_oks_near"](link, need + CUT_MARGIN_M):
                 if link.distance(og) < need + CUT_MARGIN_M:
                     return f"отступ до ОКС {oid} {link.distance(og):.2f} м < {need:.2f} + {CUT_MARGIN_M} м"
@@ -873,22 +885,29 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, rep):
                 norm = _TYPES[rt]["clearance_m"] + w2 + extra
                 if (rt, rid) not in exempt and link.distance(rg) < norm + CUT_MARGIN_M:
                     return f"отступ до {rt} {rid} {link.distance(rg):.2f} м < {norm:.2f} + {CUT_MARGIN_M} м"
-            # зазор до других участков по отрезкам; отрезки из общего узла расходятся от него, у них зазор меряется
-            # у дальних концов, как Router.apart в сервисе
-            ab = new[i:i + 2]
-            for j in tree.query(link, predicate="dwithin", distance=CUT_APART_M):
-                if j == k:
-                    continue
-                oc = list(lines[j].coords)
-                for q in zip(oc, oc[1:]):
-                    ends = [(x, y) for x in (0, 1) for y in (0, 1) if math.dist(ab[x], q[y]) <= NODE_TOL]
-                    if ends:
-                        x, y = ends[0]
-                        gap = min(LineString(q).distance(Point(ab[1 - x])), link.distance(Point(q[1 - y])))
-                    else:
-                        gap = link.distance(LineString(q))
-                    if gap < CUT_APART_M:
-                        return f"ближе {CUT_APART_M} м к участку {segs[j]['properties']['id']} ({gap:.2f} м)"
+            why = crowded(k, new[i:i + 2], moved) if apart else None
+            if why:
+                return why
+        return None
+
+    def crowded(k, ab, moved):
+        """Почему звено ab участка k ближе CUT_APART_M к другим участкам (moved — их новые координаты); None — нет.
+        Отрезки из общего узла расходятся от него, у них зазор меряется у дальних концов, как Router.apart."""
+        link = LineString(ab)
+        near = list(tree.query(link, predicate="dwithin", distance=CUT_APART_M))
+        for j in near + [j for j in moved if j not in near]:
+            if j == k:
+                continue
+            oc = moved.get(j) or list(lines[j].coords)
+            for q in zip(oc, oc[1:]):
+                ends = [(x, y) for x in (0, 1) for y in (0, 1) if math.dist(ab[x], q[y]) <= NODE_TOL]
+                if ends:
+                    x, y = ends[0]
+                    gap = min(LineString(q).distance(Point(ab[1 - x])), link.distance(Point(q[1 - y])))
+                else:
+                    gap = link.distance(LineString(q))
+                if gap < CUT_APART_M:
+                    return f"ближе {CUT_APART_M} м к участку {segs[j]['properties']['id']} ({gap:.2f} м)"
         return None
 
     for k, s in enumerate(segs):
@@ -962,6 +981,103 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, rep):
                 rep.add("B18 зигзаг можно спрямить", text)
             else:
                 rep.add("i  зигзаг нельзя спрямить (B18)", f"{text}: {why}")
+
+    # Г. излом у камеры ветвления: камера сдвигается вдоль первого звена своего участка на продолжение звена другого
+    # участка за его вершиной у камеры, и вершина уходит; остальные участки идут от нового места прямой к своей
+    # первой вершине
+    index = {id(s): k for k, s in enumerate(segs)}
+
+    def kink_blocked(x, s, t, inc, out, up, width, exit_kept):
+        """Почему камеру нельзя сдвинуть вдоль t в точку x, чтобы убрать вершину s у камеры; None — можно."""
+        new = {id(r): [x] + out[id(r)][2 if r is s else 1:] for r in inc}
+        if math.dist(x, new[id(t)][1]) < CUT_PIECE_M:
+            return f"до вершины {t['properties']['id']} {math.dist(x, new[id(t)][1]):.2f} м < {CUT_PIECE_M} м"
+        tp = t["properties"]
+        if "cp" in (kinds.get(str(tp["start_node_id"])), kinds.get(str(tp["end_node_id"]))) \
+                and LineString(new[id(t)]).length < CHAMBER_GAP_M:
+            return f"камера ближе {CHAMBER_GAP_M} м к точке подключения по {tp['id']}"
+        pt = Point(x)
+        for rid, rt, rg, extra in trees["spec_near"](pt, trees["spec_reach"] + width + CHAMBER_NEAR_M):
+            if pt.distance(rg) <= _TYPES[rt]["clearance_m"] + width + extra + CHAMBER_NEAR_M:
+                return f"камера в {pt.distance(rg):.2f} м от {rt} {rid}"
+        for q in inc:
+            if up is not None and q is not up and turn_deg(new[id(up)][1], x, new[id(q)][1]) > MAX_TURN_DEG:
+                return f"поворот в камере {turn_deg(new[id(up)][1], x, new[id(q)][1]):.1f}° > {MAX_TURN_DEG}°"
+        # новые координаты участков в их собственном направлении
+        forward = {id(r): out[id(r)][0] == lines[index[id(r)]].coords[0] for r in inc}
+        own = {index[id(r)]: new[id(r)] if forward[id(r)] else new[id(r)][::-1] for r in inc}
+        for r in inc:
+            if r is t:
+                continue
+            k = index[id(r)]
+            if r is s and exit_kept:
+                # до точки выхода новое только продолжение финального участка, дальше он прежний
+                c = [x] + out[id(r)][1:]
+                c = c if forward[id(r)] else c[::-1]
+                why = blocked(k, c, [0] if forward[id(r)] else [len(c) - 2], own, 0.0, False) \
+                    or crowded(k, new[id(r)][:2], own)
+            else:
+                why = blocked(k, own[k], [0] if forward[id(r)] else [len(own[k]) - 2], own)
+            if why:
+                return f"{r['properties']['id']}: {why}"
+        return None
+
+    def kink_ds(x, s, inc, out):
+        """Изменение S при сдвиге камеры в x: длины участков камеры по цене их ДУ."""
+        dc = dl = 0.0
+        for r in inc:
+            c = [x] + out[id(r)][2 if r is s else 1:]
+            d = LineString(c).length - LineString(out[id(r)]).length
+            dc += d * DN[r["properties"]["diameter"]]["new_rub_m"]
+            dl += d
+        return 0.7 * dc / 25e6 + 0.3 * dl / 100
+
+    for cid in sorted(n for n, kind in kinds.items() if kind == "heat_chamber" and n not in ties):
+        at = geo[cid]
+        inc = adj[cid]
+        if len(inc) < 3 or any(s["properties"]["laying_method"] == "special" for s in inc):
+            continue
+        out = {}
+        for s in inc:
+            c = list(lines[index[id(s)]].coords)
+            out[id(s)] = c if Point(c[0]).distance(at) <= NODE_TOL else c[::-1]
+        up = parent[cid][1] if cid in parent else None
+        width = DN[max(s["properties"]["diameter"] for s in inc)]["width_m"] / 2
+        for s in inc:
+            cs = out[id(s)]
+            if len(cs) < 3 or turn_deg(cs[0], cs[1], cs[2]) < TURN_DEG:
+                continue
+            sid = str(s["properties"]["id"])
+            exit_kept = sid in final_piece and len(cs) == 3 and tuple(cs[1]) in final_piece[sid][1].coords
+            text = f"{sid} вершина у {cid} {turn_deg(cs[0], cs[1], cs[2]):.1f}°"
+            first = None
+            for t in inc:
+                x = None if t is s else slide_point(cs[2], cs[1], out[id(t)][0], out[id(t)][1])
+                if x is None:
+                    continue
+                shift = f"сдвиг {math.dist(x, cs[0]):.2f} м вдоль {t['properties']['id']}"
+                why = kink_blocked(x, s, t, inc, out, up, width, exit_kept)
+                if why is None:
+                    ds = kink_ds(x, s, inc, out)
+                    if ds < -1e-6:
+                        rep.add("B21 излом у камеры снимает сдвиг камеры", f"{text}: {shift}, ΔS {ds:+.6f}")
+                        break
+                    why = f"S не ниже ({ds:+.6f})"
+                first = first or f"{text}: {shift}: {why}"
+            else:
+                if first:
+                    rep.add("i  излом у камеры сдвигом не снять (B21)", first)
+
+
+def slide_point(w, v, c, u):
+    """Точка звена c→u (не на концах) на прямой w→v по ту сторону от w, где v; None — такой нет."""
+    dx, dy, ex, ey, fx, fy = v[0] - w[0], v[1] - w[1], u[0] - c[0], u[1] - c[1], c[0] - w[0], c[1] - w[1]
+    den = dx * ey - dy * ex
+    if abs(den) < 1e-12:
+        return None
+    mu = (fx * ey - fy * ex) / den
+    lam = (fx * dy - fy * dx) / den
+    return (c[0] + lam * ex, c[1] + lam * ey) if mu > 0 and 0 < lam < 1 else None
 
 
 def trees_for(inp):

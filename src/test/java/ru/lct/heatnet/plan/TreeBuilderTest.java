@@ -229,6 +229,41 @@ class TreeBuilderTest {
         assertEquals(1, cut.degree(cut.root), "ребро от узла врезки срезанного дерева");
     }
 
+    @Test
+    void junctionSlidesAlongTrunkToStraightenKinkedBranch() {
+        // ствол идёт вверх через камеру, ветка к o-2 ломается в 3,6 м от камеры: на продолжении её дальнего звена
+        // камера стоит на 2,33 м выше по стволу, и ветка оттуда прямая
+        PlanFixture fixture = PlanFixture.trunk().oks("o-1", 300, 200, 5).oks("o-2", 362, 143, 5);
+        InputData input = fixture.input();
+        TieInFinder finder = new TieInFinder(input, rules);
+        TieCandidate tie = finder.find(List.of(point(300, 60)), DN).stream()
+                .filter(c -> c.getExistingObjectId().equals("hn-2")).findFirst().orElseThrow();
+        Coordinate root = tie.getPoint().getCoordinate();
+        Tree tree = new Tree(tie);
+        Tree.Node junction = Tree.Node.junction(new Coordinate(root.x, 120));
+        tree.edges.add(new Tree.Edge(tree.root, junction, PlanFixture.line(root.x, root.y, root.x, 120)));
+        tree.edges.add(new Tree.Edge(junction, Tree.Node.connection(fixture.connection("o-1")),
+                PlanFixture.line(root.x, 120, 300, 200)));
+        tree.edges.add(new Tree.Edge(junction, Tree.Node.connection(fixture.connection("o-2")), PlanFixture.GEOMETRY
+                .createLineString(new Coordinate[] {new Coordinate(root.x, 120), new Coordinate(302, 123), new Coordinate(362, 143)})));
+        Map<Tree.Edge, Integer> dnByEdge = new java.util.IdentityHashMap<>();
+        Map<Tree.Edge, Double> priceRub = new java.util.IdentityHashMap<>();
+        tree.edges.forEach(edge -> {
+            dnByEdge.put(edge, DN);
+            priceRub.put(edge, 1.0);
+        });
+        TreeBuilder builder = builder(input, finder);
+        Router router = new Router(input, rules, AREA, DN);
+
+        List<TreeBuilder.Slide> slides = builder.unkinks(tree, edge -> router.obstacles(), dnByEdge, priceRub, 0);
+
+        assertEquals(1, slides.size());
+        Tree moved = builder.moved(tree, slides.get(0));
+        assertEquals(122.333, JunctionMover.junctions(moved).get(0).point.y, 1e-3);
+        assertEquals(2, moved.edges.get(2).line.getNumPoints(), "ветка прямая: " + moved.edges.get(2).line);
+        assertTrue(moved.length() < tree.length() - 1, "длина " + moved.length() + " против " + tree.length());
+    }
+
     private TreeBuilder builder(InputData input, TieInFinder finder) {
         return builder(input, finder, Map.of());
     }

@@ -39,11 +39,11 @@ public final class Router {
     private static final int CUT_STEPS = 6;
     private static final double CUT_APART_M = 0.5;
     /** Запас формы к отступу: сборка может поднять Ду по длине на ступень, см. ObstacleSet#plain. */
-    private static final double CUT_MARGIN_M = 0.15;
+    public static final double CUT_MARGIN_M = 0.15;
     /** Запас хорды срезки к отступу, как у зоны узлов графа, см. {@link #chord}. */
     private static final double CHORD_MARGIN_M = 0.2;
     /** Подотрезок после срезки не короче метра с запасом: check18 видит 1,00 м после округления координат как 0,999. */
-    private static final double CUT_PIECE_M = 1.05;
+    public static final double CUT_PIECE_M = 1.05;
     /** Короткое звено между поворотами, см. {@link #sharpen}: 10 м с запасом на округление координат выхода. */
     private static final double SHORT_LINK_M = 10.05;
     /** Сколько средних прямых окна может остаться при замене поворотов, см. {@link #sharpenWindow}. */
@@ -1140,7 +1140,7 @@ public final class Router {
      * Отрезок не ближе CUT_APART_M к others. Отрезки из общего конца (узла дерева) расходятся от него, поэтому у них
      * зазор проверяется у дальних концов.
      */
-    private static boolean apart(LineSegment segment, List<LineSegment> others) {
+    public static boolean apart(LineSegment segment, List<LineSegment> others) {
         for (LineSegment other : others) {
             Coordinate far = null;
             Coordinate otherFar = null;

@@ -296,12 +296,12 @@ final class JunctionMover {
     }
 
     /** Координаты ребра от камеры junction. */
-    private static Coordinate[] fromJunction(Tree.Edge edge, Tree.Node junction) {
+    static Coordinate[] fromJunction(Tree.Edge edge, Tree.Node junction) {
         Coordinate[] coords = edge.line.getCoordinates();
         return edge.from == junction ? coords : reversed(coords);
     }
 
-    private static Coordinate[] reversed(Coordinate[] coords) {
+    static Coordinate[] reversed(Coordinate[] coords) {
         Coordinate[] result = new Coordinate[coords.length];
         for (int i = 0; i < coords.length; i++) {
             result[i] = coords[coords.length - 1 - i];
