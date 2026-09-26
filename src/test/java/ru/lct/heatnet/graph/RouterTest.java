@@ -222,6 +222,18 @@ class RouterTest {
     }
 
     @Test
+    void sharpenStraightensEdgeFromTieIntoOneSegment() {
+        // ребро от врезки на трубе вдоль оси x: лишняя вершина убирается и тогда, когда остаётся одна прямая, которая
+        // касается трубы врезки своим концом
+        NetworkSegment pipe = new NetworkSegment("hn-1", line(-100, 0, 100, 0), DN, 10, "src");
+        Router router = router(List.of(), List.of(pipe));
+        List<Coordinate> edge = new ArrayList<>(List.of(new Coordinate(0, 0), new Coordinate(-20, 30), new Coordinate(-40, 51)));
+
+        assertTrue(router.sharpen(router.obstacles(), edge, Set.of("hn-1"), null, null));
+        assertEquals(2, edge.size(), edge.toString());
+    }
+
+    @Test
     void pointRestrictionsAreBypassedWithTheirClearance() {
         // Точка неизвестного типа и точка railway обходятся с отступом своего правила.
         List<Restriction> restrictions = List.of(new Restriction("pls-1", point(0, 0), "power_line_support"),
