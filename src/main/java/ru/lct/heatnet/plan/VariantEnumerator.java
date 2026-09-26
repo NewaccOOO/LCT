@@ -131,6 +131,11 @@ public final class VariantEnumerator {
     /** Слияния и переносы пробуются только между блоками, ближайшими друг к другу по точкам подключения. */
     private static final int NEAREST_BLOCKS = 2;
     private static final double IMPROVE_EPS = 1e-6;
+    /** Сдвиг камер ветвления в деревьях выбранных вариантов (heatnet.slide.junctions), см. {@link #shifted(Draft)}. */
+    private static final boolean SLIDE_JUNCTIONS =
+            Boolean.parseBoolean(System.getProperty("heatnet.slide.junctions", "true"));
+    /** Сдвиг камеры собирается, только если по цене метров рёбер он дешевле хотя бы на столько рублей: ≈0,25 м ветки. */
+    private static final double SLIDE_MIN_GAIN_RUB = 50_000;
     /** Из локального оптимума спуск продолжается с наименее плохого соседа, если он хуже не больше чем на столько S. */
     private static final double WALK_THRESHOLD = 0.5;
     /**
@@ -200,6 +205,22 @@ public final class VariantEnumerator {
             this.score = score;
         }
     }
+
+    /** Зоны и Ду графа, на котором построено дерево подмножества, и оценка его новой формы тем же {@link #option}. */
+    private static final class Shaping {
+        final ObstacleSet zones;
+        final int dn;
+        final java.util.function.Function<Tree, Option> option;
+
+        Shaping(ObstacleSet zones, int dn, java.util.function.Function<Tree, Option> option) {
+            this.zones = zones;
+            this.dn = dn;
+            this.option = option;
+        }
+    }
+
+    /** Как построено каждое дерево из {@link #options}: по нему сдвигаются камеры в деревьях вариантов. */
+    private final Map<Tree, Shaping> shapings = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** Группа близких ОКС: общий граф на её область и кэш деревьев по подмножествам. */
     private final class Region {
@@ -423,6 +444,11 @@ public final class VariantEnumerator {
             return city();
         }
         List<Draft> picked = picked();
+        if (SLIDE_JUNCTIONS) {
+            // черновики независимы, а поиск уже закончен и ядра свободны; сдвиги могут поменять порядок вариантов
+            picked = (PARALLEL ? picked.parallelStream() : picked.stream()).map(this::shifted)
+                    .sorted(Comparator.comparingDouble(Draft::score)).collect(Collectors.toList());
+        }
         List<Variant> variants = new ArrayList<>();
         for (int i = 0; i < picked.size(); i++) {
             Draft draft = picked.get(i);
@@ -1349,6 +1375,10 @@ public final class VariantEnumerator {
                     best = option;
                 }
             }
+            if (best != null && !district) {
+                shapings.put(best.tree, new Shaping(router.obstacles(), dn,
+                        shape -> option(shape, label, verify, area, dn, region, tree.narrow)));
+            }
             return best;
         }).filter(Objects::nonNull).collect(Collectors.toList());
         options.sort(Comparator.comparingDouble(option -> option.score));
@@ -1511,6 +1541,102 @@ public final class VariantEnumerator {
             log.debug("options: subset={} tie={} отброшено: {}", label, tree.tie.nodeKey(), e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Черновик, где в деревьях камеры ветвления сдвинуты вдоль рёбер ({@link TreeBuilder#slides}), пока сдвиг
+     * снижает score дерева, собранного отдельно; сдвинутое дерево не касается других деревьев черновика. Берётся,
+     * если весь черновик собирается и его score ниже; иначе черновик прежний.
+     */
+    private Draft shifted(Draft draft) {
+        long started = System.nanoTime();
+        List<Tree> trees = new ArrayList<>(draft.trees);
+        boolean changed = false;
+        for (int i = 0; i < trees.size(); i++) {
+            Shaping shaping = shapings.get(trees.get(i));
+            if (shaping == null) {
+                continue;
+            }
+            List<Tree> others = new ArrayList<>(trees);
+            others.remove(i);
+            Tree tree = shifted(trees.get(i), shaping, others);
+            changed |= tree != trees.get(i);
+            trees.set(i, tree);
+        }
+        if (!changed) {
+            return draft;
+        }
+        try {
+            Draft result = new Draft(trees, draft.unconnected, assembler.assemble("0", 0, trees, draft.unconnected));
+            log.info("slide: score {} -> {} elapsed={}ms", draft.score(), result.score(),
+                    (System.nanoTime() - started) / 1_000_000);
+            return result.score() < draft.score() - IMPROVE_EPS ? result : draft;
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            log.debug("slide: черновик не собрался: {}", e.getMessage());
+            return draft;
+        }
+    }
+
+    /**
+     * Сдвиги камер одного дерева: лучший по оценке сдвиг, который снижает score, принимается, и сдвиги ищутся на
+     * новом дереве снова. Сдвиг, который score не снизил, больше не собирается.
+     */
+    private Tree shifted(Tree tree, Shaping shaping, List<Tree> others) {
+        Map<List<Tree.Edge>, TreeBuilder.Slide> cache = new HashMap<>();
+        Set<TreeBuilder.Slide> rejected = Collections.newSetFromMap(new IdentityHashMap<>());
+        Option current = null;
+        while (true) {
+            Tree shape = current == null ? tree : current.tree;
+            List<TreeBuilder.Slide> slides = builder.slides(shape, shaping.zones, shaping.dn, metreRub(shape),
+                    SLIDE_MIN_GAIN_RUB, cache, PARALLEL);
+            if (current == null && !slides.isEmpty()) {
+                // score дерева нужен, только если есть что сдвигать
+                current = shaping.option.apply(tree);
+            }
+            Option better = null;
+            for (TreeBuilder.Slide slide : current == null ? List.<TreeBuilder.Slide>of() : slides) {
+                if (rejected.contains(slide)) {
+                    continue;
+                }
+                Tree moved = builder.moved(current.tree, slide);
+                Option option = compatible(moved, others) ? shaping.option.apply(moved) : null;
+                if (option != null && option.score < current.score - IMPROVE_EPS) {
+                    better = option;
+                    break;
+                }
+                rejected.add(slide);
+            }
+            if (better == null) {
+                return current == null ? tree : current.tree;
+            }
+            current = better;
+        }
+    }
+
+    /** Цена метра каждого ребра в рублях: труба по расходу ниже ребра и метр длины по весам S. */
+    private Map<Tree.Edge, Double> metreRub(Tree tree) {
+        Map<Tree.Node, Double> flowBelow = new IdentityHashMap<>();
+        Map<Tree.Edge, Double> result = new IdentityHashMap<>();
+        for (Tree.Edge edge : tree.edges) {
+            double flow = flowBelow(tree, edge.to, flowBelow);
+            result.put(edge, rules.diameterFor(flow).getNewRubM() + rules.lengthWorthRub());
+        }
+        return result;
+    }
+
+    private double flowBelow(Tree tree, Tree.Node node, Map<Tree.Node, Double> memo) {
+        Double known = memo.get(node);
+        if (known != null) {
+            return known;
+        }
+        double flow = node.kind == Tree.Kind.CONNECTION ? oksById.get(node.connection.getOksId()).getFlowTph() : 0;
+        for (Tree.Edge edge : tree.edges) {
+            if (edge.from == node) {
+                flow += flowBelow(tree, edge.to, memo);
+            }
+        }
+        memo.put(node, flow);
+        return flow;
     }
 
     /**

@@ -49,6 +49,8 @@ final class TreeBuilder {
     private static final double SAMPLE_STEP_M = 10;
     private static final double CONNECTION_GAP_M = 3;
     private static final double[] SHIFTS_M = {3, 6, 12, 24};
+    /** Сдвиги камеры ветвления вдоль ребра от прежнего места, м; вершины ребра пробуются тоже, см. {@link #slides}. */
+    private static final double[] SLIDE_STEPS_M = {1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50};
     /** Точка выхода стоит за зоной отступа своего ОКС на столько, чтобы не лечь на её упрощённую границу. */
     private static final double PORTAL_EXTRA_M = 0.3;
     /** Шаг и предел удлинения финального участка, пока выход лежит в чужой зоне запрета. */
@@ -651,26 +653,8 @@ final class TreeBuilder {
          * не у точки подключения и не в зоне запрета (на финальном участке в свой ОКС).
          */
         boolean allowed(Tree.Edge edge, double position, List<SpecialSpan> spans) {
-            double length = edge.line.getLength();
-            if (position < MIN_PIECE_M || position > length - MIN_PIECE_M) {
-                return false;
-            }
-            if (edge.to.kind == Tree.Kind.CONNECTION && position > length - CONNECTION_GAP_M) {
-                return false;
-            }
-            for (double vertex : verticesByEdge.computeIfAbsent(edge, e -> vertexPositions(e.line))) {
-                double gap = Math.abs(vertex - position);
-                if (gap > 1e-9 && gap < MIN_PIECE_M) {
-                    return false;
-                }
-            }
-            for (SpecialSpan span : spans) {
-                if (position > span.getFromM() - MIN_PIECE_M && position < span.getToM() + MIN_PIECE_M) {
-                    return false;
-                }
-            }
-            Coordinate at = new LengthIndexedLine(edge.line).extractPoint(position);
-            return !specials.near(at, dn) && !obstacles.insideForbid(at, false);
+            return spotAllowed(edge, position, verticesByEdge.computeIfAbsent(edge, e -> vertexPositions(e.line)), spans,
+                    obstacles, dn);
         }
 
         Coordinate[] branch(List<Coordinate> head, Coordinate end, ObstacleSet zones) {
@@ -810,6 +794,311 @@ final class TreeBuilder {
             result.edges.add(new Tree.Edge(from, edge.to, factory.createLineString(coords.toArray(new Coordinate[0]))));
         }
         return changed ? result : tree;
+    }
+
+    /** Место камеры ветвления на ребре, см. {@link Run#allowed}; vertices — положения вершин ребра по длине. */
+    private boolean spotAllowed(Tree.Edge edge, double position, List<Double> vertices, List<SpecialSpan> spans,
+            ObstacleSet zones, int dn) {
+        double length = edge.line.getLength();
+        if (position < MIN_PIECE_M || position > length - MIN_PIECE_M) {
+            return false;
+        }
+        if (edge.to.kind == Tree.Kind.CONNECTION && position > length - CONNECTION_GAP_M) {
+            return false;
+        }
+        for (double vertex : vertices) {
+            double gap = Math.abs(vertex - position);
+            if (gap > 1e-9 && gap < MIN_PIECE_M) {
+                return false;
+            }
+        }
+        for (SpecialSpan span : spans) {
+            if (position > span.getFromM() - MIN_PIECE_M && position < span.getToM() + MIN_PIECE_M) {
+                return false;
+            }
+        }
+        Coordinate at = new LengthIndexedLine(edge.line).extractPoint(position);
+        return !specials.near(at, dn) && !zones.insideForbid(at, false);
+    }
+
+    /** Сдвиг камеры ветвления: оценка в рублях (меньше нуля — дешевле) и новые линии рёбер камеры. */
+    static final class Slide {
+        final double gain;
+        final Tree.Node junction;
+        final Coordinate point;
+        final Map<Tree.Edge, Coordinate[]> lines;
+
+        Slide(double gain, Tree.Node junction, Coordinate point, Map<Tree.Edge, Coordinate[]> lines) {
+            this.gain = gain;
+            this.junction = junction;
+            this.point = point;
+            this.lines = lines;
+        }
+    }
+
+    /**
+     * Сдвиги камер ветвления вдоль своих рёбер: к родителю или к одному из детей. Ребро сдвига и продолжающее его
+     * ребро меняются только в длине, остальные ветки камеры идут от нового места прямой к одной из своих вершин,
+     * выход из здания остаётся на месте. Жадное дерево ставит камеру там, где ветку удобно присоединить в момент
+     * присоединения, а более поздние ветки и разные Ду рёбер камеры не учитывает. Топология прежняя, поэтому расход и
+     * цена метра ребра ({@code priceRub}) тоже: на каждую камеру берётся лучший допустимый сдвиг, который по этой цене
+     * дешевле хотя бы на {@code minGainRub}, от лучшей оценки. Точную цену и все проверки сдвига даёт сборка дерева
+     * {@link #moved}. {@code cache} — сдвиги по рёбрам камеры с прошлых вызовов для того же дерева: сдвиг камеры
+     * зависит только от её рёбер. Камеры считаются параллельно, если {@code parallel}; результат от этого не зависит.
+     */
+    List<Slide> slides(Tree tree, ObstacleSet zones, int dn, Map<Tree.Edge, Double> priceRub, double minGainRub,
+            Map<List<Tree.Edge>, Slide> cache, boolean parallel) {
+        List<List<Tree.Edge>> junctions = new ArrayList<>();
+        List<List<Tree.Edge>> missing = new ArrayList<>();
+        for (Tree.Edge in : tree.edges) {
+            if (in.to.kind != Tree.Kind.JUNCTION) {
+                continue;
+            }
+            List<Tree.Edge> incident = new ArrayList<>(List.of(in));
+            for (Tree.Edge edge : tree.edges) {
+                if (edge.from == in.to) {
+                    incident.add(edge);
+                }
+            }
+            junctions.add(incident);
+            if (!cache.containsKey(incident)) {
+                missing.add(incident);
+            }
+        }
+        java.util.stream.Stream<List<Tree.Edge>> stream = parallel ? missing.parallelStream() : missing.stream();
+        List<Slide> computed = stream.map(incident -> slide(tree, incident, zones, dn, priceRub, minGainRub))
+                .collect(java.util.stream.Collectors.toList());
+        for (int i = 0; i < missing.size(); i++) {
+            cache.put(missing.get(i), computed.get(i));
+        }
+        List<Slide> found = new ArrayList<>();
+        for (List<Tree.Edge> incident : junctions) {
+            if (cache.get(incident) != null) {
+                found.add(cache.get(incident));
+            }
+        }
+        found.sort(Comparator.comparingDouble(slide -> slide.gain));
+        return found;
+    }
+
+    /** Лучший сдвиг камеры с рёбрами incident (первое — входящее) или null. */
+    private Slide slide(Tree tree, List<Tree.Edge> incident, ObstacleSet zones, int dn, Map<Tree.Edge, Double> priceRub,
+            double minGainRub) {
+        Set<String> ignored = tree.tie.getIgnored();
+        Tree.Edge in = incident.get(0);
+        List<Tree.Edge> outs = incident.subList(1, incident.size());
+        Slide best = null;
+        for (Tree.Edge rail : incident) {
+            List<Double> vertices = vertexPositions(rail.line);
+            List<SpecialSpan> spans = null;
+            double length = rail.line.getLength();
+            LengthIndexedLine indexed = new LengthIndexedLine(rail.line);
+            // на ребре к точке в здании камера стоит до точки выхода: финальный участок остаётся от ближней стены
+            boolean toBuilding = rail.to.kind == Tree.Kind.CONNECTION
+                    && buildingByConnection.containsKey(rail.to.connection.getId());
+            double limit = toBuilding && !vertices.isEmpty() ? vertices.get(vertices.size() - 1) : length;
+            for (double shift : shifts(vertices, length, rail == in)) {
+                double at = rail == in ? length - shift : shift;
+                if (at >= limit) {
+                    continue;
+                }
+                Coordinate point = indexed.extractPoint(at);
+                // оценка снизу без геометрии: ребро сдвига и продолжающее его меняются на shift, другие ветки — прямой
+                // к ближайшей по длине вершине; дорогие проверки только у сдвигов, которые могут выиграть
+                Map<Tree.Edge, Double> straight = new IdentityHashMap<>();
+                double others = 0;
+                for (Tree.Edge out : outs) {
+                    straight.put(out, price(priceRub, out) * (shortest(out, point) - out.line.getLength()));
+                    others += straight.get(out);
+                }
+                for (Tree.Edge through : rail == in ? outs : List.of(rail)) {
+                    double bound = best == null ? -minGainRub : best.gain;
+                    double optimistic = shift * (price(priceRub, through) - price(priceRub, in)) * (rail == in ? 1 : -1)
+                            + others - straight.get(through);
+                    if (optimistic >= bound) {
+                        continue;
+                    }
+                    if (spans == null) {
+                        spans = zones.spans(rail.line, ignored);
+                    }
+                    if (!spotAllowed(rail, at, vertices, spans, zones, dn)) {
+                        break;
+                    }
+                    Slide slide = slide(in, rail, through, outs, at, point, zones, ignored, priceRub, straight, bound);
+                    if (slide != null) {
+                        best = slide;
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    /** Расстояния сдвига от камеры вдоль ребра: шаги SLIDE_STEPS_M и вершины ребра. */
+    private static List<Double> shifts(List<Double> vertices, double length, boolean fromEnd) {
+        Set<Double> shifts = new java.util.TreeSet<>();
+        for (double step : SLIDE_STEPS_M) {
+            shifts.add(step);
+        }
+        for (double vertex : vertices) {
+            shifts.add(fromEnd ? length - vertex : vertex);
+        }
+        return new ArrayList<>(shifts);
+    }
+
+    /**
+     * Сдвиг камеры ребра in в точку point на ребре rail (at — место на rail по длине); through — ребро, которое
+     * продолжает rail за камерой: при сдвиге к родителю к нему отходит конец in, при сдвиге к ребёнку in
+     * продолжается началом rail. Null — сдвиг недопустим или не дешевле bound.
+     */
+    private Slide slide(Tree.Edge in, Tree.Edge rail, Tree.Edge through, List<Tree.Edge> outs, double at, Coordinate point,
+            ObstacleSet zones, Set<String> ignored, Map<Tree.Edge, Double> priceRub, Map<Tree.Edge, Double> straight,
+            double bound) {
+        Map<Tree.Edge, Coordinate[]> lines = new IdentityHashMap<>();
+        List<Coordinate> joined;
+        if (rail == in) {
+            lines.put(in, part(in.line, 0, at, point, false).getCoordinates());
+            joined = new ArrayList<>(Arrays.asList(part(in.line, at, in.line.getLength(), point, true).getCoordinates()));
+            joined.addAll(Arrays.asList(through.line.getCoordinates()).subList(1, through.line.getNumPoints()));
+        } else {
+            lines.put(rail, part(rail.line, at, rail.line.getLength(), point, true).getCoordinates());
+            joined = new ArrayList<>(Arrays.asList(in.line.getCoordinates()));
+            Coordinate[] head = part(rail.line, 0, at, point, false).getCoordinates();
+            joined.addAll(Arrays.asList(head).subList(1, head.length));
+        }
+        // старое место камеры — вершина продолжающего ребра: излом меньше 3° снимается, круче 90° недопустим
+        straighten(joined, zones, ignored);
+        Coordinate[] joinedLine = joined.toArray(new Coordinate[0]);
+        if (!shapeValid(joinedLine)) {
+            return null;
+        }
+        lines.put(rail == in ? through : in, joinedLine);
+        double gain = change(priceRub, in, lines) + change(priceRub, through, lines);
+        // другие ветки по оценке снизу, пока их прямые не проверены: проверки дорогие, сдвиг бросается сразу
+        double rest = -straight.get(through);
+        for (Tree.Edge out : outs) {
+            rest += straight.get(out);
+        }
+        for (Tree.Edge out : outs) {
+            if (out == through) {
+                continue;
+            }
+            if (gain + rest >= bound) {
+                return null;
+            }
+            Coordinate[] line = shortcut(out, point, zones, ignored);
+            if (line.length == 0) {
+                return null;
+            }
+            lines.put(out, line);
+            gain += change(priceRub, out, lines);
+            rest -= straight.get(out);
+        }
+        return gain < bound ? new Slide(gain, in.to, point, lines) : null;
+    }
+
+    /** Длина ветки out от point прямой к ближайшей по длине вершине, без проверок: нижняя оценка shortcut. */
+    private double shortest(Tree.Edge out, Coordinate point) {
+        Coordinate[] c = out.line.getCoordinates();
+        double best = Double.POSITIVE_INFINITY;
+        double rest = 0;
+        for (int k = c.length - 1; k >= 1; k--) {
+            best = Math.min(best, point.distance(c[k]) + rest);
+            rest += c[k - 1].distance(c[k]);
+        }
+        return best;
+    }
+
+    /**
+     * Ветка out от новой камеры point: прямая к одной из вершин out и дальше по out, самая короткая из допустимых;
+     * у точки в здании прямая идёт не дальше точки выхода. Пустой массив — допустимой нет.
+     */
+    private Coordinate[] shortcut(Tree.Edge out, Coordinate point, ObstacleSet zones, Set<String> ignored) {
+        Coordinate[] c = out.line.getCoordinates();
+        int last = c.length - 1;
+        if (out.to.kind == Tree.Kind.CONNECTION && buildingByConnection.containsKey(out.to.connection.getId())) {
+            last--;
+        }
+        double[] rest = new double[c.length];
+        for (int k = c.length - 2; k >= 0; k--) {
+            rest[k] = rest[k + 1] + c[k].distance(c[k + 1]);
+        }
+        List<Integer> order = new ArrayList<>();
+        for (int k = 1; k <= last; k++) {
+            order.add(k);
+        }
+        order.sort(Comparator.comparingDouble(k -> point.distance(c[k]) + rest[k]));
+        for (int k : order) {
+            double straight = point.distance(c[k]);
+            if (straight < MIN_PIECE_M) {
+                continue;
+            }
+            if (k + 1 < c.length) {
+                double deflection = deflectionDeg(point, c[k], c[k + 1]);
+                if (deflection > Router.MAX_TURN_DEG || deflection < MIN_TURN_DEG) {
+                    continue;
+                }
+            }
+            // прямая без спецпрохода и не вдоль трубы врезки, как у переноса врезки к стволу
+            if (!(zones.edgeWeight(point, c[k], ignored) <= straight + 1e-9) || zones.alongIgnored(point, c[k], ignored)) {
+                continue;
+            }
+            Coordinate[] line = new Coordinate[c.length - k + 1];
+            line[0] = point;
+            System.arraycopy(c, k, line, 1, c.length - k);
+            return line;
+        }
+        return new Coordinate[0];
+    }
+
+    /** Изломы в вершинах от 3 до 90°, подотрезки не короче метра. */
+    private static boolean shapeValid(Coordinate[] line) {
+        for (int i = 0; i + 1 < line.length; i++) {
+            if (line[i].distance(line[i + 1]) < MIN_PIECE_M) {
+                return false;
+            }
+            if (i > 0) {
+                double deflection = deflectionDeg(line[i - 1], line[i], line[i + 1]);
+                if (deflection > Router.MAX_TURN_DEG || deflection < MIN_TURN_DEG) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private static double price(Map<Tree.Edge, Double> priceRub, Tree.Edge edge) {
+        return priceRub.get(edge);
+    }
+
+    /** Изменение цены ребра edge с новой линией из lines. */
+    private static double change(Map<Tree.Edge, Double> priceRub, Tree.Edge edge, Map<Tree.Edge, Coordinate[]> lines) {
+        return price(priceRub, edge) * (length(lines.get(edge)) - edge.line.getLength());
+    }
+
+    private static double length(Coordinate[] line) {
+        double length = 0;
+        for (int i = 0; i + 1 < line.length; i++) {
+            length += line[i].distance(line[i + 1]);
+        }
+        return length;
+    }
+
+    /** Дерево tree со сдвигом slide, найденным для него {@link #slides}. */
+    Tree moved(Tree tree, Slide slide) {
+        Tree.Node junction = slide.junction;
+        Tree result = new Tree(tree.tie);
+        result.unconnected.addAll(tree.unconnected);
+        result.narrow = tree.narrow;
+        Tree.Node at = Tree.Node.junction(slide.point);
+        for (Tree.Edge edge : tree.edges) {
+            Coordinate[] line = slide.lines.get(edge);
+            Tree.Node from = edge.from == tree.root ? result.root : edge.from == junction ? at : edge.from;
+            Tree.Node to = edge.to == junction ? at : edge.to;
+            result.edges.add(line == null && from == edge.from && to == edge.to ? edge
+                    : new Tree.Edge(from, to, line == null ? edge.line : factory.createLineString(line)));
+        }
+        return result;
     }
 
     /** Часть полилинии; конец у камеры ветвления ставится ровно в её точку. */
