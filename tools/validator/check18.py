@@ -3,7 +3,7 @@
 Запуск из корня: uv run --project tools python tools/validator/check18.py <вход.geojson> <выход.geojson> [--no-shape]
 Печатает нарушения по категориям (A — состав и ссылки, B — геометрия и отступы, C — расходы и ДУ, D — камеры,
 E — стоимость и сводка), строки «i» — справочные. В конце CHECK18 OK и код 0, если нарушений нет. B16–B18 — форма
-трассы (п. 5), --no-shape их отключает.
+трассы (п. 5), --no-shape их отключает. B19 — финальный участок снова заходит в зону отступа своего здания (п. 2.2).
 """
 import json
 import math
@@ -555,6 +555,24 @@ def check_variant(inp, trees, vid, feats, rep):
                 else:
                     rep.add("B8 финальный участок не от ближайшей границы, хотя ближняя сторона открыта",
                             f"{sid} ДУ{dn} внутри {inside:.1f} м, до границы {to_edge:.1f} м")
+    # B19: п. 2.2 снимает отступ к своему полигону только с части финального участка в зоне перед границей. Участок
+    # от точки выходит из этой зоны один раз, иначе он снова подходит к своему зданию ближе отступа по своему Ду
+    by_cp = defaultdict(list)
+    for sid, (cp, piece) in final_piece.items():
+        by_cp[cp].append(sid)
+    for cp, sids in by_cp.items():
+        cg = inp["cps"][cp][0]
+        ray = shapely.line_merge(shapely.MultiLineString([final_piece[sid][1] for sid in sids]))
+        dn = max(seg_by_id[sid]["properties"]["diameter"] for sid in sids)
+        need = oks_clearance(dn) + DN[dn]["width_m"] / 2
+        for og in (og for _, og in trees["oks_near"](cg, 0.0) if og.buffer(0.01).contains(cg)):
+            hit = ray.intersection(og.buffer(need - EPS, quad_segs=64))
+            parts = shapely.line_merge(shapely.MultiLineString(
+                [g for g in getattr(hit, "geoms", [hit]) if g.geom_type == "LineString" and g.length > 0]))
+            back = [g for g in getattr(parts, "geoms", [parts]) if g.length > 0.05 and g.distance(cg) > 0.05]
+            if back:
+                rep.add("B19 финальный участок повторно заходит в зону отступа своего здания",
+                        f"{','.join(sids)} ДУ{dn} {min(g.distance(og) for g in back):.2f} м < {need:.2f}")
     for s in segs:
         p = s["properties"]
         line = geo[str(p["id"])]

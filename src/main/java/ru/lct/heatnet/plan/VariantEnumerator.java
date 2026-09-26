@@ -60,6 +60,7 @@ import ru.lct.heatnet.rules.Rules;
  */
 public final class VariantEnumerator {
     private static final Logger log = LoggerFactory.getLogger(VariantEnumerator.class);
+    private static final String OKS_EXISTING = "oks_existing";
     /** ОКС ближе этого по точкам подключения считаются близкими и пробуются общим деревом. */
     private static final double GROUP_DISTANCE_M = 300;
     /** Запас области графа вокруг ОКС и кандидатов врезки (D-6). */
@@ -2015,7 +2016,7 @@ public final class VariantEnumerator {
             int maxDn = alone.getSegments().stream().mapToInt(NewSegment::getDiameter).max().orElse(graphDn);
             boolean check = verify || maxDn > graphDn;
             boolean holds = narrow ? forbidClear(tree, alone, area, region) : !check || clearanceHolds(tree, alone, area, region);
-            return holds ? new Option(tree, alone.getSummary().getScore(), exact(alone)) : null;
+            return holds && raysClear(tree, alone) ? new Option(tree, alone.getSummary().getScore(), exact(alone)) : null;
         } catch (IllegalStateException | IllegalArgumentException e) {
             // дерево нарушает правила при сборке (предельная длина, отступ участка, число поворотов): кандидат отбрасывается
             log.debug("options: subset={} tie={} отброшено: {}", label, tree.tie.nodeKey(), e.getMessage());
@@ -2316,6 +2317,11 @@ public final class VariantEnumerator {
         double before = ObstacleSet.weight(edge.line.getLength(), router.obstacles().spans(edge.line, ignored));
         Coordinate end = portal ? old[old.length - 2] : old[old.length - 1];
         Coordinate closer = portal ? builder.exit(router, dn, area, tree.tie, edge.to.connection) : null;
+        // выход ставится по зонам графа большего Ду, а из зоны отступа по Ду ребра луч тоже выходит один раз
+        if (closer != null && !builder.leavesZoneOnce(buildingByConnection.get(edge.to.connection.getId()),
+                old[old.length - 1], closer, oksClearance(dn))) {
+            closer = null;
+        }
         for (Coordinate exit : closer == null || closer.equals2D(end) ? List.of(end) : List.of(closer, end)) {
             Route route = router.routeToAny(factory.createPoint(old[0]), List.of(factory.createPoint(exit)), ignored,
                     true);
@@ -2445,6 +2451,32 @@ public final class VariantEnumerator {
             }
         }
         return true;
+    }
+
+    /**
+     * Финальный отрезок к точке подключения выходит из зоны отступа её здания по Ду своего участка один раз
+     * ({@link TreeBuilder#leavesZoneOnce}): выход ставится по зонам графа, а зона по Ду участка может быть другой.
+     */
+    private boolean raysClear(Tree tree, Variant alone) {
+        Map<String, Integer> dnByEnd = new HashMap<>();
+        alone.getSegments().forEach(segment -> dnByEnd.put(segment.getEndNodeId(), segment.getDiameter()));
+        for (Tree.Edge edge : tree.edges) {
+            ExistingOks building = edge.to.kind == Tree.Kind.CONNECTION ? buildingByConnection.get(edge.to.connection.getId()) : null;
+            if (building == null) {
+                continue;
+            }
+            int dn = dnByEnd.get(edge.to.connection.getId());
+            Coordinate[] coords = edge.line.getCoordinates();
+            if (!builder.leavesZoneOnce(building, coords[coords.length - 1], coords[coords.length - 2], oksClearance(dn))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Отступ оси участка Ду {@code dn} от полигона ОКС, как у зон графа того же Ду. */
+    private double oksClearance(int dn) {
+        return rules.restriction(OKS_EXISTING).clearanceM(dn) + rules.diameter(dn).getWidthM() / 2;
     }
 
     /** Первый вариант дерева с другой врезкой: другой объект или точка дальше OTHER_TIE_M. */

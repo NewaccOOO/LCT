@@ -1,6 +1,7 @@
 package ru.lct.heatnet.plan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static ru.lct.heatnet.plan.PlanFixture.point;
 
@@ -137,6 +138,20 @@ class TreeBuilderTest {
         Geometry inside = piece.intersection(building);
         assertEquals(1, inside.getNumGeometries(), "финальный участок входит в здание один раз: " + inside);
         assertTrue(inside.getLength() < 9, "выход через наружную стену x=150, а не сквозь двор: " + inside.getLength());
+    }
+
+    @Test
+    void finalPieceDoesNotComeBackIntoOwnClearanceZone() {
+        // луч вышел из зоны отступа стены y=10 и проходит в 3,58 м от крюка того же здания: при отступе 5,3 м он
+        // входит в зону снова, как у ОКС 10 датасета, при 3,5 м нет
+        Geometry building = PlanFixture.rect(0, 0, 30, 10).union(PlanFixture.rect(25, 10, 30, 30))
+                .union(PlanFixture.rect(13.58, 25, 30, 30));
+        Coordinate cp = new Coordinate(10, 8);
+        Coordinate exit = new Coordinate(10, 40);
+
+        assertFalse(TreeBuilder.leavesOnce(building, cp, exit, 5.3));
+        assertTrue(TreeBuilder.leavesOnce(building, cp, exit, 3.5));
+        assertTrue(TreeBuilder.leavesOnce(building, cp, new Coordinate(10, 16), 5.3), "луч кончается до крюка");
     }
 
     @Test

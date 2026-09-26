@@ -151,8 +151,8 @@ final class DirectTies {
     }
 
     /**
-     * Выход из своего здания на луче через сторону контура: точка выхода (null — выхода нет) и пересекает ли отрезок
-     * от точки подключения до выхода здание один раз.
+     * Выход из своего здания на луче через сторону контура: точка выхода (null — выхода нет) и выходит ли отрезок
+     * от точки подключения до выхода из здания и его зоны отступа по одному разу, см. {@link TreeBuilder#leavesOnce}.
      */
     private static final class Portal {
         final Coordinate exit;
@@ -529,7 +529,7 @@ final class DirectTies {
                 reject(reasons, "короче метра");
                 return null;
             }
-            if (building != null && !TreeBuilder.leavesOnce(building.getGeometry(), cp, tiePoint)) {
+            if (building != null && !TreeBuilder.leavesOnce(building.getGeometry(), cp, tiePoint, clearance)) {
                 reject(reasons, "снова через своё здание");
                 return null;
             }
@@ -577,7 +577,7 @@ final class DirectTies {
                         break;
                     }
                     Coordinate exit = exit(cp, anchor, building, clearance);
-                    portals.add(new Portal(exit, exit != null && TreeBuilder.leavesOnce(building.getGeometry(), cp, exit)));
+                    portals.add(new Portal(exit, exit != null && TreeBuilder.leavesOnce(building.getGeometry(), cp, exit, clearance)));
                 }
                 shared.portals = portals;
             }
