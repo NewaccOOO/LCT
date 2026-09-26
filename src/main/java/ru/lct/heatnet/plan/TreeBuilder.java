@@ -45,6 +45,9 @@ final class TreeBuilder {
     /** Подотрезок и расстояние между узлами не короче метра (правило geometry). */
     static final double MIN_PIECE_M = 1.0;
     static final double MIN_TURN_DEG = 3.0;
+    /** Шаг и наибольший угол поворота звена у камеры ветвления, см. {@link #bends}. */
+    private static final double BEND_STEP_DEG = 0.5;
+    private static final double MAX_BEND_DEG = 90;
     private static final double TOUCH_M = 0.05;
     /** Валидатор не проверяет касание участков в круге 0,15 м вокруг общего узла. */
     private static final double JUNCTION_CLIP_M = 0.15;
@@ -1296,7 +1299,10 @@ final class TreeBuilder {
         return found;
     }
 
-    /** Сдвиг камеры junction в point на ребре rail, который убирает вершину s у камеры, см. {@link #unkinks}; null — нельзя. */
+    /**
+     * Сдвиг камеры junction в point на ребре rail, который убирает вершину s у камеры, см. {@link #unkinks}; s null —
+     * вершины не убираются ({@link #turnSlides}). null — нельзя.
+     */
     private Slide unkink(Tree tree, Tree.Node junction, List<Tree.Edge> incident, Map<Tree.Edge, Coordinate[]> from,
             Tree.Edge s, Tree.Edge rail, Coordinate point, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
             Map<Tree.Edge, Double> priceRub, Set<String> ignored) {
@@ -1356,6 +1362,136 @@ final class TreeBuilder {
             lines.put(edge, edge.from == junction ? line : JunctionMover.reversed(line));
         }
         return new Slide(gain, junction, point, lines);
+    }
+
+    /**
+     * Сдвиги камеры ветвления junction вдоль первого звена её рёбер с шагом step до maxShift, после которых поворот в
+     * камере на пути точки к врезке не круче MAX_TURN_DEG (п. 2.1, разъяснение 5). Рёбра идут от нового места прямой к
+     * своей первой вершине, место камеры и новые звенья проверяются, как у {@link #unkinks}. Порядок — по gain,
+     * сдвиги с gain больше maxGainRub не берутся.
+     */
+    List<Slide> turnSlides(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
+            Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub, double step,
+            double maxShift) {
+        Set<String> ignored = tree.tie.getIgnored();
+        List<Tree.Edge> incident = JunctionMover.incident(tree, junction);
+        Map<Tree.Edge, Coordinate[]> from = new IdentityHashMap<>();
+        int dn = 0;
+        for (Tree.Edge edge : incident) {
+            from.put(edge, JunctionMover.fromJunction(edge, junction));
+            dn = Math.max(dn, dnByEdge.get(edge));
+        }
+        List<Slide> found = new ArrayList<>();
+        for (Tree.Edge rail : incident) {
+            Coordinate[] ct = from.get(rail);
+            LineSegment link = new LineSegment(ct[0], ct[1]);
+            ObstacleSet railZones = zones.apply(rail);
+            List<Double> vertices = vertexPositions(rail.line);
+            List<SpecialSpan> spans = railZones.spans(rail.line, ignored);
+            for (double shift = step; shift <= Math.min(maxShift, link.getLength() - Router.CUT_PIECE_M); shift += step) {
+                Coordinate point = link.pointAlong(shift / link.getLength());
+                double position = rail.from == junction ? shift : rail.line.getLength() - shift;
+                if (!placeAllowed(rail, position, vertices, spans, railZones, dn)) {
+                    continue;
+                }
+                Slide slide = unkink(tree, junction, incident, from, null, rail, point, zones, priceRub, ignored);
+                if (slide != null && slide.gain <= maxGainRub) {
+                    found.add(slide);
+                }
+            }
+        }
+        found.sort(Comparator.comparingDouble(slide -> slide.gain));
+        return found;
+    }
+
+    /**
+     * Изломы у камеры ветвления junction, после которых поворот в ней на пути точки к врезке не круче MAX_TURN_DEG
+     * (п. 2.1, разъяснение 5): звено одного ребра у камеры поворачивается на наименьший для этого угол с шагом
+     * BEND_STEP_DEG, но не меньше MIN_TURN_DEG с шагом запаса, и ребро идёт от камеры до новой вершины в r метрах (от
+     * CUT_PIECE_M, дальше вдвое больше, пока до прежней первой вершины остаётся звено), оттуда к прежней первой вершине.
+     * Камера остаётся на месте, финальный участок прямо от камеры в здание не меняется, новые звенья проверяются, как у
+     * {@link #unkink}, а изломы в новой вершине и в прежней первой — не меньше MIN_TURN_DEG. Порядок — по gain, изломы с
+     * gain больше maxGainRub не берутся.
+     */
+    List<Slide> bends(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
+            Map<Tree.Edge, Double> priceRub, double maxGainRub) {
+        List<Tree.Edge> incident = JunctionMover.incident(tree, junction);
+        Map<Tree.Edge, Coordinate[]> from = new IdentityHashMap<>();
+        incident.forEach(edge -> from.put(edge, JunctionMover.fromJunction(edge, junction)));
+        List<Slide> found = new ArrayList<>();
+        for (Tree.Edge edge : incident) {
+            Coordinate[] c = from.get(edge);
+            Tree.Node far = edge.from == junction ? edge.to : edge.from;
+            if (c.length == 2 && far.kind == Tree.Kind.CONNECTION && buildingByConnection.containsKey(far.connection.getId())) {
+                continue;
+            }
+            double angle = Math.atan2(c[1].y - c[0].y, c[1].x - c[0].x);
+            for (int sign = -1; sign <= 1; sign += 2) {
+                Coordinate toward = null;
+                for (double delta = MIN_TURN_DEG + BEND_STEP_DEG; toward == null && delta <= MAX_BEND_DEG; delta += BEND_STEP_DEG) {
+                    double a = angle + sign * Math.toRadians(delta);
+                    Coordinate unit = new Coordinate(c[0].x + Math.cos(a), c[0].y + Math.sin(a));
+                    toward = turnsAllowed(junction, incident, from, edge, unit) ? unit : null;
+                }
+                for (double r = Router.CUT_PIECE_M; toward != null && r + Router.CUT_PIECE_M <= c[0].distance(c[1]); r *= 2) {
+                    Coordinate[] line = new Coordinate[c.length + 1];
+                    line[0] = c[0];
+                    line[1] = new Coordinate(c[0].x + (toward.x - c[0].x) * r, c[0].y + (toward.y - c[0].y) * r);
+                    System.arraycopy(c, 1, line, 2, c.length - 1);
+                    Slide slide = bend(tree, junction, edge, line, zones.apply(edge), priceRub);
+                    if (slide != null && slide.gain <= maxGainRub) {
+                        found.add(slide);
+                    }
+                }
+            }
+        }
+        found.sort(Comparator.comparingDouble(slide -> slide.gain));
+        return found;
+    }
+
+    /** Повороты в камере junction на пути точки к врезке не круче MAX_TURN_DEG, если звено ребра edge идёт к point. */
+    private static boolean turnsAllowed(Tree.Node junction, List<Tree.Edge> incident, Map<Tree.Edge, Coordinate[]> from,
+            Tree.Edge edge, Coordinate point) {
+        for (Tree.Edge in : incident) {
+            if (in.to != junction) {
+                continue;
+            }
+            Coordinate before = in == edge ? point : from.get(in)[1];
+            for (Tree.Edge out : incident) {
+                if (out != in && deflectionDeg(before, junction.point, out == edge ? point : from.get(out)[1]) > Router.MAX_TURN_DEG) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /** Ребро edge камеры junction с линией line от камеры, см. {@link #bends}; null — два новых звена не годятся. */
+    private Slide bend(Tree tree, Tree.Node junction, Tree.Edge edge, Coordinate[] line, ObstacleSet zones,
+            Map<Tree.Edge, Double> priceRub) {
+        Set<String> ignored = tree.tie.getIgnored();
+        List<LineSegment> others = new ArrayList<>();
+        for (Tree.Edge other : tree.edges) {
+            Coordinate[] c = other.line.getCoordinates();
+            for (int i = 0; other != edge && i + 1 < c.length; i++) {
+                others.add(new LineSegment(c[i], c[i + 1]));
+            }
+        }
+        for (int i = 2; i + 1 < line.length; i++) {
+            others.add(new LineSegment(line[i], line[i + 1]));
+        }
+        for (int i = 0; i < 2; i++) {
+            Coordinate a = line[i];
+            Coordinate b = line[i + 1];
+            double turn = i + 2 < line.length ? deflectionDeg(a, b, line[i + 2]) : MIN_TURN_DEG;
+            if (a.distance(b) < Router.CUT_PIECE_M || turn > Router.MAX_TURN_DEG || turn < MIN_TURN_DEG
+                    || !zones.covers(a, b) || !zones.plain(a, b, ignored, Router.CUT_MARGIN_M)
+                    || !Router.apart(new LineSegment(a, b), others)) {
+                return null;
+            }
+        }
+        double gain = price(priceRub, edge) * (length(line) - edge.line.getLength());
+        return new Slide(gain, junction, junction.point, Map.of(edge, edge.from == junction ? line : JunctionMover.reversed(line)));
     }
 
     /**

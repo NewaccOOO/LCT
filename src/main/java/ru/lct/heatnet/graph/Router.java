@@ -829,12 +829,22 @@ public final class Router {
      */
     public boolean sharpen(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
             List<LineSegment> apart) {
+        return sharpen(zones, coords, ignored, keep, apart, null, List.of());
+    }
+
+    /**
+     * {@link #sharpen} у ребра дерева: before — вершина перед началом ломаной на пути точки к врезке (null — нет),
+     * after — вершины после её конца (пусто — нет). Убранная вершина не делает поворот в концах круче MAX_TURN_DEG
+     * (п. 2.1, разъяснение 5), замена поворотов крайние отрезки не поворачивает.
+     */
+    public boolean sharpen(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
+            List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
         List<LineSegment> others = apart == null ? List.of() : apart;
         boolean changed = false;
         while (coords.size() > 2) {
             List<SpecialSpan> spans = zones.spans(factory.createLineString(coords.toArray(new Coordinate[0])), ignored);
-            if (!drop(zones, coords, 1, keep, spans, ignored, others)
-                    && !drop(zones, coords, 2, keep, spans, ignored, others)
+            if (!drop(zones, coords, 1, keep, spans, ignored, others, before, after)
+                    && !drop(zones, coords, 2, keep, spans, ignored, others, before, after)
                     && !merge(zones, coords, held(coords, keep, spans), spans, ignored, others)) {
                 break;
             }
@@ -851,6 +861,12 @@ public final class Router {
      */
     public boolean loose(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
             List<LineSegment> apart) {
+        return loose(zones, coords, ignored, keep, apart, null, List.of());
+    }
+
+    /** {@link #loose} у ребра дерева с вершинами соседних рёбер before и after, как у {@link #sharpen}. */
+    public boolean loose(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
+            List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
         List<LineSegment> others = apart == null ? List.of() : apart;
         List<SpecialSpan> spans = zones.spans(factory.createLineString(coords.toArray(new Coordinate[0])), ignored);
         double at = 0;
@@ -861,7 +877,7 @@ public final class Router {
             }
             List<Coordinate> shape = new ArrayList<>(coords);
             shape.remove(v);
-            if (removalFits(zones, shape, v - 1, ignored, others)) {
+            if (removalFits(zones, shape, v - 1, ignored, others, before, after)) {
                 return true;
             }
         }
@@ -889,7 +905,8 @@ public final class Router {
      * убираются. true — coords заменены.
      */
     private boolean drop(ObstacleSet zones, List<Coordinate> coords, int count, Coordinate keep,
-            List<SpecialSpan> spans, Set<String> ignored, List<LineSegment> apart) {
+            List<SpecialSpan> spans, Set<String> ignored, List<LineSegment> apart, Coordinate before,
+            List<Coordinate> after) {
         int n = coords.size();
         double[] at = new double[n];
         for (int v = 1; v < n; v++) {
@@ -905,7 +922,7 @@ public final class Router {
         }
         removals.sort(Comparator.comparingDouble(removal -> -removal.saving));
         for (Removal removal : removals) {
-            if (removalFits(zones, removal.shape, removal.join, ignored, apart)) {
+            if (removalFits(zones, removal.shape, removal.join, ignored, apart, before, after)) {
                 coords.clear();
                 coords.addAll(removal.shape);
                 return true;
@@ -978,15 +995,18 @@ public final class Router {
 
     /**
      * Новый отрезок join ломаной shape годится, см. {@link #sharpen}: он обычный (специальные части ломаной до него
-     * и после не заходят в него), а повороты на его концах не круче MAX_TURN_DEG.
+     * и после не заходят в него), а повороты на его концах, в том числе к вершинам соседних рёбер before и after, не
+     * круче MAX_TURN_DEG.
      */
     private boolean removalFits(ObstacleSet zones, List<Coordinate> shape, int join, Set<String> ignored,
-            List<LineSegment> apart) {
+            List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
         int n = shape.size();
         Coordinate a = shape.get(join);
         Coordinate b = shape.get(join + 1);
         if (a.distance(b) < CUT_PIECE_M || join >= 1 && !turnAllowed(shape.get(join - 1), a, b)
                 || join + 2 < n && !turnAllowed(a, b, shape.get(join + 2))
+                || join == 0 && before != null && !turnAllowed(before, a, b)
+                || join + 2 == n && after.stream().anyMatch(c -> !turnAllowed(a, b, c))
                 || !zones.covers(a, b) || !zones.plain(a, b, ignored, CUT_MARGIN_M)
                 || along(zones, shape, join, ignored)) {
             return false;

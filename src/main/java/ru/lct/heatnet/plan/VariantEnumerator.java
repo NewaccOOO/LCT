@@ -142,6 +142,13 @@ public final class VariantEnumerator {
     /** Сдвиги новой камеры врезки вдоль трубы, снимающие излом у неё: шаг и наибольший, см. {@link #retied}. */
     private static final double RETIE_STEP_M = 0.1;
     private static final double RETIE_MAX_M = 5;
+    /**
+     * Правка поворота в камере на пути точки к врезке, см. {@link #turned}: сдвиг камеры шагом TURN_STEP_M до
+     * TURN_MAX_M, S узла врезки растёт не больше TURN_TOLERANCE_S за место.
+     */
+    private static final double TURN_STEP_M = 0.1;
+    private static final double TURN_MAX_M = 10;
+    private static final double TURN_TOLERANCE_S = 0.002;
     /** Сдвиг камер ветвления в деревьях выбранных вариантов (heatnet.slide.junctions), см. {@link #shifted(Draft)}. */
     private static final boolean SLIDE_JUNCTIONS =
             Boolean.parseBoolean(System.getProperty("heatnet.slide.junctions", "true"));
@@ -517,7 +524,8 @@ public final class VariantEnumerator {
             Variant variant = null;
             if (REROUTE) {
                 try {
-                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, unkinked(rerouted(draft)), draft.unconnected);
+                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, turned(unkinked(rerouted(draft))),
+                            draft.unconnected);
                 } catch (IllegalStateException | IllegalArgumentException e) {
                     // узлы врезки собирались по отдельности, а вместе нет: вариант как найден поиском
                     log.info("rerouted: вариант {} не собран: {}", i + 1, e.getMessage());
@@ -525,7 +533,7 @@ public final class VariantEnumerator {
             }
             if (variant == null) {
                 try {
-                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, unkinked(draft.trees), draft.unconnected);
+                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, turned(unkinked(draft.trees)), draft.unconnected);
                 } catch (IllegalStateException | IllegalArgumentException e) {
                     log.info("unkinked: вариант {} не собран: {}", i + 1, e.getMessage());
                 }
@@ -2235,7 +2243,7 @@ public final class VariantEnumerator {
             }
             for (Map<Integer, LineString> change : changes) {
                 Tree tree = result.get(t);
-                Map<Integer, LineString> sharp = sharpened(tree, change, found);
+                Map<Integer, LineString> sharp = sharpened(tree, change, found, false);
                 if (sharp == null || !apart(sharp.values(), result, tree)) {
                     continue;
                 }
@@ -2360,9 +2368,11 @@ public final class VariantEnumerator {
      * фактического Ду ребра из found, новые куски не ближе 0,5 м к другим рёбрам дерева, выход из здания на месте
      * (п. 2.2). Пока форма меняется, новые рёбра сравниваются друг с другом в новом виде. null — ребро от врезки
      * после этого идёт вдоль её трубы или в ребре осталась вершина, которую без соседа можно убрать
-     * ({@link Router#loose}).
+     * ({@link Router#loose}). При {@code pathTurns} убранная вершина не делает поворот в камере ветвления на пути точки
+     * к врезке круче MAX_TURN_DEG, см. {@link Router#sharpen(ObstacleSet, List, Set, Coordinate, List, Coordinate, List)}.
      */
-    private Map<Integer, LineString> sharpened(Tree tree, Map<Integer, LineString> change, Map<Integer, Fresh> found) {
+    private Map<Integer, LineString> sharpened(Tree tree, Map<Integer, LineString> change, Map<Integer, Fresh> found,
+            boolean pathTurns) {
         List<LineString> lines = new ArrayList<>();
         for (int e = 0; e < tree.edges.size(); e++) {
             lines.add(change.getOrDefault(e, tree.edges.get(e).line));
@@ -2387,11 +2397,23 @@ public final class VariantEnumerator {
                         && buildingByConnection.containsKey(edge.to.connection.getId()) && coords.size() > 2
                         ? coords.get(coords.size() - 2) : null;
                 Router router = found.get(e).router;
-                if (router.sharpen(found.get(e).zones, coords, ignored, exit, others)) {
-                    lines.set(e, factory.createLineString(coords.toArray(new Coordinate[0])));
-                    again = change.size() > 1;
+                Coordinate before = null;
+                List<Coordinate> after = new ArrayList<>();
+                for (int o = 0; pathTurns && o < lines.size(); o++) {
+                    Tree.Edge other = tree.edges.get(o);
+                    Coordinate[] c = lines.get(o).getCoordinates();
+                    if (edge.from.kind == Tree.Kind.JUNCTION && other.to == edge.from) {
+                        before = c[c.length - 2];
+                    }
+                    if (edge.to.kind == Tree.Kind.JUNCTION && other.from == edge.to) {
+                        after.add(c[1]);
+                    }
                 }
-                if (router.loose(found.get(e).zones, coords, ignored, exit, others)) {
+                if (router.sharpen(found.get(e).zones, coords, ignored, exit, others, before, after)) {
+                    lines.set(e, factory.createLineString(coords.toArray(new Coordinate[0])));
+                    again = change.size() > 1 || pathTurns;
+                }
+                if (router.loose(found.get(e).zones, coords, ignored, exit, others, before, after)) {
                     loose.add(e);
                 } else {
                     loose.remove(e);
@@ -2474,7 +2496,7 @@ public final class VariantEnumerator {
                     if (!tried.add(List.of(slide.junction.point.x, slide.junction.point.y, slide.point.x, slide.point.y))) {
                         continue;
                     }
-                    Tree changed = unkinked(tree, slide, tree.tie, dnByEdge, region, area);
+                    Tree changed = unkinked(tree, slide, tree.tie, dnByEdge, region, area, false);
                     List<Tree> others = new ArrayList<>(result);
                     others.remove(t);
                     if (changed == null || !compatible(changed, others)) {
@@ -2507,6 +2529,99 @@ public final class VariantEnumerator {
             }
         }
         log.info("unkinked: moves={} elapsed={}ms", taken, (System.nanoTime() - started) / 1_000_000);
+        return result;
+    }
+
+    /**
+     * Деревья варианта без поворотов круче MAX_TURN_DEG в камерах ветвления на пути точки к врезке (п. 2.1, разъяснение
+     * 5), которые снимает сдвиг камеры вдоль первого звена одного из её рёбер ({@link TreeBuilder#turnSlides}). Поиск
+     * таких поворотов не проверяет, проход правит готовые варианты. Рёбра камеры доводятся до строгой формы, где
+     * убранная вершина не делает поворот в камере круче ({@link #sharpened}). Сдвиг берётся, если таких поворотов в
+     * дереве стало меньше, S узла врезки вырос не больше TURN_TOLERANCE_S, Ду рёбер не выросли, а дерево не касается
+     * других; дальше повороты ищутся на новом дереве. Места, которые проход не снял, пишутся в лог.
+     */
+    private List<Tree> turned(List<Tree> trees) {
+        long started = System.nanoTime();
+        List<Tree> result = new ArrayList<>(trees);
+        int taken = 0;
+        double maxGainRub = TURN_TOLERANCE_S / rules.score(1, 0);
+        for (int t = 0; t < result.size(); t++) {
+            Tree first = result.get(t);
+            Region region = regionByConnection.get(first.connected().get(0).getId());
+            Envelope area = region.area.contains(first.envelope()) ? region.area : region.wideArea;
+            for (int sharp = sharpTurns(first).size(); sharp > 0 && area.contains(first.envelope()); ) {
+                Tree tree = result.get(t);
+                List<Tree> unit = new ArrayList<>();
+                for (Tree other : result) {
+                    if (other.root.key.equals(tree.root.key)) {
+                        unit.add(other);
+                    }
+                }
+                Map<Tree.Edge, Integer> dnByEdge;
+                try {
+                    dnByEdge = assembler.diameters(unit);
+                } catch (IllegalStateException | IllegalArgumentException e) {
+                    break;
+                }
+                Map<Tree.Edge, Double> priceRub = new IdentityHashMap<>();
+                dnByEdge.forEach((edge, dn) -> priceRub.put(edge, rules.diameter(dn).getNewRubM() + rules.lengthWorthRub()));
+                double before = unitScore(unit);
+                List<Tree> others = new ArrayList<>(result);
+                others.remove(t);
+                Tree changed = null;
+                for (Tree.Node junction : sharpTurns(tree)) {
+                    java.util.function.Function<Tree.Edge, ObstacleSet> zones = edge -> region.obstacles(dnByEdge.get(edge), area);
+                    List<TreeBuilder.Slide> slides = new ArrayList<>(builder.turnSlides(tree, junction, zones, dnByEdge,
+                            priceRub, maxGainRub, TURN_STEP_M, TURN_MAX_M));
+                    slides.addAll(builder.bends(tree, junction, zones, priceRub, maxGainRub));
+                    slides.sort(Comparator.comparingDouble(slide -> slide.gain));
+                    for (TreeBuilder.Slide slide : slides) {
+                        Tree attempt = unkinked(tree, slide, tree.tie, dnByEdge, region, area, true);
+                        if (attempt == null || sharpTurns(attempt).size() >= sharp || !compatible(attempt, others)) {
+                            continue;
+                        }
+                        List<Tree> after = new ArrayList<>();
+                        for (Tree other : unit) {
+                            after.add(other == tree ? attempt : other);
+                        }
+                        if (unitScore(after) <= before + TURN_TOLERANCE_S && !thicker(tree, unit, attempt, after)) {
+                            changed = attempt;
+                            break;
+                        }
+                    }
+                    if (changed != null) {
+                        break;
+                    }
+                }
+                if (changed == null) {
+                    sharpTurns(tree).forEach(junction -> log.info("turned: поворот в камере {} не снят", junction.key));
+                    break;
+                }
+                result.set(t, changed);
+                taken++;
+                sharp = sharpTurns(changed).size();
+            }
+        }
+        log.info("turned: moves={} elapsed={}ms", taken, (System.nanoTime() - started) / 1_000_000);
+        return result;
+    }
+
+    /** Камеры ветвления дерева, где путь точки к врезке поворачивает круче MAX_TURN_DEG. */
+    private static List<Tree.Node> sharpTurns(Tree tree) {
+        List<Tree.Node> result = new ArrayList<>();
+        for (Tree.Edge in : tree.edges) {
+            if (in.to.kind != Tree.Kind.JUNCTION) {
+                continue;
+            }
+            Coordinate[] c = in.line.getCoordinates();
+            for (Tree.Edge out : tree.edges) {
+                if (out.from == in.to && Router.deflectionDeg(c[c.length - 2], in.to.point,
+                        out.line.getCoordinateN(1)) > Router.MAX_TURN_DEG) {
+                    result.add(in.to);
+                    break;
+                }
+            }
+        }
         return result;
     }
 
@@ -2567,7 +2682,7 @@ public final class VariantEnumerator {
                     || !builder.retieClear(tree, slide, tie.getIgnored(), edge -> region.obstacles(dnByEdge.get(edge), area))) {
                 continue;
             }
-            Tree changed = unkinked(tree, slide, tie, dnByEdge, region, area);
+            Tree changed = unkinked(tree, slide, tie, dnByEdge, region, area, false);
             if (changed == null || !compatible(changed, others)) {
                 continue;
             }
@@ -2579,9 +2694,12 @@ public final class VariantEnumerator {
         return null;
     }
 
-    /** Дерево со сдвигом slide камеры и врезкой tie, рёбра камеры в строгой форме, или null, см. {@link #unkinked(List)}. */
+    /**
+     * Дерево со сдвигом slide камеры и врезкой tie, рёбра камеры в строгой форме (pathTurns — как у
+     * {@link #sharpened}), или null, см. {@link #unkinked(List)}.
+     */
     private Tree unkinked(Tree tree, TreeBuilder.Slide slide, TieCandidate tie, Map<Tree.Edge, Integer> dnByEdge,
-            Region region, Envelope area) {
+            Region region, Envelope area, boolean pathTurns) {
         Tree moved = builder.moved(tree, slide, tie);
         Map<Integer, LineString> change = new LinkedHashMap<>();
         Map<Integer, Fresh> found = new HashMap<>();
@@ -2602,7 +2720,7 @@ public final class VariantEnumerator {
             change.put(e, line);
             found.put(e, new Fresh(line, router, region.obstacles(dn, area)));
         }
-        Map<Integer, LineString> sharp = sharpened(moved, change, found);
+        Map<Integer, LineString> sharp = sharpened(moved, change, found, pathTurns);
         return sharp == null ? null : replaced(moved, sharp);
     }
 

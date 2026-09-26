@@ -312,6 +312,37 @@ class TreeBuilderTest {
         assertEquals(moved.nodeKey(), retied.root.key);
     }
 
+    @Test
+    void branchLinkBendsAtJunctionSoPathTurnIsNotSteeperThan90() {
+        // ветка к o-2 уходит от камеры назад, на 116,6° к стволу: звено у камеры поворачивается, и путь точки к врезке
+        // поворачивает в камере не круче 89,9°
+        PlanFixture fixture = PlanFixture.trunk().oks("o-1", 340, 100, 5).oks("o-2", 240, 30, 5);
+        InputData input = fixture.input();
+        TieInFinder finder = new TieInFinder(input, rules);
+        TieCandidate tie = finder.find(List.of(point(300, 60)), DN).stream()
+                .filter(c -> c.getExistingObjectId().equals("hn-2")).findFirst().orElseThrow();
+        Coordinate root = tie.getPoint().getCoordinate();
+        Tree tree = new Tree(tie);
+        Tree.Node junction = Tree.Node.junction(new Coordinate(root.x, 60));
+        tree.edges.add(new Tree.Edge(tree.root, junction, PlanFixture.line(root.x, root.y, root.x, 60)));
+        tree.edges.add(new Tree.Edge(junction, Tree.Node.connection(fixture.connection("o-1")), PlanFixture.line(root.x, 60, 340, 100)));
+        tree.edges.add(new Tree.Edge(junction, Tree.Node.connection(fixture.connection("o-2")), PlanFixture.line(root.x, 60, 240, 30)));
+        Map<Tree.Edge, Double> priceRub = new java.util.IdentityHashMap<>();
+        tree.edges.forEach(edge -> priceRub.put(edge, 1.0));
+        Router router = new Router(input, rules, AREA, DN);
+
+        List<TreeBuilder.Slide> bends = builder(input, finder).bends(tree, junction, edge -> router.obstacles(), priceRub, 100);
+
+        assertFalse(bends.isEmpty());
+        Tree bent = builder(input, finder).moved(tree, bends.get(0));
+        Tree.Node at = JunctionMover.junctions(bent).get(0);
+        Coordinate[] trunk = bent.edges.get(0).line.getCoordinates();
+        for (Tree.Edge edge : bent.edges.subList(1, 3)) {
+            double turn = Router.deflectionDeg(trunk[trunk.length - 2], at.point, edge.line.getCoordinateN(1));
+            assertTrue(turn <= Router.MAX_TURN_DEG, edge.to.key + " " + turn);
+        }
+    }
+
     private TreeBuilder builder(InputData input, TieInFinder finder) {
         return builder(input, finder, Map.of());
     }
