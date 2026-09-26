@@ -187,6 +187,15 @@ final class TieInFinder {
         return segment == null ? null : pipeCandidate(segment, point, dn);
     }
 
+    /** Врезка на участке врезки tie в трубу в shift м вдоль оси от проекции point; null — участок не подходит. */
+    TieCandidate shifted(TieCandidate tie, Coordinate point, double shift, int dn) {
+        NetworkSegment segment = segmentById.get(tie.getExistingObjectId());
+        if (segment == null) {
+            return null;
+        }
+        return pipeCandidate(segment, new LengthIndexedLine(segment.getGeometry()).project(point) + shift, dn);
+    }
+
     TieCandidate pipeCandidate(NetworkSegment segment, Point point, int dn) {
         LengthIndexedLine indexed = new LengthIndexedLine(segment.getGeometry());
         double at = indexed.project(point.getCoordinate());

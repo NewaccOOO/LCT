@@ -830,8 +830,7 @@ public final class Router {
         if (a.distance(b) < CUT_PIECE_M || join >= 1 && !turnAllowed(shape.get(join - 1), a, b)
                 || join + 2 < n && !turnAllowed(a, b, shape.get(join + 2))
                 || !zones.covers(a, b) || !zones.plain(a, b, ignored, CUT_MARGIN_M)
-                || join == 0 && zones.alongIgnored(a, b, ignored)
-                || join + 2 == n && zones.alongIgnored(b, a, ignored)) {
+                || along(zones, shape, join, ignored)) {
             return false;
         }
         double from = 0;
@@ -851,6 +850,21 @@ public final class Router {
             }
         }
         return apart(new LineSegment(a, b), own);
+    }
+
+    /**
+     * Новый отрезок join ломаной shape у её конца идёт вдоль объекта врезки из ignored. Отрезок, который один
+     * составляет ломаную, касается объекта врезки одним концом, и проверка от другого конца всегда находит касание:
+     * вдоль он идёт, только если его находят проверки от обоих концов.
+     */
+    private static boolean along(ObstacleSet zones, List<Coordinate> shape, int join, Set<String> ignored) {
+        int n = shape.size();
+        Coordinate a = shape.get(join);
+        Coordinate b = shape.get(join + 1);
+        if (n == 2) {
+            return zones.alongIgnored(a, b, ignored) && zones.alongIgnored(b, a, ignored);
+        }
+        return join == 0 && zones.alongIgnored(a, b, ignored) || join + 2 == n && zones.alongIgnored(b, a, ignored);
     }
 
     /**
