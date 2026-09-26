@@ -82,6 +82,8 @@ public final class VariantEnumerator {
     private static final double SHARED_ROOT_CLIP_M = 0.15;
     private static final double SHARED_ROOT_APART_M = 0.01;
     private static final int MAX_VARIANTS = 3;
+    /** Сдвиги врезки вдоль трубы от проекции камеры ветвления, м, см. {@link #absorbed}. */
+    private static final double[] ABSORB_SHIFTS_M = {0, -2, 2, -4, 4, -8, 8, -16, 16};
     /** Деревья кандидатов врезки считаются параллельно (heatnet.search.parallel); false — в одну нить, тот же выход. */
     private static final boolean PARALLEL = Boolean.parseBoolean(System.getProperty("heatnet.search.parallel", "true"));
     /**
@@ -1341,6 +1343,11 @@ public final class VariantEnumerator {
             rerooted = rerooted == tree ? tree : slid(rerooted, router, dn, metreRub);
             Option best = null;
             for (Tree shape : new java.util.LinkedHashSet<>(List.of(slid, rerooted, tree))) {
+                if (!district && shape == tree && slid != tree && best != null) {
+                    // дерево как построено — запасной ход, когда формы с перенесённой врезкой не собрались: на восьми
+                    // наборах выход с ним и без него один и тот же, а его сборка занимала до 4 % расчёта
+                    continue;
+                }
                 // срезка только укорачивает рёбра: несрезанное дерево собирается, если срезанное не собралось
                 Tree cut = builder.cut(shape, router);
                 Option option = cut == shape ? null : option(cut, label, verify, area, dn, region, tree.narrow);
@@ -1348,6 +1355,14 @@ public final class VariantEnumerator {
                 if (option != null && (best == null || option.score < best.score)) {
                     best = option;
                 }
+            }
+            Tree absorbed = best == null || !slide ? null : absorbed(best.tree, router, dn);
+            if (absorbed != null && absorbed != best.tree) {
+                // лучшая форма без первой камеры ветвления, если её ветки дешевле провести прямо из врезки
+                Tree cut = builder.cut(absorbed, router);
+                Option option = cut == absorbed ? null : option(cut, label, verify, area, dn, region, tree.narrow);
+                option = option != null ? option : option(absorbed, label, verify, area, dn, region, tree.narrow);
+                best = option != null && option.score < best.score ? option : best;
             }
             return best;
         }).filter(Objects::nonNull).collect(Collectors.toList());
@@ -1485,9 +1500,208 @@ public final class VariantEnumerator {
         return result;
     }
 
+    /**
+     * Дерево, в котором новая камера врезки на трубе заменяет первую камеру ветвления: к камере на трубе примыкают
+     * две части трубы и два новых участка (п. 2.1), и обе ветки камеры ветвления идут прямо из врезки, а сама она не
+     * строится. Новая камера ставится на трубе прежней врезки, а вместо врезки в существующую камеру — на ближайших к
+     * камере ветвления трубах, у проекции камеры и со сдвигом вдоль оси. Ветка идёт прямой от врезки к одной из своих
+     * вершин и дальше как была; финальный участок к точке подключения не меняется, прямая проверяется как у
+     * {@link #slid}. Камера убирается, если по цене метра Ду расхода, камеры и врезки так дешевле; остальное проверяет
+     * сборка.
+     */
+    private Tree absorbed(Tree tree, Router router, int dn) {
+        if (district || tree.degree(tree.root) != 1) {
+            return tree;
+        }
+        Tree.Edge trunk = tree.edges.stream().filter(edge -> edge.from == tree.root).findFirst().orElseThrow();
+        List<Tree.Edge> children = tree.edges.stream().filter(edge -> edge.from == trunk.to).collect(Collectors.toList());
+        if (trunk.to.kind != Tree.Kind.JUNCTION || children.size() != 2) {
+            return tree;
+        }
+        Coordinate junction = trunk.to.point;
+        List<TieCandidate> bases = !tree.tie.isChamber() ? List.of(tree.tie)
+                : finder.find(List.of(factory.createPoint(junction)), dn);
+        Map<String, TieCandidate> ties = new LinkedHashMap<>();
+        ties.put(tree.tie.nodeKey(), tree.tie);
+        for (TieCandidate base : bases) {
+            for (double shift : ABSORB_SHIFTS_M) {
+                TieCandidate tie = base.isChamber() ? null : finder.shifted(base, junction, shift, dn);
+                if (tie != null) {
+                    ties.putIfAbsent(tie.nodeKey(), tie);
+                }
+            }
+        }
+        List<LineSegment> others = new ArrayList<>();
+        for (Tree.Edge edge : tree.edges) {
+            Coordinate[] coords = edge.line.getCoordinates();
+            for (int i = 0; edge != trunk && !children.contains(edge) && i + 1 < coords.length; i++) {
+                others.add(new LineSegment(coords[i], coords[i + 1]));
+            }
+        }
+        double flow = flow(below(tree, trunk.to));
+        int flowDn = rules.diameterFor(flow).getDn();
+        double[] metreRub = new double[2];
+        double best = tieCost(tree.tie, flowDn) + trunk.line.getLength() * metreRub(flow) + rules.chamberCost(flowDn);
+        for (int c = 0; c < 2; c++) {
+            metreRub[c] = metreRub(flow(below(tree, children.get(c).to)));
+            best += children.get(c).line.getLength() * metreRub[c];
+        }
+        ObstacleSet obstacles = router.obstacles();
+        TieCandidate bestTie = null;
+        Coordinate[][] bestLines = null;
+        for (TieCandidate tie : ties.values()) {
+            if (tie.isChamber() || tie.getCapacity() < 2) {
+                continue;
+            }
+            List<Coordinate[]> first = branches(children.get(0), tie);
+            List<Coordinate[]> second = branches(children.get(1), tie);
+            if (first.isEmpty() || second.isEmpty()) {
+                continue;
+            }
+            // ветки по возрастанию длины: дорогая проверка прямой только у тех, что ещё могут быть дешевле лучшей
+            double cheapestB = length(second.get(0)) * metreRub[1];
+            Map<Coordinate[], Boolean> checked = new IdentityHashMap<>();
+            for (Coordinate[] a : first) {
+                double rubA = tieCost(tie, flowDn) + length(a) * metreRub[0];
+                if (rubA + cheapestB >= best) {
+                    break;
+                }
+                if (!checked.computeIfAbsent(a, line -> clear(line, tie, obstacles, others))) {
+                    continue;
+                }
+                for (Coordinate[] b : second) {
+                    double rub = rubA + length(b) * metreRub[1];
+                    if (rub >= best) {
+                        break;
+                    }
+                    if (checked.computeIfAbsent(b, line -> clear(line, tie, obstacles, others)) && apart(a, b)) {
+                        best = rub;
+                        bestTie = tie;
+                        bestLines = new Coordinate[][] {a, b};
+                    }
+                }
+            }
+        }
+        if (bestTie == null) {
+            return tree;
+        }
+        Tree result = new Tree(bestTie);
+        result.unconnected.addAll(tree.unconnected);
+        for (Tree.Edge edge : tree.edges) {
+            int c = children.indexOf(edge);
+            if (c >= 0) {
+                result.edges.add(new Tree.Edge(result.root, edge.to, factory.createLineString(bestLines[c])));
+            } else if (edge != trunk) {
+                result.edges.add(edge);
+            }
+        }
+        return result;
+    }
+
+    private double metreRub(double flow) {
+        return rules.diameterFor(flow).getNewRubM() + rules.lengthWorthRub();
+    }
+
+    /**
+     * Ветки из врезки tie вместо ребра edge из камеры ветвления по возрастанию длины: прямая к вершине ребра, включая
+     * саму камеру ветвления, и остаток ребра от этой вершины; поворот в вершине не круче 90°. Финальный участок к
+     * точке подключения остаётся целым. Допустимость прямой проверяет {@link #clear}.
+     */
+    private static List<Coordinate[]> branches(Tree.Edge edge, TieCandidate tie) {
+        Coordinate at = tie.getPoint().getCoordinate();
+        Coordinate[] coords = edge.line.getCoordinates();
+        int last = edge.to.kind == Tree.Kind.CONNECTION ? coords.length - 2 : coords.length - 1;
+        List<Coordinate[]> result = new ArrayList<>();
+        for (int k = 0; k <= last; k++) {
+            if (at.distance(coords[k]) < TreeBuilder.MIN_PIECE_M) {
+                continue;
+            }
+            if (k + 1 < coords.length) {
+                double deflection = Router.deflectionDeg(at, coords[k], coords[k + 1]);
+                if (deflection > Router.MAX_TURN_DEG || deflection < TreeBuilder.MIN_TURN_DEG) {
+                    continue;
+                }
+            }
+            Coordinate[] line = new Coordinate[coords.length - k + 1];
+            line[0] = at;
+            System.arraycopy(coords, k, line, 1, coords.length - k);
+            result.add(line);
+        }
+        result.sort(Comparator.comparingDouble(VariantEnumerator::length));
+        return result;
+    }
+
+    /**
+     * Первая прямая ветки из {@link #branches} допустима, как у {@link #slid}: без спецпрохода, не вдоль трубы врезки,
+     * не ближе TREES_APART_M к отрезкам others и к остатку своей ветки.
+     */
+    private static boolean clear(Coordinate[] line, TieCandidate tie, ObstacleSet obstacles, List<LineSegment> others) {
+        Set<String> ignored = tie.getIgnored();
+        if (!(obstacles.edgeWeight(line[0], line[1], ignored) <= line[0].distance(line[1]) + 1e-9)
+                || obstacles.alongIgnored(line[0], line[1], ignored)) {
+            return false;
+        }
+        LineSegment segment = new LineSegment(line[0], line[1]);
+        for (LineSegment other : others) {
+            if (segment.distance(other) < TREES_APART_M) {
+                return false;
+            }
+        }
+        for (int i = 2; i + 1 < line.length; i++) {
+            if (segment.distance(new LineSegment(line[i], line[i + 1])) < TREES_APART_M) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Ветки a и b из общей врезки не ближе TREES_APART_M друг к другу вне общей точки. */
+    private static boolean apart(Coordinate[] a, Coordinate[] b) {
+        LineSegment firstA = new LineSegment(a[0], a[1]);
+        LineSegment firstB = new LineSegment(b[0], b[1]);
+        if (firstA.distance(b[1]) < TREES_APART_M || firstB.distance(a[1]) < TREES_APART_M) {
+            return false;
+        }
+        for (int i = 0; i + 1 < a.length; i++) {
+            for (int j = i == 0 ? 1 : 0; j + 1 < b.length; j++) {
+                if (new LineSegment(a[i], a[i + 1]).distance(new LineSegment(b[j], b[j + 1])) < TREES_APART_M) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private static double length(Coordinate[] line) {
+        double length = 0;
+        for (int i = 0; i + 1 < line.length; i++) {
+            length += line[i].distance(line[i + 1]);
+        }
+        return length;
+    }
+
+    /** Точки подключения ниже узла node. */
+    private static List<ConnectionPoint> below(Tree tree, Tree.Node node) {
+        List<ConnectionPoint> result = new ArrayList<>();
+        if (node.kind == Tree.Kind.CONNECTION) {
+            result.add(node.connection);
+        }
+        for (Tree.Edge edge : tree.edges) {
+            if (edge.from == node) {
+                result.addAll(below(tree, edge.to));
+            }
+        }
+        return result;
+    }
+
     /** Цена узла врезки в метрах ветки: врезка в камеру или новая камера на трубе. */
     private double tiePenalty(TieCandidate tie, int dn, double metreRub) {
         return (tie.isChamber() ? rules.tieInCost() : rules.chamberCost(dn)) / metreRub;
+    }
+
+    /** Цена узла врезки: врезка в камеру или новая камера на трубе по наибольшему Ду, включая саму трубу (п. 2.1). */
+    private double tieCost(TieCandidate tie, int dn) {
+        return tie.isChamber() ? rules.tieInCost() : rules.chamberCost(Math.max(dn, tie.getExistingDiameter()));
     }
 
     /**
