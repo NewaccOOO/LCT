@@ -77,6 +77,8 @@ LINE_TOL_M = 1e-6
 # кандидата во входе предел строже, APPROACH_ENTRY_M, а конец участка лежит за зоной сервиса, она шире нормы на
 # ZONE_WIDER_M (ObstacleSet.SIMPLIFY_M): так проверка не требует входа, которого сервис не видит
 ENTRY_STEP_M = 0.05
+# звено от врезки не пересекает её сеть дальше TIE_TOUCH_M от врезки (TieInFinder.TOUCH_M)
+TIE_TOUCH_M = 0.5
 ENTRY_TOL_M = 0.1
 APPROACH_M = 0.05
 APPROACH_ENTRY_M = 0.03
@@ -156,8 +158,8 @@ def entry_window(cg, q, own, zone, dn, trees):
 
     Луч выходит из здания один раз и в зоне отступа своего здания не подходит к нему снова (к другой стене, больше
     чем на APPROACH_ENTRY_M), конец участка лежит за зоной отступа сервиса (норма + ZONE_WIDER_M) до нового входа луча
-    в зону. Участок до конца не задевает зон чужих зданий и запретных объектов: это проверяет nearer_entry у каждого
-    конца."""
+    в зону. Участок до конца не задевает зон чужих зданий и запретных объектов и не идёт ближе отступа вдоль объекта
+    специального прохода (B10): это проверяет nearer_entry у каждого конца."""
     r = q.distance(cg)
     if r < 1e-6:
         return "точка на границе", None
@@ -212,6 +214,13 @@ def nearer_entry(cg, own, shells, dn, trees, limit, relink, points=None):
                     part.distance(rg) < FORBID.get(rt, FALLBACK) + DN[dn]["width_m"] / 2 - EPS
                     for _, rt, rg in trees["forbid_near"](part, max(FALLBACK, *FORBID.values()) + DN[dn]["width_m"] / 2)):
                 why = "участок задевает зону чужого здания или запретного объекта"
+                break
+            # участок вдоль объекта специального прохода ближе отступа, не пересекая его, — B10. Зона сервиса —
+            # буфер шире нормы на ZONE_WIDER_M, упрощённый с тем же допуском (ObstacleSet.zone): вход, который проходит
+            # у объекта в полосе 2 × ZONE_WIDER_M за нормой, сервис не видит
+            if any(0 < part.distance(rg) < _TYPES[rt]["clearance_m"] + DN[dn]["width_m"] / 2 + extra + 2 * ZONE_WIDER_M
+                   for _, rt, rg, extra in trees["spec_near"](part, trees["spec_reach"] + DN[dn]["width_m"] / 2)):
+                why = "участок ближе отступа к объекту специального прохода"
                 break
             why = relink((end.x, end.y))
             if why is None:
@@ -1106,6 +1115,11 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
                 norm = _TYPES[rt]["clearance_m"] + w2 + extra
                 if (rt, rid) not in exempt and link.distance(rg) < norm + CUT_MARGIN_M:
                     return f"отступ до {rt} {rid} {link.distance(rg):.2f} м < {norm:.2f} + {CUT_MARGIN_M} м"
+                # звено от врезки освобождено от отступа до её сети, но дальше TIE_TOUCH_M от врезки её не
+                # пересекает (TreeBuilder.leavesNetwork)
+                tie = new[i] if i == 0 and (rt, rid) in tie_keys.get(start, set()) else new[i + 1]
+                if (rt, rid) in exempt and link.difference(Point(tie).buffer(TIE_TOUCH_M)).intersects(rg):
+                    return f"звено от врезки снова пересекает её сеть {rt} {rid}"
             why = crowded(k, new[i:i + 2], moved) if apart else None
             if why:
                 return why
