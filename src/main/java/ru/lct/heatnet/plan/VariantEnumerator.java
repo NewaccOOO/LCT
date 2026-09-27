@@ -86,6 +86,14 @@ public final class VariantEnumerator {
      * стал 0,702).
      */
     private static final double DRAFT_ROUTE_M = 1.0;
+    /**
+     * Запасной поиск врезки для точки без трассы, см. {@link #scanned}: трубы и камеры в радиусе, шаг мест вдоль трубы и
+     * сколько лучших по маршруту строить деревом (heatnet.search.scan=false выключает).
+     */
+    private static final boolean SCAN = Boolean.parseBoolean(System.getProperty("heatnet.search.scan", "true"));
+    private static final double SCAN_RADIUS_M = 150;
+    private static final double SCAN_STEP_M = 2;
+    private static final int SCAN_TRIES = 3;
     /** Дерево ОКС идёт в обход, если оно длиннее прямой до ближайшего кандидата врезки больше чем во столько раз. */
     private static final double DETOUR_RATIO = 1.1;
     static final double TREES_APART_M = 0.5;
@@ -1454,6 +1462,16 @@ public final class VariantEnumerator {
                 Envelope wide = district ? region.area : region.wideArea;
                 options.addAll(options(region, blockDn, wide, subset, false, candidates(points, flow, blockDn), true, slide));
             }
+            if (SCAN && incomplete(plain(options))) {
+                // сеть в коридоре коммуникаций: проекции точки на три ближайшие трубы лежат в отступах идущих вдоль них
+                // линий, в зоне здания или в полосе дороги, и из них не выйти. Врезка ищется по всем трубам вокруг,
+                // лучшие по маршруту строятся деревом (п. 2.5: неподключение только без допустимого маршрута)
+                Envelope wide = district ? region.area : region.wideArea;
+                List<TieCandidate> scanned = scanned(region, blockDn, wide, subset.get(0));
+                if (!scanned.isEmpty()) {
+                    options.addAll(options(region, blockDn, wide, subset, false, scanned, false, slide));
+                }
+            }
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
         List<Option> plain = plain(options);
@@ -1470,6 +1488,42 @@ public final class VariantEnumerator {
             }
         }
         return options;
+    }
+
+    /**
+     * До SCAN_TRIES врезок из {@link TieInFinder#around} на разных объектах сети по весу маршрута от точки (от выхода из
+     * её здания): вне зон запрета, в области area. Маршрут считается один раз на цель, дерево строится только у лучших.
+     */
+    private List<TieCandidate> scanned(Region region, int dn, Envelope area, ConnectionPoint connection) {
+        Router router = region.router(dn, area);
+        List<TieCandidate> left = new ArrayList<>();
+        Set<String> ignored = new HashSet<>();
+        for (TieCandidate candidate : finder.around(connection.getGeometry(), dn, SCAN_RADIUS_M, SCAN_STEP_M)) {
+            Coordinate at = candidate.getPoint().getCoordinate();
+            if (area.contains(at) && !router.obstacles().insideForbid(at)) {
+                left.add(candidate);
+                ignored.addAll(candidate.getIgnored());
+            }
+        }
+        if (left.isEmpty()) {
+            return List.of();
+        }
+        Coordinate exit = builder.exit(router, dn, area, left.get(0), connection);
+        Coordinate start = exit != null ? exit : connection.getGeometry().getCoordinate();
+        List<TieCandidate> best = new ArrayList<>();
+        while (best.size() < SCAN_TRIES && !left.isEmpty()) {
+            Router.Choice choice = router.choose(start,
+                    left.stream().map(TieCandidate::getPoint).collect(Collectors.toList()), ignored, Double.POSITIVE_INFINITY);
+            if (choice == null) {
+                break;
+            }
+            TieCandidate picked = left.stream().filter(c -> c.getPoint().getCoordinate().equals2D(choice.target()))
+                    .findFirst().orElseThrow();
+            best.add(picked);
+            left.removeIf(c -> c.getExistingObjectId().equals(picked.getExistingObjectId()));
+        }
+        log.info("scan: {} picked={}", connection.getId(), best.stream().map(TieCandidate::nodeKey).collect(Collectors.toList()));
+        return best;
     }
 
     /** Кандидаты врезки у точек. */

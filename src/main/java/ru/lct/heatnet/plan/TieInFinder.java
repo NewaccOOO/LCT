@@ -199,6 +199,37 @@ final class TieInFinder {
         return result;
     }
 
+    /**
+     * Все врезки не дальше radius от точки: камеры со свободным местом и места на трубах через step м вдоль оси, как
+     * у {@link #pipeCandidate(NetworkSegment, double, int)} (перенос из полосы дороги, камера ближе max_dist_m). Запас
+     * для точки, у которой ближайшие проекции лежат в зонах коммуникаций, идущих вдоль трубы, и трассы из них нет.
+     */
+    List<TieCandidate> around(Point point, int dn, double radius, double step) {
+        Map<String, TieCandidate> byKey = new LinkedHashMap<>();
+        Envelope window = new Envelope(point.getCoordinate());
+        window.expandBy(radius);
+        for (int i : sorted(chamberIndex.query(window))) {
+            Chamber chamber = input.getChambers().get(i);
+            TieCandidate candidate = chamber.getGeometry().distance(point) <= radius ? chamberCandidate(chamber) : null;
+            if (candidate != null) {
+                byKey.putIfAbsent(candidate.nodeKey(), candidate);
+            }
+        }
+        for (int i : sorted(segmentIndex.query(window))) {
+            NetworkSegment segment = input.getSegments().get(i);
+            if (!segment.getGeometry().isWithinDistance(point, radius)) {
+                continue;
+            }
+            for (double at = 0; at <= segment.getGeometry().getLength(); at += step) {
+                TieCandidate candidate = pipeCandidate(segment, at, dn);
+                if (candidate != null) {
+                    byKey.putIfAbsent(candidate.nodeKey(), candidate);
+                }
+            }
+        }
+        return new ArrayList<>(byKey.values());
+    }
+
     int links(String chamberId) {
         return linksByChamber.getOrDefault(chamberId, 0);
     }
