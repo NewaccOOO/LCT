@@ -83,7 +83,7 @@ class GeoJsonStreamWriterTest {
 
         JsonNode summary = byType.get("variant_summary");
         assertTrue(summary.get("geometry").isNull());
-        assertDecimal("1.235", summary.get("properties").get("score"));
+        assertDecimal("1.2345", summary.get("properties").get("score"));
         assertDecimal("0.01", summary.get("properties").get("new_network_length"));
         assertTrue(summary.get("properties").get("existing_chamber_tie_in_count").isInt());
         assertEquals("O7", summary.get("properties").get("unconnected_oks_ids").get(0).textValue());

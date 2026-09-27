@@ -9,6 +9,9 @@ B19 — финальный участок снова заходит в зону 
 B22 — звено короче 1 м у узла спецпрохода, когда вершину на его конце можно убрать или совместить с узлом (п. 5,
 разъяснение 6); --no-shape отключает и его.
 D11 — камера врезки в полосе margin_m дороги или трамвайных путей, хотя на трубе есть место вне полосы (разъяснение 6).
+Дорога и пути, заданные линией, — полигон нулевой ширины: угол к звену оси, зона margin_m вдоль трассы от точки
+пересечения, дальше обычный участок держит отступ от оси (разд. 1.1, 4, разъяснение 6).
+E7 — score сводки не равен S разд. 6 с точностью 0,0001 (пример п. 7.3), E8 — ранги не по возрастанию score (п. 7.2).
 Строка «i» у пар вариантов — доля расхождения трасс (разд. 6): варианты различны от 10 % длины вне полосы 10 м
 и при другом устройстве (разбиение точек по узлам врезки и объекты врезки), как у сервиса.
 """
@@ -102,6 +105,9 @@ SMALL_BEND_DEG = 30.0
 # устройство (VariantEnumerator.distinct); доля расхождения — 1 минус меньшая из этих длин, делённая на длину меньшего
 SAME_ROUTE_M = 10.0
 SAME_ROUTE_SHARE = 0.9
+# E7: score сводки — S разд. 6 от её calculated_cost и new_network_length, округлённый до 4 знаков, как 0,6913 в
+# примере п. 7.3; допуск — половина последнего знака
+SCORE_TOL = 0.00005 + 1e-9
 # --no-shape отключает B16–B18, B20–B22: так старые категории сверяются с прежними прогонами
 SHAPE = "--no-shape" not in sys.argv
 
@@ -232,6 +238,13 @@ def turn_deg(a, b, c):
     if nu == 0 or nv == 0:
         return 0.0
     return math.degrees(math.acos(max(-1.0, min(1.0, (ux * vx + uy * vy) / nu / nv))))
+
+
+def areal(rt, rg):
+    """Зона как у полигона дороги (табл. 2: «полигон и по 3 м за границей»): полигон спецпрохода или линия типа с
+    минимальным углом пересечения — дорога или пути, заданные осью, то есть полигон нулевой ширины. Обычный участок
+    за такой зоной держит отступ от объекта."""
+    return rg.geom_type.endswith("Polygon") or rt in MIN_ANGLE
 
 
 def acute_deg(a, b, p, q):
@@ -557,7 +570,7 @@ def check_variant(inp, trees, vid, feats, rep):
                     rep.add("D9 новая камера в 10 м от существующей, которую можно было использовать", f"{cid} → {e} {d:.1f} м")
                     break
             band = [f"{rt} {rid} {rg.distance(g):.2f} м" for rid, rt, rg in trees["special_near"](g, max(MARGIN.values()))
-                    if rg.geom_type.endswith("Polygon") and rg.distance(g) < MARGIN[rt] - BAND_TOL]
+                    if areal(rt, rg) and rg.distance(g) < MARGIN[rt] - BAND_TOL]
             if band:
                 room = tie_room(trees, g, new_dn)
                 if room > BAND_ROOM_M:
@@ -762,6 +775,10 @@ def check_variant(inp, trees, vid, feats, rep):
     with_all = sum(x["properties"]["cost"] for x in segs) + summary["chamber_construction_cost"] + tie_cost_out
     if abs(summary["construction_cost"] - with_all) > 1 and abs(summary["construction_cost"] - sum(x["properties"]["cost"] for x in segs)) <= 1:
         rep.add("E6 construction_cost без камер и врезок (п.6: должен включать)", f"{summary['construction_cost']:.0f} вместо {with_all:.0f}")
+    stated = RULES["score"]["w_cost"] * summary["calculated_cost"] / RULES["score"]["cost_base"] \
+        + RULES["score"]["w_length"] * summary["new_network_length"] / RULES["score"]["length_base_m"]
+    if abs(summary["score"] - stated) > SCORE_TOL:
+        rep.add("E7 score не равен S по сводке с точностью 0,0001 (разд. 6, п. 7.3)", f"{summary['score']} vs {stated:.6f}")
     construction = seg_cost_new + chamber_cost_sum + new_tie_chamber_cost + 5e6 * existing_tie_ins
     calculated = construction + penalty
     length = sum(s["properties"]["length"] for s in segs)
@@ -769,7 +786,7 @@ def check_variant(inp, trees, vid, feats, rep):
     parts = dict(seg_out=round(sum(x["properties"]["cost"] for x in segs)), seg_1809=round(seg_cost_new),
                  chambers=round(chamber_cost_sum), tie_chambers=round(new_tie_chamber_cost), existing_ties=existing_tie_ins)
     print("   parts", parts)
-    return dict(variant=vid, score_out=summary["score"], score_1809=round(score, 3), unconnected=len(ids),
+    return dict(variant=vid, score_out=summary["score"], score_1809=round(score, 4), unconnected=len(ids),
                 construction_out=summary["construction_cost"], construction_1809=round(construction, 2),
                 tie_new_chambers=new_tie_chambers, existing_tie_ins=existing_tie_ins)
 
@@ -828,9 +845,10 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
             if not xs:
                 continue
             area = [x.buffer(MARGIN[rt] + ZONE_TOL) for x in xs]
-            if rg.geom_type.endswith("Polygon"):
-                # полигон и дальше margin_m полоса нормы: обычный участок в ней был бы ближе отступа
-                area += [rg, rg.buffer(_TYPES[rt]["clearance_m"] + norm_w2)]
+            if areal(rt, rg):
+                # полигон (у оси — нулевой ширины) и дальше margin_m полоса нормы: обычный участок в ней был бы ближе
+                # отступа
+                area += ([rg] if rg.geom_type.endswith("Polygon") else []) + [rg.buffer(_TYPES[rt]["clearance_m"] + norm_w2)]
             z[(rt, rid)] = line.intersection(shapely.union_all(area))
         zones[id(s)] = {k: g for k, g in z.items() if g.length > ZONE_TOL}
 
@@ -899,8 +917,9 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
             for rt, rid in zones[id(t)]:
                 rg = obj[(rt, rid)]
                 exact += [x.buffer(MARGIN[rt]) for part in run_of[id(t)] for x in crossings(part, rt, rg)]
-                if rg.geom_type.endswith("Polygon"):
-                    exact += [rg, rg.buffer(_TYPES[rt]["clearance_m"] + DN[t["properties"]["diameter"]]["width_m"] / 2)]
+                if areal(rt, rg):
+                    exact += [rg] if rg.geom_type.endswith("Polygon") else []
+                    exact += [rg.buffer(_TYPES[rt]["clearance_m"] + DN[t["properties"]["diameter"]]["width_m"] / 2)]
             band = shapely.union_all(exact)
             for s in lst:
                 if s["properties"]["laying_method"] == "special":
@@ -937,7 +956,7 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
         along(node, None, None, {(rt, rid) for rid, rt, _, _ in trees["spec_near"](pt, 0.5) if rt == "heat_network"})
     for t in special:
         tc = list(line_of[id(t)].coords)
-        lines = {k for k in zones[id(t)] if not obj[k].geom_type.endswith("Polygon")}
+        lines = {k for k in zones[id(t)] if not areal(k[0], obj[k])}
         along(nodes_of[id(t)][0], tc[1], t, lines)
         along(nodes_of[id(t)][1], tc[-2], t, lines)
 
@@ -1646,7 +1665,7 @@ def tie_room(trees, g, dn):
             continue
         window = shapely.ops.substring(pg, gap, pg.length - gap)
         band = shapely.union_all([rg.buffer(MARGIN[rt]) for _, rt, rg in trees["special_near"](window, max(MARGIN.values()))
-                                  if rg.geom_type.endswith("Polygon")])
+                                  if areal(rt, rg)])
         room = max(room, window.difference(band).length)
     return room
 
@@ -1767,10 +1786,15 @@ def main():
     ids = Counter(str(f["properties"]["id"]) for f in out["features"])
     dup = sum(1 for v in ids.values() if v > 1)
     bad = 0
+    # E8: ранг 1 — наименьший score, ранги по возрастанию score (п. 7.2)
+    ranked = sorted((f["properties"]["rank"], f["properties"]["score"]) for f in out["features"]
+                    if f["properties"]["object_type"] == "variant_summary")
     for vid in sorted(variants):
         rep = Report()
         if dup:
             rep.add("A0 неуникальные id во всём файле", str(dup))
+        if vid == min(variants) and any(a[1] > b[1] for a, b in zip(ranked, ranked[1:])):
+            rep.add("E8 ранги не по возрастанию score (п. 7.2)", str(ranked))
         res = check_variant(inp, trees, vid, variants[vid], rep)
         print(f"== вариант {vid}: {res}")
         for key in sorted(rep.count):

@@ -165,12 +165,51 @@ class GeoJsonStreamReaderTest {
     }
 
     @Test
-    void datasetSegmentOffNetwork() throws IOException {
+    void datasetSegmentOffNetworkIsKeptWithWarning() throws IOException {
+        // связи сети с источником приложение не требует (п. 1.1, 2.4, разъяснение 11): участок остаётся местом врезки
         ArrayNode features = datasetFeatures();
         features.add(feature("LineString", new double[][] {{37.70, 55.70}, {37.71, 55.70}},
                 "id", 13, "object_type", "heat_network", "diameter", 300));
 
-        assertOnly(features, "13", "upstream_object_id");
+        InputData data = GeoJsonStreamReader.read(write(features));
+
+        assertEquals(List.of(), data.getDiagnostics());
+        assertTrue(data.getSegments().stream().anyMatch(segment -> segment.getId().equals("13")));
+        assertEquals(List.of("ПРЕДУПРЕЖДЕНИЕ: не связаны с источником по стыкам участков heat_network: 1, камер: 0; "
+                + "расчёт идёт, врезка в них допустима"), data.getWarnings());
+    }
+
+    @Test
+    void branchEndOnPipeMiddleIsConnected() throws IOException {
+        // ответвление упирается концом в середину участка 12 без разреза, а за ним ещё участок: всё связано
+        ArrayNode features = datasetFeatures();
+        features.add(feature("LineString", new double[][] {{37.62, 55.755}, {37.63, 55.755}},
+                "id", 13, "object_type", "heat_network", "diameter", 100));
+        features.add(feature("LineString", new double[][] {{37.63, 55.755}, {37.63, 55.745}},
+                "id", 14, "object_type", "heat_network", "diameter", 100));
+
+        InputData data = GeoJsonStreamReader.read(write(features));
+
+        assertEquals(List.of(), data.getDiagnostics());
+        assertEquals(List.of(), data.getWarnings());
+        Map<String, NetworkSegment> segments = data.getSegments().stream()
+                .collect(Collectors.toMap(NetworkSegment::getId, segment -> segment));
+        assertEquals("12", segments.get("13").getUpstreamId());
+        assertEquals("13", segments.get("14").getUpstreamId());
+    }
+
+    @Test
+    void anyJsonNumberIsId() throws IOException {
+        // разд. 1: id «могут быть строковыми или числовыми» — и 11.0, и 11.5; в выход пишется та же запись числа
+        ArrayNode features = datasetFeatures();
+        ((ObjectNode) features.get(5).get("properties")).put("id", 30.5);
+        ((ObjectNode) features.get(2).get("properties")).put("id", 20.0);
+
+        InputData data = GeoJsonStreamReader.read(write(features));
+
+        assertEquals(List.of(), data.getDiagnostics());
+        assertEquals(Set.of("30.5", "31", "32", "20.0"), data.getNumericIds());
+        assertEquals("30.5", data.getConnectionPoints().get(0).getId());
     }
 
     @Test

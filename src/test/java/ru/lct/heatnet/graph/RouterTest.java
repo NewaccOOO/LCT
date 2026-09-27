@@ -336,6 +336,32 @@ class RouterTest {
     }
 
     @Test
+    void roadAxisCrossingAt30DegreesGoesAtAllowedAngle() {
+        // дорога осью (разд. 1.1, разъяснение 6): угол к звену оси, узлы вдоль оси дают переход от 45°, а не обход
+        LineString axis = line(-500, 0, 500, 0);
+        Router router = router(List.of(new Restriction("road-1", axis, "road")), List.of());
+        Coordinate from = polar(-80, 30);
+        Coordinate to = polar(80, 30);
+
+        assertTrue(Double.isNaN(router.obstacles().edgeWeight(from, to, Set.of())));
+
+        Route route = router.route(factory.createPoint(from), factory.createPoint(to), Set.of());
+        assertNotNull(route);
+        assertTrue(route.getGeometry().getLength() < 200, "обход конца оси: " + route.getGeometry().getLength());
+        assertEquals(1, route.getSpans().size());
+        assertEquals(2 * rules.restriction("road").getMarginM(), route.getSpans().get(0).getToM()
+                - route.getSpans().get(0).getFromM(), EPS);
+        Coordinate[] coords = route.getGeometry().getCoordinates();
+        for (int i = 0; i + 1 < coords.length; i++) {
+            if (factory.createLineString(new Coordinate[] {coords[i], coords[i + 1]}).intersects(axis)) {
+                double angle = Math.toDegrees(Math.atan2(Math.abs(coords[i + 1].y - coords[i].y),
+                        Math.abs(coords[i + 1].x - coords[i].x)));
+                assertTrue(angle >= rules.restriction("road").getMinAngleDeg(), "угол " + angle);
+            }
+        }
+    }
+
+    @Test
     void roadCrossingAt60DegreesGetsSpecialWeight() {
         double roadWidth = 20;
         Geometry road = rect(-500, -roadWidth / 2, 500, roadWidth / 2);

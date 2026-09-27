@@ -318,7 +318,7 @@ final class TieInFinder {
             window.expandBy(maxMargin);
             for (SpecialObjects.Special special : specials.zonesNear(window)) {
                 double margin = special.rule.getMarginM();
-                if (!special.polygon || !special.geometry.isWithinDistance(line, margin)) {
+                if (!special.band || !special.geometry.isWithinDistance(line, margin)) {
                     continue;
                 }
                 Geometry inside = bandBySpecial.computeIfAbsent(special,

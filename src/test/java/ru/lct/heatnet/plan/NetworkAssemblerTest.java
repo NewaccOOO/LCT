@@ -18,6 +18,8 @@ import ru.lct.heatnet.rules.Rules;
 
 class NetworkAssemblerTest {
     private static final Geometry ROAD = PlanFixture.rect(-500, 50, 1000, 70);
+    /** Та же дорога осью: полигон нулевой ширины (приложение 18.09, разд. 1.1 и 4, разъяснение 6). */
+    private static final Geometry ROAD_AXIS = PlanFixture.line(-500, 60, 1000, 60);
     private final Rules rules = Rules.load();
 
     @Test
@@ -49,6 +51,31 @@ class NetworkAssemblerTest {
     }
 
     @Test
+    void roadAxisSpecialRunsThreeMetersEachSideAlongTrace() {
+        // табл. 2: «полигон дороги и по 3 м за границей», у оси полигон нулевой ширины — 3 м вдоль трассы в обе стороны
+        List<NewSegment> special = specials(assemble(PlanFixture.trunk(), ROAD_AXIS, 60, 10));
+
+        assertEquals(1, special.size());
+        assertEquals(6, special.get(0).getGeometry().getLength(), 0.05);
+    }
+
+    @Test
+    void roadAxisSpecialGoesOnWhileBaseWouldBreakClearance() {
+        // Ду 400 под 46°: в 3 м вдоль трассы от оси до неё 3 · sin 46° = 2,16 м, норма 1,5 + 0,685 = 2,185 м. Обычный
+        // участок держит отступ от оси, как от полигона: он не освобождён, как у газопровода
+        Variant variant = assemble(PlanFixture.trunk(), ROAD_AXIS, 46, 500);
+        double norm = 1.5 + rules.diameter(400).getWidthM() / 2;
+
+        assertEquals(1, specials(variant).size());
+        assertTrue(specials(variant).get(0).getGeometry().getLength() > 6 + 0.05, "спецучасток не продлён до нормы");
+        for (NewSegment base : variant.getSegments()) {
+            if (NetworkAssembler.BASE.equals(base.getLayingMethod())) {
+                assertTrue(base.getGeometry().distance(ROAD_AXIS) >= norm, base.getId() + " ближе нормы к оси дороги");
+            }
+        }
+    }
+
+    @Test
     void specialIsSplitWhereSetOfZonesChanges() {
         // газопровод в 2 м под дорогой: его зона накрывает начало зоны дороги. Kспец 1,60 на общем фрагменте и за
         // ним тот же, но на границе общего фрагмента начинается новый участок (п. 4, разъяснение 8)
@@ -68,8 +95,12 @@ class NetworkAssemblerTest {
 
     /** Один прямой участок от врезки на hn-2 в (300, 0) через дорогу под углом deg к ОКС с расходом flow. */
     private Variant assemble(PlanFixture fixture, double deg, double flow) {
+        return assemble(fixture, ROAD, deg, flow);
+    }
+
+    private Variant assemble(PlanFixture fixture, Geometry road, double deg, double flow) {
         double rise = 120;
-        fixture.restriction("road-1", ROAD, "road").oks("1", 300 + rise / Math.tan(Math.toRadians(deg)), rise, flow);
+        fixture.restriction("road-1", road, "road").oks("1", 300 + rise / Math.tan(Math.toRadians(deg)), rise, flow);
         InputData input = fixture.input();
         TieCandidate tie = new TieCandidate("hn-2", TieCandidate.HEAT_NETWORK, 200, PlanFixture.point(300, 0),
                 Set.of("hn-2"), 2);

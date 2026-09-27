@@ -862,9 +862,11 @@ public final class ObstacleSet {
             } else {
                 Special special = new Special(restriction.getId(), restriction.getType(), rule, geometry, distance);
                 specialList.add(special);
-                if (special.polygon) {
+                if (special.polygon || rule.getMinAngleDeg() != null) {
                     // спецпроход — один прямой участок с полосой margin_m за полигоном: внутри полосы узлов нет, а
-                    // узлы для пересечения стоят у её внешней границы, чтобы отрезок через дорогу был прямым от узла до узла
+                    // узлы для пересечения стоят у её внешней границы, чтобы отрезок через дорогу был прямым от узла до узла.
+                    // Дорога или пути, заданные осью, — полигон нулевой ширины (табл. 2, разъяснение 6): без узлов
+                    // вдоль оси её пересекает только отрезок между узлами других зон, если он сам идёт под допустимым углом
                     marginZones.add(geometry.buffer(rule.getMarginM() - MARGIN_NODE_INSET_M, MARGIN_QUADRANT_SEGMENTS));
                     crossingObjects.add(geometry);
                     crossingDistances.add(Math.max(distance, rule.getMarginM() - 2 * SIMPLIFY_M - NODE_OFFSET_M));

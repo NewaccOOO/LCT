@@ -41,6 +41,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
+import org.locationtech.jts.algorithm.Distance;
 import org.locationtech.jts.algorithm.RayCrossingCounter;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.CoordinateSequence;
@@ -417,7 +418,7 @@ public class GeoJsonStreamReader {
             int before = diagnostics.size();
             String id = identifier(props, ordinalId, "id");
             String featureId = id == null ? ordinalId : id;
-            boolean numericId = id != null && props.get("id").isIntegralNumber();
+            boolean numericId = id != null && props.get("id").isNumber();
             if (!"Feature".equals(node.path("type").textValue())) {
                 add(featureId, "type", "ожидается type = Feature");
             }
@@ -553,29 +554,34 @@ public class GeoJsonStreamReader {
             checkUpstreamCycles();
             List<NetworkSegment> segments = new ArrayList<>();
             List<Chamber> chambers = new ArrayList<>();
-            network(segments, chambers);
+            List<String> warnings = new ArrayList<>();
+            network(segments, chambers, warnings);
             // списки прочитанного не меняются: по ним второй проход, см. read
             List<FutureOks> future = new ArrayList<>(futureOks);
             List<ConnectionPoint> points = new ArrayList<>(connectionPoints);
             List<ExistingOks> existing = new ArrayList<>(existingOks);
             consumers(future, points, existing);
-            List<String> warnings = new ArrayList<>();
             unknownRestrictionTypes.forEach((type, count) -> warnings.add(unknownTypeWarning(type, count)));
             return new InputData(source, segments, chambers, future, points, existing, restrictions,
                     diagnostics, warnings, numericIds);
         }
 
-        /** Направление сети обходом от источника, диаметры камер и текущий расход там, где их нет во входе. */
-        void network(List<NetworkSegment> segments, List<Chamber> chambers) {
+        /**
+         * Направление сети обходом от источника, диаметры камер и текущий расход там, где их нет во входе. Участок и
+         * камера, до которых обход не дошёл, остаются в сети без upstream: приложение не требует связи сети с
+         * источником (п. 1.1 — у heat_network обязательны id, object_type и diameter; п. 2.4 — расход сети не
+         * считается; разъяснение 11 — врезка в любой допустимой точке heat_network), а направление расчёт не читает.
+         * О таких объектах предупреждает одна строка warnings.
+         */
+        void network(List<NetworkSegment> segments, List<Chamber> chambers, List<String> warnings) {
             if (source != null && (rawSegments.stream().anyMatch(r -> r.upstream == null)
                     || rawChambers.stream().anyMatch(r -> r.upstream == null))) {
                 traverse();
             }
+            int apartSegments = 0;
+            int apartChambers = 0;
             for (RawSegment raw : rawSegments) {
-                if (raw.upstream == null) {
-                    add(raw.id, "upstream_object_id", "нет upstream_object_id, и обход сети от источника по стыкам до участка не дошёл");
-                    continue;
-                }
+                apartSegments += raw.upstream == null ? 1 : 0;
                 // текущий расход существующей сети в расчёте не участвует (приложение 18.09, п. 2.4)
                 double flow = raw.flow != null ? raw.flow : 0.0;
                 segments.add(new NetworkSegment(raw.id, raw.geometry, raw.diameter, flow, raw.upstream));
@@ -590,11 +596,14 @@ public class GeoJsonStreamReader {
                 }
                 if (diameter == null) {
                     add(raw.id, "diameter", "нет diameter, и к камере не примыкает ни один участок сети");
-                } else if (raw.upstream == null) {
-                    add(raw.id, "upstream_object_id", "нет upstream_object_id, и обход сети от источника до камеры не дошёл");
                 } else {
+                    apartChambers += raw.upstream == null ? 1 : 0;
                     chambers.add(new Chamber(raw.id, raw.geometry, diameter, raw.upstream));
                 }
+            }
+            if (source != null && apartSegments + apartChambers > 0) {
+                warnings.add(String.format(RUSSIAN, "ПРЕДУПРЕЖДЕНИЕ: не связаны с источником по стыкам участков "
+                        + "heat_network: %d, камер: %d; расчёт идёт, врезка в них допустима", apartSegments, apartChambers));
             }
         }
 
@@ -608,22 +617,112 @@ public class GeoJsonStreamReader {
             }
             boolean[] reached = new boolean[rawSegments.size()];
             List<int[]> queue = new ArrayList<>();
-            for (int[] end : near(ends, source.getGeometry().getCoordinate())) {
+            Coordinate at = source.getGeometry().getCoordinate();
+            for (int[] end : near(ends, at)) {
                 reach(end, source.getId(), reached, queue);
             }
-            for (int head = 0; head < queue.size(); head++) {
-                int[] from = queue.get(head);
-                RawSegment segment = rawSegments.get(from[0]);
-                Coordinate far = endpoint(segment.geometry, 1 - from[1]);
-                RawChamber chamber = chamberAt(chamberIndex, far);
-                if (chamber != null && chamber.upstream == null) {
-                    chamber.upstream = segment.id;
+            STRtree lines = null;
+            for (int head = 0; ; ) {
+                for (; head < queue.size(); head++) {
+                    int[] from = queue.get(head);
+                    RawSegment segment = rawSegments.get(from[0]);
+                    Coordinate far = endpoint(segment.geometry, 1 - from[1]);
+                    RawChamber chamber = chamberAt(chamberIndex, far);
+                    if (chamber != null && chamber.upstream == null) {
+                        chamber.upstream = segment.id;
+                    }
+                    String upstream = chamber != null ? chamber.id : segment.id;
+                    for (int[] end : near(ends, far)) {
+                        reach(end, upstream, reached, queue);
+                    }
                 }
-                String upstream = chamber != null ? chamber.id : segment.id;
-                for (int[] end : near(ends, far)) {
-                    reach(end, upstream, reached, queue);
+                if (allReached(reached)) {
+                    break;
+                }
+                lines = lines == null ? lineIndex() : lines;
+                if (!tees(at, lines, reached, queue)) {
+                    break;
                 }
             }
+            // камера на середине пройденного участка без разреза тоже в сети
+            for (RawChamber chamber : rawChambers) {
+                if (chamber.upstream != null) {
+                    continue;
+                }
+                lines = lines == null ? lineIndex() : lines;
+                Coordinate c = chamber.geometry.getCoordinate();
+                for (Object item : lines.query(new Envelope(c))) {
+                    int j = (Integer) item;
+                    if (reached[j] && Distance.pointToSegmentString(c, rawSegments.get(j).geometry.getCoordinates()) <= JOINT_M) {
+                        chamber.upstream = rawSegments.get(j).id;
+                        break;
+                    }
+                }
+            }
+        }
+
+        static boolean allReached(boolean[] reached) {
+            for (boolean one : reached) {
+                if (!one) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /** Участки по рамкам, расширенным на JOINT_M: запрос точкой находит участки не дальше JOINT_M от неё. */
+        STRtree lineIndex() {
+            STRtree index = new STRtree();
+            for (int i = 0; i < rawSegments.size(); i++) {
+                Envelope envelope = new Envelope(rawSegments.get(i).geometry.getEnvelopeInternal());
+                envelope.expandBy(JOINT_M);
+                index.insert(envelope, i);
+            }
+            return index;
+        }
+
+        /**
+         * Т-стыки: участок, до которого обход по концам не дошёл, связан с пройденным, если конец одного лежит на
+         * другом не дальше JOINT_M, а разреза там нет; так же — участок, на середине которого стоит источник.
+         * Выгрузки рабочих систем (разъяснение 17) так пишут ответвление от середины трубы. Ищутся, только когда
+         * очередь обхода кончилась, а пройдены не все участки; false — связанных так не нашлось.
+         */
+        boolean tees(Coordinate at, STRtree lines, boolean[] reached, List<int[]> queue) {
+            int before = queue.size();
+            for (int i = 0; i < reached.length; i++) {
+                if (reached[i]) {
+                    continue;
+                }
+                LineString line = rawSegments.get(i).geometry;
+                if (line.getEnvelopeInternal().distance(new Envelope(at)) <= JOINT_M
+                        && Distance.pointToSegmentString(at, line.getCoordinates()) <= JOINT_M) {
+                    // источник на середине участка: обход идёт от обоих его концов
+                    reach(new int[] {i, 0}, source.getId(), reached, queue);
+                    queue.add(new int[] {i, 1});
+                    continue;
+                }
+                for (Object item : lines.query(line.getEnvelopeInternal())) {
+                    int j = (Integer) item;
+                    if (!reached[j] || reached[i]) {
+                        continue;
+                    }
+                    LineString other = rawSegments.get(j).geometry;
+                    for (int k = 0; k < 2 && !reached[i]; k++) {
+                        // конец участка i на участке j: обход идёт дальше от другого конца i
+                        if (Distance.pointToSegmentString(endpoint(line, k), other.getCoordinates()) <= JOINT_M) {
+                            reach(new int[] {i, k}, rawSegments.get(j).id, reached, queue);
+                        }
+                    }
+                    for (int k = 0; k < 2 && !reached[i]; k++) {
+                        // конец участка j на середине участка i: обход идёт от обоих концов i
+                        if (Distance.pointToSegmentString(endpoint(other, k), line.getCoordinates()) <= JOINT_M) {
+                            reach(new int[] {i, 0}, rawSegments.get(j).id, reached, queue);
+                            queue.add(new int[] {i, 1});
+                        }
+                    }
+                }
+            }
+            return queue.size() > before;
         }
 
         void reach(int[] end, String upstream, boolean[] reached, List<int[]> queue) {
@@ -811,17 +910,21 @@ public class GeoJsonStreamReader {
             return value != null && !value.isNull();
         }
 
-        /** Идентификатор: непустая строка или целое число, как в датасете организаторов. */
+        /**
+         * Идентификатор: непустая строка или любое число JSON, в том числе 11.0 и 11.5 (приложение 18.09, разд. 1: id
+         * «могут быть строковыми или числовыми» и «не интерпретируется по его формату»). Число становится строкой
+         * Jackson с тем же значением (11.0 остаётся 11.0) и так же пишется в выход, см. numericIds.
+         */
         String identifier(JsonNode props, String featureId, String field) {
             JsonNode value = required(props, featureId, field);
             if (value == null) {
                 return null;
             }
-            if (value.isIntegralNumber()) {
+            if (value.isNumber()) {
                 return value.asText();
             }
             if (!value.isTextual() || value.textValue().isEmpty()) {
-                add(featureId, field, "ожидается непустая строка или целое число, получено " + describe(value));
+                add(featureId, field, "ожидается непустая строка или число, получено " + describe(value));
                 return null;
             }
             return value.textValue();

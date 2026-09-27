@@ -445,7 +445,7 @@ final class NetworkAssembler {
                         List<SpecialObjects.Special> crossed = crossed(index, from, to);
                         runStart = runStart == null ? startId : runStart;
                         runEnd = endId;
-                        crossed.stream().filter(object -> !object.polygon).forEach(runLines::add);
+                        crossed.stream().filter(object -> !object.band).forEach(runLines::add);
                         k = crossed.stream().mapToDouble(s -> s.rule.getKSpecial()).max().orElse(1);
                     } else if (runStart != null) {
                         exempt(runStart, runEnd, runLines);
@@ -711,7 +711,7 @@ final class NetworkAssembler {
                 if (!special.geometry.getEnvelopeInternal().intersects(trace)) {
                     continue;
                 }
-                if (special.polygon) {
+                if (special.band) {
                     polygonZone(special, near.getValue(), zones);
                 } else {
                     lineZone(special, near.getValue(), zones);
@@ -725,7 +725,8 @@ final class NetworkAssembler {
 
         /**
          * Зона полигона дороги или путей (п. 4, табл. 2): часть трассы в полигоне и margin_m вдоль трассы от каждой
-         * точки пересечения его границы, через узлы во все ветви. Если в конце этих метров обычный участок был бы
+         * точки пересечения его границы, через узлы во все ветви. Дорога или пути, заданные линией, — полигон нулевой
+         * ширины: margin_m вдоль трассы от точки пересечения оси. Если в конце этих метров обычный участок был бы
          * ближе нормы отступа к полигону (Ду от 400 под углом около 45°), зона идёт дальше вдоль ребра до точки, где
          * норма держится; near — рёбра у полигона.
          */
@@ -756,7 +757,7 @@ final class NetworkAssembler {
             for (double distance = margin; distance < end; distance += NORM_STEP_M) {
                 indexed = indexed == null ? new LengthIndexedLine(edge.source.line) : indexed;
                 Coordinate c = indexed.extractPoint(at + dir * distance);
-                if (special.inside(c) || !special.within(factory.createPoint(c), norm + NORM_EXTRA_M)) {
+                if (special.polygon && special.inside(c) || !special.within(factory.createPoint(c), norm + NORM_EXTRA_M)) {
                     return distance;
                 }
             }

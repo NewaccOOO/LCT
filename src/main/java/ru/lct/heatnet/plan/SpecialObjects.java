@@ -35,11 +35,17 @@ final class SpecialObjects {
     static final class Special {
         final Geometry geometry;
         final boolean polygon;
+        /**
+         * Зона как у полигона дороги (табл. 2: «полигон и по 3 м за границей»): у полигона и у линии с минимальным
+         * углом пересечения — дороги или путей, заданных осью, то есть полигоном нулевой ширины. Обычный участок за
+         * такой зоной держит отступ от объекта, см. NetworkAssembler.polygonZone.
+         */
+        final boolean band;
         final boolean network;
         final RestrictionRule rule;
         /** Полуширина самого объекта: половина ширины существующей трубы или half_width_m линии. */
         final double halfWidth;
-        /** Полигон для быстрой проверки, задевает ли его ребро: наложение JTS считается только тогда. */
+        /** Объект зоны band для быстрой проверки, задевает ли его ребро: наложение JTS считается только тогда. */
         final PreparedGeometry prepared;
         /** Стороны линейного объекта или колец полигона. */
         final LineSegment[] sides;
@@ -52,10 +58,11 @@ final class SpecialObjects {
         Special(Geometry geometry, boolean network, RestrictionRule rule, double halfWidth) {
             this.geometry = geometry;
             this.polygon = geometry.getDimension() == 2;
+            this.band = polygon || rule.getMinAngleDeg() != null;
             this.network = network;
             this.rule = rule;
             this.halfWidth = halfWidth;
-            this.prepared = polygon ? PreparedGeometryFactory.prepare(geometry) : null;
+            this.prepared = band ? PreparedGeometryFactory.prepare(geometry) : null;
             this.sides = sides(polygon ? geometry.getBoundary() : geometry);
             this.chunks = new double[4 * ((sides.length + CHUNK - 1) / CHUNK)];
             for (int k = 0; k < sides.length; k++) {

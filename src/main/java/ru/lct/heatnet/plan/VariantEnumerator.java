@@ -396,7 +396,7 @@ public final class VariantEnumerator {
     }
 
     /** Собранный вариант до присвоения ранга. */
-    private static final class Draft {
+    private final class Draft {
         final List<Tree> trees;
         final List<FutureOks> unconnected;
         final Variant variant;
@@ -410,7 +410,7 @@ public final class VariantEnumerator {
         }
 
         double score() {
-            return variant.getSummary().getScore();
+            return searchScore(variant);
         }
     }
 
@@ -561,7 +561,10 @@ public final class VariantEnumerator {
             variants.add(variant != null ? variant
                     : assembler.assemble(String.valueOf(i + 1), i + 1, draft.trees, draft.unconnected));
         }
-        return new Result(distinct(variants, picked), input.getNumericIds());
+        // ранг 1 — наименьший score (п. 7.2): доводка после поиска меняет S, и порядок черновиков мог разойтись с ним
+        List<Integer> order = Scorer.rank(variants.stream().map(Variant::getSummary).collect(Collectors.toList()));
+        return new Result(distinct(order.stream().map(variants::get).collect(Collectors.toList()),
+                order.stream().map(picked::get).collect(Collectors.toList())), input.getNumericIds());
     }
 
     /**
@@ -1725,6 +1728,14 @@ public final class VariantEnumerator {
         return best;
     }
 
+    /**
+     * S варианта с округлением до 0,001, по которому поиск сравнивает черновики и деревья. Сводка пишет S с четырьмя
+     * знаками (п. 7.3), а поиск сравнивает с тремя, как раньше: так его выбор на восьми наборах не изменился.
+     */
+    private double searchScore(Variant variant) {
+        return Math.round(exact(variant) * 1000) / 1000.0;
+    }
+
     /** S варианта без округления до трёх знаков: переносы камер меняют его в четвёртом знаке. */
     private double exact(Variant variant) {
         VariantSummary summary = variant.getSummary();
@@ -2089,7 +2100,7 @@ public final class VariantEnumerator {
             int maxDn = alone.getSegments().stream().mapToInt(NewSegment::getDiameter).max().orElse(graphDn);
             boolean check = verify || maxDn > graphDn;
             boolean holds = narrow ? forbidClear(tree, alone, area, region) : !check || clearanceHolds(tree, alone, area, region);
-            return holds && raysClear(tree, alone) ? new Option(tree, alone.getSummary().getScore(), exact(alone)) : null;
+            return holds && raysClear(tree, alone) ? new Option(tree, searchScore(alone), exact(alone)) : null;
         } catch (IllegalStateException | IllegalArgumentException e) {
             // дерево нарушает правила при сборке (предельная длина, отступ участка, число поворотов): кандидат отбрасывается
             log.debug("options: subset={} tie={} отброшено: {}", label, tree.tie.nodeKey(), e.getMessage());

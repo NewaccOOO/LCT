@@ -64,7 +64,9 @@ public final class CostCalculator {
         double penalty = penalty(unconnected);
         double calculatedCost = round2(constructionCost + penalty);
         newNetworkLength = round2(newNetworkLength);
-        double score = Math.round(rules.score(calculatedCost, newNetworkLength) * 1000) / 1000.0;
+        // четыре знака, как в примере п. 7.3 приложения 18.09 (0,6913); поиск сравнивает черновики с округлением до
+        // 0,001, см. VariantEnumerator.searchScore
+        double score = Math.round(rules.score(calculatedCost, newNetworkLength) * 10000) / 10000.0;
         return new VariantSummary(id, variantId, 0, constructionCost, chamberConstructionCost, existingTieIns, tieInCost,
                 penalty, calculatedCost, newNetworkLength, score, unconnectedIds);
     }

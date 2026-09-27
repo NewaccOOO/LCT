@@ -64,8 +64,9 @@ class CostCalculatorTest {
         assertEquals(101_250_000, summary.getUnconnectedPenalty(), EPS); // 100 000 000 + 500 000 × 2,5
         assertEquals(136_384_734.4, summary.getCalculatedCost(), EPS);
         assertEquals(220.5, summary.getNewNetworkLength(), EPS);
-        // 0,7 × 136 384 734,4 / 25 000 000 + 0,3 × 220,5 / 100 = 3,8187725632 + 0,6615 = 4,4802… -> 4,480
-        assertEquals(4.48, summary.getScore(), EPS);
+        // 0,7 × 136 384 734,4 / 25 000 000 + 0,3 × 220,5 / 100 = 3,8187725632 + 0,6615 = 4,48027… -> 4,4803, четыре
+        // знака, как в примере п. 7.3
+        assertEquals(4.4803, summary.getScore(), EPS);
         assertEquals(List.of("o9"), summary.getUnconnectedOksIds());
     }
 

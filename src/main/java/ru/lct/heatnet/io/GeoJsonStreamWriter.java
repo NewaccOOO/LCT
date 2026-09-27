@@ -29,7 +29,8 @@ public class GeoJsonStreamWriter {
     private static final int MONEY_SCALE = 2;
     private static final int LENGTH_SCALE = 2;
     private static final int FLOW_SCALE = 3;
-    private static final int SCORE_SCALE = 3;
+    /** score с четырьмя знаками, как в примере п. 7.3 приложения 18.09 (0,6913). */
+    private static final int SCORE_SCALE = 4;
 
     private static final JsonFactory JSON = new JsonFactory();
 
