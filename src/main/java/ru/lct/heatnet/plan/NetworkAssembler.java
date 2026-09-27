@@ -395,7 +395,10 @@ final class NetworkAssembler {
             for (double candidate : candidates) {
                 double at = candidate;
                 for (double vertex : vertices) {
-                    if (Math.abs(vertex - candidate) <= VERTEX_SNAP_M) {
+                    // вершина за границей спецчасти ближе MERGE_M сама становится узлом: иначе у узла остаётся звено в
+                    // сантиметры с поворотом, а спецчасть удлиняется не больше, чем у конца ребра
+                    double snap = inside(special, (vertex + candidate) / 2) ? VERTEX_SNAP_M : MERGE_M;
+                    if (Math.abs(vertex - candidate) <= snap) {
                         at = vertex;
                     }
                 }
