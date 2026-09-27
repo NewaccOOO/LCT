@@ -531,8 +531,8 @@ public final class VariantEnumerator {
             Variant variant = null;
             if (REROUTE) {
                 try {
-                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, bent(unkinked(turned(rerouted(draft)))),
-                            draft.unconnected);
+                    variant = assembler.assemble(String.valueOf(i + 1), i + 1,
+                            entered(bent(unkinked(turned(rerouted(draft))))), draft.unconnected);
                 } catch (IllegalStateException | IllegalArgumentException e) {
                     // узлы врезки собирались по отдельности, а вместе нет: вариант как найден поиском
                     log.info("rerouted: вариант {} не собран: {}", i + 1, e.getMessage());
@@ -540,7 +540,7 @@ public final class VariantEnumerator {
             }
             if (variant == null) {
                 try {
-                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, bent(unkinked(turned(draft.trees))),
+                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, entered(bent(unkinked(turned(draft.trees)))),
                             draft.unconnected);
                 } catch (IllegalStateException | IllegalArgumentException e) {
                     log.info("unkinked: вариант {} не собран: {}", i + 1, e.getMessage());
@@ -2748,6 +2748,88 @@ public final class VariantEnumerator {
         }
         return compatible(changed, others) && unitScore(attempt) <= unitScore(unit) + UNKINK_EPS
                 && !thicker(tree, unit, changed, attempt) ? changed : null;
+    }
+
+    /**
+     * Деревья варианта, где финальный участок к точке в здании входит в него у ближайшей допустимой точки контура
+     * (приложение 18.09, п. 2.2; толкование в docs/interpretation.md). Поиск ставит вход у ближней открытой стороны,
+     * а проход переносит его ближе, если звено от прежней вершины ребра до нового выхода держит запасы строгой формы
+     * ({@link TreeBuilder#entered}); рёбра доводятся до строгой формы с новым выходом на месте ({@link #sharpened}).
+     * Правка берётся, если узел врезки собирается, Ду рёбер не выросли, а дерево не касается других. S не
+     * сравнивается: вход задаёт правило.
+     */
+    private List<Tree> entered(List<Tree> trees) {
+        long started = System.nanoTime();
+        List<Tree> result = new ArrayList<>(trees);
+        int taken = 0;
+        int far = 0;
+        for (int t = 0; t < result.size(); t++) {
+            for (int e = 0; e < result.get(t).edges.size(); e++) {
+                Tree tree = result.get(t);
+                Tree.Edge edge = tree.edges.get(e);
+                ExistingOks building = edge.to.kind == Tree.Kind.CONNECTION
+                        ? buildingByConnection.get(edge.to.connection.getId()) : null;
+                if (building == null || Double.isNaN(TreeBuilder.farEntry(building.getGeometry(), edge.line.getCoordinates()))) {
+                    continue;
+                }
+                far++;
+                List<Tree> unit = new ArrayList<>();
+                for (Tree other : result) {
+                    if (other.root.key.equals(tree.root.key)) {
+                        unit.add(other);
+                    }
+                }
+                Map<Tree.Edge, Integer> dnByEdge;
+                try {
+                    dnByEdge = assembler.diameters(unit);
+                } catch (IllegalStateException | IllegalArgumentException ex) {
+                    break;
+                }
+                Region region = regionByConnection.get(edge.to.connection.getId());
+                Envelope area = region.area.contains(tree.envelope()) ? region.area : region.wideArea;
+                int dn = dnByEdge.get(edge);
+                ObstacleSet zones = region.obstacles(dn, area);
+                Coordinate before = null;
+                List<LineSegment> apart = new ArrayList<>();
+                for (Tree.Edge other : tree.edges) {
+                    Coordinate[] c = other.line.getCoordinates();
+                    for (int i = 0; other != edge && i + 1 < c.length; i++) {
+                        apart.add(new LineSegment(c[i], c[i + 1]));
+                    }
+                    if (edge.from.kind == Tree.Kind.JUNCTION && other.to == edge.from) {
+                        before = c[c.length - 2];
+                    }
+                }
+                Coordinate[] line = builder.entered(building, edge.line.getCoordinates(), zones, tree.tie.getIgnored(),
+                        before, apart, edge.from == tree.root);
+                if (line == null) {
+                    continue;
+                }
+                LineString fresh = factory.createLineString(line);
+                Router router = null;
+                for (Diameter graph = rules.diameter(dn); router == null && graph != null; graph = rules.nextDiameter(graph.getDn())) {
+                    router = region.routers.get(graph.getDn() + "@" + area);
+                }
+                Map<Integer, LineString> sharp = router == null ? Map.of(e, fresh)
+                        : sharpened(tree, Map.of(e, fresh), Map.of(e, new Fresh(fresh, router, zones)), true);
+                Tree changed = sharp == null ? null : replaced(tree, sharp);
+                List<Tree> others = new ArrayList<>(result);
+                others.remove(t);
+                List<Tree> attempt = new ArrayList<>();
+                for (Tree other : unit) {
+                    attempt.add(other == tree ? changed : other);
+                }
+                if (changed == null || !apart(sharp.values(), result, tree) || !compatible(changed, others)
+                        || Double.isNaN(unitScore(attempt)) || thicker(tree, unit, changed, attempt)) {
+                    log.info("entered: вход точки {} не перенесён", edge.to.connection.getId());
+                    continue;
+                }
+                result.set(t, changed);
+                taken++;
+            }
+        }
+        log.info("entered: far={} moves={} elapsed={}ms", far, taken, (System.nanoTime() - started) / 1_000_000);
+        return result;
     }
 
     /** Камеры ветвления дерева, где путь точки к врезке поворачивает круче MAX_TURN_DEG. */

@@ -4,11 +4,13 @@
 Печатает нарушения по категориям (A — состав и ссылки, B — геометрия и отступы, C — расходы и ДУ, D — камеры,
 E — стоимость и сводка), строки «i» — справочные. В конце CHECK18 OK и код 0, если нарушений нет. B16–B18 и B21 —
 форма трассы (п. 5), B20 — поворот круче 90° на пути точки в камере или техническом узле (п. 2.1, разъяснение 5),
---no-shape их отключает. B19 — финальный участок снова заходит в зону отступа своего здания (п. 2.2).
+--no-shape их отключает вместе с B8 — финальный участок не от ближайшего допустимого входа в своё здание (п. 2.2).
+B19 — финальный участок снова заходит в зону отступа своего здания или подходит в ней к другой стене (п. 2.2).
 """
 import itertools
 import json
 import math
+import re
 import sys
 from collections import Counter, defaultdict
 
@@ -60,6 +62,17 @@ CHAMBER_NEAR_M = 0.1
 SHIFT_M = 6.0
 SHIFT_STEP_M = 0.5
 LINE_TOL_M = 1e-6
+# вход финального участка (п. 2.2): ближайшая допустимая точка внешнего контура своего полигона, от которой звено до
+# прежней вершины перед выходом держит запасы замены. Точки контура и концы участка на луче перебираются через
+# ENTRY_STEP_M; вход сервиса дальше такого больше чем на ENTRY_TOL_M — B8. В зоне отступа финальный участок не подходит
+# к своему зданию ближе, чем был, больше чем на APPROACH_M (B19, толкование «повторный подход к другой стене»); у
+# кандидата во входе предел строже, APPROACH_ENTRY_M, а конец участка лежит за зоной сервиса, она шире нормы на
+# ZONE_WIDER_M (ObstacleSet.SIMPLIFY_M): так проверка не требует входа, которого сервис не видит
+ENTRY_STEP_M = 0.05
+ENTRY_TOL_M = 0.1
+APPROACH_M = 0.05
+APPROACH_ENTRY_M = 0.03
+ZONE_WIDER_M = 0.05
 # B20 в камере ветвления — нарушение, если поворот снимает правка у камеры, как у сервиса (VariantEnumerator.turned):
 # сдвиг камеры вдоль первого звена участка шагом 0,1 м до 10 м или излом звена у камеры на наименьший угол от 3,5° с
 # шагом 0,5°, новая вершина в 1,05·2^k м от камеры; S растёт не больше TURN_TOLERANCE_S
@@ -98,37 +111,90 @@ def crossing_near(line, chain, obj, margin):
     return False
 
 
-def near_side_blocked(cg, own, shells, dn, trees):
-    """Почему ближняя сторона здания закрыта для финального участка ДУ dn; None — открыта.
+def contour_points(shells, cg, limit):
+    """Точки внешних контуров ближе limit к точке: через ENTRY_STEP_M вдоль сторон и ближайшая точка каждой стороны,
+    по возрастанию расстояния."""
+    found = []
+    for sh in shells:
+        c = np.asarray(sh.coords)
+        for a, b in zip(c, c[1:]):
+            side = LineString([a, b])
+            if side.distance(cg) >= limit:
+                continue
+            n = max(1, math.ceil(side.length / ENTRY_STEP_M))
+            found += [Point(a + (b - a) * k / n) for k in range(n + 1)]
+            found.append(shapely.ops.nearest_points(side, cg)[0])
+    found = [q for q in found if q.distance(cg) < limit]
+    return sorted(found, key=lambda q: q.distance(cg))
 
-    Луч от точки через ближайшую точку внешнего контура ведётся за зону отступа своего здания и дальше шагами до
-    30 м. Сторона открыта, если хоть одна точка выхода на луче лежит вне зоны своего здания, участок до неё не
-    задевает зоны чужих зданий и запретных объектов и пересекает своё здание одним куском."""
-    q = min((shapely.ops.nearest_points(sh, cg)[0] for sh in shells), key=lambda pt: pt.distance(cg))
-    dx, dy = q.x - cg.x, q.y - cg.y
-    length = math.hypot(dx, dy)
-    if length < 1e-6:
-        return "точка на границе"
-    dx, dy = dx / length, dy / length
+
+def entry_window(cg, q, own, zone, dn, trees):
+    """Где на луче от точки через точку контура q может кончиться финальный участок ДУ dn: (причина, None) или
+    (None, (ux, uy, от, до)) в метрах от точки.
+
+    Луч выходит из здания один раз и в зоне отступа своего здания не подходит к нему снова (к другой стене, больше
+    чем на APPROACH_ENTRY_M), конец участка лежит за зоной отступа сервиса (норма + ZONE_WIDER_M) до нового входа луча
+    в зону. Участок до конца не задевает зон чужих зданий и запретных объектов: это проверяет nearer_entry у каждого
+    конца."""
+    r = q.distance(cg)
+    if r < 1e-6:
+        return "точка на границе", None
+    ux, uy = (q.x - cg.x) / r, (q.y - cg.y) / r
     need = oks_clearance(dn) + DN[dn]["width_m"] / 2
-    reasons = []
-    step = 0.5
-    t = length + need + 0.3
-    while t <= length + need + 30.3:
-        ray = LineString([(cg.x, cg.y), (cg.x + dx * t, cg.y + dy * t)])
-        pieces = [g for g in getattr(ray.intersection(own), "geoms", [ray.intersection(own)]) if g.length > 0.05]
-        if len(pieces) > 1 or Point(ray.coords[-1]).distance(own) < need - EPS:
-            reasons.append("луч снова входит в своё здание или его зону")
-        elif any(og is not own and not og.equals(own) and ray.distance(og) < need - EPS
-                 for _, og in trees["oks_near"](ray, need)):
-            reasons.append("зона чужого здания")
-        elif any(ray.distance(rg) < FORBID.get(rt, FALLBACK) + DN[dn]["width_m"] / 2 - EPS
-                 for _, rt, rg in trees["forbid_near"](ray, max(FALLBACK, *FORBID.values()) + DN[dn]["width_m"] / 2)):
-            reasons.append("запретная зона")
-        else:
-            return None
-        t += step
-    return Counter(reasons).most_common(1)[0][0]
+    along = lambda t: (cg.x + ux * t, cg.y + uy * t)
+    ray = LineString([(cg.x, cg.y), along(r + need + 60)])
+    hit = ray.intersection(zone)
+    spans = sorted((cg.distance(Point(g.coords[0])), cg.distance(Point(g.coords[-1])))
+                   for g in getattr(hit, "geoms", [hit]) if g.geom_type == "LineString" and g.length > 0)
+    t1, t2 = spans[0][1], math.inf
+    for a, b in spans[1:]:
+        if a > t1 + 1e-6:
+            t2 = a
+            break
+        t1 = max(t1, b)
+    inside = ray.intersection(own) if t1 == math.inf else LineString([(cg.x, cg.y), along(t1)]).intersection(own)
+    if len([g for g in getattr(inside, "geoms", [inside]) if g.length > 0.05]) != 1:
+        return "луч снова входит в своё здание", None
+    ts = np.arange(r, t1, ENTRY_STEP_M)
+    d = shapely.distance(shapely.points(cg.x + ux * ts, cg.y + uy * ts), own)
+    if len(d) and (np.maximum.accumulate(d) - d).max() > APPROACH_ENTRY_M:
+        return "луч в зоне отступа подходит к другой стене своего здания", None
+    return None, (ux, uy, t1, min(t2, t1 + 30))
+
+
+def nearer_entry(cg, own, shells, dn, trees, limit, relink):
+    """Ближайшая точка контура ближе limit к точке, через которую финальный участок ДУ dn допустим (entry_window), и
+    конец участка на луче, при котором звено от прежней вершины до него годится (relink(конец) — причина или None).
+    Возвращает (точка, конец, причины отказа у более близких точек); точка None — такой нет."""
+    need = oks_clearance(dn) + DN[dn]["width_m"] / 2
+    zone = own.buffer(need - EPS, quad_segs=64)
+    reasons = Counter()
+    for q in contour_points(shells, cg, limit):
+        why, window = entry_window(cg, q, own, zone, dn, trees)
+        if why is not None:
+            reasons[why] += 1
+            continue
+        ux, uy, t1, t2 = window
+        r = q.distance(cg)
+        why = "за зоной отступа нет места для конца участка"
+        for t in np.arange(r, t2, ENTRY_STEP_M):
+            if t <= t1:
+                continue
+            end = Point(cg.x + ux * t, cg.y + uy * t)
+            if end.distance(own) < need + ZONE_WIDER_M:
+                continue
+            part = LineString([(cg.x, cg.y), end.coords[0]])
+            if any(og is not own and not og.equals(own) and part.distance(og) < need - EPS
+                   for _, og in trees["oks_near"](part, need)) or any(
+                    part.distance(rg) < FORBID.get(rt, FALLBACK) + DN[dn]["width_m"] / 2 - EPS
+                    for _, rt, rg in trees["forbid_near"](part, max(FALLBACK, *FORBID.values()) + DN[dn]["width_m"] / 2)):
+                why = "участок задевает зону чужого здания или запретного объекта"
+                break
+            why = relink((end.x, end.y))
+            if why is None:
+                return q, end, reasons
+        reasons[re.sub(r"\d+(\.\d+)?", "N", why)] += 1
+    return None, None, reasons
 
 
 def next_to(geo, s, node):
@@ -565,20 +631,6 @@ def check_variant(inp, trees, vid, feats, rep):
             pieces = [g for g in getattr(piece.intersection(og), "geoms", [piece.intersection(og)]) if g.length > 0.05]
             if len(pieces) > 1:
                 rep.add("B4 финальный участок выходит из своего здания и входит в него снова", f"{sid} куски {[round(g.length, 1) for g in pieces]}")
-            shells = [og.exterior] if og.geom_type == "Polygon" else [g.exterior for g in og.geoms]
-            to_edge = min(sh.distance(cg) for sh in shells)
-            inside = piece.intersection(og).length
-            if inside > to_edge + 1.0:
-                # другая сторона допустима, только если ближняя закрыта: луч через ближайшую точку контура упирается
-                # в чужую зону или снова входит в своё здание (п. 2.2, толкование в docs/interpretation.md)
-                dn = seg_by_id[sid]["properties"]["diameter"]
-                reason = near_side_blocked(cg, og, shells, dn, trees)
-                if reason:
-                    rep.add("i  финальный участок не от ближайшего внешнего контура (ближняя сторона закрыта)",
-                            f"{sid} внутри {inside:.1f} м, до границы {to_edge:.1f} м: {reason}")
-                else:
-                    rep.add("B8 финальный участок не от ближайшей границы, хотя ближняя сторона открыта",
-                            f"{sid} ДУ{dn} внутри {inside:.1f} м, до границы {to_edge:.1f} м")
     # B19: п. 2.2 снимает отступ к своему полигону только с части финального участка в зоне перед границей. Участок
     # от точки выходит из этой зоны один раз, иначе он снова подходит к своему зданию ближе отступа по своему Ду
     by_cp = defaultdict(list)
@@ -597,6 +649,17 @@ def check_variant(inp, trees, vid, feats, rep):
             if back:
                 rep.add("B19 финальный участок повторно заходит в зону отступа своего здания",
                         f"{','.join(sids)} ДУ{dn} {min(g.distance(og) for g in back):.2f} м < {need:.2f}")
+            # и в самой зоне после выхода из здания не подходит к нему снова, к другой стене
+            c = list(ray.coords) if Point(ray.coords[0]).distance(cg) < 0.05 else list(ray.coords)[::-1]
+            out = LineString(c).intersection(og)
+            start = next((g.length for g in getattr(out, "geoms", [out]) if g.distance(cg) < 0.05), 0.0)
+            ts = np.arange(start, ray.length, ENTRY_STEP_M)
+            pts = [LineString(c).interpolate(t) for t in ts]
+            d = shapely.distance(shapely.points([(p.x, p.y) for p in pts]), og) if pts else np.array([])
+            d = d[:np.argmax(d >= need - EPS)] if (d >= need - EPS).any() else d
+            if len(d) and (np.maximum.accumulate(d) - d).max() > APPROACH_M:
+                rep.add("B19 финальный участок в зоне отступа своего здания подходит к другой стене",
+                        f"{','.join(sids)} ДУ{dn} ближе на {(np.maximum.accumulate(d) - d).max():.2f} м")
     for s in segs:
         p = s["properties"]
         line = geo[str(p["id"])]
@@ -611,7 +674,7 @@ def check_variant(inp, trees, vid, feats, rep):
     # путь новой сети кончается, направление теплоносителя в существующей сети не задано
     path_pairs = {n: [(cs, s) for _, cs in down[n]] for n, (_, s) in parent.items() if n in geo}
     if SHAPE:
-        check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pairs, rep)
+        check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pairs, inp["cps"], rep)
 
     # E. стоимость участков по правилам 18.09 (без надбавки за поворот)
     seg_cost_new = 0.0
@@ -862,9 +925,11 @@ def extend_cross(p1, p2, q1, q2):
     return (p1[0] + t * d1x, p1[1] + t * d1y) if t > 0 and u > 0 else None
 
 
-def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pairs, rep):
+def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pairs, cps, rep):
     """B16–B18, B20, B21: лишние вершины, двойные повороты и зигзаги внутри участка, повороты на пути точки в узлах
-    и изломы у камер ветвления (п. 5, п. 2.1, разъяснение 5).
+    и изломы у камер ветвления (п. 5, п. 2.1, разъяснение 5). B8: финальный участок не от ближайшей точки контура
+    своего здания, хотя ближе есть допустимый вход, от которого звено до прежней вершины перед выходом держит те же
+    запасы (п. 2.2, см. nearer_entry).
 
     Замена возможна, если новая геометрия держит запасы сервиса (толкование п. 5): отступы до ОКС, запретных зон и
     спецобъектов по ДУ участка с запасом CUT_MARGIN_M (существующая сеть у врезки не мешает звену от врезки), не
@@ -1053,6 +1118,35 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
             if best is None or lx < best[0]:
                 best = (lx, tuple(x))
         return best, cur
+
+    for k, s in enumerate(segs):
+        p = s["properties"]
+        sid = str(p["id"])
+        cp = str(p["end_node_id"])
+        if kinds.get(cp) != "cp" or p["laying_method"] == "special":
+            continue
+        cg = cps[cp][0]
+        c = list(lines[k].coords)
+        head = c[:-2] if len(c) > 2 else c[:1]
+
+        def relink(end):
+            if turn_deg(head[-1], end, c[-1]) < TURN_DEG:
+                return f"поворот у выхода меньше {TURN_DEG}°"
+            return blocked(k, head + [end, c[-1]], [len(head) - 1])
+
+        for og in (og for _, og in trees["oks_near"](cg, 0.0) if og.buffer(0.01).contains(cg)):
+            shells = [og.exterior] if og.geom_type == "Polygon" else [g.exterior for g in og.geoms]
+            to_edge = min(sh.distance(cg) for sh in shells)
+            inside = LineString(c[-2:]).intersection(og).length
+            if inside <= to_edge + ENTRY_TOL_M:
+                continue
+            q, end, reasons = nearer_entry(cg, og, shells, p["diameter"], trees, inside - ENTRY_TOL_M, relink)
+            if q is None:
+                rep.add("i  финальный участок не от ближайшей точки контура: ближе допустимого входа нет",
+                        f"{sid} вход {inside:.2f} м, до границы {to_edge:.2f} м: {dict(reasons)}")
+            else:
+                rep.add("B8 финальный участок не от ближайшего допустимого входа",
+                        f"{sid} ДУ{p['diameter']} вход {inside:.2f} м, допустимый {q.distance(cg):.2f} м")
 
     for k, s in enumerate(segs):
         p = s["properties"]

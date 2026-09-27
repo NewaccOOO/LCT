@@ -658,7 +658,8 @@ final class DirectTies {
 
     /**
      * Выход у ближайшей открытой стороны своего здания: ближайшая точка внешнего контура, если луч через неё не
-     * закрыт, иначе ближайшие точки других сторон по очереди. Сторона закрыта, если выхода на луче нет, луч снова
+     * закрыт, иначе ближайшие точки других сторон по очереди, а если закрыты и они — ближайшая допустимая точка
+     * контура ({@link TreeBuilder#entries}). Сторона закрыта, если выхода на луче нет, луч снова
      * входит в своё здание или его зону отступа или задевает зону чужого здания или запретного объекта
      * (docs/interpretation.md, так же судит check18.py). От врезки выход не зависит: у точки два десятка врезок, и
      * поиск выхода с проверкой здания шёл на каждую. Врезки точки считаются в разных нитях, поэтому выход ищется под
@@ -682,6 +683,23 @@ final class DirectTies {
                     if (exit != null && TreeBuilder.leavesOnce(building.getGeometry(), cp, exit, clearance)
                             && !closed(cp, exit, shared.dn, building.getId())) {
                         shared.portal = new Portal(exit, tries == 1);
+                        break;
+                    }
+                }
+                // ближние точки сторон закрыты: ближайшая допустимая точка входа среди всех точек внешнего контура, луч
+                // к которой в зоне отступа не подходит к другой стене (толкование п. 2.2 в docs/interpretation.md)
+                List<Coordinate[]> rings = TreeBuilder.rings(building.getGeometry());
+                for (Coordinate entry : shared.portal == NO_PORTAL ? TreeBuilder.entries(building.getGeometry(), cp,
+                        Double.POSITIVE_INFINITY) : List.<Coordinate>of()) {
+                    double r = cp.distance(entry);
+                    if (r < 1e-6 || TreeBuilder.reach(rings, cp, entry, clearance) <= r + clearance) {
+                        continue;
+                    }
+                    Coordinate exit = exit(cp, entry, building, clearance);
+                    if (exit != null && TreeBuilder.leavesOnce(building.getGeometry(), cp, exit, clearance)
+                            && TreeBuilder.recedes(building.getGeometry(), cp, exit, clearance)
+                            && !closed(cp, exit, shared.dn, building.getId())) {
+                        shared.portal = new Portal(exit, false);
                         break;
                     }
                 }
