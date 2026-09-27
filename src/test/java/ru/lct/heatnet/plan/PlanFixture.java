@@ -50,7 +50,7 @@ final class PlanFixture {
     }
 
     InputData input() {
-        return new InputData(new Source("src", point(0, 0)), segments, chambers, oks, connections, existing, restrictions,
+        return new InputData(List.of(new Source("src", point(0, 0))), segments, chambers, oks, connections, existing, restrictions,
                 List.of(), List.of(), java.util.Set.of());
     }
 

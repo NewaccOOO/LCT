@@ -224,7 +224,7 @@ public class GeoJsonStreamReader {
             JsonLocation at = e.getLocation();
             String where = at == null ? "" : ", строка " + at.getLineNr() + ", столбец " + at.getColumnNr();
             List<Diagnostic> broken = List.of(new Diagnostic(FILE_ID, "json", "файл не разбирается как JSON" + where));
-            return new InputData(null, List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), broken, List.of(), Set.of());
+            return new InputData(List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), broken, List.of(), Set.of());
         } catch (IOException e) {
             throw new UncheckedIOException("Не удалось прочитать входной файл " + path, e);
         }
@@ -324,7 +324,8 @@ public class GeoJsonStreamReader {
         /** Файл для чтения строками или срезами, см. lines и sliced; null — чтение деревьями на главном потоке. */
         FileChannel channel;
         boolean lines;
-        Source source;
+        /** Источники с верной геометрией в порядке файла; sources — все фичи source, и с ошибкой геометрии. */
+        final List<Source> sourcePoints = new ArrayList<>();
         int sources;
         int ordinal;
         int duplicates;
@@ -348,7 +349,7 @@ public class GeoJsonStreamReader {
             connectionPoints.addAll(first.connectionPoints);
             upstreamById.putAll(first.upstreamById);
             refs.addAll(first.refs);
-            source = first.source;
+            sourcePoints.addAll(first.sourcePoints);
             sources = first.sources;
         }
 
@@ -437,13 +438,11 @@ public class GeoJsonStreamReader {
             }
             switch (objectType) {
                 case SOURCE: {
+                    // источников может быть несколько: у каждой системы города свой (приложение 18.09, п. 1.1)
                     sources++;
-                    if (sources > 1) {
-                        add(featureId, "object_type", "во входе больше одного источника source");
-                    }
                     Geometry geometry = geometry(node, featureId, POINT);
-                    if (diagnostics.size() == before && source == null) {
-                        source = new Source(id, (Point) geometry);
+                    if (diagnostics.size() == before) {
+                        sourcePoints.add(new Source(id, (Point) geometry));
                     }
                     break;
                 }
@@ -562,19 +561,19 @@ public class GeoJsonStreamReader {
             List<ExistingOks> existing = new ArrayList<>(existingOks);
             consumers(future, points, existing);
             unknownRestrictionTypes.forEach((type, count) -> warnings.add(unknownTypeWarning(type, count)));
-            return new InputData(source, segments, chambers, future, points, existing, restrictions,
+            return new InputData(List.copyOf(sourcePoints), segments, chambers, future, points, existing, restrictions,
                     diagnostics, warnings, numericIds);
         }
 
         /**
-         * Направление сети обходом от источника, диаметры камер и текущий расход там, где их нет во входе. Участок и
+         * Направление сети обходом от источников, диаметры камер и текущий расход там, где их нет во входе. Участок и
          * камера, до которых обход не дошёл, остаются в сети без upstream: приложение не требует связи сети с
          * источником (п. 1.1 — у heat_network обязательны id, object_type и diameter; п. 2.4 — расход сети не
          * считается; разъяснение 11 — врезка в любой допустимой точке heat_network), а направление расчёт не читает.
          * О таких объектах предупреждает одна строка warnings.
          */
         void network(List<NetworkSegment> segments, List<Chamber> chambers, List<String> warnings) {
-            if (source != null && (rawSegments.stream().anyMatch(r -> r.upstream == null)
+            if (!sourcePoints.isEmpty() && (rawSegments.stream().anyMatch(r -> r.upstream == null)
                     || rawChambers.stream().anyMatch(r -> r.upstream == null))) {
                 traverse();
             }
@@ -601,14 +600,15 @@ public class GeoJsonStreamReader {
                     chambers.add(new Chamber(raw.id, raw.geometry, diameter, raw.upstream));
                 }
             }
-            if (source != null && apartSegments + apartChambers > 0) {
+            if (!sourcePoints.isEmpty() && apartSegments + apartChambers > 0) {
                 warnings.add(String.format(RUSSIAN, "ПРЕДУПРЕЖДЕНИЕ: не связаны с источником по стыкам участков "
                         + "heat_network: %d, камер: %d; расчёт идёт, врезка в них допустима", apartSegments, apartChambers));
             }
         }
 
-        // Обход в ширину от источника: участок получает следующим к источнику объектом камеру в точке стыка
-        // или участок, от дальнего конца которого до него дошли; камера — участок, который первым дошёл до неё.
+        // Обход в ширину сразу от всех источников: участок получает следующим к источнику объектом камеру в точке
+        // стыка или участок, от дальнего конца которого до него дошли; камера — участок, который первым дошёл до неё.
+        // Сеть каждой системы города так направляется от своего источника.
         void traverse() {
             STRtree ends = endIndex();
             STRtree chamberIndex = new STRtree();
@@ -617,9 +617,10 @@ public class GeoJsonStreamReader {
             }
             boolean[] reached = new boolean[rawSegments.size()];
             List<int[]> queue = new ArrayList<>();
-            Coordinate at = source.getGeometry().getCoordinate();
-            for (int[] end : near(ends, at)) {
-                reach(end, source.getId(), reached, queue);
+            for (Source source : sourcePoints) {
+                for (int[] end : near(ends, source.getGeometry().getCoordinate())) {
+                    reach(end, source.getId(), reached, queue);
+                }
             }
             STRtree lines = null;
             for (int head = 0; ; ) {
@@ -640,7 +641,7 @@ public class GeoJsonStreamReader {
                     break;
                 }
                 lines = lines == null ? lineIndex() : lines;
-                if (!tees(at, lines, reached, queue)) {
+                if (!tees(lines, reached, queue)) {
                     break;
                 }
             }
@@ -687,17 +688,17 @@ public class GeoJsonStreamReader {
          * Выгрузки рабочих систем (разъяснение 17) так пишут ответвление от середины трубы. Ищутся, только когда
          * очередь обхода кончилась, а пройдены не все участки; false — связанных так не нашлось.
          */
-        boolean tees(Coordinate at, STRtree lines, boolean[] reached, List<int[]> queue) {
+        boolean tees(STRtree lines, boolean[] reached, List<int[]> queue) {
             int before = queue.size();
             for (int i = 0; i < reached.length; i++) {
                 if (reached[i]) {
                     continue;
                 }
                 LineString line = rawSegments.get(i).geometry;
-                if (line.getEnvelopeInternal().distance(new Envelope(at)) <= JOINT_M
-                        && Distance.pointToSegmentString(at, line.getCoordinates()) <= JOINT_M) {
+                Source on = sourceOn(line);
+                if (on != null) {
                     // источник на середине участка: обход идёт от обоих его концов
-                    reach(new int[] {i, 0}, source.getId(), reached, queue);
+                    reach(new int[] {i, 0}, on.getId(), reached, queue);
                     queue.add(new int[] {i, 1});
                     continue;
                 }
@@ -723,6 +724,19 @@ public class GeoJsonStreamReader {
                 }
             }
             return queue.size() > before;
+        }
+
+        /** Первый источник не дальше JOINT_M от участка; null — такого нет. */
+        Source sourceOn(LineString line) {
+            // ponytail: перебор всех источников на каждый непройденный участок; индекс источников — если их тысячи
+            for (Source source : sourcePoints) {
+                Coordinate at = source.getGeometry().getCoordinate();
+                if (line.getEnvelopeInternal().distance(new Envelope(at)) <= JOINT_M
+                        && Distance.pointToSegmentString(at, line.getCoordinates()) <= JOINT_M) {
+                    return source;
+                }
+            }
+            return null;
         }
 
         void reach(int[] end, String upstream, boolean[] reached, List<int[]> queue) {
@@ -998,7 +1012,7 @@ public class GeoJsonStreamReader {
          * Фичи массива features срезами файла. Главный поток читает файл блоками и находит границы фич по скобкам
          * с учётом строк, пул разбирает куски фич (см. part) и применяет их к своей части чтения, главный поток
          * сливает части по порядку. Синтаксис фич проверяет разбор в пуле. Всё, в чём части могут разойтись с
-         * чтением подряд (не объект в массиве, ошибка JSON, повтор id, второй источник), — SliceMismatch: файл
+         * чтением подряд (не объект в массиве, ошибка JSON, повтор id), — SliceMismatch: файл
          * читается заново без срезов, и диагностики те же. Возвращает разбор корня после массива.
          */
         JsonParser sliced(JsonParser parser) throws IOException {
@@ -1292,11 +1306,11 @@ public class GeoJsonStreamReader {
 
         /**
          * Часть в общее чтение. Повтор id между частями видит только общий typeById, и диагностика досталась бы
-         * части, которая успела позже; второй источник часть не видит вовсе. Оба случая читаются подряд.
+         * части, которая успела позже; такой файл читается подряд.
          */
         void merge(Scan part) {
-            if (part.duplicates > 0 || sources + part.sources > 1) {
-                throw new SliceMismatch("повтор id или второй источник");
+            if (part.duplicates > 0) {
+                throw new SliceMismatch("повтор id");
             }
             rawSegments.addAll(part.rawSegments);
             rawChambers.addAll(part.rawChambers);
@@ -1311,9 +1325,7 @@ public class GeoJsonStreamReader {
             part.unknownRestrictionTypes.forEach((type, count) -> unknownRestrictionTypes.merge(type, count, Integer::sum));
             refs.addAll(part.refs);
             sources += part.sources;
-            if (source == null) {
-                source = part.source;
-            }
+            sourcePoints.addAll(part.sourcePoints);
         }
 
         List<Future<Parsed[]>> prepare(List<JsonNode> batch) {

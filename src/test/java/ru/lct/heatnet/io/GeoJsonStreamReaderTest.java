@@ -2,7 +2,6 @@ package ru.lct.heatnet.io;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -36,6 +35,7 @@ import ru.lct.heatnet.model.FutureOks;
 import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.NetworkSegment;
 import ru.lct.heatnet.model.Restriction;
+import ru.lct.heatnet.model.Source;
 import ru.lct.heatnet.rules.Rules;
 
 class GeoJsonStreamReaderTest {
@@ -66,7 +66,7 @@ class GeoJsonStreamReaderTest {
             counts.merge(type, 1, Integer::sum);
         }
         assertEquals(1, counts.get("source"));
-        assertNotNull(data.getSource());
+        assertEquals(1, data.getSources().size());
         assertEquals(counts.getOrDefault("heat_network", 0), data.getSegments().size());
         assertEquals(counts.getOrDefault("heat_chamber", 0), data.getChambers().size());
         assertEquals(counts.getOrDefault("oks_future", 0) + counts.getOrDefault("consumer", 0), data.getFutureOks().size());
@@ -175,6 +175,32 @@ class GeoJsonStreamReaderTest {
 
         assertEquals(List.of(), data.getDiagnostics());
         assertTrue(data.getSegments().stream().anyMatch(segment -> segment.getId().equals("13")));
+        assertEquals(List.of("ПРЕДУПРЕЖДЕНИЕ: не связаны с источником по стыкам участков heat_network: 1, камер: 0; "
+                + "расчёт идёт, врезка в них допустима"), data.getWarnings());
+    }
+
+    @Test
+    void severalSourcesEachDirectTheirOwnNetwork() throws IOException {
+        // у каждой системы города свой источник: приложение 18.09 (п. 1.1) число source не ограничивает
+        ArrayNode features = datasetFeatures();
+        features.add(feature("Point", new double[] {37.70, 55.70}, "id", 2, "object_type", "source", "name", "котельная"));
+        features.add(feature("LineString", new double[][] {{37.70, 55.70}, {37.71, 55.70}},
+                "id", 13, "object_type", "heat_network", "diameter", 300));
+        features.add(feature("LineString", new double[][] {{37.71, 55.70}, {37.71, 55.71}},
+                "id", 14, "object_type", "heat_network", "diameter", 200));
+        features.add(feature("LineString", new double[][] {{37.80, 55.70}, {37.81, 55.70}},
+                "id", 15, "object_type", "heat_network", "diameter", 100));
+
+        InputData data = GeoJsonStreamReader.read(write(features));
+
+        assertEquals(List.of(), data.getDiagnostics());
+        assertEquals(List.of("1", "2"), data.getSources().stream().map(Source::getId).collect(Collectors.toList()));
+        Map<String, NetworkSegment> segments = data.getSegments().stream()
+                .collect(Collectors.toMap(NetworkSegment::getId, segment -> segment));
+        assertEquals("1", segments.get("10").getUpstreamId());
+        assertEquals("2", segments.get("13").getUpstreamId(), "сеть второй системы идёт от своего источника");
+        assertEquals("13", segments.get("14").getUpstreamId());
+        assertNull(segments.get("15").getUpstreamId(), "сеть без источника остаётся местом врезки");
         assertEquals(List.of("ПРЕДУПРЕЖДЕНИЕ: не связаны с источником по стыкам участков heat_network: 1, камер: 0; "
                 + "расчёт идёт, врезка в них допустима"), data.getWarnings());
     }
@@ -295,10 +321,13 @@ class GeoJsonStreamReaderTest {
         ((ObjectNode) features.get(4)).set("geometry", geometry("Polygon", new double[][][] {{{37.6, 55.7}, {37.61, 55.7}, {37.61, 55.71}, {37.6, 55.71}}}));
         assertOnly(features, "O1", "geometry");
 
+        // второй источник — вторая система теплоснабжения, не ошибка
         features = validFeatures();
         features.add(features.get(0).deepCopy());
         ((ObjectNode) features.get(9).get("properties")).put("id", "S3");
-        assertOnly(features, "S3", "object_type");
+        InputData two = GeoJsonStreamReader.read(write(features));
+        assertEquals(List.of(), two.getDiagnostics());
+        assertEquals(List.of("S", "S3"), two.getSources().stream().map(Source::getId).collect(Collectors.toList()));
 
         features = validFeatures();
         features.remove(0);
@@ -369,7 +398,7 @@ class GeoJsonStreamReaderTest {
 
         assertEquals(1, data.getDiagnostics().size(), data.getDiagnostics().toString());
         assertEquals("#0", data.getDiagnostics().get(0).getFeatureId());
-        assertNull(data.getSource());
+        assertTrue(data.getSources().isEmpty());
         assertTrue(data.getSegments().isEmpty());
     }
 
@@ -543,7 +572,7 @@ class GeoJsonStreamReaderTest {
         ObjectNode second = features.get(0).deepCopy();
         ((ObjectNode) second.get("properties")).put("id", "S2");
         features.add(second);
-        assertSameRead(MAPPER.writeValueAsString(collection(features)), 10);
+        assertSameRead(MAPPER.writeValueAsString(collection(features)), 9);
     }
 
     // Файл больше блока чтения строками: фича на строке с запятой в конце или в начале следующей строки, пустые
@@ -623,6 +652,7 @@ class GeoJsonStreamReaderTest {
         assertEquals(expected.getDiagnostics(), actual.getDiagnostics());
         assertEquals(expected.getWarnings(), actual.getWarnings());
         assertEquals(expected.getNumericIds(), actual.getNumericIds());
+        assertEquals(expected.getSources(), actual.getSources());
         assertEquals(describe(expected), describe(actual));
     }
 

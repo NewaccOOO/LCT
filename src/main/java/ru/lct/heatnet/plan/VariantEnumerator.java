@@ -881,7 +881,7 @@ public final class VariantEnumerator {
         connections.forEach(connection -> oks.add(oksById.get(connection.getOksId())));
         // препятствия району дают общие индексы; в самом входе района они нужны были бы только сборщику для ID входа,
         // а их сотни тысяч, и сборка каждого черновика перебирала их все
-        InputData part = new InputData(input.getSource(), input.getSegments(), input.getChambers(), oks, connections,
+        InputData part = new InputData(input.getSources(), input.getSegments(), input.getChambers(), oks, connections,
                 List.of(), List.of(), List.of(), List.of(), input.getNumericIds());
         return new VariantEnumerator(part, rules, finder, obstacleIndex, specials, buildingByConnection, CITY_CACHE_MB, true);
     }
