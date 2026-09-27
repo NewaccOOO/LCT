@@ -196,9 +196,10 @@ public final class VariantEnumerator {
      * десятки тысяч точек лежат в километрах от сети, и графы их районов считаются часами. После сетки зон и быстрых
      * проверок геометрии районы ближних точек досчитываются за ~110 с, последний район с деревом — за ~230 с;
      * срок 300 и 900 с даёт тот же выход (замеры 24.09.2026 в docs/performance.md). На медленной машине
-     * до срока не успеют лишь дальние районы в 5–11 км от сети, где подключение дороже штрафа.
+     * до срока не успеют лишь дальние районы в 5–11 км от сети, где подключение дороже штрафа. Начатые до срока
+     * районы досчитываются ещё до 40 с, поэтому срок 275 с: общее время города не дольше, чем у v0.8.1 (27.09.2026).
      */
-    private static final long CITY_DEADLINE_S = Long.getLong("heatnet.city.deadline", 300);
+    private static final long CITY_DEADLINE_S = Long.getLong("heatnet.city.deadline", 275);
     /** Считать только районы с этими номерами (свойство heatnet.city.only, через запятую): замеры и сверка отдельных районов. */
     private static final Set<String> CITY_ONLY = System.getProperty("heatnet.city.only") == null ? null
             : Set.of(System.getProperty("heatnet.city.only").split(","));
