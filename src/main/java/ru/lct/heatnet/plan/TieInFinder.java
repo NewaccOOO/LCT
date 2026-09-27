@@ -296,6 +296,11 @@ final class TieInFinder {
     }
 
     TieCandidate pipeCandidate(NetworkSegment segment, Point point, int dn) {
+        return pipeCandidate(segment, point, dn, FREE_TIE);
+    }
+
+    /** free = false — без переноса из зон запрета: прямое подключение из своего здания, по которому идёт труба. */
+    TieCandidate pipeCandidate(NetworkSegment segment, Point point, int dn, boolean free) {
         LengthIndexedLine indexed = new LengthIndexedLine(segment.getGeometry());
         double at = indexed.project(point.getCoordinate());
         // точка у самой трубы: отрезок от перпендикуляра короче метра, его не пропускает правило длины подотрезка,
@@ -305,11 +310,15 @@ final class TieInFinder {
             double shift = Math.sqrt(MIN_TIE_M * MIN_TIE_M - across * across);
             at += at < segment.getGeometry().getLength() / 2 ? shift : -shift;
         }
-        return pipeCandidate(segment, at, dn);
+        return pipeCandidate(segment, at, dn, free);
+    }
+
+    TieCandidate pipeCandidate(NetworkSegment segment, double at, int dn) {
+        return pipeCandidate(segment, at, dn, FREE_TIE);
     }
 
     /** Врезка в участок в точке {@code at} м от начала оси, прижатой к отступу от концов. */
-    TieCandidate pipeCandidate(NetworkSegment segment, double at, int dn) {
+    TieCandidate pipeCandidate(NetworkSegment segment, double at, int dn, boolean free) {
         LineString line = segment.getGeometry();
         LengthIndexedLine indexed = new LengthIndexedLine(line);
         double length = line.getLength();
@@ -320,7 +329,7 @@ final class TieInFinder {
             return null;
         }
         double position = outside(bands(segment), Math.max(gap, Math.min(length - gap, at)), gap, length - gap);
-        if (FREE_TIE) {
+        if (free) {
             // труба идёт по территории школы или под зданием: у проекции врезка в зоне запрета, трассы к ней нет;
             // ближайшее по трубе место вне зон и полос спецпроходов. Те же места поиск спрашивает в каждом подмножестве
             double from = position;
