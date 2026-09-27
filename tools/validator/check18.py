@@ -6,6 +6,7 @@ E — стоимость и сводка), строки «i» — справоч
 форма трассы (п. 5), B20 — поворот круче 90° на пути точки в камере или техническом узле (п. 2.1, разъяснение 5),
 --no-shape их отключает. B19 — финальный участок снова заходит в зону отступа своего здания (п. 2.2).
 """
+import itertools
 import json
 import math
 import sys
@@ -54,6 +55,11 @@ CUT_PIECE_M = 1.05
 # к точке подключения, отступ от объектов специального прохода и сети с запасом 0,1 м
 CHAMBER_GAP_M = 3.0
 CHAMBER_NEAR_M = 0.1
+# B21: камера переносится в узлы сетки ±SHIFT_M с шагом SHIFT_STEP_M и в точки на прямых звеньев у камеры, как у
+# сервиса (TreeBuilder.unkinks); точка на прямой звена — ближе LINE_TOL_M
+SHIFT_M = 6.0
+SHIFT_STEP_M = 0.5
+LINE_TOL_M = 1e-6
 # B20 в камере ветвления — нарушение, если поворот снимает правка у камеры, как у сервиса (VariantEnumerator.turned):
 # сдвиг камеры вдоль первого звена участка шагом 0,1 м до 10 м или излом звена у камеры на наименьший угол от 3,5° с
 # шагом 0,5°, новая вершина в 1,05·2^k м от камеры; S растёт не больше TURN_TOLERANCE_S
@@ -870,10 +876,12 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
     снимает правка у камеры с теми же запасами (сдвиг камеры вдоль первого звена участка или излом звена у камеры, см.
     TURN_STEP_M, BEND_STEP_DEG) и S растёт не больше TURN_TOLERANCE_S, иначе справочная строка с причиной.
 
-    B21: вершина рядом с новой камерой ветвления лишняя, если камеру можно сдвинуть вдоль одного её участка на
-    продолжение следующего звена и S от этого не растёт. Новые звенья от камеры держат те же запасы, поворот в камере
-    по пути от точки к врезке не круче MAX_TURN_DEG, камера не ближе CHAMBER_GAP_M по участку к точке подключения и не
-    ближе отступа с запасом CHAMBER_NEAR_M к объектам специального прохода и сети."""
+    B21: вершины у новой камеры ветвления лишние, если камеру можно перенести в точку рядом (сетка ±SHIFT_M, первые
+    вершины её участков, точки на прямых звеньев у камеры), откуда у её участков вершин меньше, а S растёт не больше
+    TURN_TOLERANCE_S. Каждый участок идёт из нового места прямой к первой или второй своей вершине. Новые звенья держат
+    те же запасы, поворот в камере по пути от точки к врезке не круче MAX_TURN_DEG, финальный участок к точке остаётся
+    на своей прямой, камера не ближе CHAMBER_GAP_M по участку к точке подключения и не ближе отступа с запасом
+    CHAMBER_NEAR_M к объектам специального прохода и сети."""
     lines = [geo[str(s["properties"]["id"])] for s in segs]
     tree = STRtree(lines)
     tie_keys = {n: {(rt, rid) for rid, rt, _, _ in trees["spec_near"](pt, 0.5) if rt == "heat_network"}
@@ -885,13 +893,14 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
         return max([turn_deg(next_to(geo, other, node), pt, nb) for cs, ps in path_pairs.get(node, [])
                     for other in [ps if cs is s else cs if ps is s else None] if other is not None], default=0.0)
 
-    def blocked(k, new, changed, moved=None, min_piece=CUT_PIECE_M, apart=True):
+    def blocked(k, new, changed, moved=None, min_piece=CUT_PIECE_M, apart=True, skip=None):
         """Почему геометрия new вместо участка k недопустима; None — допустима. changed — номера новых звеньев,
         moved — новые координаты других участков по номеру, min_piece — наименьшее новое звено, apart — проверять
-        зазор до других участков."""
+        зазор до других участков, skip — узел, поворот в котором проверяет вызывающий."""
         moved = moved or {}
         p = segs[k]["properties"]
         start, end = str(p["start_node_id"]), str(p["end_node_id"])
+        start, end = (None if start == skip else start), (None if end == skip else end)
         w2 = DN[p["diameter"]]["width_m"] / 2
         need = oks_clearance(p["diameter"]) + w2
         if not LineString(new).is_simple:
@@ -1019,20 +1028,31 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
             else:
                 rep.add("i  зигзаг нельзя спрямить (B18)", f"{text}: {why}")
 
-    # Г. излом у камеры ветвления: камера сдвигается вдоль первого звена своего участка на продолжение звена другого
-    # участка за его вершиной у камеры, и вершина уходит; остальные участки идут от нового места прямой к своей
-    # первой вершине
+    # Г. изломы у камеры ветвления: камера переносится в точку рядом, откуда у её участков меньше вершин
     index = {id(s): k for k, s in enumerate(segs)}
 
-    def kink_blocked(x, s, t, inc, out, up, width, exit_kept):
-        """Почему камеру нельзя сдвинуть вдоль t в точку x, чтобы убрать вершину s у камеры; None — можно."""
-        new = {id(r): [x] + out[id(r)][2 if r is s else 1:] for r in inc}
-        if math.dist(x, new[id(t)][1]) < CUT_PIECE_M:
-            return f"до вершины {t['properties']['id']} {math.dist(x, new[id(t)][1]):.2f} м < {CUT_PIECE_M} м"
-        tp = t["properties"]
-        if "cp" in (kinds.get(str(tp["start_node_id"])), kinds.get(str(tp["end_node_id"]))) \
-                and LineString(new[id(t)]).length < CHAMBER_GAP_M:
-            return f"камера ближе {CHAMBER_GAP_M} м к точке подключения по {tp['id']}"
+    def moved_line(x, c, drop):
+        """Участок c (координаты от камеры) из точки x, без первой вершины при drop; вершина с изломом меньше TURN_DEG
+        уходит, как у сервиса."""
+        new = [x] + c[2 if drop else 1:]
+        while len(new) > 2 and turn_deg(new[0], new[1], new[2]) < TURN_DEG:
+            new = [x] + new[2:]
+        return new
+
+    def on_link(x, a, b):
+        """Где x на прямой звена a→b: None — не на ней или за концом b, [] — в звене, [x, a] — на продолжении за a."""
+        length = math.dist(a, b)
+        ux, uy = (b[0] - a[0]) / length, (b[1] - a[1]) / length
+        if abs(ux * (x[1] - a[1]) - uy * (x[0] - a[0])) > LINE_TOL_M:
+            return None
+        along = ux * (x[0] - a[0]) + uy * (x[1] - a[1])
+        return None if along >= length - LINE_TOL_M else [] if along >= -LINE_TOL_M else [x, a]
+
+    def move_blocked(cid, x, new, inc, out, up, width):
+        """Почему камеру cid нельзя перенести в x, где её участки идут по new (координаты от камеры по id участка);
+        None — можно. Первое звено на прямой прежнего звена проверяется только в новой части: в прежнем звене — никак,
+        на продолжении за его начало — как финальный участок за точкой выхода. Финальный участок к точке остаётся на
+        своей прямой."""
         pt = Point(x)
         for rid, rt, rg, extra in trees["spec_near"](pt, trees["spec_reach"] + width + CHAMBER_NEAR_M):
             if pt.distance(rg) <= _TYPES[rt]["clearance_m"] + width + extra + CHAMBER_NEAR_M:
@@ -1044,66 +1064,111 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
         forward = {id(r): out[id(r)][0] == lines[index[id(r)]].coords[0] for r in inc}
         own = {index[id(r)]: new[id(r)] if forward[id(r)] else new[id(r)][::-1] for r in inc}
         for r in inc:
-            if r is t:
+            c, line = out[id(r)], new[id(r)]
+            rp = r["properties"]
+            sid, k = str(rp["id"]), index[id(r)]
+            if math.dist(x, line[1]) < CUT_PIECE_M:
+                return f"{sid}: звено {math.dist(x, line[1]):.2f} м < {CUT_PIECE_M} м"
+            if "cp" in (kinds.get(str(rp["start_node_id"])), kinds.get(str(rp["end_node_id"]))) \
+                    and LineString(line).length < CHAMBER_GAP_M:
+                return f"камера ближе {CHAMBER_GAP_M} м к точке подключения по {sid}"
+            j = len(c) - len(line) + 1
+            part = on_link(x, c[j - 1], c[j])
+            if part is None and sid in final_piece and j == len(c) - 1:
+                return f"{sid}: финальный участок уходит со своей прямой"
+            if part == []:
                 continue
-            k = index[id(r)]
-            if r is s and exit_kept:
-                # до точки выхода новое только продолжение финального участка, дальше он прежний
-                c = [x] + out[id(r)][1:]
+            if part:
+                # до прежнего начала звена новое только продолжение его прямой
+                c = part + c[j:]
                 c = c if forward[id(r)] else c[::-1]
-                why = blocked(k, c, [0] if forward[id(r)] else [len(c) - 2], own, 0.0, False) \
-                    or crowded(k, new[id(r)][:2], own)
+                why = blocked(k, c, [0] if forward[id(r)] else [len(c) - 2], own, 0.0, False, cid) \
+                    or crowded(k, line[:2], own)
             else:
-                why = blocked(k, own[k], [0] if forward[id(r)] else [len(own[k]) - 2], own)
+                why = blocked(k, own[k], [0] if forward[id(r)] else [len(own[k]) - 2], own, skip=cid)
             if why:
-                return f"{r['properties']['id']}: {why}"
+                return f"{sid}: {why}"
         return None
 
-    def kink_ds(x, s, inc, out):
-        """Изменение S при сдвиге камеры в x: длины участков камеры по цене их ДУ."""
+    def move_ds(new, inc, out):
+        """Изменение S при переносе камеры: длины участков камеры по цене их ДУ."""
         dc = dl = 0.0
         for r in inc:
-            c = [x] + out[id(r)][2 if r is s else 1:]
-            d = LineString(c).length - LineString(out[id(r)]).length
+            d = LineString(new[id(r)]).length - LineString(out[id(r)]).length
             dc += d * DN[r["properties"]["diameter"]]["new_rub_m"]
             dl += d
         return 0.7 * dc / 25e6 + 0.3 * dl / 100
 
+    def move_spots(at, inc, out):
+        """Места переноса: сетка ±SHIFT_M с шагом SHIFT_STEP_M, первые вершины участков, проекции камеры на прямые
+        вторых звеньев и попарные пересечения прямых первых и вторых звеньев."""
+        n = round(SHIFT_M / SHIFT_STEP_M)
+        spots = [(at[0] + i * SHIFT_STEP_M, at[1] + j * SHIFT_STEP_M)
+                 for i in range(-n, n + 1) for j in range(-n, n + 1) if i or j]
+        links = []
+        for r in inc:
+            c = out[id(r)]
+            links.append((c[0], c[1]))
+            if len(c) > 2:
+                links.append((c[1], c[2]))
+                spots.append(c[1])
+                spots.append(project_line(at, c[1], c[2]))
+        for (a, b), (p, q) in itertools.combinations(links, 2):
+            x = cross_lines(a, b, p, q)
+            if x is not None and math.dist(x, at) > LINE_TOL_M:
+                spots.append(x)
+        return spots
+
     for cid in sorted(n for n, kind in kinds.items() if kind == "heat_chamber" and n not in ties):
-        at = geo[cid]
+        g = geo[cid]
+        at = (g.x, g.y)
         inc = adj[cid]
         if len(inc) < 3 or any(s["properties"]["laying_method"] == "special" for s in inc):
             continue
         out = {}
         for s in inc:
             c = list(lines[index[id(s)]].coords)
-            out[id(s)] = c if Point(c[0]).distance(at) <= NODE_TOL else c[::-1]
+            out[id(s)] = c if Point(c[0]).distance(g) <= NODE_TOL else c[::-1]
         up = parent[cid][1] if cid in parent else None
         width = DN[max(s["properties"]["diameter"] for s in inc)]["width_m"] / 2
-        for s in inc:
-            cs = out[id(s)]
-            if len(cs) < 3 or turn_deg(cs[0], cs[1], cs[2]) < TURN_DEG:
-                continue
-            sid = str(s["properties"]["id"])
-            exit_kept = sid in final_piece and len(cs) == 3 and tuple(cs[1]) in final_piece[sid][1].coords
-            text = f"{sid} вершина у {cid} {turn_deg(cs[0], cs[1], cs[2]):.1f}°"
-            first = None
-            for t in inc:
-                x = None if t is s else slide_point(cs[2], cs[1], out[id(t)][0], out[id(t)][1])
-                if x is None:
+        vertices = sum(len(c) - 2 for c in out.values())
+        if not vertices:
+            continue
+        found = []
+        for x in move_spots(at, inc, out):
+            options = []
+            for r in inc:
+                c = out[id(r)]
+                lines_r = {}
+                for drop in (False, True)[:1 + (len(c) > 2)]:
+                    line = moved_line(x, c, drop)
+                    if math.dist(x, line[1]) >= CUT_PIECE_M and (
+                            len(line) < 3 or turn_deg(line[0], line[1], line[2]) <= MAX_TURN_DEG):
+                        lines_r[tuple(map(tuple, line))] = line
+                options.append(list(lines_r.values()))
+            for combo in itertools.product(*options):
+                if sum(len(line) - 2 for line in combo) >= vertices:
                     continue
-                shift = f"сдвиг {math.dist(x, cs[0]):.2f} м вдоль {t['properties']['id']}"
-                why = kink_blocked(x, s, t, inc, out, up, width, exit_kept)
-                if why is None:
-                    ds = kink_ds(x, s, inc, out)
-                    if ds < -1e-6:
-                        rep.add("B21 излом у камеры снимает сдвиг камеры", f"{text}: {shift}, ΔS {ds:+.6f}")
-                        break
-                    why = f"S не ниже ({ds:+.6f})"
-                first = first or f"{text}: {shift}: {why}"
-            else:
-                if first:
-                    rep.add("i  излом у камеры сдвигом не снять (B21)", first)
+                new = {id(r): line for r, line in zip(inc, combo)}
+                if up is not None and any(q is not up and turn_deg(new[id(up)][1], x, new[id(q)][1]) > MAX_TURN_DEG
+                                          for q in inc):
+                    continue
+                ds = move_ds(new, inc, out)
+                if ds <= TURN_TOLERANCE_S:
+                    found.append((ds, x, new))
+        found.sort(key=lambda f: f[0])
+        first = None
+        for ds, x, new in found:
+            why = move_blocked(cid, x, new, inc, out, up, width)
+            left = sum(len(line) - 2 for line in new.values())
+            text = f"{cid}: перенос {math.dist(x, at):.2f} м, вершин у камеры {vertices} → {left}, ΔS {ds:+.6f}"
+            if why is None:
+                rep.add("B21 излом у камеры снимает перенос камеры", text)
+                break
+            first = first or f"{text}: {why}"
+        else:
+            if first:
+                rep.add("i  излом у камеры переносом не снять (B21)", first)
 
     # Д. поворот круче 90° на пути точки в узле; в камере ветвления ищется правка, как у сервиса
     def bend_blocked(cid, r, inc, out, up, delta_sign, first_len):
@@ -1175,9 +1240,10 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
             while fix is None and step * TURN_STEP_M <= min(TURN_MAX_M, first_len - CUT_PIECE_M) + 1e-9:
                 f = step * TURN_STEP_M / first_len
                 x = (c[0][0] + (c[1][0] - c[0][0]) * f, c[0][1] + (c[1][1] - c[0][1]) * f)
-                why = kink_blocked(x, None, t, inc, out, up, width, False)
+                new = {id(r): [x] + out[id(r)][1:] for r in inc}
+                why = move_blocked(n, x, new, inc, out, up, width)
                 if why is None:
-                    ds = kink_ds(x, None, inc, out)
+                    ds = move_ds(new, inc, out)
                     if ds <= TURN_TOLERANCE_S:
                         fix = f"сдвиг камеры {step * TURN_STEP_M:.1f} м вдоль {t['properties']['id']}, ΔS {ds:+.6f}"
                     why = f"S выше на {ds:.6f}"
@@ -1197,15 +1263,21 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
             rep.add("i  поворот на пути точки в камере круче 90° правкой у камеры не снять (B20)", f"{text}: {first}")
 
 
-def slide_point(w, v, c, u):
-    """Точка звена c→u (не на концах) на прямой w→v по ту сторону от w, где v; None — такой нет."""
-    dx, dy, ex, ey, fx, fy = v[0] - w[0], v[1] - w[1], u[0] - c[0], u[1] - c[1], c[0] - w[0], c[1] - w[1]
+def project_line(p, a, b):
+    """Проекция точки p на прямую a–b."""
+    ux, uy = b[0] - a[0], b[1] - a[1]
+    t = ((p[0] - a[0]) * ux + (p[1] - a[1]) * uy) / (ux * ux + uy * uy)
+    return (a[0] + t * ux, a[1] + t * uy)
+
+
+def cross_lines(a, b, p, q):
+    """Пересечение прямых a–b и p–q; None — они параллельны."""
+    dx, dy, ex, ey = b[0] - a[0], b[1] - a[1], q[0] - p[0], q[1] - p[1]
     den = dx * ey - dy * ex
-    if abs(den) < 1e-12:
+    if abs(den) < 1e-9 * math.hypot(dx, dy) * math.hypot(ex, ey):
         return None
-    mu = (fx * ey - fy * ex) / den
-    lam = (fx * dy - fy * dx) / den
-    return (c[0] + lam * ex, c[1] + lam * ey) if mu > 0 and 0 < lam < 1 else None
+    t = ((p[0] - a[0]) * ey - (p[1] - a[1]) * ex) / den
+    return (a[0] + t * dx, a[1] + t * dy)
 
 
 def trees_for(inp):

@@ -245,9 +245,9 @@ class TreeBuilderTest {
     }
 
     @Test
-    void junctionSlidesAlongTrunkToStraightenKinkedBranch() {
-        // ствол идёт вверх через камеру, ветка к o-2 ломается в 3,6 м от камеры: на продолжении её дальнего звена
-        // камера стоит на 2,33 м выше по стволу, и ветка оттуда прямая
+    void junctionMovesToStraightenKinkedBranch() {
+        // ствол идёт вверх через камеру, ветка к o-2 ломается в 3,6 м от камеры: камера переносится туда, откуда
+        // ветка прямая, например на продолжение её дальнего звена в 2,33 м выше по стволу
         PlanFixture fixture = PlanFixture.trunk().oks("o-1", 300, 200, 5).oks("o-2", 362, 143, 5);
         InputData input = fixture.input();
         TieInFinder finder = new TieInFinder(input, rules);
@@ -270,11 +270,10 @@ class TreeBuilderTest {
         TreeBuilder builder = builder(input, finder);
         Router router = new Router(input, rules, AREA, DN);
 
-        List<TreeBuilder.Slide> slides = builder.unkinks(tree, edge -> router.obstacles(), dnByEdge, priceRub, 0);
+        List<TreeBuilder.Slide> slides = builder.unkinks(tree, junction, edge -> router.obstacles(), dnByEdge, priceRub, 0);
 
-        assertEquals(1, slides.size());
+        assertFalse(slides.isEmpty());
         Tree moved = builder.moved(tree, slides.get(0));
-        assertEquals(122.333, JunctionMover.junctions(moved).get(0).point.y, 1e-3);
         assertEquals(2, moved.edges.get(2).line.getNumPoints(), "ветка прямая: " + moved.edges.get(2).line);
         assertTrue(moved.length() < tree.length() - 1, "длина " + moved.length() + " против " + tree.length());
     }

@@ -137,14 +137,15 @@ public final class VariantEnumerator {
     /** Слияния и переносы пробуются только между блоками, ближайшими друг к другу по точкам подключения. */
     private static final int NEAREST_BLOCKS = 2;
     private static final double IMPROVE_EPS = 1e-6;
-    /** Сдвиг камеры, снимающий излом, не хуже по S с этим запасом на округление, см. {@link #unkinked(List)}. */
+    /** Сдвиг врезки вдоль трубы, снимающий излом, не хуже по S с этим запасом на округление, см. {@link #retied}. */
     private static final double UNKINK_EPS = 1e-9;
     /** Сдвиги новой камеры врезки вдоль трубы, снимающие излом у неё: шаг и наибольший, см. {@link #retied}. */
     private static final double RETIE_STEP_M = 0.1;
     private static final double RETIE_MAX_M = 5;
     /**
      * Правка поворота в камере на пути точки к врезке, см. {@link #turned}: сдвиг камеры шагом TURN_STEP_M до
-     * TURN_MAX_M, S узла врезки растёт не больше TURN_TOLERANCE_S за место.
+     * TURN_MAX_M. S узла врезки растёт не больше TURN_TOLERANCE_S за место, так же у переноса камеры, снимающего
+     * излом, см. {@link #unkinked(List)}.
      */
     private static final double TURN_STEP_M = 0.1;
     private static final double TURN_MAX_M = 10;
@@ -530,7 +531,7 @@ public final class VariantEnumerator {
             Variant variant = null;
             if (REROUTE) {
                 try {
-                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, turned(unkinked(rerouted(draft))),
+                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, unkinked(turned(rerouted(draft))),
                             draft.unconnected);
                 } catch (IllegalStateException | IllegalArgumentException e) {
                     // узлы врезки собирались по отдельности, а вместе нет: вариант как найден поиском
@@ -539,7 +540,7 @@ public final class VariantEnumerator {
             }
             if (variant == null) {
                 try {
-                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, turned(unkinked(draft.trees)), draft.unconnected);
+                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, unkinked(turned(draft.trees)), draft.unconnected);
                 } catch (IllegalStateException | IllegalArgumentException e) {
                     log.info("unkinked: вариант {} не собран: {}", i + 1, e.getMessage());
                 }
@@ -2474,16 +2475,18 @@ public final class VariantEnumerator {
     }
 
     /**
-     * Деревья варианта без изломов у камер ветвления, которые снимает сдвиг камеры вдоль её ребра
+     * Деревья варианта без изломов у камер ветвления, которые снимает перенос камеры в точку рядом
      * ({@link TreeBuilder#unkinks}, п. 5), и у новой камеры врезки на трубе, которые снимает её сдвиг вдоль трубы
      * ({@link #retied}). Рёбра камеры проверяются по зонам своего Ду, как в {@link #rerouted}, и доводятся до строгой
-     * формы ({@link #sharpened}). Сдвиг берётся, если S узла врезки не растёт, Ду рёбер не растут, а дерево не
-     * касается других; дальше изломы ищутся на новом дереве. Каждый сдвиг убирает вершину, поэтому цикл конечен.
+     * формы, где убранная вершина не делает поворот в камере круче ({@link #sharpened}). Перенос берётся, если S узла
+     * врезки вырос не больше TURN_TOLERANCE_S, Ду рёбер не выросли, а дерево не касается других; дальше изломы
+     * ищутся на новом дереве. Каждый перенос убирает вершину, поэтому цикл конечен.
      */
     private List<Tree> unkinked(List<Tree> trees) {
         long started = System.nanoTime();
         List<Tree> result = new ArrayList<>(trees);
         int taken = 0;
+        double maxGainRub = TURN_TOLERANCE_S / rules.score(1, 0);
         for (int t = 0; t < result.size(); t++) {
             Tree first = result.get(t);
             if (JunctionMover.junctions(first).isEmpty() && first.tie.isChamber()) {
@@ -2491,8 +2494,9 @@ public final class VariantEnumerator {
             }
             Region region = regionByConnection.get(first.connected().get(0).getId());
             Envelope area = region.area.contains(first.envelope()) ? region.area : region.wideArea;
-            // сдвиг, который не взят, у той же камеры не пробуется снова
+            // перенос, который не взят, у той же камеры не пробуется снова, как и камера с теми же рёбрами без переноса
             Set<List<Double>> tried = new HashSet<>();
+            Set<List<Double>> settled = new HashSet<>();
             boolean retieTried = false;
             for (boolean moved = area.contains(first.envelope()); moved; ) {
                 moved = false;
@@ -2511,31 +2515,41 @@ public final class VariantEnumerator {
                 }
                 Map<Tree.Edge, Double> priceRub = new IdentityHashMap<>();
                 dnByEdge.forEach((edge, dn) -> priceRub.put(edge, rules.diameter(dn).getNewRubM() + rules.lengthWorthRub()));
-                // S узла собирается, только когда есть сдвиг, который проходит проверки: у большинства деревьев его нет
+                // S узла собирается, только когда есть перенос, который проходит проверки: у большинства деревьев его нет
                 double before = Double.NaN;
-                for (TreeBuilder.Slide slide : builder.unkinks(tree, edge -> region.obstacles(dnByEdge.get(edge), area),
-                        dnByEdge, priceRub, 0)) {
-                    if (!tried.add(List.of(slide.junction.point.x, slide.junction.point.y, slide.point.x, slide.point.y))) {
+                for (Tree.Node junction : JunctionMover.junctions(tree)) {
+                    List<Double> key = signature(tree, junction);
+                    if (settled.contains(key)) {
                         continue;
                     }
-                    Tree changed = unkinked(tree, slide, tree.tie, dnByEdge, region, area, false);
-                    List<Tree> others = new ArrayList<>(result);
-                    others.remove(t);
-                    if (changed == null || !compatible(changed, others)) {
-                        continue;
+                    for (TreeBuilder.Slide slide : builder.unkinks(tree, junction,
+                            edge -> region.obstacles(dnByEdge.get(edge), area), dnByEdge, priceRub, maxGainRub)) {
+                        if (!tried.add(List.of(junction.point.x, junction.point.y, slide.point.x, slide.point.y))) {
+                            continue;
+                        }
+                        Tree changed = unkinked(tree, slide, tree.tie, dnByEdge, region, area, true);
+                        List<Tree> others = new ArrayList<>(result);
+                        others.remove(t);
+                        if (changed == null || !compatible(changed, others)) {
+                            continue;
+                        }
+                        List<Tree> attempt = new ArrayList<>();
+                        for (Tree other : unit) {
+                            attempt.add(other == tree ? changed : other);
+                        }
+                        before = Double.isNaN(before) ? unitScore(unit) : before;
+                        if (!(unitScore(attempt) <= before + TURN_TOLERANCE_S) || thicker(tree, unit, changed, attempt)) {
+                            continue;
+                        }
+                        result.set(t, changed);
+                        taken++;
+                        moved = true;
+                        break;
                     }
-                    List<Tree> attempt = new ArrayList<>();
-                    for (Tree other : unit) {
-                        attempt.add(other == tree ? changed : other);
+                    if (moved) {
+                        break;
                     }
-                    before = Double.isNaN(before) ? unitScore(unit) : before;
-                    if (!(unitScore(attempt) <= before + UNKINK_EPS) || thicker(tree, unit, changed, attempt)) {
-                        continue;
-                    }
-                    result.set(t, changed);
-                    taken++;
-                    moved = true;
-                    break;
+                    settled.add(key);
                 }
                 // врезка сдвигается, когда у камер ветвления сдвигов больше нет: одна попытка на дерево
                 if (!moved && !retieTried && unit.size() == 1) {
@@ -2553,6 +2567,18 @@ public final class VariantEnumerator {
         }
         log.info("unkinked: moves={} elapsed={}ms", taken, (System.nanoTime() - started) / 1_000_000);
         return result;
+    }
+
+    /** Координаты рёбер камеры junction: камера с теми же рёбрами без переноса не пробуется снова, см. {@link #unkinked(List)}. */
+    private static List<Double> signature(Tree tree, Tree.Node junction) {
+        List<Double> key = new ArrayList<>();
+        for (Tree.Edge edge : JunctionMover.incident(tree, junction)) {
+            for (Coordinate c : edge.line.getCoordinates()) {
+                key.add(c.x);
+                key.add(c.y);
+            }
+        }
+        return key;
     }
 
     /**

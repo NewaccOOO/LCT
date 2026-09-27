@@ -1230,25 +1230,45 @@ public final class ObstacleSet {
      * к ней добавляется margin без него: иначе запас больше заданного и форма трассы держит лишние вершины (п. 5).
      */
     public boolean plain(Coordinate a, Coordinate b, Set<String> ignored, double margin) {
+        return plain(a, b, ignored, margin, new Object[1]);
+    }
+
+    /**
+     * {@link #plain} с подсказкой: hint[0] — зона или объект специального прохода, из-за которых прошлый отрезок не
+     * обычный. Соседние отрезки к одной вершине упираются в тот же объект, и он проверяется первым, без запроса к
+     * индексу; ответ от подсказки не зависит. hint[0] заменяется объектом, из-за которого не обычный этот отрезок.
+     */
+    public boolean plain(Coordinate a, Coordinate b, Set<String> ignored, double margin, Object[] hint) {
         double extra = margin - SIMPLIFY_M;
+        if (hint[0] != null && blocksPlain(hint[0], a, b, ignored, extra)) {
+            return false;
+        }
         Envelope envelope = new Envelope(a, b);
         envelope.expandBy(margin);
         for (Object item : forbidZones.query(envelope)) {
-            Zone zone = (Zone) item;
-            if (!ignored.contains(zone.id) && zone.intersects(a, b, extra, false)) {
+            if (blocksPlain(item, a, b, ignored, extra)) {
+                hint[0] = item;
                 return false;
             }
         }
         for (Object item : specials.query(envelope)) {
-            Special special = (Special) item;
-            if (ignored.contains(special.id) && touches(special, a, b)) {
-                continue;
-            }
-            if (special.crossedBy(a, b) || special.zone.intersects(a, b, extra, false)) {
+            if (blocksPlain(item, a, b, ignored, extra)) {
+                hint[0] = item;
                 return false;
             }
         }
         return true;
+    }
+
+    /** Зона или объект специального прохода item делает отрезок a–b не обычным, см. {@link #plain}. */
+    private boolean blocksPlain(Object item, Coordinate a, Coordinate b, Set<String> ignored, double extra) {
+        if (item instanceof Zone) {
+            Zone zone = (Zone) item;
+            return !ignored.contains(zone.id) && zone.intersects(a, b, extra, false);
+        }
+        Special special = (Special) item;
+        return !(ignored.contains(special.id) && touches(special, a, b))
+                && (special.crossedBy(a, b) || special.zone.intersects(a, b, extra, false));
     }
 
     /**
