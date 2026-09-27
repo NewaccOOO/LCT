@@ -352,6 +352,11 @@ final class TieInFinder {
                         s -> s.geometry.buffer(margin, MARGIN_QUADRANT_SEGMENTS)).intersection(line);
                 for (int i = 0; i < inside.getNumGeometries(); i++) {
                     Coordinate[] c = inside.getGeometryN(i).getCoordinates();
+                    // труба ровно на margin_m от спецпрохода: isWithinDistance да, а буфер-многоугольник её не
+                    // задевает, и пересечение — пустая линия (Москва, 510 ОКС: падение на c[0])
+                    if (c.length == 0) {
+                        continue;
+                    }
                     double a = indexed.indexOf(c[0]);
                     double b = indexed.indexOf(c[c.length - 1]);
                     result.add(new double[] {Math.min(a, b), Math.max(a, b)});
