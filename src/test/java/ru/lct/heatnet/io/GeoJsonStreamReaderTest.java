@@ -95,8 +95,9 @@ class GeoJsonStreamReaderTest {
 
         assertEquals(List.of(), data.getDiagnostics());
         assertEquals(List.of(), partials.get(0).getRestrictions());
-        assertEquals(List.of(), partials.get(0).getExistingOks());
-        assertEquals(List.of("E1", "v1_far"), ids(data.getExistingOks(), ExistingOks::getId));
+        // полигон oks_future O1 — здание-препятствие (приложение 18.09, п. 2.2), дальние здания в часть не попадают
+        assertEquals(List.of("O1"), ids(partials.get(0).getExistingOks(), ExistingOks::getId));
+        assertEquals(List.of("E1", "v1_far", "O1"), ids(data.getExistingOks(), ExistingOks::getId));
         assertEquals(List.of("R1", "R2"), ids(data.getRestrictions(), Restriction::getId));
         assertEquals(List.of("R1", "R2", "far"), ids(GeoJsonStreamReader.read(file).getRestrictions(), Restriction::getId));
 
