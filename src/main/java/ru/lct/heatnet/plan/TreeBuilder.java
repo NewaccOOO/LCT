@@ -254,9 +254,11 @@ final class TreeBuilder {
 
     /**
      * Финальный участок от cp до exit выходит из своего здания и из его зоны отступа clearance по одному разу и дальше
-     * в них не входит (приложение 18.09, п. 2.2: участок «от ближайшей границы до точки», полигон ОКС непроходим, а
-     * отступ к нему снят только с части участка в зоне перед границей). Луч через ближайшую точку контура
-     * П-образного здания иначе пересекал бы второе крыло или проходил у выступа ближе отступа.
+     * в них не входит, а в зоне не подходит к другой стене ({@link #recedes}; приложение 18.09, п. 2.2: участок «от
+     * ближайшей границы до точки», полигон ОКС непроходим, а отступ к нему снят только с части участка в зоне перед
+     * границей). Луч через ближайшую точку контура П-образного здания иначе пересекал бы второе крыло или проходил у
+     * выступа ближе отступа, а луч через вершину внутреннего угла Г-образного выходил бы из соседней стены и шёл
+     * вдоль угла в его зоне.
      */
     private boolean leavesOnce(ExistingOks building, Coordinate cp, Coordinate exit, double clearance) {
         return leavesOnceCache.computeIfAbsent(List.of(building.getId(), cp.x, cp.y, exit.x, exit.y, clearance),
@@ -310,7 +312,8 @@ final class TreeBuilder {
                 pieces++;
             }
         }
-        return pieces == 1 && leavesZoneOnce(building, cp, exit, clearance);
+        return pieces == 1 && leavesZoneOnce(building, cp, exit, clearance)
+                && recedes(building, cp, exit, clearance);
     }
 
     /**
@@ -641,7 +644,7 @@ final class TreeBuilder {
     /**
      * Часть луча от cp через точку входа entry, где может стоять выход финального участка ({@link #entered}): от
      * первой точки через ENTRY_STEP_M вне зон запрета zones, до которой участок выходит из здания и его зоны отступа
-     * по одному разу ({@link #leavesOnce}) и в зоне не подходит к другой стене ({@link #recedes}), до нового входа
+     * по одному разу и в зоне не подходит к другой стене ({@link #leavesOnce}), до нового входа
      * луча в зону отступа перед зданием; пустой массив — такой части нет. От дерева не зависит, поэтому одна на все
      * варианты.
      */
@@ -660,7 +663,7 @@ final class TreeBuilder {
                 t += ENTRY_STEP_M;
             }
             Coordinate first = new Coordinate(cp.x + ux * t, cp.y + uy * t);
-            return t < limit && leavesOnce(building, cp, first, clearance) && recedes(building.getGeometry(), cp, first, clearance)
+            return t < limit && leavesOnce(building, cp, first, clearance)
                     ? new double[] {t, limit} : new double[0];
         });
     }
