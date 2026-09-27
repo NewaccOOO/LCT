@@ -26,6 +26,7 @@ import org.locationtech.jts.linearref.LengthIndexedLine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.lct.heatnet.graph.ObstacleIndex;
+import ru.lct.heatnet.graph.ObstacleSet;
 import ru.lct.heatnet.graph.Router;
 import ru.lct.heatnet.model.Chamber;
 import ru.lct.heatnet.model.ConnectionPoint;
@@ -816,6 +817,9 @@ final class DirectTies {
                     if (!crossingAllowed(piece, geometry, rule)) {
                         return reject(reasons, "угол пересечения " + restriction.getType());
                     }
+                    if (!holdsBeyond(piece, geometry, rule, distance)) {
+                        return reject(reasons, "отступ за спецпроходом " + restriction.getType());
+                    }
                     continue;
                 }
                 if (gap < distance - DIST_EPS_M) {
@@ -838,12 +842,51 @@ final class DirectTies {
                     }
                 } else if (pipeDistance(segment.getGeometry(), line[i], line[i + 1]) < distance - DIST_EPS_M
                         && !(crossPipes && segment.getGeometry().intersects(piece)
-                                && crossingAllowed(piece, segment.getGeometry(), network))) {
+                                && crossingAllowed(piece, segment.getGeometry(), network)
+                                && holdsBeyond(piece, segment.getGeometry(), network, distance))) {
                     return reject(reasons, "чужая труба");
                 }
             }
         }
         return true;
+    }
+
+    /**
+     * Обычная часть отрезка piece через объект держит отступ distance, как у ребра графа (ObstacleSet.closeBeyond):
+     * ближе может быть только часть в полигоне и в margin_m от точек на его границе, у линии — в margin_m и в круге
+     * «норма + CROSS_CIRCLE_M» вокруг точки пересечения.
+     */
+    private static boolean holdsBeyond(LineString piece, Geometry geometry, RestrictionRule rule, double distance) {
+        Coordinate a = piece.getCoordinateN(0);
+        Coordinate b = piece.getCoordinateN(1);
+        double length = a.distance(b);
+        double reach = geometry.getDimension() == 2 ? rule.getMarginM()
+                : Math.max(rule.getMarginM(), distance + ObstacleSet.CROSS_CIRCLE_M);
+        Geometry common = piece.intersection(geometry);
+        List<double[]> free = new ArrayList<>();
+        for (int g = 0; g < common.getNumGeometries(); g++) {
+            Coordinate[] coords = common.getGeometryN(g).getCoordinates();
+            double from = a.distance(coords[0]);
+            double to = a.distance(coords[coords.length - 1]);
+            free.add(new double[] {Math.min(from, to) - reach, Math.max(from, to) + reach});
+        }
+        free.sort(Comparator.comparingDouble(interval -> interval[0]));
+        double from = 0;
+        for (double[] part : free) {
+            if (part[0] > from && closer(a, b, from / length, part[0] / length, geometry, distance)) {
+                return false;
+            }
+            from = Math.max(from, part[1]);
+        }
+        return from >= length || !closer(a, b, from / length, 1, geometry, distance);
+    }
+
+    /** Часть отрезка a–b от доли from до доли to ближе distance к объекту. */
+    private static boolean closer(Coordinate a, Coordinate b, double from, double to, Geometry geometry, double distance) {
+        LineSegment segment = new LineSegment(a, b);
+        LineString part = new GeometryFactory().createLineString(
+                new Coordinate[] {segment.pointAlong(from), segment.pointAlong(to)});
+        return geometry.distance(part) < distance - DIST_EPS_M;
     }
 
     /**

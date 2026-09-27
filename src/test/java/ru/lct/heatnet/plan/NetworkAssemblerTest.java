@@ -1,7 +1,7 @@
 package ru.lct.heatnet.plan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.util.Comparator;
 import java.util.List;
@@ -31,31 +31,33 @@ class NetworkAssemblerTest {
     }
 
     @Test
-    void roadSpecialGoesOnWhileBaseWouldBreakClearance() {
-        // Ду 400 под 46°: в 3 м вдоль трассы за дорогой до неё 3 · sin 46° = 2,16 м, норма 1,5 + 0,685 = 2,185 м
-        Variant variant = assemble(PlanFixture.trunk(), 46, 500);
-        List<NewSegment> special = specials(variant);
-        double sin = Math.sin(Math.toRadians(46));
-        double norm = 1.5 + rules.diameter(400).getWidthM() / 2;
+    void roadSpecialEndsThreeMetresBeyondWhenBaseBreaksClearance() {
+        // Ду 400 под 46°: в 3 м вдоль трассы за дорогой до неё 3 · sin 46° = 2,16 м, норма 1,5 + 0,685 = 2,185 м.
+        // Спецучасток за 3 м не продлевается (табл. 2), и обычный участок ближе нормы сборка отвергает
+        assertThrows(IllegalStateException.class, () -> assemble(PlanFixture.trunk(), 46, 500));
+    }
 
-        assertEquals(1, special.size());
-        assertEquals(400, special.get(0).getDiameter());
-        assertTrue(special.get(0).getGeometry().getLength() > 20 / sin + 6 + 0.05, "спецучасток не продлён до нормы");
-        for (NewSegment base : variant.getSegments()) {
-            if (NetworkAssembler.BASE.equals(base.getLayingMethod())) {
-                assertTrue(base.getGeometry().distance(ROAD) >= norm, base.getId() + " ближе нормы к дороге");
-            }
-        }
+    @Test
+    void baseNearLineCrossingIsCloserThanNormOnlyInsideCircle() {
+        // газопровод поперёк трассы Ду 80: норма 2 + 0,235 + 0,2 = 2,435 м больше зоны 2 м. Под 90° обычная трасса
+        // ближе нормы только в круге 2,535 м у пересечения, под 60° — ещё и за ним: 2,535 · sin 60° = 2,2 м
+        assertEquals(2, specials(assemble(gasAcross(), 90, 10)).size());
+        assertThrows(IllegalStateException.class, () -> assemble(gasAcross(), 60, 10));
+    }
+
+    private static PlanFixture gasAcross() {
+        return PlanFixture.trunk().restriction("gas-1", PlanFixture.line(0, 30, 600, 30), "gas_pipeline");
     }
 
     @Test
     void specialIsSplitWhereSetOfZonesChanges() {
         // газопровод в 2 м под дорогой: его зона накрывает начало зоны дороги. Kспец 1,60 на общем фрагменте и за
-        // ним тот же, но на границе общего фрагмента начинается новый участок (п. 4, разъяснение 8)
+        // ним тот же, но на границе общего фрагмента начинается новый участок (п. 4, разъяснение 8). Трасса идёт
+        // поперёк: под острым углом обычная часть у газопровода была бы ближе нормы за кругом у пересечения
         PlanFixture fixture = PlanFixture.trunk()
                 .restriction("gas-1", PlanFixture.line(250, 48, 450, 48), "gas_pipeline");
 
-        List<Double> k = specials(assemble(fixture, 60, 10)).stream()
+        List<Double> k = specials(assemble(fixture, 90, 10)).stream()
                 .map(segment -> segment.getCost() / segment.getLength()
                         / rules.diameter(segment.getDiameter()).getNewRubM())
                 .collect(Collectors.toList());

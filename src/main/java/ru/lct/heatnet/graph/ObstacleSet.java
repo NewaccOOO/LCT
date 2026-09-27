@@ -61,6 +61,26 @@ public final class ObstacleSet {
     private static final double ORIENTATION_TOL = 1e-15;
     /** Насколько узлы пересечения дороги стоят внутри полосы margin_m: сборка прижимает границу спецучастка к узлу ближе 0,08 м. */
     private static final double MARGIN_NODE_INSET_M = 0.1;
+    /**
+     * Обычная часть трассы у пересечения линии может быть ближе нормы к ней только в круге радиусом «норма +
+     * CROSS_CIRCLE_M» вокруг точки пересечения: столько даёт пересечение под прямым углом (толкование разд. 4).
+     */
+    public static final double CROSS_CIRCLE_M = 0.1;
+    /** Запас к норме у обычной части пересекающего отрезка: проверка сверяет отступ с точностью 1 мм. */
+    private static final double NORM_EXTRA_M = 0.002;
+    /**
+     * Пары узлов напротив друг друга через линию, см. {@link #gates}: шаг вдоль линии, запас узла к норме (зона для
+     * рёбер шире нормы на SIMPLIFY_M) и к концу спецчасти (сборка ставит узел спецучастка в вершину ближе 0,08 м).
+     */
+    private static final double GATE_STEP_M = 20;
+    private static final double GATE_OFFSET_M = 0.08;
+    private static final double GATE_BEYOND_M = 0.05;
+    /**
+     * Узел пары в зоне соседней линии уходит дальше по нормали шагом GATE_SHIFT_M, но не дальше GATE_REACH_M: так пара
+     * пересекает сразу две линии, идущие рядом.
+     */
+    private static final double GATE_SHIFT_M = 0.5;
+    private static final double GATE_REACH_M = 10;
     private static final String ZONE_KEY = "zone";
     /** Повороты угла зоны, у которых вершина JOIN_MITRE в зоне соседа заменяется двумя, см. halves. */
     private static final double HALVES_MIN_TURN_DEG = 20;
@@ -100,8 +120,9 @@ public final class ObstacleSet {
     private final PreparedGeometry inside;
     /**
      * По шесть чисел на узел: сам узел и его соседи по кольцу зоны (x, y узла, предыдущего и следующего), у точек
-     * вдоль дорог соседей нет (NaN): ребро полезно, только если касается зоны. Массив вместо объектов: касание
-     * проверяется для каждой пары узлов графа.
+     * вдоль дорог соседей нет (NaN): ребро полезно, только если касается зоны. У узла пары через линию вместо
+     * соседей — его пара и NaN, см. {@link #gates}. Массив вместо объектов: касание проверяется для каждой пары узлов
+     * графа.
      */
     private final double[] around;
     /**
@@ -943,6 +964,16 @@ public final class ObstacleSet {
                 addNode(halves[1], new Coordinate[] {halves[0], ring[1]}, area, inside, margins, rings);
             }
         }
+        for (Special special : specialList) {
+            if (!special.polygon && !HEAT_NETWORK.equals(special.type)) {
+                for (Coordinate[] gate : gates(special, area, margins)) {
+                    nodes.add(gate[0]);
+                    rings.add(new Coordinate[] {gate[1], null});
+                    nodes.add(gate[1]);
+                    rings.add(new Coordinate[] {gate[0], null});
+                }
+            }
+        }
         around = new double[6 * nodes.size()];
         for (int i = 0; i < nodes.size(); i++) {
             Coordinate[] ring = rings.get(i);
@@ -950,9 +981,57 @@ public final class ObstacleSet {
             around[6 * i + 1] = nodes.get(i).y;
             around[6 * i + 2] = ring == null ? Double.NaN : ring[0].x;
             around[6 * i + 3] = ring == null ? Double.NaN : ring[0].y;
-            around[6 * i + 4] = ring == null ? Double.NaN : ring[1].x;
-            around[6 * i + 5] = ring == null ? Double.NaN : ring[1].y;
+            around[6 * i + 4] = ring == null || ring[1] == null ? Double.NaN : ring[1].x;
+            around[6 * i + 5] = ring == null || ring[1] == null ? Double.NaN : ring[1].y;
         }
+    }
+
+    /**
+     * Пары узлов напротив друг друга через линию special, по середине кусков её звеньев не длиннее GATE_STEP_M:
+     * ребро пары пересекает линию под прямым углом. Под острым углом обычная часть трассы у пересечения ближе нормы
+     * вне круга «норма + CROSS_CIRCLE_M», и без пар трасса обходит линию или ищет узлы напротив.
+     */
+    private List<Coordinate[]> gates(Special special, Envelope area, List<PreparedGeometry> margins) {
+        List<Coordinate[]> out = new ArrayList<>();
+        double offset = Math.max(special.zone.distance - SIMPLIFY_M + GATE_OFFSET_M,
+                special.rule.getMarginM() + GATE_BEYOND_M);
+        for (LineSegment side : special.sides) {
+            double length = side.getLength();
+            if (length == 0) {
+                continue;
+            }
+            int count = Math.max(1, (int) Math.round(length / GATE_STEP_M));
+            double nx = -(side.p1.y - side.p0.y) / length;
+            double ny = (side.p1.x - side.p0.x) / length;
+            for (int k = 0; k < count; k++) {
+                Coordinate at = side.pointAlong((k + 0.5) / count);
+                Coordinate left = beyond(at, nx, ny, offset, area, margins);
+                Coordinate right = left == null ? null : beyond(at, -nx, -ny, offset, area, margins);
+                if (right != null) {
+                    out.add(new Coordinate[] {left, right});
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Узел пары на луче из at по нормали (nx, ny): первая точка от offset через GATE_SHIFT_M вне зон линий, пока луч в
+     * области и коридоре и не зашёл в зону запрета или полосу margin_m дороги; null — такой нет до GATE_REACH_M.
+     */
+    private Coordinate beyond(Coordinate at, double nx, double ny, double offset, Envelope area,
+            List<PreparedGeometry> margins) {
+        for (double t = offset; t <= offset + GATE_REACH_M; t += GATE_SHIFT_M) {
+            Coordinate c = new Coordinate(at.x + nx * t, at.y + ny * t);
+            if (!area.contains(c) || inside != null && !inside.intersects(factory.createPoint(c)) || forbidGrid.covers(c)
+                    || insideAny(margins, c)) {
+                return null;
+            }
+            if (!insideSpecialZone(c)) {
+                return c;
+            }
+        }
+        return null;
     }
 
     private void addNode(Coordinate c, Coordinate[] ring, Envelope area, PreparedGeometry inside, List<PreparedGeometry> margins,
@@ -1040,7 +1119,10 @@ public final class ObstacleSet {
         return area;
     }
 
-    /** Узлы visibility graph: выпуклые снаружи вершины зон и точки вдоль сторон дорог, не лежащие ни в одной зоне. */
+    /**
+     * Узлы visibility graph: выпуклые снаружи вершины зон, точки вдоль сторон дорог и пары через линии, не лежащие ни
+     * в одной зоне.
+     */
     public List<Coordinate> nodes() {
         return nodes;
     }
@@ -1048,7 +1130,8 @@ public final class ObstacleSet {
     /**
      * Отрезок от узла node к other касается зоны узла: оба соседа по кольцу лежат по одну сторону от него. Ребро,
      * которое входит в вершину зоны и уходит через неё «внутрь угла», в кратчайшем пути не бывает, и его можно не
-     * проверять; узлы без кольца (точки вдоль дорог) допускают любые рёбра.
+     * проверять; узлы без кольца (точки вдоль дорог) допускают любые рёбра, узел пары через линию — ребро к паре и
+     * рёбра от линии.
      */
     public boolean tangent(int node, Coordinate other) {
         return tangent(node, other.x, other.y);
@@ -1059,6 +1142,13 @@ public final class ObstacleSet {
         int k = 6 * node;
         if (Double.isNaN(around[k + 2])) {
             return true;
+        }
+        // узел пары через линию: путь приходит в него из-за спины и идёт к паре, поворот не круче 90°
+        if (Double.isNaN(around[k + 4])) {
+            double px = around[k + 2];
+            double py = around[k + 3];
+            return x == px && y == py
+                    || (x - around[k]) * (px - around[k]) + (y - around[k + 1]) * (py - around[k + 1]) <= 0;
         }
         double dx = x - around[k];
         double dy = y - around[k + 1];
@@ -1146,7 +1236,7 @@ public final class ObstacleSet {
             if (sides == null) {
                 sides = special.sidesNear(a, b);
             }
-            if (!crossingAllowed(special, sides, a, b)) {
+            if (!crossingAllowed(special, sides, a, b) || closeBeyond(special, sides, a, b)) {
                 hint.special = k;
                 return Double.NaN;
             }
@@ -1222,7 +1312,48 @@ public final class ObstacleSet {
         if (special.polygon ? !special.crossedBy(a, b) : !crosses(sides, a, b)) {
             return special.zone.intersects(a, b, 0, outside);
         }
-        return !crossingAllowed(special, sides == null ? special.sidesNear(a, b) : sides, a, b);
+        sides = sides == null ? special.sidesNear(a, b) : sides;
+        return !crossingAllowed(special, sides, a, b) || closeBeyond(special, sides, a, b);
+    }
+
+    /**
+     * Обычная часть отрезка a–b, пересекающего объект, ближе нормы к нему (приложение 18.09, разд. 4, табл. 2).
+     * Норму не держат только сам полигон и margin_m вдоль отрезка от точек на его границе, у линии — спецчасть
+     * margin_m и круг «норма + CROSS_CIRCLE_M» вокруг точки пересечения. sides — стороны объекта у рамки отрезка.
+     */
+    private static boolean closeBeyond(Special special, List<LineSegment> sides, Coordinate a, Coordinate b) {
+        double length = a.distance(b);
+        if (length == 0) {
+            return false;
+        }
+        double norm = special.zone.distance - SIMPLIFY_M;
+        double reach = special.polygon ? special.rule.getMarginM()
+                : Math.max(special.rule.getMarginM(), norm + CROSS_CIRCLE_M);
+        LineIntersector intersector = new RobustLineIntersector();
+        List<double[]> free = special.polygon ? inside(a, b, special.shape, intersector) : new ArrayList<>();
+        for (LineSegment side : sides) {
+            intersector.computeIntersection(a, b, side.p0, side.p1);
+            for (int k = 0; k < intersector.getIntersectionNum(); k++) {
+                double at = a.distance(intersector.getIntersection(k));
+                free.add(new double[] {at - reach, at + reach});
+            }
+        }
+        free.sort(Comparator.comparingDouble(piece -> piece[0]));
+        double from = 0;
+        for (double[] piece : free) {
+            if (piece[0] > from && closePart(special, a, b, from / length, piece[0] / length)) {
+                return true;
+            }
+            from = Math.max(from, piece[1]);
+        }
+        return from < length && closePart(special, a, b, from / length, 1);
+    }
+
+    /** Часть отрезка a–b от доли from до доли to ближе нормы к объекту с запасом NORM_EXTRA_M. */
+    private static boolean closePart(Special special, Coordinate a, Coordinate b, double from, double to) {
+        Coordinate p = new Coordinate(a.x + (b.x - a.x) * from, a.y + (b.y - a.y) * from);
+        Coordinate q = new Coordinate(a.x + (b.x - a.x) * to, a.y + (b.y - a.y) * to);
+        return special.zone.intersects(p, q, NORM_EXTRA_M - SIMPLIFY_M, true);
     }
 
     /**
@@ -1517,9 +1648,10 @@ public final class ObstacleSet {
     }
 
     private boolean insideAnyZone(Coordinate c) {
-        if (forbidGrid.covers(c)) {
-            return true;
-        }
+        return forbidGrid.covers(c) || insideSpecialZone(c);
+    }
+
+    private boolean insideSpecialZone(Coordinate c) {
         Envelope envelope = new Envelope(c);
         for (Object item : specials.query(envelope)) {
             if (((Special) item).zone.covers(c)) {
