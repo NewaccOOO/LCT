@@ -354,6 +354,40 @@ class TreeBuilderTest {
     }
 
     @Test
+    void branchesSpreadingWiderThanOneBendAllowBendAtJunctionTogether() {
+        // ветки к o-1 и o-2 уходят от камеры назад по обе стороны ствола, на 99,5° к нему: излома одного ребра мало,
+        // гнутся обе, и путь каждой точки к врезке поворачивает в камере не круче 89,9°
+        PlanFixture fixture = PlanFixture.trunk().oks("o-1", 240, 50, 5).oks("o-2", 360, 50, 5);
+        InputData input = fixture.input();
+        TieInFinder finder = new TieInFinder(input, rules);
+        TieCandidate tie = finder.find(List.of(point(300, 60)), DN).stream()
+                .filter(c -> c.getExistingObjectId().equals("hn-2")).findFirst().orElseThrow();
+        Coordinate root = tie.getPoint().getCoordinate();
+        Tree tree = new Tree(tie);
+        Tree.Node junction = Tree.Node.junction(new Coordinate(root.x, 60));
+        tree.edges.add(new Tree.Edge(tree.root, junction, PlanFixture.line(root.x, root.y, root.x, 60)));
+        tree.edges.add(new Tree.Edge(junction, Tree.Node.connection(fixture.connection("o-1")), PlanFixture.line(root.x, 60, 240, 50)));
+        tree.edges.add(new Tree.Edge(junction, Tree.Node.connection(fixture.connection("o-2")), PlanFixture.line(root.x, 60, 360, 50)));
+        Map<Tree.Edge, Double> priceRub = new java.util.IdentityHashMap<>();
+        tree.edges.forEach(edge -> priceRub.put(edge, 1.0));
+        Router router = new Router(input, rules, AREA, DN);
+        TreeBuilder builder = builder(input, finder);
+
+        assertTrue(builder.bends(tree, junction, edge -> router.obstacles(), priceRub, 100).isEmpty(), "одного излома мало");
+        List<TreeBuilder.Slide> fans = builder.fans(tree, junction, edge -> router.obstacles(), priceRub);
+
+        assertFalse(fans.isEmpty());
+        Tree bent = builder.moved(tree, fans.get(0));
+        Tree.Node at = JunctionMover.junctions(bent).get(0);
+        Coordinate[] trunk = bent.edges.get(0).line.getCoordinates();
+        for (Tree.Edge edge : bent.edges.subList(1, 3)) {
+            double turn = Router.deflectionDeg(trunk[trunk.length - 2], at.point, edge.line.getCoordinateN(1));
+            assertTrue(turn <= Router.MAX_TURN_DEG, edge.to.key + " " + turn);
+            assertEquals(3, edge.line.getNumPoints(), "ветка изломана у камеры: " + edge.line);
+        }
+    }
+
+    @Test
     void vertexBeforeFinalPieceIsExtraOnlyWhenStraightLinkEntersNearNearestPoint() {
         // точка в 0,06 м от стены y=10: прямое звено от (40, 30) входит в 0,09 м от ближайшей точки, от (60, 30) — в 0,15 м
         Geometry building = PlanFixture.rect(0, 0, 20, 10);
