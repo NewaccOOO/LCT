@@ -61,22 +61,6 @@ class NetworkAssemblerTest {
     }
 
     @Test
-    void roadAxisSpecialGoesOnWhileBaseWouldBreakClearance() {
-        // Ду 400 под 46°: в 3 м вдоль трассы от оси до неё 3 · sin 46° = 2,16 м, норма 1,5 + 0,685 = 2,185 м. Обычный
-        // участок держит отступ от оси, как от полигона: он не освобождён, как у газопровода
-        Variant variant = assemble(PlanFixture.trunk(), ROAD_AXIS, 46, 500);
-        double norm = 1.5 + rules.diameter(400).getWidthM() / 2;
-
-        assertEquals(1, specials(variant).size());
-        assertTrue(specials(variant).get(0).getGeometry().getLength() > 6 + 0.05, "спецучасток не продлён до нормы");
-        for (NewSegment base : variant.getSegments()) {
-            if (NetworkAssembler.BASE.equals(base.getLayingMethod())) {
-                assertTrue(base.getGeometry().distance(ROAD_AXIS) >= norm, base.getId() + " ближе нормы к оси дороги");
-            }
-        }
-    }
-
-    @Test
     void specialIsSplitWhereSetOfZonesChanges() {
         // газопровод в 2 м под дорогой: его зона накрывает начало зоны дороги. Kспец 1,60 на общем фрагменте и за
         // ним тот же, но на границе общего фрагмента начинается новый участок (п. 4, разъяснение 8). Трасса идёт

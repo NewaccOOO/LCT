@@ -1285,7 +1285,7 @@ final class TreeBuilder {
                 double uy = (branch[1].y - cp.y) / length;
                 double[] out = crossings(rings(building.getGeometry()), cp, ux, uy, length);
                 line = out.length == 0 ? null : relinked(building, edge, zones, ignored, null, List.of(), fromRoot,
-                        List.of(new Coordinate(cp.x + ux * out[0], cp.y + uy * out[0])), false);
+                        List.of(new Coordinate(cp.x + ux * out[0], cp.y + uy * out[0])), false, false);
             }
             return line == null ? branch : reversed(line);
         }

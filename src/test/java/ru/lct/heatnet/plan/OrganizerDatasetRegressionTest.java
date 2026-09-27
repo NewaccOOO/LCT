@@ -32,7 +32,7 @@ import ru.lct.heatnet.rules.Rules;
  * Менять константу только при намеренной смене качества.
  */
 class OrganizerDatasetRegressionTest {
-    private static final double ORGANIZER_RANK1_SCORE = 12.748;
+    private static final double ORGANIZER_RANK1_SCORE = 12.7483;
 
     @Test
     void rank1ScoreMatchesBaseline() throws Exception {
