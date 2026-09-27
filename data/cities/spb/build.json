@@ -1,0 +1,67 @@
+{
+ "city": "spb",
+ "bbox": [
+  59.815,
+  30.38,
+  59.862,
+  30.47
+ ],
+ "cell_m": 3.0,
+ "plant": "r7160873",
+ "district_flow_tph": 17232.3,
+ "transit_per_exit_tph": 2589.4,
+ "exits": 3,
+ "unreached": [
+  "w437151779",
+  "w55700971"
+ ],
+ "modern_form": [
+  15,
+  24.0,
+  86.44428375438338,
+  134
+ ],
+ "written": 28465,
+ "dropped": 0,
+ "future": 65,
+ "k_cal": 1.0,
+ "dn_raised": 0,
+ "dn_lowered": 5,
+ "network": {
+  "restored_km": 118.4,
+  "restored_in_buildings_m": 47664.7,
+  "nodes_moved": 715,
+  "small": 129,
+  "small_m": 349.8418509729944,
+  "large": 1286,
+  "large_m": 37264.73858091542,
+  "trimmed": 871,
+  "detoured": 435,
+  "kept": 107,
+  "kept_m": 3995.1342081026473,
+  "dropped": 2,
+  "ends_joined": 4,
+  "components_attached": 78,
+  "components_dropped": 2,
+  "holes": 688,
+  "rings_opened": 9,
+  "edges_unreached": 0,
+  "consumers": 1118,
+  "consumer_buildings": 517,
+  "buildings_on_network": 1067,
+  "exits": 3,
+  "transit_tph": 8449.1,
+  "usage": 0.25,
+  "calibration": {
+   "pairs": 0,
+   "k": 1.0,
+   "q25": 0.0,
+   "q75": 0.0
+  }
+ },
+ "osm": {
+  "file": "saint_petersburg-latest.osm.pbf",
+  "sha256": "8449445f586cc8312742212441bc03b4661d5bbf7b46171d7c2faea79b4791b6",
+  "bytes": 75959425
+ }
+}
