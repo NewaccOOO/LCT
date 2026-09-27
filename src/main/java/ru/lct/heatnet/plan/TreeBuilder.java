@@ -1703,9 +1703,25 @@ final class TreeBuilder {
     /** {@link #unkinks}; при evensOnly — только переносы, которые снимают излом меньше MIN_TURN_DEG без роста цены. */
     List<Slide> unkinks(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
             Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub, boolean evensOnly) {
+        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, evensOnly, false);
+    }
+
+    /**
+     * Переносы камеры ветвления junction по местам и прямым {@link #unkinks}, после которых поворот в ней на пути точки
+     * к врезке не круче MAX_TURN_DEG (п. 2.1, разъяснение 5), при любом числе вершин. Сдвиг вдоль звена
+     * ({@link #turnSlides}) не помогает, когда точка подключения лежит у ребра к родителю: камера должна уйти вбок.
+     */
+    List<Slide> turnMoves(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
+            Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub) {
+        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, false, true);
+    }
+
+    private List<Slide> unkinks(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
+            Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub, boolean evensOnly,
+            boolean turnsOnly) {
         Ends ends = ends(tree, junction, zones);
         int[] paths = ends == null ? null : paths(ends, ends.heads);
-        if (ends == null || (evensOnly ? paths[2] == 0 : ends.vertices == 0 && paths[1] == 0)) {
+        if (ends == null || !turnsOnly && (evensOnly ? paths[2] == 0 : ends.vertices == 0 && paths[1] == 0)) {
             return List.of();
         }
         int count = ends.heads.length;
@@ -1767,7 +1783,7 @@ final class TreeBuilder {
                     }
                 }
             }
-            if (!shorter && paths[1] == 0 && !evensOnly) {
+            if (!shorter && paths[1] == 0 && !evensOnly && !turnsOnly) {
                 continue;
             }
             Coordinate[][][] lines = new Coordinate[count][2][];
@@ -1792,8 +1808,8 @@ final class TreeBuilder {
                     gain += costs[e][option];
                     bad |= verdicts[e][option] < 0;
                 }
-                boolean fits = evensOnly ? left == ends.vertices && gain <= 0 && evens(ends, layout, paths)
-                        : left < ends.vertices || left == ends.vertices && straightens(ends, layout, paths);
+                boolean fits = turnsOnly || (evensOnly ? left == ends.vertices && gain <= 0 && evens(ends, layout, paths)
+                        : left < ends.vertices || left == ends.vertices && straightens(ends, layout, paths));
                 if (!bad && fits && gain <= maxGainRub && turnsAllowed(layout, ends.up, point)) {
                     gains.add(gain);
                     layouts.add(layout);
