@@ -1,0 +1,2462 @@
+{
+"type": "FeatureCollection",
+"features": [
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.891073,
+56.352942
+]
+},
+"properties": {
+"name": "Сормовская ТЭЦ",
+"org": "ПАО «Т Плюс»",
+"capacity_gcal_h": 696.0,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.1",
+"lon": 43.891073,
+"lat": 56.352942,
+"_geocode": "OSM relation/6613324",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.895651,
+56.243416
+]
+},
+"properties": {
+"name": "Автозаводская ТЭЦ",
+"org": "ООО «Автозаводская ТЭЦ»",
+"capacity_gcal_h": 1812.0,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.2",
+"lon": 43.895651,
+"lat": 56.243416,
+"_geocode": "OSM relation/7839125",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.916239,
+56.246468
+]
+},
+"properties": {
+"name": "Котельная «Ленинская» Автозаводской ТЭЦ, Монастырка ул., 5А",
+"org": "ООО «Автозаводская ТЭЦ»",
+"capacity_gcal_h": 360.0,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.3",
+"lon": 43.916239,
+"lat": 56.246468,
+"_geocode": "улица Монастырка, 5А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.86161,
+56.352931
+]
+},
+"properties": {
+"name": "ул. Базарная, 6",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 26.0,
+"load_gcal_h": 18.88,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.86161,
+"lat": 56.352931,
+"_geocode": "Базарная улица, 6",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.818465,
+56.366325
+]
+},
+"properties": {
+"name": "ул. Баренца, 9-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 19.5,
+"load_gcal_h": 14.62,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.818465,
+"lat": 56.366325,
+"_geocode": "улица Баренца, 9 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.810404,
+56.359494
+]
+},
+"properties": {
+"name": "ул. Гаугеля, 6-б",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 33.2,
+"load_gcal_h": 16.4,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.810404,
+"lat": 56.359494,
+"_geocode": "улица Гаугеля, 6Б",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.741,
+56.387163
+]
+},
+"properties": {
+"name": "ул. Дубравная, 17  (БМК)",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 6.13,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.741,
+"lat": 56.387163,
+"_geocode": "Дубравная улица, 17",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.826148,
+56.360993
+]
+},
+"properties": {
+"name": "ул. Иванова, 14-б",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 35.0,
+"load_gcal_h": 18.07,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.826148,
+"lat": 56.360993,
+"_geocode": "улица Василия Иванова, 14Б",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.826859,
+56.366831
+]
+},
+"properties": {
+"name": "ул. Иванова, 36-б",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 10.4,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.826859,
+"lat": 56.366831,
+"_geocode": "улица Василия Иванова, 36Б",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.756606,
+56.386238
+]
+},
+"properties": {
+"name": "ул. Меднолитейная, 1-б (БМК)",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 0.32,
+"load_gcal_h": 0.18,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.756606,
+"lat": 56.386238,
+"_geocode": "Меднолитейная улица, 1 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.829642,
+56.379607
+]
+},
+"properties": {
+"name": "пер. Общественный, 2-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 0.33,
+"load_gcal_h": 0.17,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.829642,
+"lat": 56.379607,
+"_geocode": "Общественный переулок, 2 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.789179,
+56.379512
+]
+},
+"properties": {
+"name": "ул. Планетная, 8-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 10.4,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.789179,
+"lat": 56.379512,
+"_geocode": "Планетная улица, 8А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.856603,
+56.350401
+]
+},
+"properties": {
+"name": "ул. Пугачева, 1",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 35.51,
+"load_gcal_h": 22.68,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.856603,
+"lat": 56.350401,
+"_geocode": "OSM relation/9647234 у адреса улица Пугачёва, 1",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.846253,
+56.353547
+]
+},
+"properties": {
+"name": "ул. Римского-Корсакова, 50 (БМК)",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 6.45,
+"load_gcal_h": 3.25,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.846253,
+"lat": 56.353547,
+"_geocode": "улица Римского-Корсакова, 50",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.853494,
+56.357795
+]
+},
+"properties": {
+"name": "пр. Союзный, 43",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 60.0,
+"load_gcal_h": 34.09,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.853494,
+"lat": 56.357795,
+"_geocode": "Союзный переулок, 43",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.836996,
+56.352064
+]
+},
+"properties": {
+"name": "ул. Станиславского, 3 (новая БМК)",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 20.66,
+"load_gcal_h": 13.35,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.836996,
+"lat": 56.352064,
+"_geocode": "улица Станиславского, 3",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.803914,
+56.345045
+]
+},
+"properties": {
+"name": "ул. Федосеенко, 89-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 5.92,
+"load_gcal_h": 3.54,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.803914,
+"lat": 56.345045,
+"_geocode": "OSM way/240226760 у адреса улица Федосеенко, 89А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.866959,
+56.344832
+]
+},
+"properties": {
+"name": "ул. Энгельса, 1-в",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 31.04,
+"load_gcal_h": 16.92,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.866959,
+"lat": 56.344832,
+"_geocode": "OSM way/54608122 у адреса улица Энгельса, 1В",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.941199,
+56.309634
+]
+},
+"properties": {
+"name": "ул. Вольская, 15-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 9.46,
+"load_gcal_h": 3.1,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.941199,
+"lat": 56.309634,
+"_geocode": "OSM way/81159001 у адреса Вольская улица, 15А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.881392,
+56.30356
+]
+},
+"properties": {
+"name": "ул. Знаменская, 5-б",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 5.16,
+"load_gcal_h": 2.24,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.881392,
+"lat": 56.30356,
+"_geocode": "Знаменская улица, 5 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.930526,
+56.307826
+]
+},
+"properties": {
+"name": "ул. Климовская, 86-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 25.0,
+"load_gcal_h": 15.44,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.930526,
+"lat": 56.307826,
+"_geocode": "Климовская улица, 86 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.841465,
+56.307682
+]
+},
+"properties": {
+"name": "ул. Лесной городок, 6-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 33.19,
+"load_gcal_h": 17.35,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.841465,
+"lat": 56.307682,
+"_geocode": "улица Лесной Городок, 6 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.937156,
+56.322625
+]
+},
+"properties": {
+"name": "ул. Московское шоссе, 15-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 21.23,
+"load_gcal_h": 12.28,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.937156,
+"lat": 56.322625,
+"_geocode": "OSM way/180443874 у адреса Московское шоссе, 15А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.84941,
+56.286873
+]
+},
+"properties": {
+"name": "ул. Невельская, 9-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 3.39,
+"load_gcal_h": 2.09,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.84941,
+"lat": 56.286873,
+"_geocode": "Невельская улица, 9А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.864881,
+56.292881
+]
+},
+"properties": {
+"name": "ул. Путейская, 31-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 8.42,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.864881,
+"lat": 56.292881,
+"_geocode": "OSM way/42315335 у адреса Путейская улица, 31А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.952018,
+56.322851
+]
+},
+"properties": {
+"name": "ул. Ивана Романова, 3-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 5.24,
+"load_gcal_h": 2.3,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.952018,
+"lat": 56.322851,
+"_geocode": "улица Ивана Романова, 3 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.854825,
+56.291356
+]
+},
+"properties": {
+"name": "ул. Таллинская, 15-в",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 38.78,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.854825,
+"lat": 56.291356,
+"_geocode": "Таллинская улица, 15В",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.810051,
+56.309237
+]
+},
+"properties": {
+"name": "ул. Тепличная, 8-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 8.81,
+"load_gcal_h": 4.64,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.810051,
+"lat": 56.309237,
+"_geocode": "Тепличная улица, 8А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.986264,
+56.274887
+]
+},
+"properties": {
+"name": "ул.Терешковой, 7",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 14.87,
+"load_gcal_h": 10.29,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.986264,
+"lat": 56.274887,
+"_geocode": "OSM way/173987841 у адреса улица Терешковой, 7",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.884748,
+56.312716
+]
+},
+"properties": {
+"name": "ул. Тихорецкая, 3-в",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 14.5,
+"load_gcal_h": 14.83,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.884748,
+"lat": 56.312716,
+"_geocode": "Тихорецкая улица, 3 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.939877,
+56.317604
+]
+},
+"properties": {
+"name": "ул. Чкалова, 9-г",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 19.5,
+"load_gcal_h": 11.38,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.939877,
+"lat": 56.317604,
+"_geocode": "OSM relation/2813523 у адреса улица Чкалова, 9 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.937197,
+56.288386
+]
+},
+"properties": {
+"name": "ул. Академика Баха, 4-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 80.0,
+"load_gcal_h": 66.94,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.937197,
+"lat": 56.288386,
+"_geocode": "улица Академика Баха, 4А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.926484,
+56.274248
+]
+},
+"properties": {
+"name": "ул. Геройская, 11-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 17.2,
+"load_gcal_h": 16.27,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.926484,
+"lat": 56.274248,
+"_geocode": "Геройская улица, 11А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.921749,
+56.280059
+]
+},
+"properties": {
+"name": "пр. Ленина, 51 корпус 10",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 17.45,
+"load_gcal_h": 13.11,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.921749,
+"lat": 56.280059,
+"_geocode": "OSM way/56043231 у адреса проспект Ленина, 51",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.936358,
+56.299087
+]
+},
+"properties": {
+"name": "пр. Ленина, 5-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 23.38,
+"load_gcal_h": 13.39,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.936358,
+"lat": 56.299087,
+"_geocode": "проспект Ленина, 5А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.941913,
+56.270967
+]
+},
+"properties": {
+"name": "ул. Памирская, 11",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 52.0,
+"load_gcal_h": 0.0,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.941913,
+"lat": 56.270967,
+"_geocode": "Памирская улица, 11",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.91921,
+56.291921
+]
+},
+"properties": {
+"name": "ул. Премудрова, 12-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 32.5,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.91921,
+"lat": 56.291921,
+"_geocode": "улица Премудрова, 12А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.846263,
+56.33491
+]
+},
+"properties": {
+"name": "ул. Баранова, 11",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 30.44,
+"load_gcal_h": 19.83,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.846263,
+"lat": 56.33491,
+"_geocode": "улица Баранова, 11",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.889491,
+56.316846
+]
+},
+"properties": {
+"name": "ул. Гастелло, 1-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 13.41,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.889491,
+"lat": 56.316846,
+"_geocode": "улица Николая Гастелло, 1А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.895379,
+56.317654
+]
+},
+"properties": {
+"name": "пр. Героев, 13",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 5.81,
+"load_gcal_h": 3.79,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.895379,
+"lat": 56.317654,
+"_geocode": "проспект Героев, 13",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.873649,
+56.316788
+]
+},
+"properties": {
+"name": "ул. Красных Зорь, 4-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 12.72,
+"load_gcal_h": 9.03,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.873649,
+"lat": 56.316788,
+"_geocode": "улица Красных Зорь, 4 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.855795,
+56.312311
+]
+},
+"properties": {
+"name": "ул. Металлистов, 4-б",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 3.35,
+"load_gcal_h": 2.71,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.855795,
+"lat": 56.312311,
+"_geocode": "улица Металлистов, 4Б",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.860992,
+56.314621
+]
+},
+"properties": {
+"name": "Московское шоссе, 219-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 4.73,
+"load_gcal_h": 2.63,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.860992,
+"lat": 56.314621,
+"_geocode": "OSM way/836129493 у адреса Московское шоссе, 219А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.036809,
+56.319116
+]
+},
+"properties": {
+"name": "пер. Бойновский, 9-д",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 4.74,
+"load_gcal_h": 3.83,
+"_table": "Глава 4, табл. 2.4",
+"lon": 44.036809,
+"lat": 56.319116,
+"_geocode": "OSM way/162038339 у адреса Бойновский переулок, 9 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.010662,
+56.320763
+]
+},
+"properties": {
+"name": "ул. Варварская, 15-б",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 5.0,
+"load_gcal_h": 1.41,
+"_table": "Глава 4, табл. 2.4",
+"lon": 44.010662,
+"lat": 56.320763,
+"_geocode": "Варварская улица, 15Б",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.015999,
+56.329079
+]
+},
+"properties": {
+"name": "ул. Верхне-Волжская Набережная, 7-д",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 2.0,
+"load_gcal_h": 1.09,
+"_table": "Глава 4, табл. 2.4",
+"lon": 44.015999,
+"lat": 56.329079,
+"_geocode": "Верхне-Волжская набережная, 7 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.988202,
+56.312603
+]
+},
+"properties": {
+"name": "ул. Воровского, 3",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 2.06,
+"load_gcal_h": 0.97,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.988202,
+"lat": 56.312603,
+"_geocode": "OSM way/148276486 у адреса улица Воровского, 3",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.989604,
+56.3144
+]
+},
+"properties": {
+"name": "пл. Горького, 4-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 5.88,
+"load_gcal_h": 2.51,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.989604,
+"lat": 56.3144,
+"_geocode": "OSM way/148276549 у адреса площадь Максима Горького, 4 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.980478,
+56.319282
+]
+},
+"properties": {
+"name": "ул. Гребешковский откос, 7",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 1.17,
+"load_gcal_h": 1.56,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.980478,
+"lat": 56.319282,
+"_geocode": "улица Гребешковский Откос, 7",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.046316,
+56.317536
+]
+},
+"properties": {
+"name": "ул. Донецкая, 9-в",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 15.6,
+"load_gcal_h": 8.82,
+"_table": "Глава 4, табл. 2.4",
+"lon": 44.046316,
+"lat": 56.317536,
+"_geocode": "Донецкая улица, 9В",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.988202,
+56.312603
+]
+},
+"properties": {
+"name": "ул. Горького, 65-д",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 6.45,
+"load_gcal_h": 3.06,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.988202,
+"lat": 56.312603,
+"_geocode": "OSM way/148276486 у адреса улица Максима Горького, 65Д",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.007186,
+56.329578
+]
+},
+"properties": {
+"name": "ул. Минина, 1",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 4.24,
+"load_gcal_h": 1.96,
+"_table": "Глава 4, табл. 2.4",
+"lon": 44.007186,
+"lat": 56.329578,
+"_geocode": "OSM way/150852654 у адреса улица Минина, 1",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.998866,
+56.331247
+]
+},
+"properties": {
+"name": "ул. Нижне-Волжская набережная, 2-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 4.3,
+"load_gcal_h": 1.36,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.998866,
+"lat": 56.331247,
+"_geocode": "Нижне-Волжская набережная, 2 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.044341,
+56.319954
+]
+},
+"properties": {
+"name": "ул. Радужная, 2-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 4.77,
+"load_gcal_h": 2.84,
+"_table": "Глава 4, табл. 2.4",
+"lon": 44.044341,
+"lat": 56.319954,
+"_geocode": "OSM way/53095840 у адреса Радужная улица, 2А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.977929,
+56.320669
+]
+},
+"properties": {
+"name": "ул. Соревнования, 4-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 1.17,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.977929,
+"lat": 56.320669,
+"_geocode": "улица Соревнования, 4А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.988381,
+56.324125
+]
+},
+"properties": {
+"name": "ул. Суетинская, 21",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 14.44,
+"load_gcal_h": 6.24,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.988381,
+"lat": 56.324125,
+"_geocode": "OSM way/147129160 у адреса Суетинская улица, 21",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.025492,
+56.32231
+]
+},
+"properties": {
+"name": "ул. Ульянова, 47",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 0.54,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.4",
+"lon": 44.025492,
+"lat": 56.32231,
+"_geocode": "улица Ульянова, 47",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.976928,
+56.319189
+]
+},
+"properties": {
+"name": "ул. Ярославская, 23",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 0.28,
+"load_gcal_h": 0.12,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.976928,
+"lat": 56.319189,
+"_geocode": "Ярославская улица, 23",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.000342,
+56.266085
+]
+},
+"properties": {
+"name": "Анкудиновское шоссе, 24",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 6.36,
+"load_gcal_h": 4.41,
+"_table": "Глава 4, табл. 2.4",
+"lon": 44.000342,
+"lat": 56.266085,
+"_geocode": "OSM way/173656998 у адреса Анкудиновское шоссе, 24",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.989803,
+56.270648
+]
+},
+"properties": {
+"name": "Анкудиновское шоссе, 3-б",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 13.33,
+"load_gcal_h": 5.54,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.989803,
+"lat": 56.270648,
+"_geocode": "OSM way/162010412 у адреса Анкудиновское шоссе, 3Б",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.956936,
+56.231392
+]
+},
+"properties": {
+"name": "ул. Военных комиссаров, 9",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 29.75,
+"load_gcal_h": 20.91,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.956936,
+"lat": 56.231392,
+"_geocode": "улица Военных Комиссаров, 9",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.973534,
+56.259427
+]
+},
+"properties": {
+"name": "пр. Гагарина, 156",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 4.64,
+"load_gcal_h": 3.25,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.973534,
+"lat": 56.259427,
+"_geocode": "проспект Гагарина, 156",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.969678,
+56.24539
+]
+},
+"properties": {
+"name": "пр. Гагарина, 178-б",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 73.0,
+"load_gcal_h": 36.16,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.969678,
+"lat": 56.24539,
+"_geocode": "проспект Гагарина, 178Б",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.965606,
+56.235132
+]
+},
+"properties": {
+"name": "ул. Голованова, 25-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 31.9,
+"load_gcal_h": 21.39,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.965606,
+"lat": 56.235132,
+"_geocode": "OSM way/1530196327 у адреса улица Маршала Голованова, 25А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.981479,
+56.257312
+]
+},
+"properties": {
+"name": "ул. Горная, 13-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 19.59,
+"load_gcal_h": 13.3,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.981479,
+"lat": 56.257312,
+"_geocode": "Горная улица, 13А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.988166,
+56.262792
+]
+},
+"properties": {
+"name": "ул. Радистов, 24",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 7.22,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.988166,
+"lat": 56.262792,
+"_geocode": "OSM way/160659964 у адреса улица Радистов, 24",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.944309,
+56.240633
+]
+},
+"properties": {
+"name": "ул. Тропинина, 13-б",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 1.96,
+"load_gcal_h": 0.18,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.944309,
+"lat": 56.240633,
+"_geocode": "улица Тропинина, 13Б",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.030734,
+56.287581
+]
+},
+"properties": {
+"name": "ул. Ванеева, 209-б",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 19.5,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.4",
+"lon": 44.030734,
+"lat": 56.287581,
+"_geocode": "OSM way/161202176 у адреса улица Ванеева, 209 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.980947,
+56.294936
+]
+},
+"properties": {
+"name": "пр. Гагарина, 25-е",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 12.6,
+"load_gcal_h": 5.22,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.980947,
+"lat": 56.294936,
+"_geocode": "проспект Гагарина, 25 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.037767,
+56.312449
+]
+},
+"properties": {
+"name": "пер. Звенигородский, 8-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 3.18,
+"load_gcal_h": 2.04,
+"_table": "Глава 4, табл. 2.4",
+"lon": 44.037767,
+"lat": 56.312449,
+"_geocode": "Звенигородский переулок, 8А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.035461,
+56.310981
+]
+},
+"properties": {
+"name": "ул. Бориса Панина, 19-б",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 3.04,
+"load_gcal_h": 2.21,
+"_table": "Глава 4, табл. 2.4",
+"lon": 44.035461,
+"lat": 56.310981,
+"_geocode": "улица Бориса Панина, 19Б",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.035187,
+56.31405
+]
+},
+"properties": {
+"name": "ул. Республиканская, 47-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 2.71,
+"load_gcal_h": 1.04,
+"_table": "Глава 4, табл. 2.4",
+"lon": 44.035187,
+"lat": 56.31405,
+"_geocode": "Республиканская улица, 47А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.995893,
+56.302571
+]
+},
+"properties": {
+"name": "\"НТЦ\", ул. Ветеринарная, 5",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 700.0,
+"load_gcal_h": 566.65,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.995893,
+"lat": 56.302571,
+"_geocode": "OSM way/155408821 у адреса Ветеринарная улица, 5",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.928305,
+56.300998
+]
+},
+"properties": {
+"name": "ул. Чонгарская, 43-а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 1.11,
+"load_gcal_h": 0.48,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.928305,
+"lat": 56.300998,
+"_geocode": "Чонгарская улица, 43А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.617331,
+56.34162
+]
+},
+"properties": {
+"name": "Березовая пойма, ул. Чернореченская, 1 к.1",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 3.9,
+"load_gcal_h": 1.7,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.617331,
+"lat": 56.34162,
+"_geocode": "Чернореченская улица, 1 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.087595,
+56.283825
+]
+},
+"properties": {
+"name": "Казанское шоссе, д. 12",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 24.9,
+"load_gcal_h": 8.75,
+"_table": "Глава 4, табл. 2.4",
+"lon": 44.087595,
+"lat": 56.283825,
+"_geocode": "Казанское шоссе, 12",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.935436,
+56.276826
+]
+},
+"properties": {
+"name": "Космонавта Комарова д. 2Е",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 2.15,
+"load_gcal_h": 1.05,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.935436,
+"lat": 56.276826,
+"_geocode": "улица Космонавта Комарова, 2 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.937489,
+56.277794
+]
+},
+"properties": {
+"name": "Арктическая, 20",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 2.15,
+"load_gcal_h": 0.81,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.937489,
+"lat": 56.277794,
+"_geocode": "Арктическая улица, 20",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.025136,
+56.268254
+]
+},
+"properties": {
+"name": "ул. Академика Сахарова, 4а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 2.28,
+"load_gcal_h": 1.51,
+"_table": "Глава 4, табл. 2.4",
+"lon": 44.025136,
+"lat": 56.268254,
+"_geocode": "улица Академика Сахарова, 4 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.830447,
+56.34248
+]
+},
+"properties": {
+"name": "ул. Федосеенко, 4а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 1.62,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.830447,
+"lat": 56.34248,
+"_geocode": "улица Федосеенко, 4 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.904781,
+56.211703
+]
+},
+"properties": {
+"name": "Пос. Новинки, ул. Дорожная, 5/1",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 16.0,
+"load_gcal_h": 8.25,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.904781,
+"lat": 56.211703,
+"_geocode": "2-я Дорожная улица, 5",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.876394,
+56.199743
+]
+},
+"properties": {
+"name": "ул. Полевая, 8а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 2.37,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.876394,
+"lat": 56.199743,
+"_geocode": "Полевая улица, 8А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.8776,
+56.201269
+]
+},
+"properties": {
+"name": "Пос. Новинки, ул.Полевая, 2в",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 2.67,
+"load_gcal_h": 1.26,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.8776,
+"lat": 56.201269,
+"_geocode": "Полевая улица, 2 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.99991,
+56.249369
+]
+},
+"properties": {
+"name": "Пос. Новинки, ул.Ботаническая, 9а",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 0.62,
+"load_gcal_h": 0.36,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.99991,
+"lat": 56.249369,
+"_geocode": "Ботаническая улица, 9 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.032881,
+56.323445
+]
+},
+"properties": {
+"name": "Минина ул, 43а \"ул. Минина, д. 43А\"",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 3.38,
+"load_gcal_h": 1.56,
+"_table": "Глава 4, табл. 2.4",
+"lon": 44.032881,
+"lat": 56.323445,
+"_geocode": "улица Минина, 43А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.98047,
+56.317624
+]
+},
+"properties": {
+"name": "Ярославская ул, 8а \"ул. Ярославская, д.8А\"",
+"org": "АО «Теплоэнерго»",
+"capacity_gcal_h": 0.84,
+"load_gcal_h": 0.37,
+"_table": "Глава 4, табл. 2.4",
+"lon": 43.98047,
+"lat": 56.317624,
+"_geocode": "Ярославская улица, 8А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.071293,
+56.304912
+]
+},
+"properties": {
+"name": "Деловая, 14, ООО «Нижновтеплоэнерго»",
+"org": "ООО «Нижновтеплоэнерго»",
+"capacity_gcal_h": 120.0,
+"load_gcal_h": 79.12,
+"_table": "Глава 4, табл. 2.5",
+"lon": 44.071293,
+"lat": 56.304912,
+"_geocode": "Деловая улица, 14",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.084677,
+56.304298
+]
+},
+"properties": {
+"name": "Родионова, 194б, ООО «Нижновтеплоэнерго»",
+"org": "ООО «Нижновтеплоэнерго»",
+"capacity_gcal_h": 132.6,
+"load_gcal_h": 129.99,
+"_table": "Глава 4, табл. 2.5",
+"lon": 44.084677,
+"lat": 56.304298,
+"_geocode": "улица Родионова, 194Б",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.907078,
+56.309599
+]
+},
+"properties": {
+"name": "Московское шоссе, д. 52, \"СТН-Энергосети\"",
+"org": "прочие",
+"capacity_gcal_h": 21.66,
+"load_gcal_h": 20.57,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.907078,
+"lat": 56.309599,
+"_geocode": "Московское шоссе, 52",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.95149,
+56.338545
+]
+},
+"properties": {
+"name": "К. Маркса, д. 60 Б, К. Маркса, д. 42 а, \"СТН-Энергосети\"",
+"org": "прочие",
+"capacity_gcal_h": 40.42,
+"load_gcal_h": 30.49,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.95149,
+"lat": 56.338545,
+"_geocode": "OSM relation/7661698 у адреса улица Карла Маркса, 60Б",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.01143,
+56.262494
+]
+},
+"properties": {
+"name": "Цветочная, д. 3в, \"СТН-Энергосети\"",
+"org": "прочие",
+"capacity_gcal_h": 51.6,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.5",
+"lon": 44.01143,
+"lat": 56.262494,
+"_geocode": "Цветочная улица, 3В",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.044425,
+56.294923
+]
+},
+"properties": {
+"name": "ул. Богородского, д. 6В, ООО \"СТН-Энергосети\" до 27.09.2023",
+"org": "прочие",
+"capacity_gcal_h": 7.86,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.5",
+"lon": 44.044425,
+"lat": 56.294923,
+"_geocode": "улица Богородского, 6 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.82176,
+56.211163
+]
+},
+"properties": {
+"name": "ул. Ореховская, 15 к.1, ООО \"СТН-Энергосети\"",
+"org": "прочие",
+"capacity_gcal_h": 1.34,
+"load_gcal_h": 1.0,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.82176,
+"lat": 56.211163,
+"_geocode": "Ореховская улица, 15 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.88086,
+56.302206
+]
+},
+"properties": {
+"name": "Электровозная, д. 8А, ОАО ВВПКП Оборонкомплекс,",
+"org": "прочие",
+"capacity_gcal_h": 6.1,
+"load_gcal_h": 4.22,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.88086,
+"lat": 56.302206,
+"_geocode": "Электровозная улица, 8А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.857226,
+56.362915
+]
+},
+"properties": {
+"name": "Свободы, д. 95 в/г 64, ЭРТ№4,",
+"org": "прочие",
+"capacity_gcal_h": 2.52,
+"load_gcal_h": 0.93,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.857226,
+"lat": 56.362915,
+"_geocode": "улица Свободы, 95 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.968051,
+56.253778
+]
+},
+"properties": {
+"name": "Гагарина, д. 37, ПАО НИТЕЛ,",
+"org": "прочие",
+"capacity_gcal_h": 39.18,
+"load_gcal_h": 24.8,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.968051,
+"lat": 56.253778,
+"_geocode": "проспект Гагарина, 37",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.819192,
+56.34172
+]
+},
+"properties": {
+"name": "Федосеенко, д. 44а, ОАО Железобетонстрой № 5,",
+"org": "прочие",
+"capacity_gcal_h": 13.6,
+"load_gcal_h": 7.55,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.819192,
+"lat": 56.34172,
+"_geocode": "улица Федосеенко, 44А",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.795092,
+56.36675
+]
+},
+"properties": {
+"name": "Зайцева, 31в, ООО \"КСК\"",
+"org": "прочие",
+"capacity_gcal_h": 141.65,
+"load_gcal_h": 70.65,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.795092,
+"lat": 56.36675,
+"_geocode": "улица Зайцева, 31 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.849428,
+56.329059
+]
+},
+"properties": {
+"name": "Котельная №1,Чаадаева, д. 10в, ОАО Нижегородский авиастроительный завод Сокол,",
+"org": "прочие",
+"capacity_gcal_h": 82.05,
+"load_gcal_h": 33.28,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.849428,
+"lat": 56.329059,
+"_geocode": "улица Чаадаева, 10 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.055754,
+56.311019
+]
+},
+"properties": {
+"name": "Яблоневая, д. 18, ООО Высоковский кирпичный завод+,",
+"org": "прочие",
+"capacity_gcal_h": 6.0,
+"load_gcal_h": 2.77,
+"_table": "Глава 4, табл. 2.5",
+"lon": 44.055754,
+"lat": 56.311019,
+"_geocode": "Яблоневая улица, 18",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.971964,
+56.317513
+]
+},
+"properties": {
+"name": "Гаршина, д. 40, ООО НКХП-Девелопмент,",
+"org": "прочие",
+"capacity_gcal_h": 7.39,
+"load_gcal_h": null,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.971964,
+"lat": 56.317513,
+"_geocode": "улица Гаршина, 40",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.870619,
+56.167225
+]
+},
+"properties": {
+"name": "Заводская, д.19, ФГУП НПП Полет,",
+"org": "прочие",
+"capacity_gcal_h": 48.31,
+"load_gcal_h": 38.66,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.870619,
+"lat": 56.167225,
+"_geocode": "Заводская улица, 19",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.968188,
+56.249436
+]
+},
+"properties": {
+"name": "Гагарина, д. 174, ОАО ННПО имени М.В.Фрунзе,",
+"org": "прочие",
+"capacity_gcal_h": 83.33,
+"load_gcal_h": 18.21,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.968188,
+"lat": 56.249436,
+"_geocode": "проспект Гагарина, 174",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.078346,
+56.310244
+]
+},
+"properties": {
+"name": "Родионова, д. 190 , Нижегородская областная Клиническая больница им. Н.А. Семашко,",
+"org": "прочие",
+"capacity_gcal_h": 14.4,
+"load_gcal_h": 12.9,
+"_table": "Глава 4, табл. 2.5",
+"lon": 44.078346,
+"lat": 56.310244,
+"_geocode": "улица Родионова, 190",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.017258,
+56.311079
+]
+},
+"properties": {
+"name": "Ошарская, д. 76, ЗАО Механический завод РИЛС,",
+"org": "прочие",
+"capacity_gcal_h": 1.7,
+"load_gcal_h": 0.05,
+"_table": "Глава 4, табл. 2.5",
+"lon": 44.017258,
+"lat": 56.311079,
+"_geocode": "Ошарская улица, 76",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.001207,
+56.318353
+]
+},
+"properties": {
+"name": "Студенческая, д. 6 , ГБПОУ «Нижегородский радиотехнический колледж»,",
+"org": "ГБПОУ «Нижегородский радиотехнический колледж»",
+"capacity_gcal_h": 2.25,
+"load_gcal_h": 1.41,
+"_table": "Глава 4, табл. 2.5",
+"lon": 44.001207,
+"lat": 56.318353,
+"_geocode": "Студёная улица, 6",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.796077,
+56.383648
+]
+},
+"properties": {
+"name": "Котельная НПАП - филиал ГП НО «Нижегородпассажиравтотранс» - КИМа ул., 335",
+"org": "прочие",
+"capacity_gcal_h": 8.2,
+"load_gcal_h": 4.96,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.796077,
+"lat": 56.383648,
+"_geocode": "улица Кима, 335",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.903782,
+56.272943
+]
+},
+"properties": {
+"name": "Северная, Новикова-Прибоя, д.18, ООО «Генерация тепла»",
+"org": "ООО «Генерация тепла»",
+"capacity_gcal_h": 239.96,
+"load_gcal_h": 91.65,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.903782,
+"lat": 56.272943,
+"_geocode": "улица Новикова-Прибоя, 18",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.940276,
+56.281586
+]
+},
+"properties": {
+"name": "Профинтерна,7б, ООО «Генерация тепла»",
+"org": "ООО «Генерация тепла»",
+"capacity_gcal_h": 1.32,
+"load_gcal_h": 0.46,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.940276,
+"lat": 56.281586,
+"_geocode": "улица Профинтерна, 7Б",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.830407,
+56.230926
+]
+},
+"properties": {
+"name": "Мончегорская, 11г, ООО «Генерация тепла»",
+"org": "ООО «Генерация тепла»",
+"capacity_gcal_h": 10.36,
+"load_gcal_h": 7.29,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.830407,
+"lat": 56.230926,
+"_geocode": "OSM relation/2298479 у адреса Мончегорская улица, 11 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.762197,
+56.388731
+]
+},
+"properties": {
+"name": "Школа №114, пос.Стригино, Земляничная, 1б, ООО «Генерация тепла»",
+"org": "ООО «Генерация тепла»",
+"capacity_gcal_h": 0.48,
+"load_gcal_h": 0.19,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.762197,
+"lat": 56.388731,
+"_geocode": "улица Землячки, 1 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.848958,
+56.318972
+]
+},
+"properties": {
+"name": "Котельная №4,Чаадаева, д. 1, ОАО Нижегородский авиастроительный завод Сокол,",
+"org": "прочие",
+"capacity_gcal_h": 37.0,
+"load_gcal_h": 11.57,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.848958,
+"lat": 56.318972,
+"_geocode": "улица Чаадаева, 1",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.060392,
+56.317847
+]
+},
+"properties": {
+"name": "Котельная ООО \"Энергосервис\", ул. Родионова, д. 23",
+"org": "прочие",
+"capacity_gcal_h": 1.12,
+"load_gcal_h": 0.75,
+"_table": "Глава 4, табл. 2.5",
+"lon": 44.060392,
+"lat": 56.317847,
+"_geocode": "улица Родионова, 23",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.909729,
+56.264139
+]
+},
+"properties": {
+"name": "Котельная ООО \"Технологика\", пр-т Ленина, д.85Б",
+"org": "прочие",
+"capacity_gcal_h": 4.11,
+"load_gcal_h": 3.67,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.909729,
+"lat": 56.264139,
+"_geocode": "проспект Ленина, 85 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.980088,
+56.314789
+]
+},
+"properties": {
+"name": "Большие Овраги ул, 21Б \"Большие Овраги ул, 21Б\" (с января 2024)",
+"org": "прочие",
+"capacity_gcal_h": 2.22,
+"load_gcal_h": 1.57,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.980088,
+"lat": 56.314789,
+"_geocode": "OSM way/149028629 у адреса улица Большие Овраги, 21 (по дому без литеры)",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+44.051142,
+56.27037
+]
+},
+"properties": {
+"name": "ул. Вечерняя, 71, ООО «СТН-Энергосети»",
+"org": "ООО «СТН-Энергосети»",
+"capacity_gcal_h": 43.54,
+"load_gcal_h": 45.58,
+"_table": "Глава 4, табл. 2.5",
+"lon": 44.051142,
+"lat": 56.27037,
+"_geocode": "OSM way/682774688 у адреса Вечерняя улица, 71",
+"_source": "scheme"
+}
+},
+{
+"type": "Feature",
+"geometry": {
+"type": "Point",
+"coordinates": [
+43.838369,
+56.362821
+]
+},
+"properties": {
+"name": "Котельные 2 шт. по ул. Ударная ООО \"Старт-Строй\"",
+"org": "прочие",
+"capacity_gcal_h": 3.0,
+"load_gcal_h": 2.21,
+"_table": "Глава 4, табл. 2.5",
+"lon": 43.838369,
+"lat": 56.362821,
+"_geocode": "Котельный переулок, 2",
+"_source": "scheme"
+}
+}
+]
+}
