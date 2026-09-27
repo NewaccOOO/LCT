@@ -84,6 +84,8 @@ public class GeoJsonStreamReader {
     private static final String HEAT_NETWORK = "heat_network";
     private static final String HEAT_CHAMBER = "heat_chamber";
     private static final String OKS_FUTURE = "oks_future";
+    /** Полигон oks_future — ещё и препятствие (здание ОКС); heatnet.future.obstacle=false — как в v0.9.0. */
+    private static final boolean FUTURE_OBSTACLE = Boolean.parseBoolean(System.getProperty("heatnet.future.obstacle", "true"));
     private static final String CONNECTION_POINT = "oks_connection_point";
     private static final String OKS_EXISTING = "oks_existing";
     private static final String RESTRICTION = "restriction";
@@ -560,6 +562,18 @@ public class GeoJsonStreamReader {
             List<ConnectionPoint> points = new ArrayList<>(connectionPoints);
             List<ExistingOks> existing = new ArrayList<>(existingOks);
             consumers(future, points, existing);
+            if (FUTURE_OBSTACLE) {
+                // приложение 18.09, п. 2.2: все полигоны ОКС — препятствия, и здание с точкой тоже. Полигон oks_future
+                // формата раздела 12 становится зданием; тот же объект геометрии делает его «своим» зданием точки
+                // (VariantEnumerator.buildings). Здания точек формата датасета уже в existing
+                Set<Geometry> known = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+                existing.forEach(oks -> known.add(oks.getGeometry()));
+                for (FutureOks oks : future) {
+                    if (oks.getGeometry().getDimension() == 2 && known.add(oks.getGeometry())) {
+                        existing.add(new ExistingOks(oks.getId(), oks.getGeometry()));
+                    }
+                }
+            }
             unknownRestrictionTypes.forEach((type, count) -> warnings.add(unknownTypeWarning(type, count)));
             return new InputData(List.copyOf(sourcePoints), segments, chambers, future, points, existing, restrictions,
                     diagnostics, warnings, numericIds);
