@@ -21,9 +21,12 @@ import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.index.strtree.STRtree;
 import org.locationtech.jts.linearref.LengthIndexedLine;
 import ru.lct.heatnet.model.Chamber;
+import ru.lct.heatnet.model.ExistingOks;
 import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.NetworkSegment;
+import ru.lct.heatnet.model.Restriction;
 import ru.lct.heatnet.rules.ChamberRule;
+import ru.lct.heatnet.rules.RestrictionRule;
 import ru.lct.heatnet.rules.Rules;
 
 /**
@@ -76,6 +79,17 @@ final class TieInFinder {
     /** Буфер margin_m полигона спецпрохода; строится при первой трубе рядом. */
     private final Map<SpecialObjects.Special, Geometry> bandBySpecial = new ConcurrentHashMap<>();
     private final double maxMargin;
+    /**
+     * Шаг поиска места врезки вдоль трубы вне зон запрета, см. {@link #free}. Выключатель
+     * heatnet.tie.free=false — врезка у проекции, как в v0.9.0.
+     */
+    private static final double FREE_STEP_M = 0.5;
+    static final boolean FREE_TIE = Boolean.parseBoolean(System.getProperty("heatnet.tie.free", "true"));
+    /** Здания и запретные ограничения по рамке: элемент — {геометрия, тип правила}; строится при первой врезке. */
+    private volatile STRtree forbidIndex;
+    private double forbidReach;
+    /** Место врезки вне зон по трубе, Ду и месту у проекции, см. {@link #free}. */
+    private final Map<List<Object>, Double> freeByKey = new ConcurrentHashMap<>();
 
     TieInFinder(InputData input, Rules rules) {
         this(input, rules, new SpecialObjects(input, rules));
@@ -275,6 +289,13 @@ final class TieInFinder {
             return null;
         }
         double position = outside(bands(segment), Math.max(gap, Math.min(length - gap, at)), gap, length - gap);
+        if (FREE_TIE) {
+            // труба идёт по территории школы или под зданием: у проекции врезка в зоне запрета, трассы к ней нет;
+            // ближайшее по трубе место вне зон и полос спецпроходов. Те же места поиск спрашивает в каждом подмножестве
+            double from = position;
+            position = freeByKey.computeIfAbsent(List.of(segment.getId(), dn, from), key -> forbidden(indexed.extractPoint(from), dn)
+                    ? free(indexed, bands(segment), from, gap, length - gap, dn) : from);
+        }
         Point tie = factory.createPoint(indexed.extractPoint(position));
 
         ChamberRule rule = rules.chamberRule();
@@ -324,6 +345,67 @@ final class TieInFinder {
             }
         }
         return Double.isNaN(best) ? position : best;
+    }
+
+    /** Ближайшее к position место на [low, high] вне зон запрета и полос спецпроходов; нет — position. */
+    private double free(LengthIndexedLine indexed, double[][] bands, double position, double low, double high, int dn) {
+        for (double step = FREE_STEP_M; position - step >= low || position + step <= high; step += FREE_STEP_M) {
+            for (double at : new double[] {position - step, position + step}) {
+                if (low <= at && at <= high && !inBand(bands, at) && !forbidden(indexed.extractPoint(at), dn)) {
+                    return at;
+                }
+            }
+        }
+        return position;
+    }
+
+    /** Точка ближе нормы Ду dn к зданию или запретному ограничению: трасса к ней нарушила бы отступ. */
+    boolean forbidden(Coordinate c, int dn) {
+        double half = rules.diameter(dn).getWidthM() / 2;
+        STRtree index = forbidIndex();
+        Envelope window = new Envelope(c);
+        window.expandBy(forbidReach);
+        Point point = factory.createPoint(c);
+        for (Object item : index.query(window)) {
+            Object[] entry = (Object[]) item;
+            Geometry geometry = (Geometry) entry[0];
+            RestrictionRule rule = rules.restriction((String) entry[1]);
+            double limit = rule.clearanceM(dn) + half
+                    + (geometry.getDimension() == 1 && rule.getHalfWidthM() != null ? rule.getHalfWidthM() : 0);
+            if (geometry.isWithinDistance(point, limit - 1e-9)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private STRtree forbidIndex() {
+        STRtree index = forbidIndex;
+        if (index == null) {
+            synchronized (this) {
+                if (forbidIndex == null) {
+                    STRtree built = new STRtree();
+                    int maxDn = rules.diameters().get(rules.diameters().size() - 1).getDn();
+                    double reach = rules.restriction("oks_existing").clearanceM(maxDn);
+                    for (ExistingOks oks : input.getExistingOks()) {
+                        built.insert(oks.getGeometry().getEnvelopeInternal(), new Object[] {oks.getGeometry(), "oks_existing"});
+                    }
+                    for (Restriction restriction : input.getRestrictions()) {
+                        RestrictionRule rule = rules.restriction(restriction.getType());
+                        if (rule.forbid()) {
+                            built.insert(restriction.getGeometry().getEnvelopeInternal(),
+                                    new Object[] {restriction.getGeometry(), restriction.getType()});
+                            reach = Math.max(reach, rule.clearanceM(maxDn) + (rule.getHalfWidthM() == null ? 0 : rule.getHalfWidthM()));
+                        }
+                    }
+                    built.build();
+                    forbidReach = reach + rules.diameter(maxDn).getWidthM();
+                    forbidIndex = built;
+                }
+                index = forbidIndex;
+            }
+        }
+        return index;
     }
 
     private static boolean inBand(double[][] bands, double at) {
