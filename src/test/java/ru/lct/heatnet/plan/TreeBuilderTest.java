@@ -15,6 +15,7 @@ import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.LineString;
+import org.locationtech.jts.geom.util.AffineTransformation;
 import ru.lct.heatnet.graph.Router;
 import ru.lct.heatnet.model.ConnectionPoint;
 import ru.lct.heatnet.model.ExistingOks;
@@ -138,6 +139,30 @@ class TreeBuilderTest {
         Geometry inside = piece.intersection(building);
         assertEquals(1, inside.getNumGeometries(), "финальный участок входит в здание один раз: " + inside);
         assertTrue(inside.getLength() < 9, "выход через наружную стену x=150, а не сквозь двор: " + inside.getLength());
+    }
+
+    @Test
+    void branchFromBuildingAlongPipeReachesTieAtPerpendicular() {
+        // здание стеной вдоль трубы и повёрнутое на 2°: маршрут от выхода идёт почти по прямой финального участка, и
+        // поворот в выходе меньше 3° отбрасывал ветку к врезке у перпендикуляра, точка оставалась без сети (проба P1)
+        for (double deg : new double[] {0, 2}) {
+            Geometry building = AffineTransformation.rotationInstance(Math.toRadians(deg), 150, 85)
+                    .transform(PlanFixture.rect(140, 80, 160, 100));
+            PlanFixture fixture = new PlanFixture().pipe("hn-1", 0, 0, 300, 0, 300, 100, "src");
+            fixture.oks.add(new FutureOks("o-1", building, 10, 1.0));
+            fixture.connections.add(new ConnectionPoint("cp-o-1", point(150, 85), "o-1"));
+            fixture.existing.add(new ExistingOks("b-1", building));
+            InputData input = fixture.input();
+            TieInFinder finder = new TieInFinder(input, rules);
+            TieCandidate tie = finder.find(List.of(point(150, 85)), DN).get(0);
+            TreeBuilder builder = builder(input, finder, VariantEnumerator.buildings(input));
+
+            Tree tree = builder.build(new Router(input, rules, AREA, DN), DN, AREA, tie, fixture.connections);
+
+            assertTrue(tree.unconnected.isEmpty(), deg + "°: не подключена");
+            double length = tree.edges.stream().mapToDouble(edge -> edge.line.getLength()).sum();
+            assertTrue(length < 85.1, deg + "°: длина " + length);
+        }
     }
 
     @Test
