@@ -6,6 +6,9 @@ E — стоимость и сводка), строки «i» — справоч
 форма трассы (п. 5), B20 — поворот круче 90° на пути точки в камере или техническом узле (п. 2.1, разъяснение 5),
 --no-shape их отключает вместе с B8 — финальный участок не от ближайшего допустимого входа в своё здание (п. 2.2).
 B19 — финальный участок снова заходит в зону отступа своего здания или подходит в ней к другой стене (п. 2.2).
+B22 — звено короче 1 м у узла спецпрохода, когда вершину на его конце можно убрать или совместить с узлом (п. 5,
+разъяснение 6); --no-shape отключает и его.
+D11 — камера врезки в полосе margin_m дороги или трамвайных путей, хотя на трубе есть место вне полосы (разъяснение 6).
 Строка «i» у пар вариантов — доля расхождения трасс (разд. 6): варианты различны от 10 %, как у сервиса.
 """
 import itertools
@@ -81,11 +84,22 @@ TURN_STEP_M = 0.1
 TURN_MAX_M = 10.0
 BEND_STEP_DEG = 0.5
 TURN_TOLERANCE_S = 0.002
+# D11: камера врезки в трубу не стоит в полосе margin_m полигона спецпрохода (дорога, трамвайные пути), если на трубе
+# есть место вне полосы (разъяснение 6: спецпроход — один прямой участок, угол — в точке входа). Камера в полосе, если
+# до полигона меньше margin_m − BAND_TOL (буфер строится хордами); место на трубе — как у сервиса
+# (TieInFinder.pipeCandidate): не ближе к концам трубы, чем отступ до сети плюс полуширины пар и END_GAP_M, и длиной
+# больше BAND_ROOM_M
+BAND_TOL = 0.01
+BAND_ROOM_M = 0.1
+END_GAP_M = 1.0
+# B22: звено короче SHORT_PIECE_M у узла спецпрохода — нарушение, если вершину на его конце можно убрать с запасами
+# B16 или совместить с узлом: спецучасток до этой вершины выходит за полосу margin_m не больше чем на ZONE_TOL
+SHORT_PIECE_M = 1.0
 # разд. 6: варианты одинаковы, если у каждого больше 90 % длины меньшего лежит в полосе 1 м от другого
 # (VariantEnumerator.sameRoute); доля расхождения — 1 минус меньшая из этих длин, делённая на длину меньшего
 SAME_ROUTE_M = 1.0
 SAME_ROUTE_SHARE = 0.9
-# --no-shape отключает B16–B18, B20 и B21: так старые категории сверяются с прежними прогонами
+# --no-shape отключает B16–B18, B20–B22: так старые категории сверяются с прежними прогонами
 SHAPE = "--no-shape" not in sys.argv
 
 
@@ -538,6 +552,16 @@ def check_variant(inp, trees, vid, feats, rep):
                 if links <= 4:
                     rep.add("D9 новая камера в 10 м от существующей, которую можно было использовать", f"{cid} → {e} {d:.1f} м")
                     break
+            band = [f"{rt} {rid} {rg.distance(g):.2f} м" for rid, rt, rg in trees["special_near"](g, max(MARGIN.values()))
+                    if rg.geom_type.endswith("Polygon") and rg.distance(g) < MARGIN[rt] - BAND_TOL]
+            if band:
+                room = tie_room(trees, g, new_dn)
+                if room > BAND_ROOM_M:
+                    rep.add("D11 камера врезки в полосе margin_m полигона спецпрохода, на трубе есть место вне полосы",
+                            f"{cid} {band}, вне полос {room:.1f} м трубы")
+                else:
+                    rep.add("i  камера врезки в полосе margin_m полигона спецпрохода: вне полос места на трубе нет (D11)",
+                            f"{cid} {band}")
 
     # tie_in старого формата: пересчёт в правила 18.09
     ties_old = [f for f in feats if f["properties"]["object_type"] == "tie_in"]
@@ -674,12 +698,12 @@ def check_variant(inp, trees, vid, feats, rep):
             if d < FORBID.get(rt, FALLBACK) + DN[dn]["width_m"] / 2 - EPS:
                 rep.add(f"B7 {'пересекает' if d == 0 else 'ближе отступа к'} {rt}", f"{p['id']} {d:.2f} м ({rt} {rid})")
     ties = {n: node_geom(n)[0] for n in tie_nodes}
-    check_specials(trees, segs, geo, adj, kinds, ties, rep)
+    short_links = check_specials(trees, segs, geo, adj, kinds, ties, rep)
     # путь точки к месту присоединения в узле: участок ниже узла и участок к месту присоединения; в месте присоединения
     # путь новой сети кончается, направление теплоносителя в существующей сети не задано
     path_pairs = {n: [(cs, s) for _, cs in down[n]] for n, (_, s) in parent.items() if n in geo}
     if SHAPE:
-        check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pairs, inp["cps"], rep)
+        check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pairs, inp["cps"], short_links, rep)
 
     # E. стоимость участков по правилам 18.09 (без надбавки за поворот)
     seg_cost_new = 0.0
@@ -753,7 +777,7 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
     спецучастков (связные через узлы спецучастки) пересекает полигон; у линии — margin_m от точки пересечения с
     прогоном в обе стороны. Пересечение сети в точке врезки (не дальше 0,5 м от врезки) пересечением не считается."""
     if not segs:
-        return
+        return []
     sid_of = {id(s): str(s["properties"]["id"]) for s in segs}
     line_of = {id(s): geo[sid_of[id(s)]] for s in segs}
     nodes_of = {id(s): (str(s["properties"]["start_node_id"]), str(s["properties"]["end_node_id"])) for s in segs}
@@ -840,6 +864,31 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
                         rep.add("B12 спецпроход кончается внутри полосы margin_m",
                                 f"{sid_of[id(s)]} у узла {node}: {rt} {rid} в {d:.2f} м < {MARGIN[rt]}")
 
+    # B22: звенья короче SHORT_PIECE_M у узла спецпрохода и на сколько спецучасток, продолженный до вершины на их
+    # конце, вышел бы за точную полосу margin_m своих объектов (у линии — от точек пересечения прогона)
+    short_links = []
+    for node, lst in adj.items():
+        for t in (u for u in lst if u["properties"]["laying_method"] == "special" and zones[id(u)]):
+            tc = list(line_of[id(t)].coords)
+            far = tc[-1] if nodes_of[id(t)][0] == node else tc[0]
+            exact = []
+            for rt, rid in zones[id(t)]:
+                rg = obj[(rt, rid)]
+                if rg.geom_type.endswith("Polygon"):
+                    exact.append(rg.buffer(MARGIN[rt]))
+                else:
+                    exact += [x.buffer(MARGIN[rt]) for part in run_of[id(t)] for x in crossings(part, rt, rg)]
+            band = shapely.union_all(exact)
+            for s in lst:
+                if s["properties"]["laying_method"] == "special":
+                    continue
+                c = list(line_of[id(s)].coords)
+                v = c[1] if nodes_of[id(s)][0] == node else c[-2]
+                end = c[0] if nodes_of[id(s)][0] == node else c[-1]
+                if math.dist(end, v) < SHORT_PIECE_M:
+                    merged = LineString([far, v])
+                    short_links.append((s, node, t, merged.length - merged.intersection(band).length))
+
     # звенья без отступа до объекта (ключи объектов по (id участка, номер звена)): прямая от врезки до сети, которая
     # её касается, и прямое продолжение спецучастка через узел — хвост того же прямого пересечения. Прямая идёт через
     # технические узлы, пока направление не меняется больше чем на 1°
@@ -909,6 +958,7 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
         if not rest.is_empty and rest.distance(lines[j]) < 0.001:
             rep.add("B15 новые участки пересекаются или касаются вне общего узла",
                     f"{sid_of[id(a)]} и {sid_of[id(b)]} {rest.distance(lines[j]) * 1000:.1f} мм")
+    return short_links
 
 
 def signed_turn(a, b, c):
@@ -930,7 +980,7 @@ def extend_cross(p1, p2, q1, q2):
     return (p1[0] + t * d1x, p1[1] + t * d1y) if t > 0 and u > 0 else None
 
 
-def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pairs, cps, rep):
+def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pairs, cps, short_links, rep):
     """B16–B18, B20, B21: лишние вершины, двойные повороты и зигзаги внутри участка, повороты на пути точки в узлах
     и изломы у камер ветвления (п. 5, п. 2.1, разъяснение 5). B8: финальный участок не от ближайшей точки контура
     своего здания, хотя ближе есть допустимый вход, от которого звено до прежней вершины перед выходом держит те же
@@ -1249,6 +1299,30 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
     # Г. изломы у камеры ветвления: камера переносится в точку рядом, откуда у её участков меньше вершин
     index = {id(s): k for k, s in enumerate(segs)}
 
+    # B22. звено короче метра у узла спецпрохода: вершину на его конце убрать (запасы B16) или совместить с узлом,
+    # продлив спецучасток до неё не дальше ZONE_TOL за полосу
+    for s, node, t, out in short_links:
+        k = index[id(s)]
+        sid = str(s["properties"]["id"])
+        c = list(lines[k].coords)
+        start = str(s["properties"]["start_node_id"]) == node
+        i = 1 if start else len(c) - 2
+        text = f"{sid} звено {math.dist(c[i - 1 if start else i + 1], c[i]):.3f} м у {node} ({t['properties']['id']})"
+        if len(c) < 3:
+            why = "вершины нет, звено — весь участок"
+        elif sid in final_piece and tuple(c[i]) in final_piece[sid][1].coords:
+            why = "вершина — точка выхода финального участка"
+        else:
+            why = blocked(k, c[:i] + c[i + 1:], [0] if start else [len(c) - 3])
+        if why is None:
+            rep.add("B22 звено короче 1 м у узла спецпрохода: вершину можно убрать", text)
+        elif out <= ZONE_TOL:
+            rep.add("B22 звено короче 1 м у узла спецпрохода: вершину можно совместить с узлом",
+                    f"{text}, спецучасток за полосой {out:.2f} м")
+        else:
+            rep.add("i  звено короче 1 м у узла спецпрохода не убрать и не совместить (B22)",
+                    f"{text}: убрать — {why}; совместить — спецучасток за полосой {out:.2f} м > {ZONE_TOL} м")
+
     def moved_line(x, c, drop):
         """Участок c (координаты от камеры) из точки x, без первой вершины при drop; вершина с изломом меньше TURN_DEG
         уходит, как у сервиса."""
@@ -1479,6 +1553,23 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
             rep.add("B20 поворот на пути точки в камере круче 90° снимает правка у камеры", f"{text}: {fix}")
         else:
             rep.add("i  поворот на пути точки в камере круче 90° правкой у камеры не снять (B20)", f"{text}: {first}")
+
+
+def tie_room(trees, g, dn):
+    """Метров трубы под камерой g вне полос margin_m полигонов спецпрохода, где сервис может поставить врезку для
+    новой сети dn: не ближе к концам трубы, чем отступ до сети плюс полуширины пар и END_GAP_M (см. D11)."""
+    room = 0.0
+    for _, pg, pdn in trees["pipes_near_ids"](g):
+        if pg.distance(g) > NODE_TOL or pdn not in DN:
+            continue
+        gap = _TYPES["heat_network"]["clearance_m"] + DN[dn]["width_m"] / 2 + DN[pdn]["width_m"] / 2 + END_GAP_M
+        if pg.length <= 2 * gap:
+            continue
+        window = shapely.ops.substring(pg, gap, pg.length - gap)
+        band = shapely.union_all([rg.buffer(MARGIN[rt]) for _, rt, rg in trees["special_near"](window, max(MARGIN.values()))
+                                  if rg.geom_type.endswith("Polygon")])
+        room = max(room, window.difference(band).length)
+    return room
 
 
 def project_line(p, a, b):

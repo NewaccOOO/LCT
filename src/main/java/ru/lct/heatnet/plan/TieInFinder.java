@@ -9,10 +9,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.ToDoubleFunction;
 import org.locationtech.jts.algorithm.Distance;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
+import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
@@ -46,6 +48,12 @@ final class TieInFinder {
     private static final double FIRST_REACH_M = 64;
     /** Запас окна запроса к индексу: объект на самом краю не должен выпасть из-за округления. */
     private static final double WINDOW_EXTRA_M = 1.0;
+    /**
+     * Врезка, вынесенная из полосы margin_m дороги, стоит на столько дальше её границы вдоль трубы: буфер строится
+     * хордами и лежит внутри полосы на миллиметры. Спецучасток через дорогу из камеры сборка начинает в самой камере:
+     * граница полосы ближе MERGE_M.
+     */
+    private static final double BAND_EXTRA_M = 0.05;
 
     private final InputData input;
     private final Rules rules;
@@ -60,10 +68,18 @@ final class TieInFinder {
     private final Envelope segmentExtent = new Envelope();
     private final Envelope chamberExtent = new Envelope();
     private final Map<String, NetworkSegment> segmentById = new HashMap<>();
+    private final SpecialObjects specials;
+    /** Части оси трубы в полосе margin_m полигонов спецпрохода, по длине от начала оси; считаются раз на трубу. */
+    private final Map<String, double[][]> bandsBySegment = new ConcurrentHashMap<>();
 
     TieInFinder(InputData input, Rules rules) {
+        this(input, rules, new SpecialObjects(input, rules));
+    }
+
+    TieInFinder(InputData input, Rules rules, SpecialObjects specials) {
         this.input = input;
         this.rules = rules;
+        this.specials = specials;
         for (int i = 0; i < input.getSegments().size(); i++) {
             NetworkSegment segment = input.getSegments().get(i);
             segmentIndex.insert(segment.getGeometry().getEnvelopeInternal(), i);
@@ -226,7 +242,7 @@ final class TieInFinder {
         if (length <= 2 * gap) {
             return null;
         }
-        double position = Math.max(gap, Math.min(length - gap, at));
+        double position = outside(bands(segment), Math.max(gap, Math.min(length - gap, at)), gap, length - gap);
         Point tie = factory.createPoint(indexed.extractPoint(position));
 
         ChamberRule rule = rules.chamberRule();
@@ -255,6 +271,58 @@ final class TieInFinder {
             return null;
         }
         return new TieCandidate(segment.getId(), TieCandidate.HEAT_NETWORK, segment.getDiameter(), tie, touching, capacity);
+    }
+
+    /**
+     * Разъяснение 6: спецпроход — один прямой участок, угол проверяется в точке входа. Камера врезки в полосе margin_m
+     * дороги или трамвайных путей начинала бы спецучастки внутри неё, поэтому врезка переносится вдоль трубы за
+     * ближайшую границу полосы в пределах [low, high]. Места вне полос на трубе нет — точка остаётся.
+     */
+    static double outside(double[][] bands, double position, double low, double high) {
+        if (!inBand(bands, position)) {
+            return position;
+        }
+        double best = Double.NaN;
+        for (double[] band : bands) {
+            for (double at : new double[] {band[0] - BAND_EXTRA_M, band[1] + BAND_EXTRA_M}) {
+                if (low <= at && at <= high && !inBand(bands, at)
+                        && (Double.isNaN(best) || Math.abs(at - position) < Math.abs(best - position))) {
+                    best = at;
+                }
+            }
+        }
+        return Double.isNaN(best) ? position : best;
+    }
+
+    private static boolean inBand(double[][] bands, double at) {
+        for (double[] band : bands) {
+            if (band[0] < at && at < band[1]) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Части оси участка в буфере margin_m полигонов спецпрохода: [от, до] по длине оси. */
+    private double[][] bands(NetworkSegment segment) {
+        return bandsBySegment.computeIfAbsent(segment.getId(), id -> {
+            LineString line = segment.getGeometry();
+            LengthIndexedLine indexed = new LengthIndexedLine(line);
+            List<double[]> result = new ArrayList<>();
+            for (SpecialObjects.Special special : specials.zonesNear(line.getEnvelopeInternal())) {
+                if (!special.polygon || !special.bufferedPrepared.intersects(line)) {
+                    continue;
+                }
+                Geometry inside = special.buffered.intersection(line);
+                for (int i = 0; i < inside.getNumGeometries(); i++) {
+                    Coordinate[] c = inside.getGeometryN(i).getCoordinates();
+                    double a = indexed.indexOf(c[0]);
+                    double b = indexed.indexOf(c[c.length - 1]);
+                    result.add(new double[] {Math.min(a, b), Math.max(a, b)});
+                }
+            }
+            return result.toArray(new double[0][]);
+        });
     }
 
     private static boolean same(TieCandidate a, TieCandidate b) {

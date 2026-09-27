@@ -407,7 +407,11 @@ public final class VariantEnumerator {
     }
 
     public VariantEnumerator(InputData input, Rules rules) {
-        this(input, rules, new TieInFinder(input, rules), new ObstacleIndex(input, rules), new SpecialObjects(input, rules),
+        this(input, rules, new SpecialObjects(input, rules));
+    }
+
+    private VariantEnumerator(InputData input, Rules rules, SpecialObjects specials) {
+        this(input, rules, new TieInFinder(input, rules, specials), new ObstacleIndex(input, rules), specials,
                 buildings(input), RouteCache.DEFAULT_MB, false);
     }
 

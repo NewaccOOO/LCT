@@ -95,6 +95,30 @@ class TieInFinderTest {
     }
 
     @Test
+    void pipeTieInLeavesRoadBandTowardNearestEdge() {
+        // дорога x 295..310 поперёк hn-2, её полоса 3 м — x 292..313; проекция (300, 60) в полосе
+        TieInFinder finder = new TieInFinder(PlanFixture.trunk()
+                .restriction("road-1", PlanFixture.rect(295, -20, 310, 20), "road").input(), rules);
+
+        TieCandidate pipe = finder.find(List.of(point(300, 60)), DN).stream()
+                .filter(c -> c.getExistingObjectId().equals("hn-2")).findFirst().orElseThrow();
+
+        assertEquals(291.95, pipe.getPoint().getX(), 1e-6);
+        assertEquals(0, pipe.getPoint().getY(), 1e-6);
+    }
+
+    @Test
+    void pipeTieInStaysInBandWithoutRoomOutside() {
+        TieInFinder finder = new TieInFinder(PlanFixture.trunk()
+                .restriction("road-1", PlanFixture.rect(190, -20, 410, 20), "road").input(), rules);
+
+        TieCandidate pipe = finder.find(List.of(point(300, 60)), DN).stream()
+                .filter(c -> c.getExistingObjectId().equals("hn-2")).findFirst().orElseThrow();
+
+        assertEquals(300, pipe.getPoint().getX(), 1e-6);
+    }
+
+    @Test
     void nearestByWindowMatchesFullSort() {
         // решётка даёт равные расстояния, их порядок — порядок входа; точки и линии вперемешку, далеко и близко
         Random random = new Random(11);
