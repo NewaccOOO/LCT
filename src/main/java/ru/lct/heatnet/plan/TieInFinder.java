@@ -69,6 +69,7 @@ final class TieInFinder {
     private final Envelope segmentExtent = new Envelope();
     private final Envelope chamberExtent = new Envelope();
     private final Map<String, NetworkSegment> segmentById = new HashMap<>();
+    private final Map<String, Chamber> chamberById = new HashMap<>();
     private final SpecialObjects specials;
     /** Части оси трубы в полосе margin_m полигонов спецпрохода, по длине от начала оси; считаются раз на трубу. */
     private final Map<String, double[][]> bandsBySegment = new ConcurrentHashMap<>();
@@ -100,6 +101,7 @@ final class TieInFinder {
         chamberIndex.build();
         for (Chamber chamber : input.getChambers()) {
             linksByChamber.put(chamber.getId(), links(chamber).size());
+            chamberById.put(chamber.getId(), chamber);
         }
     }
 
@@ -202,10 +204,35 @@ final class TieInFinder {
                 touching(chamber.getGeometry()), capacity);
     }
 
-    /** Врезка у проекции точки на участок врезки tie в трубу, как у {@link #find}; null — участок не подходит. */
-    TieCandidate onSamePipe(TieCandidate tie, Point point, int dn) {
-        NetworkSegment segment = segmentById.get(tie.getExistingObjectId());
-        return segment == null ? null : pipeCandidate(segment, point, dn);
+    /**
+     * Врезки у проекции точки на участки узла врезки tie, как у {@link #find}: на трубу врезки или на трубы камеры
+     * врезки. Проекцию ближе max_dist_m к камере со свободным местом {@link #pipeCandidate} отдаёт камере, и тогда
+     * пробуется ещё новая камера сразу за этим пределом вдоль оси: приложение 18.09, п. 2.4 обязывает врезаться в
+     * камеру только ближе, а новая камера на трубе Ду до 200 дешевле врезки в существующую.
+     */
+    List<TieCandidate> ownPipes(TieCandidate tie, Point point, int dn) {
+        Chamber own = tie.isChamber() ? chamberById.get(tie.getExistingObjectId()) : null;
+        NetworkSegment pipe = tie.isChamber() ? null : segmentById.get(tie.getExistingObjectId());
+        List<NetworkSegment> segments = own != null ? links(own) : pipe != null ? List.of(pipe) : List.of();
+        List<TieCandidate> result = new ArrayList<>();
+        for (NetworkSegment segment : segments) {
+            TieCandidate candidate = pipeCandidate(segment, point, dn);
+            if (candidate == null) {
+                continue;
+            }
+            result.add(candidate);
+            if (candidate.isChamber()) {
+                LengthIndexedLine indexed = new LengthIndexedLine(segment.getGeometry());
+                double at = indexed.project(point.getCoordinate());
+                double chamber = indexed.project(chamberById.get(candidate.getExistingObjectId()).getGeometry().getCoordinate());
+                double beyond = rules.chamberRule().getMaxDistM() + 2 * DIST_MARGIN_M;
+                TieCandidate free = pipeCandidate(segment, at < chamber ? chamber - beyond : chamber + beyond, dn);
+                if (free != null && !free.isChamber()) {
+                    result.add(free);
+                }
+            }
+        }
+        return result;
     }
 
     /** Врезка на участке врезки tie в трубу в shift м вдоль оси от проекции point; null — участок не подходит. */

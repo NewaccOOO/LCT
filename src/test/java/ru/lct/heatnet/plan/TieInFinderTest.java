@@ -37,6 +37,21 @@ class TieInFinderTest {
     }
 
     @Test
+    void chamberTieAlsoGetsNewChamberJustBeyondMaxDistOnItsPipes() {
+        // проекция (205, 40) на hn-2 в 5 м от hc-1 отдаётся камере; на трубах камеры пробуется и новая камера за
+        // max_dist_m от неё: п. 2.4 обязывает врезаться в камеру только ближе, а новая камера дешевле врезки
+        TieInFinder finder = new TieInFinder(PlanFixture.trunk().input(), rules);
+        TieCandidate chamber = finder.find(List.of(point(205, 40)), DN).stream().filter(TieCandidate::isChamber)
+                .findFirst().orElseThrow();
+
+        List<TieCandidate> own = finder.ownPipes(chamber, point(205, 40), DN);
+
+        double beyond = rules.chamberRule().getMaxDistM() + 0.2;
+        assertTrue(own.stream().anyMatch(c -> !c.isChamber() && c.getExistingObjectId().equals("hn-2")
+                && c.getPoint().distance(point(200 + beyond, 0)) < 1e-6), "новая камера на hn-2: " + own);
+    }
+
+    @Test
     void chamberWithFourSegmentsKeepsPipeTieInNearIt() {
         PlanFixture fixture = PlanFixture.trunk()
                 .pipe("hn-4", 200, 0, 200, 150, DN, 10, "hc-1")

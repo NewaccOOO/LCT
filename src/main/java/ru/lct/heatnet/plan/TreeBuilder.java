@@ -62,6 +62,11 @@ final class TreeBuilder {
     private static final double SHIFT_STEP_M = 0.5;
     /** Точка на прямой звена — ближе LINE_TOL_M. */
     private static final double LINE_TOL_M = 1e-6;
+    /**
+     * Выход из здания на прямой от точки к следующей вершине ветки — ближе ON_LINE_M, см. {@link Run#throughExit}:
+     * точка и выход прошли пересчёт из градусов, и на прямой они расходятся на тысячные доли миллиметра.
+     */
+    private static final double ON_LINE_M = 1e-3;
     /** Мелкий излом пути точки в камере — поворот от MIN_TURN_DEG до SMALL_BEND_DEG, см. {@link #unkinks}; у B21 тот же. */
     private static final double SMALL_BEND_DEG = 30;
     /** Годных переносов одной камеры, которые {@link #unkinks} отдаёт на проверку по S узла. */
@@ -1058,7 +1063,7 @@ final class TreeBuilder {
                 Coordinate target, Set<String> firstIgnored, Router branchRouter) {
             ObstacleSet zones = branchRouter.obstacles();
             for (Spot spot : spots) {
-                Coordinate[] branch = branch(head, spot.point, zones);
+                Coordinate[] branch = throughExit(connection, branch(head, spot.point, zones), zones, spot);
                 if (branch != null && valid(branch, pieces, spot, firstIgnored, zones)) {
                     return new Attach(connection, branch, spot, weight, target, branchRouter != router);
                 }
@@ -1220,6 +1225,43 @@ final class TreeBuilder {
             }
             straighten(coords, zones, ignored);
             return coords.toArray(new Coordinate[0]);
+        }
+
+        /**
+         * Ветка без вершины выхода из здания, если маршрут от выхода идёт почти по прямой финального участка: поворот
+         * меньше MIN_TURN_DEG {@link #valid} не пропускает, а {@link #straighten} выход не убирает — прямая от точки
+         * идёт через своё здание. Так не строилась ветка к врезке у перпендикуляра на трубе вдоль стены, и точка
+         * оставалась без сети или уходила к дальней врезке (п. 2.5, разъяснения 11 и 15). Выход на прямой от точки к
+         * следующей вершине просто убирается: участок тот же. Иначе прямой участок от точки берётся, если входит в
+         * здание у ближайшей точки контура и держит запасы строгой формы, см. {@link #straightened}; если нет — выход
+         * отодвигается по тому же лучу, пока поворот в нём не дойдёт до MIN_TURN_DEG, см. {@link #relinked}.
+         */
+        Coordinate[] throughExit(ConnectionPoint connection, Coordinate[] branch, ObstacleSet zones, Spot spot) {
+            ExistingOks building = buildingByConnection.get(connection.getId());
+            if (branch == null || building == null || branch.length < 3
+                    || deflectionDeg(branch[0], branch[1], branch[2]) >= MIN_TURN_DEG) {
+                return branch;
+            }
+            if (new LineSegment(branch[0], branch[2]).distance(branch[1]) <= ON_LINE_M
+                    && !Double.isNaN(zones.edgeWeight(branch[1], branch[2], ignored))) {
+                Coordinate[] result = new Coordinate[branch.length - 1];
+                result[0] = branch[0];
+                System.arraycopy(branch, 2, result, 1, result.length - 1);
+                return result;
+            }
+            Coordinate[] edge = reversed(branch);
+            boolean fromRoot = spot.node == tree.root;
+            Coordinate[] line = straightened(building, edge, zones, ignored, null, List.of(), fromRoot);
+            if (line == null) {
+                Coordinate cp = branch[0];
+                double length = cp.distance(branch[1]);
+                double ux = (branch[1].x - cp.x) / length;
+                double uy = (branch[1].y - cp.y) / length;
+                double[] out = crossings(rings(building.getGeometry()), cp, ux, uy, length);
+                line = out.length == 0 ? null : relinked(building, edge, zones, ignored, null, List.of(), fromRoot,
+                        List.of(new Coordinate(cp.x + ux * out[0], cp.y + uy * out[0])), false);
+            }
+            return line == null ? branch : reversed(line);
         }
 
         boolean valid(Coordinate[] branch, List<Piece> pieces, Spot spot, Set<String> firstIgnored, ObstacleSet zones) {
@@ -2405,6 +2447,12 @@ final class TreeBuilder {
                 }
             }
         }
+    }
+
+    private static Coordinate[] reversed(Coordinate[] coords) {
+        Coordinate[] result = coords.clone();
+        java.util.Collections.reverse(Arrays.asList(result));
+        return result;
     }
 
     static List<Double> vertexPositions(LineString line) {

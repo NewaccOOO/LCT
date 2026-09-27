@@ -1734,7 +1734,8 @@ public final class VariantEnumerator {
     /**
      * Дерево с врезкой, перенесённой к вершине ствола: кандидаты врезки — проекции точек подключения, и ствол
      * подходит к сети наискось или тянется к дальней врезке мимо ближней трубы (гипотеза Q12). У каждой вершины
-     * ствола пробуются проекция на трубу прежней врезки и кандидаты врезки самой вершины; берётся врезка, у которой
+     * ствола пробуются проекции на трубу прежней врезки или на трубы её камеры ({@link TieInFinder#ownPipes}: новая
+     * камера вместо врезки в существующую) и кандидаты врезки самой вершины; берётся врезка, у которой
      * прямая до вершины вместе с остатком ствола и ценой узла врезки короче всего и хотя бы на SLIDE_MIN_M короче
      * прежнего. Прямая допустима, без спецпрохода, не идёт вдоль трубы, не ближе TREES_APART_M к другим отрезкам
      * дерева, а поворот в вершине не круче 90°. Переносится только врезка с одним ребром; иначе дерево прежнее.
@@ -1765,10 +1766,7 @@ public final class VariantEnumerator {
             // врезки у самой вершины: ближайшие камеры и проекции на ближайшие участки; в районе города поиск по
             // всем камерам на каждую вершину дорог, там только своя труба
             List<TieCandidate> candidates = new ArrayList<>(district ? List.of() : finder.find(List.of(vertex), dn));
-            TieCandidate same = tree.tie.isChamber() ? null : finder.onSamePipe(tree.tie, vertex, dn);
-            if (same != null) {
-                candidates.add(same);
-            }
+            candidates.addAll(finder.ownPipes(tree.tie, vertex, dn));
             for (TieCandidate candidate : candidates) {
                 Coordinate at = candidate.getPoint().getCoordinate();
                 double straight = at.distance(coords[k]);
