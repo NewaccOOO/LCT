@@ -749,9 +749,12 @@ def check_variant(inp, trees, vid, feats, rep):
 def check_specials(trees, segs, geo, adj, kinds, ties, rep):
     """B9–B15: спецпроходы, отступы от спецобъектов и существующей сети, пересечения новых участков между собой.
 
-    Зона спецпрохода объекта (п. 4, docs/interpretation.md): у полигона — его буфер на margin_m, если прогон
-    спецучастков (связные через узлы спецучастки) пересекает полигон; у линии — margin_m от точки пересечения с
-    прогоном в обе стороны. Пересечение сети в точке врезки (не дальше 0,5 м от врезки) пересечением не считается."""
+    Зона спецпрохода объекта (п. 4, табл. 2, docs/interpretation.md) на прогоне спецучастков (связные через узлы
+    спецучастки): у линии — margin_m вдоль трассы от точки пересечения в обе стороны; у полигона — часть прогона в
+    полигоне и margin_m вдоль трассы от каждой точки на его границе, а дальше — пока прогон ближе нормы отступа к
+    полигону (обычный участок там отступ не держал бы). Вдоль трассы меряется расстоянием до точки пересечения:
+    спецучасток прямой. Пересечение сети в точке врезки (не дальше 0,5 м от врезки) пересечением не считается. На
+    каждой смене набора зон начинается новый участок (п. 4, разъяснение 8, B14)."""
     if not segs:
         return
     sid_of = {id(s): str(s["properties"]["id"]) for s in segs}
@@ -763,6 +766,9 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
         return any(pt.distance(t) <= 0.5 for t in ties.values())
 
     def crossings(line, rt, rg):
+        """Точки пересечения линии или границы полигона rg участком line."""
+        if rg.geom_type.endswith("Polygon"):
+            return [Point(c) for c in shapely.get_coordinates(line.intersection(rg.boundary))]
         pts = [Point(c) for c in shapely.get_coordinates(line.intersection(rg))]
         return [pt for pt in pts if not (rt == "heat_network" and at_tie(pt))]
 
@@ -785,15 +791,19 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
         line = line_of[id(s)]
         run = run_of[id(s)]
         z = {}
+        norm_w2 = DN[s["properties"]["diameter"]]["width_m"] / 2
         for rid, rt, rg, _ in trees["spec_near"](line, max(MARGIN.values()) + ZONE_TOL):
             obj[(rt, rid)] = rg
+            if rg.geom_type == "Point":
+                continue
+            xs = [pt for part in run for pt in crossings(part, rt, rg)]
+            if not xs:
+                continue
+            area = [x.buffer(MARGIN[rt] + ZONE_TOL) for x in xs]
             if rg.geom_type.endswith("Polygon"):
-                if any(part.intersects(rg) for part in run):
-                    z[(rt, rid)] = line.intersection(rg.buffer(MARGIN[rt] + ZONE_TOL))
-            elif rg.geom_type != "Point":
-                xs = [pt for part in run for pt in crossings(part, rt, rg)]
-                if xs:
-                    z[(rt, rid)] = line.intersection(shapely.union_all([x.buffer(MARGIN[rt] + ZONE_TOL) for x in xs]))
+                # полигон и дальше margin_m полоса нормы: обычный участок в ней был бы ближе отступа
+                area += [rg, rg.buffer(_TYPES[rt]["clearance_m"] + norm_w2)]
+            z[(rt, rid)] = line.intersection(shapely.union_all(area))
         zones[id(s)] = {k: g for k, g in z.items() if g.length > ZONE_TOL}
 
     for s in special:
@@ -815,6 +825,15 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
                 rep.add("B9 угол пересечения спецобъекта меньше min_angle_deg",
                         f"{sid} {min(angles):.2f}° < {MIN_ANGLE[rt]}° ({rt} {rid})")
 
+    for s in special:
+        # B14: внутри спецучастка набор зон не меняется, на смене набора начинается новый участок (п. 4, разъяснение 8)
+        z = zones[id(s)]
+        part = [f"{rt} {rid}" for (rt, rid), g in sorted(z.items())
+                if shapely.union_all([h for k, h in z.items() if k != (rt, rid)]).difference(g).length > ZONE_TOL]
+        if part:
+            rep.add("B14 набор объектов меняется внутри спецучастка",
+                    f"{sid_of[id(s)]} {line_of[id(s)].length:.2f} м, зона не на всю длину: {', '.join(part)}")
+
     for node, lst in adj.items():
         spec_here = [t for t in lst if t["properties"]["laying_method"] == "special"]
         # B14: технический узел между спецучастками ставится только там, где меняется набор объектов (п. 4)
@@ -829,10 +848,10 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
             for key in zones[id(t)]:
                 rt, rid = key
                 rg = obj[key]
-                if rg.geom_type.endswith("Polygon"):
-                    d = rg.distance(end)
-                else:
-                    d = min((x.distance(end) for x in crossings(line_of[id(t)], rt, rg)), default=math.inf)
+                # вдоль трассы от точки пересечения на прогоне; конец в полигоне — внутри зоны
+                d = min((x.distance(end) for part in run_of[id(t)] for x in crossings(part, rt, rg)), default=math.inf)
+                if rg.geom_type.endswith("Polygon") and rg.covers(end):
+                    d = 0.0
                 if d >= MARGIN[rt] - ZONE_TOL:
                     continue
                 for s in lst:
@@ -841,8 +860,9 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
                                 f"{sid_of[id(s)]} у узла {node}: {rt} {rid} в {d:.2f} м < {MARGIN[rt]}")
 
     # звенья без отступа до объекта (ключи объектов по (id участка, номер звена)): прямая от врезки до сети, которая
-    # её касается, и прямое продолжение спецучастка через узел — хвост того же прямого пересечения. Прямая идёт через
-    # технические узлы, пока направление не меняется больше чем на 1°
+    # её касается, и прямое продолжение спецучастка через линию — хвост того же прямого пересечения: зона линии
+    # margin_m вдоль трассы короче отступа. Прямая идёт через технические узлы, пока направление не меняется больше
+    # чем на 1°. За полигоном дороги обычный участок держит отступ: зона продлевается до нормы
     free = defaultdict(set)
 
     def along(node, prev, came, keys):
@@ -864,8 +884,9 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
         along(node, None, None, {(rt, rid) for rid, rt, _, _ in trees["spec_near"](pt, 0.5) if rt == "heat_network"})
     for t in special:
         tc = list(line_of[id(t)].coords)
-        along(nodes_of[id(t)][0], tc[1], t, set(zones[id(t)]))
-        along(nodes_of[id(t)][1], tc[-2], t, set(zones[id(t)]))
+        lines = {k for k in zones[id(t)] if not obj[k].geom_type.endswith("Polygon")}
+        along(nodes_of[id(t)][0], tc[1], t, lines)
+        along(nodes_of[id(t)][1], tc[-2], t, lines)
 
     # B10, B11: вне спецпрохода объекта участок держит отступ и объект не пересекает (п. 3.1, п. 4, разъяснение 7)
     for s in segs:

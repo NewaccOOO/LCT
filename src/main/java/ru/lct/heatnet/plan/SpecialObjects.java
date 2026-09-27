@@ -27,7 +27,6 @@ import ru.lct.heatnet.rules.Rules;
 
 /** Объекты со специальным проходом: дороги и пути, газопроводы, кабели и существующая сеть. */
 final class SpecialObjects {
-    private static final int MARGIN_QUADRANT_SEGMENTS = 16;
     /** Запас к отступу, чтобы узел не встал на самой границе зоны сближения. */
     private static final double NEAR_EXTRA_M = 0.1;
     /** Сторон в куске с общей рамкой, см. Special#chunks. */
@@ -40,10 +39,8 @@ final class SpecialObjects {
         final RestrictionRule rule;
         /** Полуширина самого объекта: половина ширины существующей трубы или half_width_m линии. */
         final double halfWidth;
+        /** Полигон для быстрой проверки, задевает ли его ребро: наложение JTS считается только тогда. */
         final PreparedGeometry prepared;
-        final Geometry buffered;
-        /** Буфер полигона для быстрой проверки, задевает ли его ребро: наложение JTS считается только тогда. */
-        final PreparedGeometry bufferedPrepared;
         /** Стороны линейного объекта или колец полигона. */
         final LineSegment[] sides;
         /**
@@ -59,8 +56,6 @@ final class SpecialObjects {
             this.rule = rule;
             this.halfWidth = halfWidth;
             this.prepared = polygon ? PreparedGeometryFactory.prepare(geometry) : null;
-            this.buffered = polygon ? geometry.buffer(rule.getMarginM(), MARGIN_QUADRANT_SEGMENTS) : null;
-            this.bufferedPrepared = polygon ? PreparedGeometryFactory.prepare(buffered) : null;
             this.sides = sides(polygon ? geometry.getBoundary() : geometry);
             this.chunks = new double[4 * ((sides.length + CHUNK - 1) / CHUNK)];
             for (int k = 0; k < sides.length; k++) {
@@ -190,8 +185,6 @@ final class SpecialObjects {
 
     final List<Special> all = new ArrayList<>();
     private final STRtree index = new STRtree();
-    /** Объекты по рамке зоны сборки: буфера margin_m у полигона, самой линии у линии. */
-    private final STRtree zoneIndex = new STRtree();
     private final Set<RestrictionRule> kinds = new HashSet<>();
     private final Rules rules;
     private final double maxHalfWidth;
@@ -215,13 +208,11 @@ final class SpecialObjects {
         double widest = 0;
         for (Special special : all) {
             index.insert(special.geometry.getEnvelopeInternal(), special);
-            zoneIndex.insert((special.polygon ? special.buffered : special.geometry).getEnvelopeInternal(), special);
             widest = Math.max(widest, special.halfWidth);
             kinds.add(special.rule);
         }
         maxHalfWidth = widest;
         index.build();
-        zoneIndex.build();
     }
 
     /** Точка ближе отступа к какому-либо объекту со специальным проходом для диаметра dn. */
@@ -266,10 +257,13 @@ final class SpecialObjects {
         };
     }
 
-    /** Объекты, чья зона сборки (буфер полигона или сама линия) задевает рамку envelope. */
+    /**
+     * Объекты, чья рамка задевает рамку envelope: зона сборки начинается там, где ребро пересекает объект, и идёт
+     * через узлы в соседние рёбра.
+     */
     List<Special> zonesNear(Envelope envelope) {
         List<Special> result = new ArrayList<>();
-        for (Object item : zoneIndex.query(envelope)) {
+        for (Object item : index.query(envelope)) {
             result.add((Special) item);
         }
         return result;

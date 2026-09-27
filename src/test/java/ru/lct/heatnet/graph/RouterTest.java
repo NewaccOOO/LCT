@@ -349,13 +349,16 @@ class RouterTest {
 
         assertEquals(1, spans.size());
         SpecialSpan span = spans.get(0);
-        // полигон, буферизованный на margin_m, вдоль отрезка под 60° даёт (ширина + 2 × margin) / sin 60°
-        double halfSpecial = (roadWidth / 2 + rule.getMarginM()) / Math.sin(Math.toRadians(60));
+        // спецчасть — полигон и margin_m вдоль отрезка за границей (ТП разд. 4): ширина / sin 60° + 2 × margin
+        double halfSpecial = roadWidth / 2 / Math.sin(Math.toRadians(60)) + rule.getMarginM();
         assertEquals(40 - halfSpecial, span.getFromM(), EPS);
         assertEquals(40 + halfSpecial, span.getToM(), EPS);
         assertEquals("road-1", span.getObjectId());
         assertEquals(rule.getKSpecial(), span.getKSpecial(), EPS);
-        assertEquals(80 + (rule.getKSpecial() - 1) * 2 * halfSpecial, weight, EPS);
+        // вес ребра графа — по полосе margin_m поперёк границы, оценка не меньше спецчасти:
+        // (ширина + 2 × margin) / sin 60°
+        double halfBand = (roadWidth / 2 + rule.getMarginM()) / Math.sin(Math.toRadians(60));
+        assertEquals(80 + (rule.getKSpecial() - 1) * 2 * halfBand, weight, EPS);
     }
 
     @Test

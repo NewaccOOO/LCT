@@ -48,7 +48,7 @@ final class Tree {
          * в сотни черновиков, а пересечение с объектом зависит только от ребра и объекта.
          */
         final Map<SpecialObjects.Special, Object> crossings = new ConcurrentHashMap<>();
-        /** Спецобъекты перечислителя, чья зона задевает рамку ребра; считает сборка, null — ещё не считались. */
+        /** Спецобъекты перечислителя, чья рамка задевает рамку ребра; считает сборка, null — ещё не считались. */
         volatile List<SpecialObjects.Special> nearSpecials;
 
         Edge(Node from, Node to, LineString line) {

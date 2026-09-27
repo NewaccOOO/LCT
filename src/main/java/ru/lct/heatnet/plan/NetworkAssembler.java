@@ -46,8 +46,8 @@ import ru.lct.heatnet.rules.Rules;
  * Сборка варианта из деревьев по техническому приложению от 18.09.2026: расходы, специальные части, диаметры,
  * участки с узлами, камеры врезки, стоимость и сводка. Врезка в трубу — новая камера в точке врезки, врезка в
  * существующую камеру — участок заканчивается в ней и стоит 5 млн (п. 2.4, 3.2). Специальные части считаются по
- * всей трассе варианта: зона линии продолжается через узлы во все ветви, зона дороги — вся связная часть трассы в
- * полосе margin_m, пересекающая полигон.
+ * всей трассе варианта: margin_m вдоль трассы от точки пересечения линии или границы полигона продолжается через узлы
+ * во все ветви, у дороги к ним добавляется часть трассы в полигоне.
  */
 final class NetworkAssembler {
     static final String BASE = "base";
@@ -62,6 +62,12 @@ final class NetworkAssembler {
      * перекрыл бы расширенные зоны ровно на 0,1 м, на границе порога.
      */
     private static final double ZONE_GROW_M = 0.02;
+    /**
+     * Шаг, с которым зона полигона продлевается за margin_m, пока обычный участок был бы ближе нормы отступа, и запас
+     * к норме у её конца: отступ сверяется с точностью 1 мм.
+     */
+    private static final double NORM_STEP_M = 0.01;
+    private static final double NORM_EXTRA_M = 0.002;
     /** Разрез ближе этого к вершине ребра переносится в вершину; сдвиг вместе с ZONE_GROW_M не выходит за ZONE_TOL_M. */
     private static final double VERTEX_SNAP_M = ZONE_TOL_M - ZONE_GROW_M;
     private static final double DIST_EPS_M = 0.001;
@@ -296,11 +302,12 @@ final class NetworkAssembler {
         }
 
         Variant run() {
-            zonesByEdge = zones();
-            specialByEdge = mergedZones();
+            // Ду нужен зонам: зона дороги продлевается, пока обычный участок этого Ду был бы ближе нормы
             for (Map.Entry<String, List<Tree>> unit : units.entrySet()) {
                 plan(unit.getKey());
             }
+            zonesByEdge = zones();
+            specialByEdge = mergedZones();
             nameNodes();
             for (int i = 0; i < edges.size(); i++) {
                 cut(i);
@@ -403,6 +410,10 @@ final class NetworkAssembler {
                 }
             }
             Double from = null;
+            // подряд идущие спецучастки: начало, конец и пересечённые линии
+            String runStart = null;
+            String runEnd = null;
+            Set<SpecialObjects.Special> runLines = new HashSet<>();
             for (double to : cuts.keySet()) {
                 if (from != null) {
                     double mid = (from + to) / 2;
@@ -429,9 +440,14 @@ final class NetworkAssembler {
                     double k = 1;
                     if (isSpecial) {
                         List<SpecialObjects.Special> crossed = crossed(index, from, to);
-                        exemptByNode.computeIfAbsent(startId, id -> new HashSet<>()).addAll(crossed);
-                        exemptByNode.computeIfAbsent(endId, id -> new HashSet<>()).addAll(crossed);
+                        runStart = runStart == null ? startId : runStart;
+                        runEnd = endId;
+                        crossed.stream().filter(object -> !object.polygon).forEach(runLines::add);
                         k = crossed.stream().mapToDouble(s -> s.rule.getKSpecial()).max().orElse(1);
+                    } else if (runStart != null) {
+                        exempt(runStart, runEnd, runLines);
+                        runStart = null;
+                        runLines = new HashSet<>();
                     }
                     NewSegment segment = new NewSegment(prefix + "seg_" + counters.segments.incrementAndGet(), variantId,
                             line, startId, endId, flowByEdge.get(edge.id), dn, length, isSpecial ? SPECIAL : BASE, null,
@@ -443,6 +459,19 @@ final class NetworkAssembler {
                 }
                 from = to;
             }
+            if (runStart != null) {
+                exempt(runStart, runEnd, runLines);
+            }
+        }
+
+        /**
+         * Концы подряд идущих спецучастков ребра освобождают смежные обычные участки от отступа до линий, которые
+         * эти спецучастки пересекают: зона линии — margin_m вдоль трассы, а отступ больше (п. 4, табл. 2). От дороги
+         * отступ держится: её зона продлена до нормы, см. polygonZone.
+         */
+        void exempt(String runStart, String runEnd, Set<SpecialObjects.Special> lines) {
+            exemptByNode.computeIfAbsent(runStart, id -> new HashSet<>()).addAll(lines);
+            exemptByNode.computeIfAbsent(runEnd, id -> new HashSet<>()).addAll(lines);
         }
 
         /** Объекты, чьи зоны засчитаются специальному участку: перекрытие больше ZONE_OVERLAP_M. */
@@ -457,7 +486,7 @@ final class NetworkAssembler {
         }
 
         /**
-         * Отступ обычного участка от объектов со специальным проходом: объекты, через которые проходит смежный
+         * Отступ обычного участка от объектов со специальным проходом: линии, через которые проходит смежный
          * специальный участок, и сеть у врезки, с которой участок начинается, не проверяются. Маршрут проверен по
          * рёбрам графа целиком, а здесь проверяется каждый участок.
          */
@@ -691,38 +720,44 @@ final class NetworkAssembler {
             return result;
         }
 
-        /** Связные части трассы в буфере полигона, которые пересекают сам полигон; near — рёбра у буфера. */
+        /**
+         * Зона полигона дороги или путей (п. 4, табл. 2): часть трассы в полигоне и margin_m вдоль трассы от каждой
+         * точки пересечения его границы, через узлы во все ветви. Если в конце этих метров обычный участок был бы
+         * ближе нормы отступа к полигону (Ду от 400 под углом около 45°), зона идёт дальше вдоль ребра до точки, где
+         * норма держится; near — рёбра у полигона.
+         */
         void polygonZone(SpecialObjects.Special special, List<Integer> near, List<Zone> result) {
-            List<Zone> pieces = new ArrayList<>();
-            List<Piece> parts = new ArrayList<>();
             for (int i : near) {
-                for (Piece piece : pieces(edges.get(i).source, special)) {
-                    pieces.add(new Zone(i, piece.from, piece.to, special));
-                    parts.add(piece);
+                Edge edge = edges.get(i);
+                Crossing crossing = crossing(edge.source, special);
+                for (double[] inside : crossing.inside) {
+                    result.add(new Zone(i, inside[0], inside[1], special));
+                }
+                double norm = specials.clearance(special, dnByEdge.get(edge.id));
+                for (double at : crossing.hits) {
+                    double back = reach(edge, at, -1, special, norm);
+                    spread(result, i, at, back, reach(edge, at, 1, special, norm), special);
                 }
             }
-            int[] cluster = new int[parts.size()];
-            for (int i = 0; i < cluster.length; i++) {
-                cluster[i] = i;
-            }
-            for (int i = 0; i < parts.size(); i++) {
-                for (int j = i + 1; j < parts.size(); j++) {
-                    if (parts.get(i).part.intersects(parts.get(j).part)) {
-                        cluster[find(cluster, i)] = find(cluster, j);
-                    }
+        }
+
+        /**
+         * Метры зоны от точки пересечения at в сторону dir: margin_m, а если там точка ребра вне полигона ближе нормы
+         * norm к нему — до первой точки с шагом NORM_STEP_M, где норма держится, но не дальше конца ребра. margin_m
+         * за концом ребра продолжается через узел, см. spread.
+         */
+        double reach(Edge edge, double at, int dir, SpecialObjects.Special special, double norm) {
+            double margin = special.rule.getMarginM();
+            double end = dir < 0 ? at : edge.length - at;
+            LengthIndexedLine indexed = null;
+            for (double distance = margin; distance < end; distance += NORM_STEP_M) {
+                indexed = indexed == null ? new LengthIndexedLine(edge.source.line) : indexed;
+                Coordinate c = indexed.extractPoint(at + dir * distance);
+                if (special.inside(c) || !special.within(factory.createPoint(c), norm + NORM_EXTRA_M)) {
+                    return distance;
                 }
             }
-            boolean[] crossing = new boolean[parts.size()];
-            for (int i = 0; i < parts.size(); i++) {
-                if (parts.get(i).crossing) {
-                    crossing[find(cluster, i)] = true;
-                }
-            }
-            for (int i = 0; i < parts.size(); i++) {
-                if (crossing[find(cluster, i)]) {
-                    result.add(pieces.get(i));
-                }
-            }
+            return Math.max(margin, end);
         }
 
         /** По margin_m в обе стороны от каждого пересечения; пересечение сети в точке врезки не считается. */
@@ -732,7 +767,7 @@ final class NetworkAssembler {
                     if (special.network && atTie(hit.at, special.geometry)) {
                         continue;
                     }
-                    spread(result, i, hit.position, special);
+                    spread(result, i, hit.position, special.rule.getMarginM(), special.rule.getMarginM(), special);
                 }
             }
         }
@@ -762,19 +797,20 @@ final class NetworkAssembler {
             return false;
         }
 
-        void spread(List<Zone> result, int index, double position, SpecialObjects.Special special) {
+        /** Зона от места position назад на back и вперёд на ahead по ребру и дальше через узлы. */
+        void spread(List<Zone> result, int index, double position, double back, double ahead,
+                SpecialObjects.Special special) {
             Edge edge = edges.get(index);
-            double margin = special.rule.getMarginM();
-            result.add(new Zone(index, Math.max(0, position - margin), Math.min(edge.length, position + margin), special));
-            if (position - margin < 0) {
-                walk(result, edge.from(), index, margin - position, special);
+            result.add(new Zone(index, Math.max(0, position - back), Math.min(edge.length, position + ahead), special));
+            if (position - back < 0) {
+                walk(result, edge.from(), index, back - position, special);
             }
-            if (position + margin > edge.length) {
-                walk(result, edge.to(), index, position + margin - edge.length, special);
+            if (position + ahead > edge.length) {
+                walk(result, edge.to(), index, position + ahead - edge.length, special);
             }
         }
 
-        /** Зона линии продолжается через узел во все ветви. */
+        /** Зона продолжается через узел во все ветви. */
         void walk(List<Zone> result, String node, int cameFrom, double remaining, SpecialObjects.Special special) {
             for (int index : incident.get(node)) {
                 if (index == cameFrom) {
@@ -797,40 +833,47 @@ final class NetworkAssembler {
 
         /**
          * Специальные интервалы по рёбрам, расширенные на ZONE_GROW_M; границы у концов ребра прижимаются к узлу.
-         * Интервал режется там, где меняется наибольший Kспец покрывающих зон (смена набора объектов — новый
-         * участок, п. 4), и сливается с соседом только при равном Kспец. При наложении зон коэффициент один,
-         * наибольший, без перемножения.
+         * Интервал режется везде, где меняется набор покрывающих зон: на границах общего фрагмента начинается новый
+         * участок (п. 4, разъяснение 8). Коэффициент части — наибольший Kспец её набора, без перемножения.
          */
         List<List<double[]>> mergedZones() {
             List<List<double[]>> result = new ArrayList<>();
             for (int i = 0; i < edges.size(); i++) {
-                List<double[]> raw = new ArrayList<>();
+                List<Zone> raw = new ArrayList<>();
+                TreeSet<Double> bounds = new TreeSet<>();
                 for (Zone zone : zonesByEdge.get(i)) {
                     if (zone.to > zone.from) {
-                        raw.add(new double[] {Math.max(0, zone.from - ZONE_GROW_M),
-                                Math.min(edges.get(i).length, zone.to + ZONE_GROW_M), zone.special.rule.getKSpecial()});
+                        Zone grown = new Zone(i, Math.max(0, zone.from - ZONE_GROW_M),
+                                Math.min(edges.get(i).length, zone.to + ZONE_GROW_M), zone.special);
+                        raw.add(grown);
+                        bounds.add(grown.from);
+                        bounds.add(grown.to);
                     }
                 }
-                TreeSet<Double> bounds = new TreeSet<>();
-                for (double[] interval : raw) {
-                    bounds.add(interval[0]);
-                    bounds.add(interval[1]);
-                }
                 List<double[]> merged = new ArrayList<>();
+                Set<SpecialObjects.Special> lastSet = null;
                 Double from = null;
                 for (double to : bounds) {
                     if (from != null) {
                         double mid = (from + to) / 2;
-                        double k = raw.stream().filter(r -> r[0] <= mid && mid <= r[1]).mapToDouble(r -> r[2]).max().orElse(0);
+                        Set<SpecialObjects.Special> set = new HashSet<>();
+                        double k = 0;
+                        for (Zone zone : raw) {
+                            if (zone.from <= mid && mid <= zone.to) {
+                                set.add(zone.special);
+                                k = Math.max(k, zone.special.rule.getKSpecial());
+                            }
+                        }
                         double[] last = merged.isEmpty() ? null : merged.get(merged.size() - 1);
-                        if (k == 0) {
+                        if (set.isEmpty()) {
                             from = to;
                             continue;
                         }
-                        if (last != null && last[2] == k && from <= last[1] + MERGE_M) {
+                        if (last != null && set.equals(lastSet) && from <= last[1] + MERGE_M) {
                             last[1] = to;
                         } else {
                             merged.add(new double[] {from, to, k});
+                            lastSet = set;
                         }
                     }
                     from = to;
@@ -850,19 +893,10 @@ final class NetworkAssembler {
         }
     }
 
-    /** Часть ребра в буфере полигона: границы по длине ребра, сама линия и задевает ли она полигон. */
-    private static final class Piece {
-        final double from;
-        final double to;
-        final Geometry part;
-        final boolean crossing;
-
-        Piece(double from, double to, Geometry part, boolean crossing) {
-            this.from = from;
-            this.to = to;
-            this.part = part;
-            this.crossing = crossing;
-        }
+    /** Ребро и полигон: части ребра в полигоне и места пересечения границы по длине ребра. */
+    private static final class Crossing {
+        final List<double[]> inside = new ArrayList<>();
+        final List<Double> hits = new ArrayList<>();
     }
 
     /** Точка пересечения ребра с линейным объектом и её место по длине ребра. */
@@ -876,7 +910,7 @@ final class NetworkAssembler {
         }
     }
 
-    /** Спецобъекты, чья зона (буфер полигона или сама линия) задевает рамку ребра; считаются один раз на ребро. */
+    /** Спецобъекты, чья рамка задевает рамку ребра; считаются один раз на ребро. */
     private List<SpecialObjects.Special> nearSpecials(Tree.Edge edge) {
         List<SpecialObjects.Special> near = edge.nearSpecials;
         if (near == null) {
@@ -886,33 +920,38 @@ final class NetworkAssembler {
         return near;
     }
 
-    /** Части ребра в буфере полигона special; считаются один раз на ребро и объект, см. {@link Tree.Edge#crossings}. */
-    @SuppressWarnings("unchecked")
-    private static List<Piece> pieces(Tree.Edge edge, SpecialObjects.Special special) {
-        List<Piece> cached = (List<Piece>) edge.crossings.get(special);
+    /**
+     * Части ребра в полигоне special и места пересечения его границы; считаются один раз на ребро и объект, см.
+     * {@link Tree.Edge#crossings}. Конец ребра в полигоне тоже считается местом пересечения: его зона вдоль трассы
+     * лежит внутри зон настоящих пересечений на тех же путях.
+     */
+    private static Crossing crossing(Tree.Edge edge, SpecialObjects.Special special) {
+        Crossing cached = (Crossing) edge.crossings.get(special);
         if (cached != null) {
             return cached;
         }
-        List<Piece> pieces = new ArrayList<>();
-        if (!special.bufferedPrepared.intersects(edge.line)) {
-            // рамка ребра задевает рамку буфера, а сам буфер нет: наложение дало бы пустую геометрию
-            edge.crossings.putIfAbsent(special, pieces);
-            return pieces;
-        }
-        Geometry inside = edge.line.intersection(special.buffered);
-        LengthIndexedLine indexed = new LengthIndexedLine(edge.line);
-        for (int g = 0; g < inside.getNumGeometries(); g++) {
-            Geometry part = inside.getGeometryN(g);
-            if (!(part instanceof LineString) || part.getLength() == 0) {
-                continue;
+        Crossing crossing = new Crossing();
+        if (special.prepared.intersects(edge.line)) {
+            Geometry common = edge.line.intersection(special.geometry);
+            LengthIndexedLine indexed = new LengthIndexedLine(edge.line);
+            for (int g = 0; g < common.getNumGeometries(); g++) {
+                Coordinate[] coords = common.getGeometryN(g).getCoordinates();
+                if (coords.length == 0) {
+                    continue;
+                }
+                double a = indexed.project(coords[0]);
+                double b = indexed.project(coords[coords.length - 1]);
+                if (common.getGeometryN(g).getLength() > 0) {
+                    crossing.inside.add(new double[] {Math.min(a, b), Math.max(a, b)});
+                }
+                crossing.hits.add(a);
+                if (b != a) {
+                    crossing.hits.add(b);
+                }
             }
-            Coordinate[] coords = part.getCoordinates();
-            double a = indexed.project(coords[0]);
-            double b = indexed.project(coords[coords.length - 1]);
-            pieces.add(new Piece(Math.min(a, b), Math.max(a, b), part, special.prepared.intersects(part)));
         }
-        edge.crossings.putIfAbsent(special, pieces);
-        return pieces;
+        edge.crossings.putIfAbsent(special, crossing);
+        return crossing;
     }
 
     /** Пересечения ребра с линейным объектом special; считаются один раз на ребро и объект. */
@@ -979,13 +1018,5 @@ final class NetworkAssembler {
             }
         }
         return false;
-    }
-
-    private static int find(int[] cluster, int i) {
-        while (cluster[i] != i) {
-            cluster[i] = cluster[cluster[i]];
-            i = cluster[i];
-        }
-        return i;
     }
 }

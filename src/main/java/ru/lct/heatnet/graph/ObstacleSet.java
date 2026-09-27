@@ -710,9 +710,9 @@ public final class ObstacleSet {
         final boolean polygon;
         final PreparedGeometry object;
         final Zone zone;
-        /** Полоса margin_m вокруг полигона; у линии null. */
+        /** Полоса margin_m вокруг полигона для веса ребра графа, см. {@link ObstacleSet#edgeWeight}; у линии null. */
         final Area margin;
-        /** Сам полигон как область для проверки пересечения отрезком; у линии null. */
+        /** Сам полигон как область для проверки пересечения отрезком и его частей внутри; у линии null. */
         final Area shape;
         final LineSegment[] sides;
         /** Рамки кусков sides, см. {@link ObstacleSet#chunks}. */
@@ -1080,7 +1080,9 @@ public final class ObstacleSet {
      * Вес ребра графа. {@code aNode} и {@code bNode} говорят, что конец — узел графа, а не начало или конец пути.
      * Узел может лежать в полосе margin_m пересечённого объекта. Тогда путь до узла прошёл часть этой полосы по
      * соседнему ребру, и эта часть тоже специальная, хотя соседнее ребро объект не пересекает. Ребро получает её
-     * вес по нижней оценке, иначе переход со сдвигом вбок через узлы в полосе легче прямого.
+     * вес по нижней оценке, иначе переход со сдвигом вбок через узлы в полосе легче прямого. Полоса поперёк
+     * границы — оценка для поиска: она не короче спецчасти вдоль трассы (п. 4) и держит переходы ближе к прямому
+     * углу. Спецчасти готовой трассы считает {@link #spans(LineString, Set)}.
      */
     public double edgeWeight(Coordinate a, Coordinate b, Set<String> ignored, boolean aNode, boolean bNode) {
         return edgeWeight(a, b, ignored, aNode, bNode, hint());
@@ -1351,8 +1353,9 @@ public final class ObstacleSet {
     }
 
     /**
-     * Специальные части линии от всех пересечённых ею объектов. Пересечение объекта из {@code ignored} не даёт
-     * специальной части, если оно у начала или конца линии.
+     * Специальные части линии от всех пересечённых ею объектов: у полигона — часть внутри и margin_m вдоль линии от
+     * каждой точки на его границе, у линии — margin_m от точки пересечения (п. 4). Пересечение линии из
+     * {@code ignored} не даёт специальной части, если оно у начала или конца линии.
      */
     public List<SpecialSpan> spans(LineString line, Set<String> ignored) {
         Coordinate[] coords = line.getCoordinates();
@@ -1402,20 +1405,21 @@ public final class ObstacleSet {
                 if (length == 0) {
                     continue;
                 }
+                // у полигона — часть внутри и margin_m вдоль трассы от каждой точки на границе (п. 4), у линии — от
+                // точки пересечения
                 if (special.polygon) {
-                    for (double[] piece : inside(p0, p1, special.margin, intersector)) {
+                    for (double[] piece : inside(p0, p1, special.shape, intersector)) {
                         raw.add(span(start + piece[0], start + piece[1], special));
                     }
-                } else {
-                    for (LineSegment side : special.sidesNear(p0, p1)) {
-                        intersector.computeIntersection(p0, p1, side.p0, side.p1);
-                        for (int k = 0; k < intersector.getIntersectionNum(); k++) {
-                            double at = start + p0.distance(intersector.getIntersection(k));
-                            if (skipAtEnds && (at <= TIE_IN_TOUCH_M || at >= total - TIE_IN_TOUCH_M)) {
-                                continue;
-                            }
-                            raw.add(span(Math.max(0, at - margin), Math.min(total, at + margin), special));
+                }
+                for (LineSegment side : special.sidesNear(p0, p1)) {
+                    intersector.computeIntersection(p0, p1, side.p0, side.p1);
+                    for (int k = 0; k < intersector.getIntersectionNum(); k++) {
+                        double at = start + p0.distance(intersector.getIntersection(k));
+                        if (skipAtEnds && !special.polygon && (at <= TIE_IN_TOUCH_M || at >= total - TIE_IN_TOUCH_M)) {
+                            continue;
                         }
+                        raw.add(span(Math.max(0, at - margin), Math.min(total, at + margin), special));
                     }
                 }
                 start += length;
