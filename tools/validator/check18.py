@@ -93,8 +93,10 @@ BAND_TOL = 0.01
 BAND_ROOM_M = 0.1
 END_GAP_M = 1.0
 # B22: звено короче SHORT_PIECE_M у узла спецпрохода — нарушение, если вершину на его конце можно убрать с запасами
-# B16 или совместить с узлом: спецучасток до этой вершины выходит за полосу margin_m не больше чем на ZONE_TOL
+# B16 или совместить с узлом: спецучасток до этой вершины выходит за зону спецпрохода не больше чем на ZONE_TOL
 SHORT_PIECE_M = 1.0
+# B21: мелкий излом пути точки в камере — поворот от TURN_DEG до SMALL_BEND_DEG (TreeBuilder.SMALL_BEND_DEG)
+SMALL_BEND_DEG = 30.0
 # разд. 6: варианты одинаковы, если у каждого больше 90 % длины меньшего лежит в полосе 1 м от другого
 # (VariantEnumerator.sameRoute); доля расхождения — 1 минус меньшая из этих длин, делённая на длину меньшего
 SAME_ROUTE_M = 1.0
@@ -181,14 +183,15 @@ def entry_window(cg, q, own, zone, dn, trees):
     return None, (ux, uy, t1, min(t2, t1 + 30))
 
 
-def nearer_entry(cg, own, shells, dn, trees, limit, relink):
+def nearer_entry(cg, own, shells, dn, trees, limit, relink, points=None):
     """Ближайшая точка контура ближе limit к точке, через которую финальный участок ДУ dn допустим (entry_window), и
     конец участка на луче, при котором звено от прежней вершины до него годится (relink(конец) — причина или None).
-    Возвращает (точка, конец, причины отказа у более близких точек); точка None — такой нет."""
+    points — точки входа вместо точек контура. Возвращает (точка, конец, причины отказа у более близких точек); точка
+    None — такой нет."""
     need = oks_clearance(dn) + DN[dn]["width_m"] / 2
     zone = own.buffer(need - EPS, quad_segs=64)
     reasons = Counter()
-    for q in contour_points(shells, cg, limit):
+    for q in points or contour_points(shells, cg, limit):
         why, window = entry_window(cg, q, own, zone, dn, trees)
         if why is not None:
             reasons[why] += 1
@@ -1012,6 +1015,8 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
     ближе CUT_APART_M к другим участкам новой сети (у отрезков из общего узла — у дальних концов), не пересекает
     себя, повороты в вершинах, а на пути точки и в камерах и технических узлах (path_pairs) не круче MAX_TURN_DEG,
     новые звенья не короче CUT_PIECE_M. Вершины финального участка к точке (точка выхода) и спецучастки не меняются.
+    Исключение — вершина перед финальным участком: она лишняя (B16), если прямое звено от предыдущей вершины входит в
+    здание не дальше ENTRY_TOL_M от ближайшей точки контура и держит запасы звена от выхода (nearer_entry).
     Два соседних поворота в одну сторону со звеном от SHORT_LINK_M — тоже B17, если их заменяет одна вершина в лучшей
     точке (one_bend) и путь с ней не длиннее прежнего.
 
@@ -1020,11 +1025,13 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
     TURN_STEP_M, BEND_STEP_DEG) и S растёт не больше TURN_TOLERANCE_S, иначе справочная строка с причиной.
 
     B21: вершины у новой камеры ветвления лишние, если камеру можно перенести в точку рядом (сетка ±SHIFT_M, первые
-    вершины её участков, точки на прямых звеньев у камеры), откуда у её участков вершин меньше, а S растёт не больше
-    TURN_TOLERANCE_S. Каждый участок идёт из нового места прямой к первой или второй своей вершине. Новые звенья держат
-    те же запасы, поворот в камере по пути от точки к врезке не круче MAX_TURN_DEG, финальный участок к точке остаётся
-    на своей прямой, камера не ближе CHAMBER_GAP_M по участку к точке подключения и не ближе отступа с запасом
-    CHAMBER_NEAR_M к объектам специального прохода и сети."""
+    вершины её участков, точки на прямых звеньев у камеры и на прямых между первыми вершинами участка к врезке и
+    остальных), откуда у её участков вершин меньше, а S растёт не больше TURN_TOLERANCE_S. При том же числе вершин
+    перенос снимает мелкий излом пути (path_counts): прямых поворотов в камере и в камерах на дальних концах её
+    участков больше, а поворотов от TURN_DEG до SMALL_BEND_DEG меньше. Каждый участок идёт из нового места прямой к
+    первой или второй своей вершине. Новые звенья держат те же запасы, поворот в камере по пути от точки к врезке не
+    круче MAX_TURN_DEG, финальный участок к точке остаётся на своей прямой, камера не ближе CHAMBER_GAP_M по участку
+    к точке подключения и не ближе отступа с запасом CHAMBER_NEAR_M к объектам специального прохода и сети."""
     lines = [geo[str(s["properties"]["id"])] for s in segs]
     tree = STRtree(lines)
     tie_keys = {n: {(rt, rid) for rid, rt, _, _ in trees["spec_near"](pt, 0.5) if rt == "heat_network"}
@@ -1210,9 +1217,31 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
                 return f"поворот у выхода меньше {TURN_DEG}°"
             return blocked(k, head + [end, c[-1]], [len(head) - 1])
 
+        def straight(end):
+            """Почему прямое звено от вершины перед выходом к точке через конец end не годится; None — годится."""
+            if math.dist(end, c[-1]) >= math.dist(head[-1], c[-1]):
+                return "конец участка за прежней вершиной"
+            return blocked(k, head + [end, c[-1]], [len(head) - 1], min_piece=0.0, apart=False) \
+                or crowded(k, (head[-1], c[-1]), {})
+
         for og in (og for _, og in trees["oks_near"](cg, 0.0) if og.buffer(0.01).contains(cg)):
             shells = [og.exterior] if og.geom_type == "Polygon" else [g.exterior for g in og.geoms]
             to_edge = min(sh.distance(cg) for sh in shells)
+            # вершина перед финальным участком лишняя, если прямое звено от предыдущей входит не дальше ENTRY_TOL_M
+            # от ближайшей точки контура и держит те же запасы (TreeBuilder.straightened)
+            if len(c) > 2:
+                hit = LineString([c[-1], head[-1]]).intersection(og.boundary)
+                e = min((pt for g in getattr(hit, "geoms", [hit]) for pt in g.coords),
+                        key=lambda pt: math.dist(pt, c[-1]), default=None)
+                near = min((shapely.ops.nearest_points(sh, cg)[0] for sh in shells), key=cg.distance)
+                if e is not None and near.distance(Point(e)) <= ENTRY_TOL_M:
+                    text = f"{sid} вершина {len(c) - 2} {turn_deg(c[-3], c[-2], c[-1]):.1f}°, прямое звено входит в " \
+                           f"{near.distance(Point(e)):.3f} м от ближайшей точки контура"
+                    q, _, reasons = nearer_entry(cg, og, shells, p["diameter"], trees, math.inf, straight, [Point(e)])
+                    if q is None:
+                        rep.add("i  вершину перед финальным участком убрать нельзя (B16)", f"{text}: {dict(reasons)}")
+                    else:
+                        rep.add("B16 лишняя вершина перед финальным участком: прямое звено входит у ближайшей точки", text)
             inside = LineString(c[-2:]).intersection(og).length
             if inside <= to_edge + ENTRY_TOL_M:
                 continue
@@ -1403,6 +1432,22 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
                 return f"{sid}: {why}"
         return None
 
+    def path_counts(cid, x, new, inc):
+        """Прямые (поворот меньше TURN_DEG) и мелкие (меньше SMALL_BEND_DEG) повороты на пути точки в камере cid на месте
+        x и в камерах ветвления на дальних концах её участков; new — координаты участков от камеры."""
+        turns = [turn_deg(new[id(cs)][1], x, new[id(ps)][1]) for cs, ps in path_pairs.get(cid, [])]
+        for r in inc:
+            line = new[id(r)]
+            p = r["properties"]
+            far = str(p["end_node_id"]) if str(p["start_node_id"]) == cid else str(p["start_node_id"])
+            if kinds.get(far) != "heat_chamber" or far in ties:
+                continue
+            for cs, ps in path_pairs.get(far, []):
+                other = ps if cs is r else cs if ps is r else None
+                if other is not None:
+                    turns.append(turn_deg(line[-2], line[-1], next_to(geo, other, far)))
+        return sum(t < TURN_DEG for t in turns), sum(TURN_DEG <= t < SMALL_BEND_DEG for t in turns)
+
     def move_ds(new, inc, out):
         """Изменение S при переносе камеры: длины участков камеры по цене их ДУ."""
         dc = dl = 0.0
@@ -1412,9 +1457,10 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
             dl += d
         return 0.7 * dc / 25e6 + 0.3 * dl / 100
 
-    def move_spots(at, inc, out):
+    def move_spots(at, inc, out, up):
         """Места переноса: сетка ±SHIFT_M с шагом SHIFT_STEP_M, первые вершины участков, проекции камеры на прямые
-        вторых звеньев и попарные пересечения прямых первых и вторых звеньев."""
+        вторых звеньев и на прямые между первыми вершинами участка к врезке up и остальных, попарные пересечения прямых
+        первых и вторых звеньев."""
         n = round(SHIFT_M / SHIFT_STEP_M)
         spots = [(at[0] + i * SHIFT_STEP_M, at[1] + j * SHIFT_STEP_M)
                  for i in range(-n, n + 1) for j in range(-n, n + 1) if i or j]
@@ -1426,6 +1472,9 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
                 links.append((c[1], c[2]))
                 spots.append(c[1])
                 spots.append(project_line(at, c[1], c[2]))
+        for r in inc:
+            if up is not None and r is not up and out[id(r)][1] != out[id(up)][1]:
+                spots.append(project_line(at, out[id(up)][1], out[id(r)][1]))
         for (a, b), (p, q) in itertools.combinations(links, 2):
             x = cross_lines(a, b, p, q)
             if x is not None and math.dist(x, at) > LINE_TOL_M:
@@ -1445,10 +1494,11 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
         up = parent[cid][1] if cid in parent else None
         width = DN[max(s["properties"]["diameter"] for s in inc)]["width_m"] / 2
         vertices = sum(len(c) - 2 for c in out.values())
-        if not vertices:
+        straight0, small0 = path_counts(cid, at, out, inc)
+        if not vertices and not small0:
             continue
         found = []
-        for x in move_spots(at, inc, out):
+        for x in move_spots(at, inc, out, up):
             options = []
             for r in inc:
                 c = out[id(r)]
@@ -1460,12 +1510,18 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
                         lines_r[tuple(map(tuple, line))] = line
                 options.append(list(lines_r.values()))
             for combo in itertools.product(*options):
-                if sum(len(line) - 2 for line in combo) >= vertices:
+                left = sum(len(line) - 2 for line in combo)
+                if left > vertices or left == vertices and not small0:
                     continue
                 new = {id(r): line for r, line in zip(inc, combo)}
                 if up is not None and any(q is not up and turn_deg(new[id(up)][1], x, new[id(q)][1]) > MAX_TURN_DEG
                                           for q in inc):
                     continue
+                if left == vertices:
+                    # вершин столько же: перенос снимает мелкий излом пути, если прямых поворотов больше, а мелких меньше
+                    straight1, small1 = path_counts(cid, x, new, inc)
+                    if straight1 <= straight0 or small1 >= small0:
+                        continue
                 ds = move_ds(new, inc, out)
                 if ds <= TURN_TOLERANCE_S:
                     found.append((ds, x, new))
@@ -1474,7 +1530,8 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
         for ds, x, new in found:
             why = move_blocked(cid, x, new, inc, out, up, width)
             left = sum(len(line) - 2 for line in new.values())
-            text = f"{cid}: перенос {math.dist(x, at):.2f} м, вершин у камеры {vertices} → {left}, ΔS {ds:+.6f}"
+            text = f"{cid}: перенос {math.dist(x, at):.2f} м, вершин у камеры {vertices} → {left}, " \
+                   f"мелких изломов пути {small0} → {path_counts(cid, x, new, inc)[1]}, ΔS {ds:+.6f}"
             if why is None:
                 rep.add("B21 излом у камеры снимает перенос камеры", text)
                 break

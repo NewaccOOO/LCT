@@ -353,6 +353,20 @@ class TreeBuilderTest {
         }
     }
 
+    @Test
+    void vertexBeforeFinalPieceIsExtraOnlyWhenStraightLinkEntersNearNearestPoint() {
+        // точка в 0,06 м от стены y=10: прямое звено от (40, 30) входит в 0,09 м от ближайшей точки, от (60, 30) — в 0,15 м
+        Geometry building = PlanFixture.rect(0, 0, 20, 10);
+        Coordinate cp = new Coordinate(10, 9.94);
+        Coordinate exit = new Coordinate(10, 20);
+
+        Coordinate entry = TreeBuilder.straightEntry(building, new Coordinate[] {new Coordinate(40, 30), exit, cp});
+
+        assertEquals(0.09, entry.distance(new Coordinate(10, 10)), 0.001);
+        assertEquals(null, TreeBuilder.straightEntry(building, new Coordinate[] {new Coordinate(60, 30), exit, cp}));
+        assertEquals(null, TreeBuilder.straightEntry(building, new Coordinate[] {exit, cp}));
+    }
+
     private TreeBuilder builder(InputData input, TieInFinder finder) {
         return builder(input, finder, Map.of());
     }
