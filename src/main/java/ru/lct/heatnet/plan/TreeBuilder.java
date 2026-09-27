@@ -644,9 +644,9 @@ final class TreeBuilder {
     /**
      * Часть луча от cp через точку входа entry, где может стоять выход финального участка ({@link #entered}): от
      * первой точки через ENTRY_STEP_M вне зон запрета zones, до которой участок выходит из здания и его зоны отступа
-     * по одному разу и в зоне не подходит к другой стене ({@link #leavesOnce}), до нового входа
-     * луча в зону отступа перед зданием; пустой массив — такой части нет. От дерева не зависит, поэтому одна на все
-     * варианты.
+     * по одному разу и в зоне не подходит к другой стене ({@link #leavesOnce}), до нового входа луча в зону отступа
+     * перед зданием, но не дальше PORTAL_MAX_M от этой первой точки; пустой массив — такой части нет. От дерева не
+     * зависит, поэтому одна на все варианты.
      */
     private double[] window(ObstacleSet zones, ExistingOks building, List<Coordinate[]> rings, Coordinate cp, Coordinate entry) {
         return windowByEntry.computeIfAbsent(List.of(zones, building.getId(), cp.x, cp.y, entry.x, entry.y), key -> {
@@ -657,11 +657,14 @@ final class TreeBuilder {
             double ux = (entry.x - cp.x) / r;
             double uy = (entry.y - cp.y) / r;
             double clearance = zones.oksClearance();
-            double limit = reach(rings, cp, entry, clearance + SIMPLIFY_M);
+            // луч вдоль стены выходит из зоны отступа далеко за r + zone: предел PORTAL_MAX_M считается от выхода,
+            // как у check18.py (entry_window)
+            double far = reach(rings, cp, entry, clearance + SIMPLIFY_M, 3 * PORTAL_MAX_M);
             double t = r + ENTRY_STEP_M * Math.ceil((clearance + SIMPLIFY_M) / ENTRY_STEP_M);
-            while (t < limit && zones.insideForbid(new Coordinate(cp.x + ux * t, cp.y + uy * t), false)) {
+            while (t < far && zones.insideForbid(new Coordinate(cp.x + ux * t, cp.y + uy * t), false)) {
                 t += ENTRY_STEP_M;
             }
+            double limit = Math.min(far, t + PORTAL_MAX_M);
             Coordinate first = new Coordinate(cp.x + ux * t, cp.y + uy * t);
             return t < limit && leavesOnce(building, cp, first, clearance)
                     ? new double[] {t, limit} : new double[0];
@@ -674,8 +677,13 @@ final class TreeBuilder {
      * r + zone + PORTAL_MAX_M. Дешёвый отсев: у большинства точек входа изрезанного фасада луч снова входит в здание.
      */
     static double reach(List<Coordinate[]> rings, Coordinate cp, Coordinate entry, double zone) {
+        return reach(rings, cp, entry, zone, PORTAL_MAX_M);
+    }
+
+    /** То же, но не дальше r + zone + beyond. */
+    static double reach(List<Coordinate[]> rings, Coordinate cp, Coordinate entry, double zone, double beyond) {
         double r = cp.distance(entry);
-        double limit = r + zone + PORTAL_MAX_M;
+        double limit = r + zone + beyond;
         for (double hit : crossings(rings, cp, (entry.x - cp.x) / r, (entry.y - cp.y) / r, limit)) {
             if (hit > r + TOUCH_M) {
                 return Math.min(limit, hit - zone);
