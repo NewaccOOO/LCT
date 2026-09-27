@@ -79,6 +79,21 @@ class NetworkAssemblerTest {
         assertEquals(1.6, k.get(2), 0.001);
     }
 
+    @Test
+    void zoneEndAndNextZoneStartCentimetresApartShareOneCutBetweenThem() {
+        // газопровод в 5,001 м за кромкой (профиль улицы СПб v1): зона дороги кончается в 73,000, зона газопровода
+        // начинается в 73,001. Разрез между ними, а не в начале расширенной зоны газопровода 72,981: иначе 2 см зоны
+        // дороги уходят в участок газопровода с Kспец 1,25 (check18 B14)
+        PlanFixture fixture = PlanFixture.trunk()
+                .restriction("gas-1", PlanFixture.line(250, 75.001, 450, 75.001), "gas_pipeline");
+
+        List<NewSegment> special = specials(assemble(fixture, 90, 10));
+        double cut = special.get(special.size() - 1).getGeometry().getCoordinateN(0).y;
+
+        assertEquals(2, special.size());
+        assertEquals(73.0005, cut, 0.0005);
+    }
+
     /** Один прямой участок от врезки на hn-2 в (300, 0) через дорогу под углом deg к ОКС с расходом flow. */
     private Variant assemble(PlanFixture fixture, double deg, double flow) {
         return assemble(fixture, ROAD, deg, flow);
