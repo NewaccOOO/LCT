@@ -819,6 +819,7 @@ final class NetworkAssembler {
                     }
                 }
                 List<double[]> merged = new ArrayList<>();
+                List<Set<SpecialObjects.Special>> sets = new ArrayList<>();
                 Set<SpecialObjects.Special> lastSet = null;
                 Double from = null;
                 for (double to : bounds) {
@@ -841,11 +842,13 @@ final class NetworkAssembler {
                             last[1] = to;
                         } else {
                             merged.add(new double[] {from, to, k});
+                            sets.add(set);
                             lastSet = set;
                         }
                     }
                     from = to;
                 }
+                collapseSlivers(merged, sets);
                 double length = edges.get(i).length;
                 for (double[] interval : merged) {
                     if (interval[0] <= MERGE_M) {
@@ -858,6 +861,49 @@ final class NetworkAssembler {
                 result.add(merged);
             }
             return result;
+        }
+
+        /**
+         * Кусок короче MERGE_M между двумя смежными частями cut не разрежет, он оставил бы первую его границу. Границы
+         * такого куска — концы и начала зон в сантиметрах друг от друга: на улице конец зоны дороги в 3 м за кромкой и
+         * начало зоны газопровода в 5 м за ней. Разрез ставится так, чтобы точная зона не заходила в соседний участок
+         * без неё: не раньше конца зоны, кончившейся у куска, и не позже начала зоны, начавшейся у куска. Зоны
+         * перекрываются (начало раньше конца) — посередине, между точными концом и началом: границы куска отстоят от
+         * них на ZONE_GROW_M.
+         */
+        void collapseSlivers(List<double[]> merged, List<Set<SpecialObjects.Special>> sets) {
+            for (int j = 1; j + 1 < merged.size(); j++) {
+                double[] a = merged.get(j - 1);
+                double[] s = merged.get(j);
+                double[] b = merged.get(j + 1);
+                if (s[1] - s[0] >= MERGE_M || a[1] != s[0] || s[1] != b[0]) {
+                    continue;
+                }
+                Set<SpecialObjects.Special> left = sets.get(j - 1);
+                Set<SpecialObjects.Special> mid = sets.get(j);
+                Set<SpecialObjects.Special> right = sets.get(j + 1);
+                double lastEnd = !right.containsAll(mid) ? s[1] : !mid.containsAll(left) ? s[0] : Double.NaN;
+                double firstStart = !left.containsAll(mid) ? s[0] : !mid.containsAll(right) ? s[1] : Double.NaN;
+                double at;
+                if (Double.isNaN(lastEnd) || Double.isNaN(firstStart)) {
+                    at = Double.isNaN(lastEnd) ? firstStart : lastEnd;
+                } else if (lastEnd <= firstStart) {
+                    // между зонами промежуток: кусок отходит части с меньшим Kспец
+                    at = a[2] <= b[2] ? firstStart : lastEnd;
+                } else {
+                    at = (lastEnd + firstStart) / 2;
+                }
+                a[1] = at;
+                b[0] = at;
+                merged.remove(j);
+                sets.remove(j);
+                if (left.equals(right)) {
+                    a[1] = b[1];
+                    merged.remove(j);
+                    sets.remove(j);
+                }
+                j--;
+            }
         }
     }
 
