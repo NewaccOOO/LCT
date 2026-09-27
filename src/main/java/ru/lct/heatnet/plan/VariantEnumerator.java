@@ -202,6 +202,15 @@ public final class VariantEnumerator {
     private static final double CITY_MARGIN_M = 60;
     private static final int CITY_BUDGET = Integer.getInteger("heatnet.city.budget", 60);
     /**
+     * Второй проход по точкам города без сети (heatnet.city.retry), см. {@link #retried}: до RETRY_TREES соседних
+     * деревьев не дальше RETRY_NEAR_M.
+     */
+    private static final boolean CITY_RETRY = Boolean.parseBoolean(System.getProperty("heatnet.city.retry", "true"));
+    private static final double RETRY_NEAR_M = 150;
+    private static final int RETRY_TREES = 3;
+    /** Сколько секунд от начала второго прохода варианта можно начинать его группы. */
+    private static final long CITY_RETRY_S = Long.getLong("heatnet.city.retry.deadline", 60);
+    /**
      * Сколько секунд от начала городского расчёта отводится районам (heatnet.city.deadline): районы идут от ближних
      * к сети к дальним, после срока оставшиеся не считаются, их точки остаются без сети. На синтетическом городе
      * десятки тысяч точек лежат в километрах от сети, и графы их районов считаются часами. После сетки зон и быстрых
@@ -710,7 +719,7 @@ public final class VariantEnumerator {
         log.info("city: oks={} direct={} beyond {} m: {} districts={} elapsed={}s", all.size(), all.size() - rest.size(),
                 reach, rest.size() - near.size(), districts.size(), (System.nanoTime() - started) / 1_000_000_000L);
         long deadline = started + CITY_DEADLINE_S * 1_000_000_000L;
-        List<List<Draft>> results = districts.isEmpty() ? new ArrayList<>() : solve(districts, directIndex, deadline, detached);
+        List<List<Draft>> results = districts.isEmpty() ? new ArrayList<>() : solve(districts, i -> directIndex, deadline, detached);
         if (!detached.isEmpty()) {
             // точки, которые проходы формы районов и прямых подключений отцепили (поворот круче 90° в камере),
             // считаются ещё раз по одной: у дерева одной точки камер ветвления нет; в варианте, где точка уже в сети,
@@ -718,14 +727,21 @@ public final class VariantEnumerator {
             List<List<ConnectionPoint>> singles = detached.stream().sorted(Comparator.comparing(ConnectionPoint::getId))
                     .map(List::of).collect(Collectors.toList());
             log.info("city: detached by shape passes {}, solved again one by one", singles.size());
-            results.addAll(solve(singles, directIndex, deadline, null));
+            results.addAll(solve(singles, i -> directIndex, deadline, null));
         }
         int most = Math.max(directTrees.size(), results.stream().mapToInt(List::size).max().orElse(0));
-        List<Variant> variants = new ArrayList<>();
+        List<List<Tree>> candidates = new ArrayList<>();
         for (int k = 0; k < Math.min(MAX_VARIANTS, Math.max(most, 1)); k++) {
             List<Tree> trees = new ArrayList<>(directTrees.get(Math.min(k, directTrees.size() - 1)));
-            List<Tree> districtTrees = joined(results, k, trees);
-            trees.addAll(districtTrees);
+            trees.addAll(joined(results, k, trees));
+            candidates.add(trees);
+        }
+        if (CITY_RETRY) {
+            candidates = retried(candidates, near, System.nanoTime() + CITY_RETRY_S * 1_000_000_000L);
+        }
+        List<Variant> variants = new ArrayList<>();
+        for (int k = 0; k < candidates.size(); k++) {
+            List<Tree> trees = candidates.get(k);
             Variant variant = assembleParts(String.valueOf(k + 1), k + 1, trees, missing(trees));
             variants.add(variant);
             log.info("city: candidate {} trees={} score={} unconnected={} elapsed={}s", k + 1, trees.size(),
@@ -860,8 +876,8 @@ public final class VariantEnumerator {
      * Черновики районов по возрастанию score в порядке списка; район, расчёт которого упал или не начался до
      * {@code deadlineNanos}, остаётся без черновиков.
      */
-    private List<List<Draft>> solve(List<List<ConnectionPoint>> districts, STRtree directIndex, long deadlineNanos,
-            Set<ConnectionPoint> detached) {
+    private List<List<Draft>> solve(List<List<ConnectionPoint>> districts, java.util.function.IntFunction<STRtree> directIndex,
+            long deadlineNanos, Set<ConnectionPoint> detached) {
         ExecutorService pool = Executors.newFixedThreadPool(CITY_THREADS);
         long started = System.nanoTime();
         AtomicInteger done = new AtomicInteger();
@@ -881,7 +897,7 @@ public final class VariantEnumerator {
                     }
                     long districtStarted = System.nanoTime();
                     VariantEnumerator district = district(connections);
-                    district.direct = directIndex;
+                    district.direct = directIndex.apply(index);
                     // те же проходы формы, что в обычном режиме: деревья района проверяются на прямые подключения
                     // (compatible по direct), с соседними районами — при склейке (joined)
                     List<Draft> drafts = new ArrayList<>();
@@ -998,6 +1014,133 @@ public final class VariantEnumerator {
         }
         return accepted;
     }
+
+
+    /**
+     * Второй проход города по точкам без сети: каждая группа таких точек считается районом вместе с точками ближайших
+     * (не дальше RETRY_NEAR_M, до RETRY_TREES) уже принятых деревьев — районов или прямых подключений. Районы считаются
+     * порознь, и точка у границы района остаётся без трассы, когда её маршрут есть только ветвлением от дерева
+     * соседнего района, или её дерево задело дерево соседа и было отброшено в {@link #joined}. Новые деревья заменяют
+     * соседние, если подключают больше точек и не задевают остальные принятые деревья варианта; врезки — только в
+     * существующую сеть, как у любого района. Группа без соседних деревьев — тот же район заново, она не считается.
+     * Группы всех вариантов идут одним пулом, одинаковые (те же точки и те же соседи) — один раз; не начатые до
+     * {@code deadlineNanos} остаются как были.
+     */
+    private List<List<Tree>> retried(List<List<Tree>> variants, List<ConnectionPoint> near, long deadlineNanos) {
+        long started = System.nanoTime();
+        Map<String, Integer> byKey = new LinkedHashMap<>();
+        List<List<ConnectionPoint>> subsets = new ArrayList<>();
+        List<List<Tree>> neighbours = new ArrayList<>();
+        List<Integer> owners = new ArrayList<>();
+        List<List<Map.Entry<List<Tree>, Integer>>> tasks = new ArrayList<>();
+        for (int k = 0; k < variants.size(); k++) {
+            List<Tree> trees = variants.get(k);
+            List<Map.Entry<List<Tree>, Integer>> own = new ArrayList<>();
+            int owner = k;
+            tasks.add(own);
+            Set<String> connected = new HashSet<>();
+            trees.forEach(tree -> tree.connected().forEach(connection -> connected.add(connection.getOksId())));
+            List<ConnectionPoint> left = near.stream().filter(connection -> !connected.contains(connection.getOksId()))
+                    .collect(Collectors.toList());
+            if (left.isEmpty()) {
+                continue;
+            }
+            STRtree index = new STRtree();
+            trees.forEach(tree -> index.insert(tree.envelope(), tree));
+            for (List<ConnectionPoint> group : districts(left)) {
+                Envelope around = new Envelope();
+                group.forEach(connection -> around.expandToInclude(connection.getGeometry().getCoordinate()));
+                around.expandBy(RETRY_NEAR_M);
+                Geometry points = factory.createMultiPoint(group.stream().map(ConnectionPoint::getGeometry).toArray(Point[]::new));
+                List<Tree> close = new ArrayList<>();
+                for (Object item : index.query(around)) {
+                    Tree tree = (Tree) item;
+                    if (!tree.connected().isEmpty() && geometry(tree).distance(points) <= RETRY_NEAR_M) {
+                        close.add(tree);
+                    }
+                }
+                if (close.isEmpty()) {
+                    continue;
+                }
+                close.sort(Comparator.comparingDouble((Tree tree) -> geometry(tree).distance(points))
+                        .thenComparing(tree -> tree.connected().get(0).getId()));
+                List<Tree> taken = new ArrayList<>(close.subList(0, Math.min(RETRY_TREES, close.size())));
+                List<ConnectionPoint> subset = new ArrayList<>(group);
+                taken.forEach(tree -> subset.addAll(tree.connected()));
+                String key = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(","))
+                        + taken.stream().map(tree -> "#" + System.identityHashCode(tree)).sorted().collect(Collectors.joining());
+                int task = byKey.computeIfAbsent(key, any -> {
+                    subsets.add(subset);
+                    neighbours.add(taken);
+                    owners.add(owner);
+                    return subsets.size() - 1;
+                });
+                own.add(Map.entry(taken, task));
+            }
+        }
+        List<List<Draft>> results = subsets.isEmpty() ? List.of() : solve(subsets, i -> {
+            // прямые подключения района второго прохода — деревья варианта, кроме заменяемых соседей
+            Set<Tree> replaced = Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+            replaced.addAll(neighbours.get(i));
+            STRtree others = new STRtree();
+            for (Tree tree : variants.get(owners.get(i))) {
+                if (!replaced.contains(tree)) {
+                    others.insert(tree.envelope(), Map.entry(0, tree));
+                }
+            }
+            others.build();
+            return others;
+        }, deadlineNanos, null);
+        List<List<Tree>> result = new ArrayList<>();
+        for (int k = 0; k < variants.size(); k++) {
+            List<Tree> trees = new ArrayList<>(variants.get(k));
+            Set<Tree> present = Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+            present.addAll(trees);
+            int improved = 0;
+            int attached = 0;
+            for (Map.Entry<List<Tree>, Integer> task : tasks.get(k)) {
+                List<Draft> drafts = results.get(task.getValue());
+                List<Tree> old = task.getKey();
+                if (drafts.isEmpty() || !present.containsAll(old)) {
+                    continue;
+                }
+                List<Tree> fresh = drafts.get(0).trees;
+                int before = old.stream().mapToInt(tree -> tree.connected().size()).sum();
+                int after = fresh.stream().mapToInt(tree -> tree.connected().size()).sum();
+                if (after <= before) {
+                    continue;
+                }
+                trees.removeIf(old::contains);
+                List<Tree> added = new ArrayList<>();
+                for (Tree tree : fresh) {
+                    Envelope around = new Envelope(tree.envelope());
+                    around.expandBy(TREES_APART_M + 1);
+                    List<Tree> close = trees.stream().filter(t -> t.envelope().intersects(around)).collect(Collectors.toList());
+                    close.addAll(added);
+                    if (!compatible(tree, close)) {
+                        added = null;
+                        break;
+                    }
+                    added.add(tree);
+                }
+                if (added == null) {
+                    trees.addAll(old);
+                    continue;
+                }
+                trees.addAll(added);
+                present.removeAll(old);
+                present.addAll(added);
+                improved++;
+                attached += after - before;
+            }
+            result.add(trees);
+            log.info("city: retry variant {} groups={} improved={} connected+{}", k + 1, tasks.get(k).size(), improved,
+                    attached);
+        }
+        log.info("city: retry tasks={} elapsed={}s", subsets.size(), (System.nanoTime() - started) / 1_000_000_000L);
+        return result;
+    }
+
 
     /** Группы близких точек и их области расчёта, сборщик. */
     private List<List<ConnectionPoint>> regions() {
