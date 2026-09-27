@@ -2498,7 +2498,7 @@ public final class VariantEnumerator {
      * ({@link #retied}). Рёбра камеры проверяются по зонам своего Ду, как в {@link #rerouted}, и доводятся до строгой
      * формы, где убранная вершина не делает поворот в камере круче ({@link #sharpened}). Перенос берётся, если S узла
      * врезки вырос не больше TURN_TOLERANCE_S, Ду рёбер не выросли, а дерево не касается других; дальше изломы
-     * ищутся на новом дереве. Каждый перенос убирает вершину, поэтому цикл конечен.
+     * ищутся на новом дереве. Каждый перенос убирает вершину или мелкий излом пути, поэтому цикл конечен.
      */
     private List<Tree> unkinked(List<Tree> trees) {
         long started = System.nanoTime();
@@ -2765,7 +2765,9 @@ public final class VariantEnumerator {
      * Деревья варианта, где финальный участок к точке в здании входит в него у ближайшей допустимой точки контура
      * (приложение 18.09, п. 2.2; толкование в docs/interpretation.md). Поиск ставит вход у ближней открытой стороны,
      * а проход переносит его ближе, если звено от прежней вершины ребра до нового выхода держит запасы строгой формы
-     * ({@link TreeBuilder#entered}); рёбра доводятся до строгой формы с новым выходом на месте ({@link #sharpened}).
+     * ({@link TreeBuilder#entered}). Вершина перед финальным участком уходит, если прямое звено от предыдущей входит
+     * не дальше 0,1 м от ближайшей точки контура ({@link TreeBuilder#straightened}). Рёбра доводятся до строгой формы с
+     * новым выходом на месте ({@link #sharpened}).
      * Правка берётся, если узел врезки собирается, Ду рёбер не выросли, а дерево не касается других. S не
      * сравнивается: вход задаёт правило.
      */
@@ -2773,29 +2775,33 @@ public final class VariantEnumerator {
         long started = System.nanoTime();
         List<Tree> result = new ArrayList<>(trees);
         int taken = 0;
-        int far = 0;
+        int tried = 0;
+        // Ду рёбер узла врезки: до правки в нём те же
+        Map<String, Map<Tree.Edge, Integer>> dnByRoot = new HashMap<>();
         for (int t = 0; t < result.size(); t++) {
             for (int e = 0; e < result.get(t).edges.size(); e++) {
                 Tree tree = result.get(t);
                 Tree.Edge edge = tree.edges.get(e);
                 ExistingOks building = edge.to.kind == Tree.Kind.CONNECTION
                         ? buildingByConnection.get(edge.to.connection.getId()) : null;
-                if (building == null || Double.isNaN(TreeBuilder.farEntry(building.getGeometry(), edge.line.getCoordinates()))) {
+                if (building == null || edge.line.getNumPoints() < 3
+                        && Double.isNaN(TreeBuilder.farEntry(building.getGeometry(), edge.line.getCoordinates()))) {
                     continue;
                 }
-                far++;
+                tried++;
                 List<Tree> unit = new ArrayList<>();
                 for (Tree other : result) {
                     if (other.root.key.equals(tree.root.key)) {
                         unit.add(other);
                     }
                 }
-                Map<Tree.Edge, Integer> dnByEdge;
+                Map<Tree.Edge, Integer> dnByEdge = dnByRoot.get(tree.root.key);
                 try {
-                    dnByEdge = assembler.diameters(unit);
+                    dnByEdge = dnByEdge != null ? dnByEdge : assembler.diameters(unit);
                 } catch (IllegalStateException | IllegalArgumentException ex) {
                     break;
                 }
+                dnByRoot.put(tree.root.key, dnByEdge);
                 Region region = regionByConnection.get(edge.to.connection.getId());
                 Envelope area = region.area.contains(tree.envelope()) ? region.area : region.wideArea;
                 int dn = dnByEdge.get(edge);
@@ -2813,6 +2819,9 @@ public final class VariantEnumerator {
                 }
                 Coordinate[] line = builder.entered(building, edge.line.getCoordinates(), zones, tree.tie.getIgnored(),
                         before, apart, edge.from == tree.root);
+                Coordinate[] straight = builder.straightened(building, line != null ? line : edge.line.getCoordinates(),
+                        zones, tree.tie.getIgnored(), before, apart, edge.from == tree.root);
+                line = straight != null ? straight : line;
                 if (line == null) {
                     continue;
                 }
@@ -2836,10 +2845,11 @@ public final class VariantEnumerator {
                     continue;
                 }
                 result.set(t, changed);
+                dnByRoot.remove(tree.root.key);
                 taken++;
             }
         }
-        log.info("entered: far={} moves={} elapsed={}ms", far, taken, (System.nanoTime() - started) / 1_000_000);
+        log.info("entered: tried={} moves={} elapsed={}ms", tried, taken, (System.nanoTime() - started) / 1_000_000);
         return result;
     }
 
