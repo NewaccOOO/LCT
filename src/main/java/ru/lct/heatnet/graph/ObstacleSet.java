@@ -1395,6 +1395,34 @@ public final class ObstacleSet {
         return true;
     }
 
+    /**
+     * Отрезок a–b держит отступы с запасом margin, как у {@link #plain}, но объект специального прохода может
+     * пересекать по правилам, как ребро графа ({@link #crossingAllowed}): не вдоль и под углом не меньше min_angle_deg.
+     * Так проверяется прямая, которая заменяет излом меньше 3° у границы специальной части.
+     */
+    public boolean crossable(Coordinate a, Coordinate b, Set<String> ignored, double margin) {
+        double extra = margin - SIMPLIFY_M;
+        Envelope envelope = new Envelope(a, b);
+        envelope.expandBy(margin);
+        for (Object item : forbidZones.query(envelope)) {
+            if (blocksPlain(item, a, b, ignored, extra)) {
+                return false;
+            }
+        }
+        for (Object item : specials.query(envelope)) {
+            Special special = (Special) item;
+            if (ignored.contains(special.id) && touches(special, a, b)) {
+                continue;
+            }
+            List<LineSegment> sides = special.sidesNear(a, b);
+            boolean crossed = special.polygon ? special.crossedBy(a, b) : crosses(sides, a, b);
+            if (crossed ? !crossingAllowed(special, sides, a, b) : special.zone.intersects(a, b, extra, false)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** Зона или объект специального прохода item делает отрезок a–b не обычным, см. {@link #plain}. */
     private boolean blocksPlain(Object item, Coordinate a, Coordinate b, Set<String> ignored, double extra) {
         if (item instanceof Zone) {

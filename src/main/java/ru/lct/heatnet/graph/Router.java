@@ -55,6 +55,11 @@ public final class Router {
     private static final int BEND_ROUNDS = 20;
     /** Вершина ближе этого к границе специальной части стоит на ней, см. {@link #drop}. */
     private static final double SPAN_EPS_M = 1e-3;
+    /**
+     * Мелкий излом — поворот меньше MIN_TURN_DEG, у которого конец короткого плеча уходит с прямой хотя бы на MICRO_M:
+     * так он не путается с округлением координат выхода до 9 знаков (десятые доли миллиметра), см. {@link #micro}.
+     */
+    public static final double MICRO_M = 0.001;
     private static final double UNKNOWN = Double.NEGATIVE_INFINITY;
     /** Предел состояний точного поиска: дальше перебор считается безнадёжным и маршрут не ищется. */
     private static final int EXACT_STATES = 100_000;
@@ -900,6 +905,114 @@ public final class Router {
         return false;
     }
 
+    /**
+     * Убирает вершину на границе специальной части с изломом меньше MIN_TURN_DEG ({@link #micro}): {@link #sharpen}
+     * такие вершины не трогает, специальная часть там остаётся прямой, а обычный участок за узлом чуть ломается. Соседи
+     * соединяются прямой через объект специального прохода, если она пересекает его по правилам
+     * ({@link ObstacleSet#crossable}); соседи с изломом меньше MIN_TURN_DEG после этого уходят тоже, кроме keep. Прямая
+     * держит запасы строгой формы, как у {@link #sharpen}: звено от CUT_PIECE_M, повороты на концах, в том числе к
+     * before и after, до MAX_TURN_DEG, CUT_APART_M до apart и своей ломаной; специальные части на ней целиком, от концов
+     * не ближе MIN_PIECE_M или от самого конца. Изломов меньше MIN_TURN_DEG на ломаной и на её концах становится
+     * меньше. Повторяется, пока что-то меняется; true — coords заменены.
+     */
+    public boolean even(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
+            List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
+        boolean changed = false;
+        for (boolean again = true; again && coords.size() > 2; ) {
+            again = false;
+            List<SpecialSpan> spans = zones.spans(factory.createLineString(coords.toArray(new Coordinate[0])), ignored);
+            int n = coords.size();
+            double[] at = new double[n];
+            for (int v = 1; v < n; v++) {
+                at[v] = at[v - 1] + coords.get(v - 1).distance(coords.get(v));
+            }
+            for (int v = 1; v + 1 < n && !again; v++) {
+                if (coords.get(v) == keep || !micro(coords.get(v - 1), coords.get(v), coords.get(v + 1))
+                        || !spanEnd(spans, at[v])) {
+                    continue;
+                }
+                int lo = v;
+                int hi = v;
+                while (lo >= 2 && coords.get(lo - 1) != keep
+                        && deflectionDeg(coords.get(lo - 2), coords.get(lo - 1), coords.get(hi + 1)) < MIN_TURN_DEG) {
+                    lo--;
+                }
+                while (hi + 2 < n && coords.get(hi + 1) != keep
+                        && deflectionDeg(coords.get(lo - 1), coords.get(hi + 1), coords.get(hi + 2)) < MIN_TURN_DEG) {
+                    hi++;
+                }
+                List<Coordinate> shape = new ArrayList<>(coords.subList(0, lo));
+                shape.addAll(coords.subList(hi + 1, n));
+                if (crossFits(zones, shape, lo - 1, ignored, apart, before, after)
+                        && microCount(shape, before, after) < microCount(coords, before, after)) {
+                    coords.clear();
+                    coords.addAll(shape);
+                    changed = again = true;
+                }
+            }
+        }
+        return changed;
+    }
+
+    /** На at начинается или кончается специальная часть. */
+    private static boolean spanEnd(List<SpecialSpan> spans, double at) {
+        for (SpecialSpan span : spans) {
+            if (Math.abs(span.getFromM() - at) <= SPAN_EPS_M || Math.abs(span.getToM() - at) <= SPAN_EPS_M) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Изломы меньше MIN_TURN_DEG ({@link #micro}) в вершинах ломаной и на её концах к before и after. */
+    private static int microCount(List<Coordinate> coords, Coordinate before, List<Coordinate> after) {
+        int n = coords.size();
+        int count = before != null && micro(before, coords.get(0), coords.get(1)) ? 1 : 0;
+        for (int v = 1; v + 1 < n; v++) {
+            count += micro(coords.get(v - 1), coords.get(v), coords.get(v + 1)) ? 1 : 0;
+        }
+        for (Coordinate c : after) {
+            count += micro(coords.get(n - 2), coords.get(n - 1), c) ? 1 : 0;
+        }
+        return count;
+    }
+
+    /** Новый отрезок join ломаной shape через специальную часть годится, см. {@link #even}. */
+    private boolean crossFits(ObstacleSet zones, List<Coordinate> shape, int join, Set<String> ignored,
+            List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
+        int n = shape.size();
+        Coordinate a = shape.get(join);
+        Coordinate b = shape.get(join + 1);
+        if (a.distance(b) < CUT_PIECE_M || join >= 1 && !turnAllowed(shape.get(join - 1), a, b)
+                || join + 2 < n && !turnAllowed(a, b, shape.get(join + 2))
+                || !startFits(shape, join, before) || !endFits(shape, join, after)
+                || !zones.covers(a, b) || !zones.crossable(a, b, ignored, CUT_MARGIN_M) || along(zones, shape, join, ignored)) {
+            return false;
+        }
+        double from = 0;
+        for (int k = 0; k < join; k++) {
+            from += shape.get(k).distance(shape.get(k + 1));
+        }
+        double to = from + a.distance(b);
+        for (SpecialSpan span : zones.spans(factory.createLineString(shape.toArray(new Coordinate[0])), ignored)) {
+            if (span.getFromM() >= to || span.getToM() <= from) {
+                continue;
+            }
+            boolean start = Math.abs(span.getFromM() - from) <= SPAN_EPS_M || span.getFromM() >= from + MIN_PIECE_M;
+            boolean end = Math.abs(span.getToM() - to) <= SPAN_EPS_M || span.getToM() <= to - MIN_PIECE_M;
+            if (!start || !end) {
+                return false;
+            }
+        }
+        List<LineSegment> own = new ArrayList<>(apart);
+        for (int k = 0; k + 1 < n; k++) {
+            if (Math.abs(k - join) > 1) {
+                own.add(new LineSegment(shape.get(k), shape.get(k + 1)));
+            }
+        }
+        return apart(new LineSegment(a, b), own);
+    }
+
     /** Вершины, которые замена поворотов не двигает: keep и вершины ближе MIN_PIECE_M к специальным частям. */
     private static boolean[] held(List<Coordinate> coords, Coordinate keep, List<SpecialSpan> spans) {
         boolean[] held = new boolean[coords.size()];
@@ -1713,6 +1826,12 @@ public final class Router {
         double gap = limit + GAP_EPS_M;
         return Math.min(r.x, s.x) - Math.max(p.x, q.x) > gap || Math.min(p.x, q.x) - Math.max(r.x, s.x) > gap
                 || Math.min(r.y, s.y) - Math.max(p.y, q.y) > gap || Math.min(p.y, q.y) - Math.max(r.y, s.y) > gap;
+    }
+
+    /** В b мелкий излом пути a–b–c: поворот меньше MIN_TURN_DEG, конец короткого плеча дальше MICRO_M от прямой. */
+    public static boolean micro(Coordinate a, Coordinate b, Coordinate c) {
+        double turn = deflectionDeg(a, b, c);
+        return turn < MIN_TURN_DEG && Math.min(a.distance(b), b.distance(c)) * Math.sin(Math.toRadians(turn)) >= MICRO_M;
     }
 
     /** Изменение направления в вершине b пути a–b–c, градусы; 0 — по прямой. */

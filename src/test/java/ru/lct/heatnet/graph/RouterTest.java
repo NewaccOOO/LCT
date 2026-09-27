@@ -388,6 +388,18 @@ class RouterTest {
     }
 
     @Test
+    void evenDropsSmallKinkAtEndOfRoadCrossing() {
+        // спецчасть через дорогу кончается в вершине (0, 13), за ней трасса уходит в сторону на 1,3°: вершину заменяет
+        // одна прямая через дорогу, почти под прямым углом к ней
+        Router router = router(List.of(new Restriction("road-1", rect(-500, -10, 500, 10), "road")), List.of());
+        List<Coordinate> coords = new ArrayList<>(List.of(new Coordinate(0, -60), new Coordinate(0, 13), new Coordinate(2, 100)));
+
+        assertTrue(Router.micro(coords.get(0), coords.get(1), coords.get(2)));
+        assertTrue(router.even(router.obstacles(), coords, Set.of(), null, List.of(), null, List.of()));
+        assertEquals(List.of(new Coordinate(0, -60), new Coordinate(2, 100)), coords);
+    }
+
+    @Test
     void perpendicularTramCrossingStaysStraight() {
         // Узлы вдоль путей лежат в полосе margin_m: переход между ними со сдвигом вбок не должен быть легче прямого.
         double tramWidth = 8;

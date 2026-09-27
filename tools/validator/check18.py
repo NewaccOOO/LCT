@@ -81,12 +81,7 @@ ENTRY_TOL_M = 0.1
 APPROACH_M = 0.05
 APPROACH_ENTRY_M = 0.03
 ZONE_WIDER_M = 0.05
-# B20 в камере ветвления — нарушение, если поворот снимает правка у камеры, как у сервиса (VariantEnumerator.turned):
-# сдвиг камеры вдоль первого звена участка шагом 0,1 м до 10 м или излом звена у камеры на наименьший угол от 3,5° с
-# шагом 0,5°, новая вершина в 1,05·2^k м от камеры; S растёт не больше TURN_TOLERANCE_S
-TURN_STEP_M = 0.1
-TURN_MAX_M = 10.0
-BEND_STEP_DEG = 0.5
+# B21: перенос камеры снимает излом, если S растёт не больше TURN_TOLERANCE_S (TreeBuilder.unkinks)
 TURN_TOLERANCE_S = 0.002
 # D11: камера врезки в трубу не стоит в полосе margin_m полигона спецпрохода (дорога, трамвайные пути), если на трубе
 # есть место вне полосы (разъяснение 6: спецпроход — один прямой участок, угол — в точке входа). Камера в полосе, если
@@ -101,6 +96,11 @@ END_GAP_M = 1.0
 SHORT_PIECE_M = 1.0
 # B21: мелкий излом пути точки в камере — поворот от TURN_DEG до SMALL_BEND_DEG (TreeBuilder.SMALL_BEND_DEG)
 SMALL_BEND_DEG = 30.0
+# B21: излом меньше TURN_DEG в камере или техническом узле на пути точки — поворот, у которого конец короткого плеча
+# дальше MICRO_M от прямой (Router.MICRO_M, округление координат выхода даёт десятые доли миллиметра). Сервис снимает
+# его, если S не растёт; нарушение — если правка сервиса снимает его с ΔS не больше −MICRO_DS: запас на ошибку сложения
+MICRO_M = 0.001
+MICRO_DS = 1e-6
 # разд. 6: варианты одинаковы, если у каждого больше 90 % длины меньшего лежит в полосе 10 м от другого или у них одно
 # устройство (VariantEnumerator.distinct); доля расхождения — 1 минус меньшая из этих длин, делённая на длину меньшего
 SAME_ROUTE_M = 10.0
@@ -1014,6 +1014,13 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
     return short_links
 
 
+def micro(a, b, c):
+    """В b излом меньше TURN_DEG: конец короткого плеча дальше MICRO_M от прямой (Router.micro), так он не путается с
+    округлением координат выхода."""
+    t = turn_deg(a, b, c)
+    return t < TURN_DEG and min(math.dist(a, b), math.dist(b, c)) * math.sin(math.radians(t)) >= MICRO_M
+
+
 def signed_turn(a, b, c):
     """Отклонение в вершине b со знаком: плюс — влево, минус — вправо."""
     cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
@@ -1049,9 +1056,7 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
     Два соседних поворота в одну сторону со звеном от SHORT_LINK_M — тоже B17, если их заменяет одна вершина в лучшей
     точке (one_bend) и путь с ней не длиннее прежнего.
 
-    B20: поворот круче 90° на пути точки в техническом узле — нарушение; в камере ветвления — нарушение, если его
-    снимает правка у камеры с теми же запасами (сдвиг камеры вдоль первого звена участка или излом звена у камеры, см.
-    TURN_STEP_M, BEND_STEP_DEG) и S растёт не больше TURN_TOLERANCE_S, иначе справочная строка с причиной.
+    B20: поворот круче 90° на пути точки в камере или техническом узле — нарушение при любой цене правки.
 
     B21: вершины у новой камеры ветвления лишние, если камеру можно перенести в точку рядом (сетка ±SHIFT_M, первые
     вершины её участков, точки на прямых звеньев у камеры и на прямых между первыми вершинами участка к врезке и
@@ -1060,7 +1065,13 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
     участков больше, а поворотов от TURN_DEG до SMALL_BEND_DEG меньше. Каждый участок идёт из нового места прямой к
     первой или второй своей вершине. Новые звенья держат те же запасы, поворот в камере по пути от точки к врезке не
     круче MAX_TURN_DEG, финальный участок к точке остаётся на своей прямой, камера не ближе CHAMBER_GAP_M по участку
-    к точке подключения и не ближе отступа с запасом CHAMBER_NEAR_M к объектам специального прохода и сети."""
+    к точке подключения и не ближе отступа с запасом CHAMBER_NEAR_M к объектам специального прохода и сети.
+
+    B21 и для излома меньше TURN_DEG на пути точки (micro): в камере его снимает перенос с тем же числом вершин, после
+    которого таких изломов меньше, прямые пути остаются прямыми, а ΔS не больше −MICRO_DS; места ещё и проекции на
+    прямые спецучастков за техническими узлами, финальный участок прямо от камеры в здание может повернуться
+    (rotated_final). В техническом узле его снимает прямая вместо вершины у спецучастка через объект по правилам или
+    прямая к точке в здании вместо выхода на границе спецчасти (Router.even, TreeBuilder.evened)."""
     lines = [geo[str(s["properties"]["id"])] for s in segs]
     tree = STRtree(lines)
     tie_keys = {n: {(rt, rid) for rid, rt, _, _ in trees["spec_near"](pt, 0.5) if rt == "heat_network"}
@@ -1419,11 +1430,36 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
         along = ux * (x[0] - a[0]) + uy * (x[1] - a[1])
         return None if along >= length - LINE_TOL_M else [] if along >= -LINE_TOL_M else [x, a]
 
-    def move_blocked(cid, x, new, inc, out, up, width):
+    def rotated_final(k, x, cp):
+        """Почему финальный участок k прямо от камеры в здание нельзя вести из x; None — можно: вход не дальше
+        ENTRY_TOL_M от ближайшей точки контура и запасы, как у прямого звена в B16 (TreeBuilder.lineAllowed)."""
+        cg = cps[cp][0]
+        c = [x, tuple(lines[k].coords[-1])]
+        for og in (og for _, og in trees["oks_near"](cg, 0.0) if og.buffer(0.01).contains(cg)):
+            shells = [og.exterior] if og.geom_type == "Polygon" else [g.exterior for g in og.geoms]
+            hit = LineString(c[::-1]).intersection(og.boundary)
+            e = min((pt for g in getattr(hit, "geoms", [hit]) for pt in g.coords),
+                    key=lambda pt: math.dist(pt, c[-1]), default=None)
+            near = min((shapely.ops.nearest_points(sh, cg)[0] for sh in shells), key=cg.distance)
+            if e is None or near.distance(Point(e)) > ENTRY_TOL_M:
+                return "финальный участок входит дальше от ближайшей точки контура"
+
+            def straight(end):
+                if math.dist(end, c[-1]) >= math.dist(x, c[-1]):
+                    return "конец участка за камерой"
+                return blocked(k, [x, end, c[-1]], [0], min_piece=0.0, apart=False)
+
+            q, _, reasons = nearer_entry(cg, og, shells, segs[k]["properties"]["diameter"], trees, math.inf, straight,
+                                         [Point(e)])
+            if q is None:
+                return f"финальный участок из нового места: {dict(reasons)}"
+        return None
+
+    def move_blocked(cid, x, new, inc, out, up, width, rotate=False):
         """Почему камеру cid нельзя перенести в x, где её участки идут по new (координаты от камеры по id участка);
         None — можно. Первое звено на прямой прежнего звена проверяется только в новой части: в прежнем звене — никак,
         на продолжении за его начало — как финальный участок за точкой выхода. Финальный участок к точке остаётся на
-        своей прямой."""
+        своей прямой, а при rotate участок прямо от камеры в здание может повернуться (rotated_final)."""
         pt = Point(x)
         for rid, rt, rg, extra in trees["spec_near"](pt, trees["spec_reach"] + width + CHAMBER_NEAR_M):
             if pt.distance(rg) <= _TYPES[rt]["clearance_m"] + width + extra + CHAMBER_NEAR_M:
@@ -1446,7 +1482,11 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
             j = len(c) - len(line) + 1
             part = on_link(x, c[j - 1], c[j])
             if part is None and sid in final_piece and j == len(c) - 1:
-                return f"{sid}: финальный участок уходит со своей прямой"
+                why = rotated_final(k, x, final_piece[sid][0]) if rotate and len(c) == 2 \
+                    else "финальный участок уходит со своей прямой"
+                if why:
+                    return f"{sid}: {why}"
+                continue
             if part == []:
                 continue
             if part:
@@ -1463,19 +1503,26 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
 
     def path_counts(cid, x, new, inc):
         """Прямые (поворот меньше TURN_DEG) и мелкие (меньше SMALL_BEND_DEG) повороты на пути точки в камере cid на месте
-        x и в камерах ветвления на дальних концах её участков; new — координаты участков от камеры."""
-        turns = [turn_deg(new[id(cs)][1], x, new[id(ps)][1]) for cs, ps in path_pairs.get(cid, [])]
+        x и в камерах ветвления на дальних концах её участков; new — координаты участков от камеры. Третье число —
+        изломы меньше TURN_DEG (micro) там же и в технических узлах на дальних концах участков перед спецучастком."""
+        turns = [(new[id(cs)][1], x, new[id(ps)][1]) for cs, ps in path_pairs.get(cid, [])]
+        nodes = []
         for r in inc:
             line = new[id(r)]
             p = r["properties"]
             far = str(p["end_node_id"]) if str(p["start_node_id"]) == cid else str(p["start_node_id"])
+            if kinds.get(far) == "technical_node":
+                nodes += [(line[-2], line[-1], next_to(geo, t, far)) for t in adj[far]
+                          if t is not r and t["properties"]["laying_method"] == "special"]
             if kinds.get(far) != "heat_chamber" or far in ties:
                 continue
             for cs, ps in path_pairs.get(far, []):
                 other = ps if cs is r else cs if ps is r else None
                 if other is not None:
-                    turns.append(turn_deg(line[-2], line[-1], next_to(geo, other, far)))
-        return sum(t < TURN_DEG for t in turns), sum(TURN_DEG <= t < SMALL_BEND_DEG for t in turns)
+                    turns.append((line[-2], line[-1], next_to(geo, other, far)))
+        angles = [turn_deg(*t) for t in turns]
+        return (sum(a < TURN_DEG for a in angles), sum(TURN_DEG <= a < SMALL_BEND_DEG for a in angles),
+                sum(micro(*t) for t in turns + nodes))
 
     def move_ds(new, inc, out):
         """Изменение S при переносе камеры: длины участков камеры по цене их ДУ."""
@@ -1486,10 +1533,11 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
             dl += d
         return 0.7 * dc / 25e6 + 0.3 * dl / 100
 
-    def move_spots(at, inc, out, up):
+    def move_spots(cid, at, inc, out, up, specials=False):
         """Места переноса: сетка ±SHIFT_M с шагом SHIFT_STEP_M, первые вершины участков, проекции камеры на прямые
         вторых звеньев и на прямые между первыми вершинами участка к врезке up и остальных, попарные пересечения прямых
-        первых и вторых звеньев."""
+        первых и вторых звеньев; при specials — проекции на прямые спецучастков за техническими узлами на концах
+        участков (там путь через узел прямой)."""
         n = round(SHIFT_M / SHIFT_STEP_M)
         spots = [(at[0] + i * SHIFT_STEP_M, at[1] + j * SHIFT_STEP_M)
                  for i in range(-n, n + 1) for j in range(-n, n + 1) if i or j]
@@ -1508,6 +1556,13 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
             x = cross_lines(a, b, p, q)
             if x is not None and math.dist(x, at) > LINE_TOL_M:
                 spots.append(x)
+        for r in inc if specials else []:
+            rp = r["properties"]
+            far = str(rp["end_node_id"]) if str(rp["start_node_id"]) == cid else str(rp["start_node_id"])
+            if kinds.get(far) == "technical_node":
+                for t in adj[far]:
+                    if t is not r and t["properties"]["laying_method"] == "special":
+                        spots.append(project_line(at, out[id(r)][-1], next_to(geo, t, far)))
         return spots
 
     for cid in sorted(n for n, kind in kinds.items() if kind == "heat_chamber" and n not in ties):
@@ -1523,11 +1578,11 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
         up = parent[cid][1] if cid in parent else None
         width = DN[max(s["properties"]["diameter"] for s in inc)]["width_m"] / 2
         vertices = sum(len(c) - 2 for c in out.values())
-        straight0, small0 = path_counts(cid, at, out, inc)
-        if not vertices and not small0:
+        straight0, small0, micro0 = path_counts(cid, at, out, inc)
+        if not vertices and not small0 and not micro0:
             continue
         found = []
-        for x in move_spots(at, inc, out, up):
+        for x in move_spots(cid, at, inc, out, up, micro0 > 0):
             options = []
             for r in inc:
                 c = out[id(r)]
@@ -1540,27 +1595,33 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
                 options.append(list(lines_r.values()))
             for combo in itertools.product(*options):
                 left = sum(len(line) - 2 for line in combo)
-                if left > vertices or left == vertices and not small0:
+                if left > vertices:
                     continue
                 new = {id(r): line for r, line in zip(inc, combo)}
                 if up is not None and any(q is not up and turn_deg(new[id(up)][1], x, new[id(q)][1]) > MAX_TURN_DEG
                                           for q in inc):
                     continue
+                evens = False
                 if left == vertices:
-                    # вершин столько же: перенос снимает мелкий излом пути, если прямых поворотов больше, а мелких меньше
-                    straight1, small1 = path_counts(cid, x, new, inc)
-                    if straight1 <= straight0 or small1 >= small0:
-                        continue
+                    # вершин столько же: перенос снимает мелкий излом пути, если прямых поворотов больше, а мелких меньше,
+                    # или излом меньше TURN_DEG, если таких меньше, прямые остаются прямыми, а S не растёт
+                    straight1, small1, micro1 = path_counts(cid, x, new, inc)
+                    if not (small0 and straight1 > straight0 and small1 < small0):
+                        evens = micro1 < micro0 and straight1 >= straight0
+                        if not evens:
+                            continue
                 ds = move_ds(new, inc, out)
-                if ds <= TURN_TOLERANCE_S:
-                    found.append((ds, x, new))
+                if ds <= (-MICRO_DS if evens else TURN_TOLERANCE_S):
+                    found.append((ds, x, new, evens))
         found.sort(key=lambda f: f[0])
         first = None
-        for ds, x, new in found:
-            why = move_blocked(cid, x, new, inc, out, up, width)
+        for ds, x, new, evens in found:
+            why = move_blocked(cid, x, new, inc, out, up, width, evens)
             left = sum(len(line) - 2 for line in new.values())
+            counts = path_counts(cid, x, new, inc)
             text = f"{cid}: перенос {math.dist(x, at):.2f} м, вершин у камеры {vertices} → {left}, " \
-                   f"мелких изломов пути {small0} → {path_counts(cid, x, new, inc)[1]}, ΔS {ds:+.6f}"
+                   f"мелких изломов пути {small0} → {counts[1]}, изломов меньше {TURN_DEG}° {micro0} → {counts[2]}, " \
+                   f"ΔS {ds:+.6f}"
             if why is None:
                 rep.add("B21 излом у камеры снимает перенос камеры", text)
                 break
@@ -1569,97 +1630,211 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
             if first:
                 rep.add("i  излом у камеры переносом не снять (B21)", first)
 
-    # Д. поворот круче 90° на пути точки в узле; в камере ветвления ищется правка, как у сервиса
-    def bend_blocked(cid, r, inc, out, up, delta_sign, first_len):
-        """Почему звено участка r у камеры нельзя повернуть на delta_sign·δ; (None, ΔS) — можно, см. B20."""
-        c = out[id(r)]
-        base = math.atan2(c[1][1] - c[0][1], c[1][0] - c[0][0])
-        unit = None
-        delta = TURN_DEG + BEND_STEP_DEG
-        while unit is None and delta <= 90.0:
-            a = base + delta_sign * math.radians(delta)
-            probe = (c[0][0] + math.cos(a), c[0][1] + math.sin(a))
-            if all(turn_deg((probe if r is up else out[id(up)][1]), c[0], (probe if q is r else out[id(q)][1]))
-                   <= MAX_TURN_DEG for q in inc if q is not up):
-                unit = probe
-            delta += BEND_STEP_DEG
-        if unit is None:
-            return "нет угла, при котором все повороты в камере до 90°", None
-        why = None
-        rr = CUT_PIECE_M
-        while rr + CUT_PIECE_M <= first_len:
-            q = (c[0][0] + (unit[0] - c[0][0]) * rr, c[0][1] + (unit[1] - c[0][1]) * rr)
-            new = [c[0], q] + c[1:]
-            turns = [turn_deg(new[i - 1], new[i], new[i + 1]) for i in (1, 2) if i + 1 < len(new)]
-            k = index[id(r)]
-            forward = c[0] == lines[k].coords[0]
-            own = new if forward else new[::-1]
-            if min(turns) < TURN_DEG:
-                why = why or f"излом {min(turns):.1f}° < {TURN_DEG}°"
-            else:
-                why = blocked(k, own, [0, 1] if forward else [len(own) - 3, len(own) - 2])
-                if why is None:
-                    d = LineString(new).length - LineString(c).length
-                    return None, 0.7 * d * DN[r["properties"]["diameter"]]["new_rub_m"] / 25e6 + 0.3 * d / 100
-            rr *= 2
-        return why or f"звено {first_len:.2f} м короче двух по {CUT_PIECE_M} м", None
+    # Е. излом меньше TURN_DEG в техническом узле на пути точки: спецучасток прямой, а обычный участок за узлом чуть
+    # ломается. Вершину у узла заменяет прямая от соседней вершины через спецобъект (Router.even), а выход к точке в
+    # здании — прямая к точке (TreeBuilder.evened), если прямая пересекает объект по правилам, держит запасы замены,
+    # спецчасть на ней целиком и не ближе 1 м к её концам, изломов меньше TURN_DEG становится меньше, а S не растёт
+    def chain_of(n):
+        """Участки между нетехническими узлами через технический узел n: (узел A, [(участок, координаты от A)], узел B)."""
+        halves = []
+        for first in adj[n]:
+            node, came, run = n, None, []
+            while True:
+                nxt = [t for t in adj[node] if t is not came] if came is not None else [first]
+                if kinds.get(node) != "technical_node" and came is not None or not nxt:
+                    break
+                t = nxt[0]
+                c = list(geo[str(t["properties"]["id"])].coords)
+                start = str(t["properties"]["start_node_id"]) == node
+                run.append((t, c if start else c[::-1]))
+                node = str(t["properties"]["end_node_id"]) if start else str(t["properties"]["start_node_id"])
+                came = t
+            halves.append((run, node))
+        (left, a_node), (right, b_node) = halves
+        chain = [(t, c[::-1]) for t, c in reversed(left)] + right
+        return a_node, chain, b_node
 
+    def end_turns(t, node, pt, nb):
+        """Повороты на пути точки в узле node между соседними участками и звеном pt→nb участка t."""
+        return [(next_to(geo, other, node), pt, nb) for cs, ps in path_pairs.get(node, [])
+                for other in [ps if cs is t else cs if ps is t else None] if other is not None]
+
+    def spec_part(link, dn):
+        """Спецчасть прямой link по объектам, которые она пересекает: {(тип, id): (длина, начало, конец)}, как зоны
+        check_specials: margin_m вдоль трассы от точек пересечения, у полигона ещё сам полигон и полоса нормы."""
+        parts = {}
+        for rid, rt, rg, _ in trees["spec_near"](link, 0.0):
+            if not link.intersects(rg):
+                continue
+            xs = [Point(q) for q in shapely.get_coordinates(
+                link.intersection(rg.boundary if rg.geom_type.endswith("Polygon") else rg))]
+            area = [x.buffer(MARGIN[rt]) for x in xs]
+            if rg.geom_type.endswith("Polygon"):
+                area += [rg, rg.buffer(_TYPES[rt]["clearance_m"] + DN[dn]["width_m"] / 2)]
+            inter = link.intersection(shapely.union_all(area))
+            if inter.length > 0:
+                at = [link.project(Point(q)) for q in shapely.get_coordinates(inter)]
+                parts[(rt, rid)] = (inter.length, min(at), max(at))
+        return parts
+
+    def cross_blocked(a, b, dn, exempt, skip, own=None):
+        """Почему прямая a→b ДУ dn не годится как замена у технического узла; None — годится. Отступы с запасом
+        CUT_MARGIN_M, спецобъект можно пересечь по правилам (угол не меньше min_angle_deg), exempt — объекты врезки
+        на концах, skip — номера заменяемых участков, own — своё здание точки."""
+        link = LineString([a, b])
+        w2 = DN[dn]["width_m"] / 2
+        need = oks_clearance(dn) + w2
+        if link.length < CUT_PIECE_M:
+            return f"звено {link.length:.2f} м < {CUT_PIECE_M} м"
+        for oid, og in trees["all_oks_near"](link, need + CUT_MARGIN_M):
+            if og is not own and link.distance(og) < need + CUT_MARGIN_M:
+                return f"отступ до ОКС {oid} {link.distance(og):.2f} м"
+        for rid, rt, rg in trees["forbid_near"](link, forbid_reach + w2 + CUT_MARGIN_M):
+            if link.distance(rg) < FORBID.get(rt, FALLBACK) + w2 + CUT_MARGIN_M:
+                return f"отступ до {rt} {rid} {link.distance(rg):.2f} м"
+        for rid, rt, rg, extra in trees["spec_near"](link, trees["spec_reach"] + w2 + CUT_MARGIN_M):
+            if (rt, rid) in exempt:
+                continue
+            if link.intersects(rg):
+                angles = [acute_deg(a, b, p_, q_) for p_, q_ in sides(rg) if LineString([p_, q_]).intersects(link)]
+                if rt in MIN_ANGLE and angles and min(angles) < MIN_ANGLE[rt] + 0.01:
+                    return f"угол пересечения {rt} {rid} {min(angles):.2f}°"
+            elif link.distance(rg) < _TYPES[rt]["clearance_m"] + w2 + extra + CUT_MARGIN_M:
+                return f"отступ до {rt} {rid} {link.distance(rg):.2f} м"
+        for j in tree.query(link, predicate="dwithin", distance=CUT_APART_M):
+            if j in skip:
+                continue
+            oc = list(lines[j].coords)
+            for q in zip(oc, oc[1:]):
+                ends = [(x, y) for x in (0, 1) for y in (0, 1) if math.dist((a, b)[x], q[y]) <= NODE_TOL]
+                if ends:
+                    x, y = ends[0]
+                    gap = min(LineString(q).distance(Point((a, b)[1 - x])), link.distance(Point(q[1 - y])))
+                else:
+                    gap = link.distance(LineString(q))
+                if gap < CUT_APART_M:
+                    return f"ближе {CUT_APART_M} м к участку {segs[j]['properties']['id']}"
+        return None
+
+    def chain_cost(pieces, dn):
+        """Цена и длина прямых pieces ДУ dn со спецчастями по коэффициентам."""
+        cost = length = 0.0
+        for a, b in pieces:
+            link = LineString([a, b])
+            k_len = sum((K_SPECIAL[rt] - 1) * part[0] for (rt, _), part in spec_part(link, dn).items())
+            cost += (link.length + k_len) * DN[dn]["new_rub_m"]
+            length += link.length
+        return cost, length
+
+    seen_chains = set()
+    for n in sorted(n for n in path_pairs if kinds.get(n) == "technical_node"):
+        g = geo[n]
+        if not any(micro(next_to(geo, cs, n), (g.x, g.y), next_to(geo, ps, n)) for cs, ps in path_pairs[n]):
+            continue
+        a_node, chain, b_node = chain_of(n)
+        key = frozenset(id(t) for t, _ in chain)
+        if key in seen_chains:
+            continue
+        seen_chains.add(key)
+        dn = max(t["properties"]["diameter"] for t, _ in chain)
+        skip = {index[id(t)] for t, _ in chain}
+        # вершины ломаной подряд, у общих узлов участков одна; технический узел на прямой — не вершина ребра сервиса
+        pts = list(chain[0][1])
+        for t, c in chain[1:]:
+            pts += c[1:]
+        pts = [pts[0]] + [pts[i] for i in range(1, len(pts) - 1)
+                          if turn_deg(pts[i - 1], pts[i], pts[i + 1]) >= TURN_DEG or micro(pts[i - 1], pts[i], pts[i + 1])] \
+            + [pts[-1]]
+        exempt = set()
+        for end in (a_node, b_node):
+            exempt |= tie_keys.get(end, set())
+        first, last = chain[0][0], chain[-1][0]
+        before = [t[0] for t in end_turns(first, a_node, pts[0], pts[1])]
+        after = [t[0] for t in end_turns(last, b_node, pts[-1], pts[-2])]
+
+        def micros(q):
+            m = sum(micro(q[i - 1], q[i], q[i + 1]) for i in range(1, len(q) - 1))
+            m += sum(micro(x, q[0], q[1]) for x in before) + sum(micro(x, q[-1], q[-2]) for x in after)
+            return m
+
+        old_cost, old_len = chain_cost(list(zip(pts, pts[1:])), dn)
+        building = kinds.get(b_node) == "cp" and str(last["properties"]["id"]) in final_piece
+        text = f"{n}: " + ", ".join(f"{cs['properties']['id']} → {ps['properties']['id']} "
+                                     f"{turn_deg(next_to(geo, cs, n), (g.x, g.y), next_to(geo, ps, n)):.2f}°"
+                                     for cs, ps in path_pairs[n])
+        first_why = None
+        for v in range(1, len(pts) - 1):
+            if not micro(pts[v - 1], pts[v], pts[v + 1]) or Point(pts[v]).distance(g) > NODE_TOL:
+                continue
+            exit_case = building and v == len(pts) - 2
+            lo = hi = v
+            while not exit_case and lo >= 2 and turn_deg(pts[lo - 2], pts[lo - 1], pts[hi + 1]) < TURN_DEG:
+                lo -= 1
+            while not exit_case and hi + 2 < len(pts) - (1 if building else 0) \
+                    and turn_deg(pts[lo - 1], pts[hi + 1], pts[hi + 2]) < TURN_DEG:
+                hi += 1
+            new = pts[:lo] + pts[hi + 1:]
+            a, b = new[lo - 1], new[lo]
+            why = None
+            if lo >= 2 and turn_deg(new[lo - 2], a, b) > MAX_TURN_DEG or lo + 1 < len(new) - 1 \
+                    and turn_deg(a, b, new[lo + 1]) > MAX_TURN_DEG \
+                    or lo == 1 and any(turn_deg(x, a, b) > MAX_TURN_DEG for x in before) \
+                    or lo + 1 == len(new) - 1 and any(turn_deg(a, b, x) > MAX_TURN_DEG for x in after):
+                why = f"поворот > {MAX_TURN_DEG}°"
+            elif micros(new) >= micros(pts):
+                why = "изломов меньше 3° не меньше"
+            elif exit_case:
+                cp = str(b_node)
+                cg = cps[cp][0]
+                own = [og for _, og in trees["oks_near"](cg, 0.0) if og.buffer(0.01).contains(cg)]
+                for og in own:
+                    shells = [og.exterior] if og.geom_type == "Polygon" else [x.exterior for x in og.geoms]
+                    hit = LineString([b, a]).intersection(og.boundary)
+                    e = min((q for x in getattr(hit, "geoms", [hit]) for q in x.coords),
+                            key=lambda q: math.dist(q, b), default=None)
+                    near = min((shapely.ops.nearest_points(sh, cg)[0] for sh in shells), key=cg.distance)
+                    if e is None or near.distance(Point(e)) > ENTRY_TOL_M:
+                        why = "прямая входит дальше от ближайшей точки контура"
+                        break
+
+                    def straight(end, a=a, b=b, og=og):
+                        if math.dist(end, b) >= math.dist(a, b):
+                            return "конец участка за вершиной"
+                        return cross_blocked(a, end, dn, exempt, skip)
+
+                    q, _, reasons = nearer_entry(cg, og, shells, dn, trees, math.inf, straight, [Point(e)])
+                    if q is None:
+                        why = f"финальный участок: {dict(reasons)}"
+                        break
+            else:
+                why = cross_blocked(a, b, dn, exempt, skip)
+            if why is None:
+                parts = spec_part(LineString([a, b]), dn)
+                span = LineString([a, b]).length
+                for _, t0, t1 in parts.values():
+                    if not (t0 <= 0.01 or t0 >= 1.0) or not (t1 >= span - 0.01 or t1 <= span - 1.0):
+                        why = "спецчасть ближе 1 м к концу прямой"
+            if why is None:
+                cost, length = chain_cost(list(zip(new, new[1:])), dn)
+                ds = 0.7 * (cost - old_cost) / 25e6 + 0.3 * (length - old_len) / 100
+                if ds <= -MICRO_DS:
+                    rep.add("B21 излом меньше 3° в техническом узле снимает прямая", f"{text}: ΔS {ds:+.6f}")
+                    break
+                why = f"S выше на {ds:+.6f}"
+            first_why = first_why or f"{text}: {why}"
+        else:
+            if first_why:
+                rep.add("i  излом меньше 3° в техническом узле прямой не снять (B21)", first_why)
+
+    # Д. поворот круче 90° на пути точки в узле: п. 2.1 и разъяснение 5 допускают до 90° включительно в любой точке
     for n, pairs in sorted(path_pairs.items()):
         g = geo[n]
         sharp = [(cs, s, turn_deg(next_to(geo, cs, n), (g.x, g.y), next_to(geo, s, n))) for cs, s in pairs]
         sharp = [(cs, s, a) for cs, s, a in sharp if a > 90.0]
-        if not sharp:
-            continue
-        text = f"{n}: " + ", ".join(f"{cs['properties']['id']} → {s['properties']['id']} {a:.2f}°" for cs, s, a in sharp)
-        if kinds.get(n) != "heat_chamber":
-            rep.add("B20 поворот на пути точки в узле круче 90°", text)
-            continue
-        inc = adj[n]
-        up = parent[n][1]
-        if any(s["properties"]["laying_method"] == "special" for s in inc):
-            rep.add("i  поворот на пути точки в камере круче 90° правкой у камеры не снять (B20)",
-                    f"{text}: у камеры участок специального прохода")
-            continue
-        out = {}
-        for s in inc:
-            c = list(lines[index[id(s)]].coords)
-            out[id(s)] = c if Point(c[0]).distance(g) <= NODE_TOL else c[::-1]
-        width = DN[max(s["properties"]["diameter"] for s in inc)]["width_m"] / 2
-        # участок прямо от камеры в здание: сдвиг камеры вдоль другого участка менял бы финальный участок
-        direct = [s for s in inc if str(s["properties"]["id"]) in final_piece and len(out[id(s)]) == 2]
-        first = None
-        fix = None
-        for t in inc:
-            c = out[id(t)]
-            first_len = math.dist(c[0], c[1])
-            step = 1
-            if any(r is not t for r in direct):
-                first = first or f"сдвиг вдоль {t['properties']['id']}: участок прямо от камеры в здание"
-                step = math.inf
-            while fix is None and step * TURN_STEP_M <= min(TURN_MAX_M, first_len - CUT_PIECE_M) + 1e-9:
-                f = step * TURN_STEP_M / first_len
-                x = (c[0][0] + (c[1][0] - c[0][0]) * f, c[0][1] + (c[1][1] - c[0][1]) * f)
-                new = {id(r): [x] + out[id(r)][1:] for r in inc}
-                why = move_blocked(n, x, new, inc, out, up, width)
-                if why is None:
-                    ds = move_ds(new, inc, out)
-                    if ds <= TURN_TOLERANCE_S:
-                        fix = f"сдвиг камеры {step * TURN_STEP_M:.1f} м вдоль {t['properties']['id']}, ΔS {ds:+.6f}"
-                    why = f"S выше на {ds:.6f}"
-                first = first or f"сдвиг вдоль {t['properties']['id']}: {why}"
-                step += 1
-            sid = str(t["properties"]["id"])
-            if fix is None and not (sid in final_piece and len(c) == 2):
-                for sign in (-1, 1):
-                    why, ds = bend_blocked(n, t, inc, out, up, sign, first_len)
-                    if why is None and ds <= TURN_TOLERANCE_S:
-                        fix = f"излом звена {sid} у камеры, ΔS {ds:+.6f}"
-                        break
-                    first = first or f"излом звена {sid}: {why or f'S выше на {ds:.6f}'}"
-        if fix:
-            rep.add("B20 поворот на пути точки в камере круче 90° снимает правка у камеры", f"{text}: {fix}")
-        else:
-            rep.add("i  поворот на пути точки в камере круче 90° правкой у камеры не снять (B20)", f"{text}: {first}")
+        if sharp:
+            where = "камере" if kinds.get(n) == "heat_chamber" else "узле"
+            rep.add(f"B20 поворот на пути точки в {where} круче 90°",
+                    f"{n}: " + ", ".join(f"{cs['properties']['id']} → {s['properties']['id']} {a:.2f}°" for cs, s, a in sharp))
 
 
 def tie_room(trees, g, dn):
