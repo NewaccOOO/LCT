@@ -38,6 +38,7 @@ import ru.lct.heatnet.model.NetworkSegment;
 import ru.lct.heatnet.model.NewChamber;
 import ru.lct.heatnet.model.NewSegment;
 import ru.lct.heatnet.model.Restriction;
+import ru.lct.heatnet.model.Source;
 import ru.lct.heatnet.model.TechnicalNode;
 import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.model.VariantSummary;
@@ -91,8 +92,6 @@ final class NetworkAssembler {
     private final DiameterPlanner planner;
     /** ОКС входа по id у перечислителя: своя карта расходов на 3 млн ОКС города не строится. */
     private final Map<String, FutureOks> oksById;
-    /** ID источника входа; остальные ID берутся из списков входа, см. {@link #inputIds}. */
-    private final String sourceId;
     /** Проверки ID входа по префиксу и целиком: выходные ID с ID входа не совпадают. */
     private final Map<String, Boolean> startsByPrefix = new ConcurrentHashMap<>();
     private final Map<String, Boolean> knownIds = new ConcurrentHashMap<>();
@@ -155,7 +154,6 @@ final class NetworkAssembler {
         this.specials = specials;
         this.costs = new CostCalculator(rules);
         this.planner = new DiameterPlanner(rules);
-        this.sourceId = input.getSource().getId();
         this.oksById = oksById;
     }
 
@@ -192,7 +190,8 @@ final class NetworkAssembler {
 
     /** ID входа по спискам: множество из шести миллионов ID города строилось ради считанных проверок. */
     private Stream<String> inputIds() {
-        return Stream.of(Stream.of(sourceId), input.getSegments().stream().map(NetworkSegment::getId),
+        return Stream.of(input.getSources().stream().map(Source::getId),
+                input.getSegments().stream().map(NetworkSegment::getId),
                 input.getChambers().stream().map(Chamber::getId),
                 input.getConnectionPoints().stream().map(ConnectionPoint::getId),
                 input.getFutureOks().stream().map(FutureOks::getId),

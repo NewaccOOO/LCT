@@ -6,7 +6,8 @@ import lombok.Value;
 
 @Value
 public class InputData {
-    Source source;
+    /** Источники теплоснабжения: у каждой системы города свой, приложение 18.09 число не ограничивает. */
+    List<Source> sources;
     List<NetworkSegment> segments;
     List<Chamber> chambers;
     List<FutureOks> futureOks;
