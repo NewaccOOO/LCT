@@ -698,7 +698,6 @@ final class DirectTies {
                     }
                     Coordinate exit = exit(cp, entry, building, clearance);
                     if (exit != null && TreeBuilder.leavesOnce(building.getGeometry(), cp, exit, clearance)
-                            && TreeBuilder.recedes(building.getGeometry(), cp, exit, clearance)
                             && !closed(cp, exit, shared.dn, building.getId())) {
                         shared.portal = new Portal(exit, false);
                         break;
