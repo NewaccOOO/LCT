@@ -531,7 +531,7 @@ public final class VariantEnumerator {
             Variant variant = null;
             if (REROUTE) {
                 try {
-                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, unkinked(turned(rerouted(draft))),
+                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, bent(unkinked(turned(rerouted(draft)))),
                             draft.unconnected);
                 } catch (IllegalStateException | IllegalArgumentException e) {
                     // узлы врезки собирались по отдельности, а вместе нет: вариант как найден поиском
@@ -540,7 +540,8 @@ public final class VariantEnumerator {
             }
             if (variant == null) {
                 try {
-                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, unkinked(turned(draft.trees)), draft.unconnected);
+                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, bent(unkinked(turned(draft.trees))),
+                            draft.unconnected);
                 } catch (IllegalStateException | IllegalArgumentException e) {
                     log.info("unkinked: вариант {} не собран: {}", i + 1, e.getMessage());
                 }
@@ -2396,6 +2397,12 @@ public final class VariantEnumerator {
      */
     private Map<Integer, LineString> sharpened(Tree tree, Map<Integer, LineString> change, Map<Integer, Fresh> found,
             boolean pathTurns) {
+        return sharpened(tree, change, found, pathTurns, false);
+    }
+
+    /** {@link #sharpened}, при {@code bends} — и с заменой двух соседних поворотов одной вершиной, см. {@link #bent}. */
+    private Map<Integer, LineString> sharpened(Tree tree, Map<Integer, LineString> change, Map<Integer, Fresh> found,
+            boolean pathTurns, boolean bends) {
         List<LineString> lines = new ArrayList<>();
         for (int e = 0; e < tree.edges.size(); e++) {
             lines.add(change.getOrDefault(e, tree.edges.get(e).line));
@@ -2432,7 +2439,7 @@ public final class VariantEnumerator {
                         after.add(c[1]);
                     }
                 }
-                if (router.sharpen(found.get(e).zones, coords, ignored, exit, others, before, after)) {
+                if (router.sharpen(found.get(e).zones, coords, ignored, exit, others, before, after, bends)) {
                     lines.set(e, factory.createLineString(coords.toArray(new Coordinate[0])));
                     again = change.size() > 1 || pathTurns;
                 }
@@ -2657,6 +2664,92 @@ public final class VariantEnumerator {
         return result;
     }
 
+    /**
+     * Деревья варианта, где два соседних поворота в одну сторону на ребре при звене любой длины заменяет одна вершина
+     * в лучшей точке, если путь не длиннее (толкование п. 5, {@link Router#sharpen} шаг Г). Рёбра с такими парами
+     * доводятся по зонам своего Ду с поворотами в камерах на пути точки ({@link #sharpened}), сначала все рёбра
+     * дерева, а если так не выходит, по одному. Замена берётся, если S узла врезки не растёт, Ду рёбер не растут, а
+     * дерево не касается других.
+     */
+    private List<Tree> bent(List<Tree> trees) {
+        long started = System.nanoTime();
+        List<Tree> result = new ArrayList<>(trees);
+        int taken = 0;
+        for (int t = 0; t < result.size(); t++) {
+            Tree tree = result.get(t);
+            Region region = regionByConnection.get(tree.connected().get(0).getId());
+            Envelope area = region.area.contains(tree.envelope()) ? region.area : region.wideArea;
+            List<Integer> paired = new ArrayList<>();
+            for (int e = 0; e < tree.edges.size(); e++) {
+                if (Router.paired(tree.edges.get(e).line.getCoordinates())) {
+                    paired.add(e);
+                }
+            }
+            if (paired.isEmpty() || !area.contains(tree.envelope())) {
+                continue;
+            }
+            List<List<Integer>> changes = new ArrayList<>(List.of(paired));
+            for (int e : paired.size() > 1 ? paired : List.<Integer>of()) {
+                changes.add(List.of(e));
+            }
+            for (List<Integer> change : changes) {
+                Tree changed = bent(result.get(t), change, region, area, result);
+                if (changed != null) {
+                    result.set(t, changed);
+                    taken += change.size();
+                    if (change == paired) {
+                        break;
+                    }
+                }
+            }
+        }
+        log.info("bent: edges={} elapsed={}ms", taken, (System.nanoTime() - started) / 1_000_000);
+        return result;
+    }
+
+    /** Дерево tree с рёбрами change, доведёнными в {@link #bent}, или null — рёбра не изменились или замена не годится. */
+    private Tree bent(Tree tree, List<Integer> change, Region region, Envelope area, List<Tree> result) {
+        List<Tree> unit = new ArrayList<>();
+        List<Tree> others = new ArrayList<>();
+        for (Tree other : result) {
+            if (other != tree) {
+                others.add(other);
+            }
+            if (other.root.key.equals(tree.root.key)) {
+                unit.add(other);
+            }
+        }
+        Map<Tree.Edge, Integer> dnByEdge;
+        try {
+            dnByEdge = assembler.diameters(unit);
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            return null;
+        }
+        Map<Integer, LineString> lines = new LinkedHashMap<>();
+        Map<Integer, Fresh> found = new HashMap<>();
+        for (int e : change) {
+            int dn = dnByEdge.get(tree.edges.get(e));
+            Router router = shaper(region, area, dn);
+            if (router == null) {
+                return null;
+            }
+            LineString line = tree.edges.get(e).line;
+            lines.put(e, line);
+            found.put(e, new Fresh(line, router, region.obstacles(dn, area)));
+        }
+        Map<Integer, LineString> sharp = sharpened(tree, lines, found, true, true);
+        if (sharp == null || sharp.entrySet().stream().allMatch(entry -> entry.getValue() == lines.get(entry.getKey()))) {
+            return null;
+        }
+        Tree changed = replaced(tree, sharp);
+        List<Tree> attempt = new ArrayList<>();
+        for (Tree other : unit) {
+            attempt.add(other == tree ? changed : other);
+        }
+        return compatible(changed, others) && unitScore(attempt) <= unitScore(unit) + UNKINK_EPS
+                && !thicker(tree, unit, changed, attempt) ? changed : null;
+    }
+
     /** Камеры ветвления дерева, где путь точки к врезке поворачивает круче MAX_TURN_DEG. */
     private static List<Tree.Node> sharpTurns(Tree tree) {
         List<Tree.Node> result = new ArrayList<>();
@@ -2759,11 +2852,7 @@ public final class VariantEnumerator {
                 continue;
             }
             int dn = dnByEdge.get(tree.edges.get(e));
-            // форму доводят зоны Ду ребра, а граф только исполняет доводку: берётся уже построенный
-            Router router = null;
-            for (Diameter graph = rules.diameter(dn); router == null && graph != null; graph = rules.nextDiameter(graph.getDn())) {
-                router = region.routers.get(graph.getDn() + "@" + area);
-            }
+            Router router = shaper(region, area, dn);
             if (router == null) {
                 return null;
             }
@@ -2773,6 +2862,18 @@ public final class VariantEnumerator {
         }
         Map<Integer, LineString> sharp = sharpened(moved, change, found, pathTurns);
         return sharp == null ? null : replaced(moved, sharp);
+    }
+
+    /**
+     * Граф области для доводки формы ребра Ду dn: форму доводят зоны Ду ребра, а граф только исполняет доводку, поэтому
+     * берётся уже построенный граф этого Ду или ближайшего большего; null — такого нет.
+     */
+    private Router shaper(Region region, Envelope area, int dn) {
+        Router router = null;
+        for (Diameter graph = rules.diameter(dn); router == null && graph != null; graph = rules.nextDiameter(graph.getDn())) {
+            router = region.routers.get(graph.getDn() + "@" + area);
+        }
+        return router;
     }
 
     /** Дерево с рёбрами, заменёнными по номеру; остальные рёбра те же. */

@@ -140,6 +140,26 @@ class RouterTest {
     }
 
     @Test
+    void sharpenBendsReplaceTwoTurnsOnLongLinkWithOneVertex() {
+        // (Г): два поворота по −18,4° над узким парком на звене 20 м; ни одну вершину не убрать, а одна вершина над
+        // парком с запасом короче прежнего пути
+        double clearance = rules.restriction("park").clearanceM(DN) + halfWidth;
+        Router router = router(List.of(new Restriction("park-1", rect(-3, -20, 3, 10 - clearance - 0.3), "park")), List.of());
+        List<Coordinate> path = new ArrayList<>(List.of(new Coordinate(-40, 0), new Coordinate(-10, 10),
+                new Coordinate(10, 10), new Coordinate(40, 0)));
+        double before = factory.createLineString(path.toArray(new Coordinate[0])).getLength();
+
+        assertFalse(router.sharpen(router.obstacles(), path, Set.of(), null, null, null, List.of(), false), path.toString());
+        assertTrue(router.sharpen(router.obstacles(), path, Set.of(), null, null, null, List.of(), true));
+
+        assertEquals(3, path.size(), path.toString());
+        assertTrue(factory.createLineString(path.toArray(new Coordinate[0])).getLength() < before, path.toString());
+        for (int i = 0; i + 1 < path.size(); i++) {
+            assertTrue(router.obstacles().plain(path.get(i), path.get(i + 1), Set.of(), 0.15), path.toString());
+        }
+    }
+
+    @Test
     void looseFindsZigzagVertexThatSharpenKeeps() {
         // зигзаг +4° и −5° на 1,2 м над углом парка: без одной вершины излом другой меньше 3°, без обеих прямая ближе
         // отступа к парку — форма его не убирает, а проверщик считает вершину лишней
