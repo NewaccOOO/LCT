@@ -67,19 +67,28 @@ class VariantEnumeratorTest {
     }
 
     @Test
-    void singleTieInCandidateStillGivesTwoDifferentVariants() {
-        // у ОКС одна ближайшая врезка: перпендикуляр на трубу или камера на её конце
-        PlanFixture onPipe = new PlanFixture().pipe("hn-1", 0, 0, 400, 0, 200, 100, "src").oks("o-1", 200, 60, 30);
-        PlanFixture atChamber = new PlanFixture().pipe("hn-1", 0, 0, 300, 0, 150, 50, "src")
+    void tieShiftedAlongSamePipeIsNotSecondVariant() {
+        // у ОКС одна ближайшая врезка — перпендикуляр на трубу; врезка дальше по той же трубе даёт ту же трассу со
+        // смещением (разд. 6), и второго варианта нет
+        PlanFixture fixture = new PlanFixture().pipe("hn-1", 0, 0, 400, 0, 200, 100, "src").oks("o-1", 200, 60, 30);
+
+        List<Variant> variants = new VariantEnumerator(fixture.input(), rules).run().getVariants();
+
+        assertEquals(1, variants.size(), "вариантов " + variants.size());
+        assertTrue(variants.get(0).getSummary().getUnconnectedOksIds().isEmpty());
+    }
+
+    @Test
+    void chamberAtPipeEndAndPipeGiveTwoDifferentVariants() {
+        // у ОКС одна ближайшая врезка — камера на конце трубы; врезка в саму трубу — другой объект врезки
+        PlanFixture fixture = new PlanFixture().pipe("hn-1", 0, 0, 300, 0, 150, 50, "src")
                 .chamber("hc-1", 300, 0, 150, "hn-1").oks("o-1", 305, 80, 10);
 
-        for (PlanFixture fixture : List.of(onPipe, atChamber)) {
-            List<Variant> variants = new VariantEnumerator(fixture.input(), rules).run().getVariants();
+        List<Variant> variants = new VariantEnumerator(fixture.input(), rules).run().getVariants();
 
-            assertTrue(variants.size() >= 2, "вариантов " + variants.size());
-            assertTrue(differ(variants.get(0), variants.get(1)), "варианты 1 и 2 не различаются");
-            assertTrue(variants.stream().allMatch(v -> v.getSummary().getUnconnectedOksIds().isEmpty()));
-        }
+        assertTrue(variants.size() >= 2, "вариантов " + variants.size());
+        assertTrue(differ(variants.get(0), variants.get(1)), "варианты 1 и 2 не различаются");
+        assertTrue(variants.stream().allMatch(v -> v.getSummary().getUnconnectedOksIds().isEmpty()));
     }
 
     @Test
@@ -182,11 +191,11 @@ class VariantEnumeratorTest {
         assertEquals(Set.of(Set.of("a", "b"), Set.of("c", "d", "e")), ids);
     }
 
-    /** Как у сервиса и check18 (разд. 6): у одного из двух не больше 90 % длины меньшего в полосе 1 м от другого. */
+    /** Как у сервиса и check18 (разд. 6): у одного из двух не больше 90 % длины меньшего в полосе 10 м от другого. */
     private static boolean differ(Variant a, Variant b) {
         Geometry lineA = lines(a);
         Geometry lineB = lines(b);
-        double inside = Math.min(lineA.intersection(lineB.buffer(1)).getLength(), lineB.intersection(lineA.buffer(1)).getLength());
+        double inside = Math.min(lineA.intersection(lineB.buffer(10)).getLength(), lineB.intersection(lineA.buffer(10)).getLength());
         return inside <= 0.9 * Math.min(lineA.getLength(), lineB.getLength());
     }
 

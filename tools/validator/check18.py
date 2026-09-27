@@ -9,7 +9,8 @@ B19 — финальный участок снова заходит в зону 
 B22 — звено короче 1 м у узла спецпрохода, когда вершину на его конце можно убрать или совместить с узлом (п. 5,
 разъяснение 6); --no-shape отключает и его.
 D11 — камера врезки в полосе margin_m дороги или трамвайных путей, хотя на трубе есть место вне полосы (разъяснение 6).
-Строка «i» у пар вариантов — доля расхождения трасс (разд. 6): варианты различны от 10 %, как у сервиса.
+Строка «i» у пар вариантов — доля расхождения трасс (разд. 6): варианты различны от 10 % длины вне полосы 10 м
+и при другом устройстве (разбиение точек по узлам врезки и объекты врезки), как у сервиса.
 """
 import itertools
 import json
@@ -97,9 +98,9 @@ END_GAP_M = 1.0
 SHORT_PIECE_M = 1.0
 # B21: мелкий излом пути точки в камере — поворот от TURN_DEG до SMALL_BEND_DEG (TreeBuilder.SMALL_BEND_DEG)
 SMALL_BEND_DEG = 30.0
-# разд. 6: варианты одинаковы, если у каждого больше 90 % длины меньшего лежит в полосе 1 м от другого
-# (VariantEnumerator.sameRoute); доля расхождения — 1 минус меньшая из этих длин, делённая на длину меньшего
-SAME_ROUTE_M = 1.0
+# разд. 6: варианты одинаковы, если у каждого больше 90 % длины меньшего лежит в полосе 10 м от другого или у них одно
+# устройство (VariantEnumerator.distinct); доля расхождения — 1 минус меньшая из этих длин, делённая на длину меньшего
+SAME_ROUTE_M = 10.0
 SAME_ROUTE_SHARE = 0.9
 # --no-shape отключает B16–B18, B20–B22: так старые категории сверяются с прежними прогонами
 SHAPE = "--no-shape" not in sys.argv
@@ -1729,6 +1730,33 @@ def divergence(a, b):
     return max(0.0, 1 - inside / shorter)
 
 
+def layout(inp, trees, feats):
+    """Устройство варианта (разд. 6): у каждой связной части новой сети её точки подключения и объекты врезки —
+    существующие камеры и трубы, на оси которых стоят её новые камеры. Одно устройство — те же деревья с врезками,
+    сдвинутыми по тем же трубам (VariantEnumerator.layout)."""
+    root = {}
+
+    def find(n):
+        while root.setdefault(n, n) != n:
+            n = root[n]
+        return n
+
+    chambers = {str(f["properties"]["id"]): utm(f["geometry"]) for f in feats
+                if f["properties"]["object_type"] == "heat_chamber"}
+    for f in feats:
+        p = f["properties"]
+        if p["object_type"] == "heat_network":
+            root[find(str(p["start_node_id"]))] = find(str(p["end_node_id"]))
+    parts = defaultdict(set)
+    for n in list(root):
+        if n in inp["cps"] or n in inp["chambers"]:
+            parts[find(n)].add(n)
+        elif n in chambers:
+            parts[find(n)].update(pid for pid, pg, _ in trees["pipes_near_ids"](chambers[n])
+                                  if pg.distance(chambers[n]) <= 0.05)
+    return {frozenset(part) for part in parts.values()}
+
+
 def main():
     inp = load_input(sys.argv[1])
     out = json.load(open(sys.argv[2]))
@@ -1751,15 +1779,22 @@ def main():
                 bad += rep.count[key]
     nets = {vid: shapely.union_all([to_utm(shape(f["geometry"])) for f in feats
                                      if f["properties"]["object_type"] == "heat_network"]) for vid, feats in variants.items()}
+    layouts = {vid: layout(inp, trees, feats) for vid, feats in variants.items()}
     vids = sorted(nets)
     pairs = []
     for i, a in enumerate(vids):
         for b in vids[i + 1:]:
             share = divergence(nets[a], nets[b])
-            pairs.append(f"{a}-{b} {100 * share:.1f} %" + (" совпадают" if share < 1 - SAME_ROUTE_SHARE else ""))
+            if share < 1 - SAME_ROUTE_SHARE:
+                same = " совпадают"
+            elif layouts[a] == layouts[b]:
+                same = " совпадают по устройству"
+            else:
+                same = ""
+            pairs.append(f"{a}-{b} {100 * share:.1f} %{same}")
     if pairs:
-        print(f"  i  расхождение трасс пар вариантов, различны от {100 * (1 - SAME_ROUTE_SHARE):.0f} % (разд. 6): "
-              + ", ".join(pairs))
+        print(f"  i  расхождение трасс пар вариантов вне полосы {SAME_ROUTE_M:.0f} м, различны от "
+              f"{100 * (1 - SAME_ROUTE_SHARE):.0f} % при другом устройстве (разд. 6): " + ", ".join(pairs))
     if bad:
         print(f"CHECK18 VIOLATIONS {bad}")
         sys.exit(1)

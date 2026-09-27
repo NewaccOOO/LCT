@@ -13,6 +13,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -57,7 +58,7 @@ import ru.lct.heatnet.rules.Rules;
 /**
  * Варианты подключения (D-11). Стратегии: каждый ОКС своей лучшей врезкой; группы близких ОКС общими деревьями;
  * те же разбиения с другой врезкой; группы из трёх и больше ОКС, разбитые k-means на две. Из собранных вариантов
- * выбираются до трёх лучших по score, попарно различных по трассе (см. {@link #sameRoute}).
+ * выбираются до трёх лучших по score, попарно различных по устройству и трассе (см. {@link #distinct}).
  */
 public final class VariantEnumerator {
     private static final Logger log = LoggerFactory.getLogger(VariantEnumerator.class);
@@ -71,11 +72,18 @@ public final class VariantEnumerator {
     private static final double OTHER_TIE_M = 20;
     /**
      * Варианты одинаковы, если у каждого больше этой доли длины меньшего лежит в полосе SAME_ROUTE_M от другого
-     * (разд. 6 ТП: смещение той же трассы вариантом не считается). Другая врезка или разбиение ОКС без этого отличием
-     * не считаются: на датасете варианты с врезкой, сдвинутой на 21,5 м по той же трубе, расходились на 5 % длины.
+     * (разд. 6 ТП: смещение той же трассы вариантом не считается). Полоса 1 м параллельный сдвиг не ловила: на
+     * medium-2 врезка, сдвинутая на 21 м по той же трубе, с веткой в 8–10 м от прежней выводила из неё 11,7 % длины.
+     * Одинаковы и варианты с тем же устройством ({@link #layout}) при любой доле, см. {@link #distinct}.
      */
     private static final double SAME_ROUTE_SHARE = 0.9;
-    private static final double SAME_ROUTE_M = 1.0;
+    private static final double SAME_ROUTE_M = 10.0;
+    /**
+     * Полоса отбора черновиков ({@link #sameRoute}) уже, чем у выдачи: перенос и сдвиг камер делают лучшим и черновик,
+     * взятый не первым. С полосой 10 м и устройством при отборе он не брался, и вариант 1 менялся (S01-06: S 0,617
+     * стал 0,702).
+     */
+    private static final double DRAFT_ROUTE_M = 1.0;
     /** Дерево ОКС идёт в обход, если оно длиннее прямой до ближайшего кандидата врезки больше чем во столько раз. */
     private static final double DETOUR_RATIO = 1.1;
     static final double TREES_APART_M = 0.5;
@@ -553,26 +561,31 @@ public final class VariantEnumerator {
             variants.add(variant != null ? variant
                     : assembler.assemble(String.valueOf(i + 1), i + 1, draft.trees, draft.unconnected));
         }
-        return new Result(distinct(variants), input.getNumericIds());
+        return new Result(distinct(variants, picked), input.getNumericIds());
     }
 
     /**
-     * Варианты без совпавших по трассе с лучшими (см. {@link #sameRoute}), с номерами подряд: перенос и сдвиг камер
-     * и прокладка заново двигают трассу после отбора черновиков.
+     * Варианты без совпавших с лучшими по устройству ({@link #layout}) или трассе (полоса SAME_ROUTE_M), с номерами
+     * подряд. Перенос и сдвиг камер и прокладка заново двигают трассу после отбора черновиков, поэтому трасса берётся
+     * по участкам варианта, а устройство — по его черновику из drafts.
      */
-    private List<Variant> distinct(List<Variant> variants) {
+    private List<Variant> distinct(List<Variant> variants, List<Draft> drafts) {
         List<Variant> kept = new ArrayList<>();
         List<RouteBand> bands = new ArrayList<>();
-        for (Variant variant : variants) {
+        List<Set<String>> layouts = new ArrayList<>();
+        for (int i = 0; i < variants.size(); i++) {
+            Variant variant = variants.get(i);
             List<LineString> lines = variant.getSegments().stream().map(NewSegment::getGeometry).collect(Collectors.toList());
             RouteBand band = new RouteBand(lines, lines.size(), SAME_ROUTE_M, factory);
-            if (bands.stream().anyMatch(other -> RouteBand.same(other, band, SAME_ROUTE_SHARE))) {
-                log.info("variants: вариант {} совпал по трассе с лучшим и не выдаётся", variant.getId());
+            Set<String> layout = layout(drafts.get(i).trees);
+            if (layouts.contains(layout) || bands.stream().anyMatch(other -> RouteBand.same(other, band, SAME_ROUTE_SHARE))) {
+                log.info("variants: вариант {} совпал с лучшим по устройству или трассе и не выдаётся", variant.getId());
                 continue;
             }
             String id = String.valueOf(kept.size() + 1);
             kept.add(variant.getId().equals(id) ? variant : renumbered(variant, id, kept.size() + 1));
             bands.add(band);
+            layouts.add(layout);
         }
         return kept;
     }
@@ -3145,16 +3158,34 @@ public final class VariantEnumerator {
         return Math.max(degree[0], degree[1]);
     }
 
-    /** Больше SAME_ROUTE_SHARE длины меньшего варианта у каждого лежит в полосе SAME_ROUTE_M от другого. */
+    /** Больше SAME_ROUTE_SHARE длины меньшего черновика у каждого лежит в полосе DRAFT_ROUTE_M от другого. */
     private boolean sameRoute(Draft a, Draft b) {
         return RouteBand.same(band(a), band(b), SAME_ROUTE_SHARE);
+    }
+
+    /**
+     * Устройство варианта: у каждого узла врезки объект врезки (труба или камера) и точки, подключённые через узел.
+     * Одно устройство — те же деревья с врезками, сдвинутыми по тем же трубам.
+     */
+    private static Set<String> layout(List<Tree> trees) {
+        Map<String, Set<String>> idsByRoot = new HashMap<>();
+        Map<String, String> objectByRoot = new HashMap<>();
+        for (Tree tree : trees) {
+            objectByRoot.put(tree.root.key, tree.tie.getExistingObjectId());
+            for (ConnectionPoint connection : tree.connected()) {
+                idsByRoot.computeIfAbsent(tree.root.key, key -> new TreeSet<>()).add(connection.getId());
+            }
+        }
+        Set<String> layout = new HashSet<>();
+        idsByRoot.forEach((root, ids) -> layout.add(objectByRoot.get(root) + " " + ids));
+        return layout;
     }
 
     private RouteBand band(Draft draft) {
         if (draft.band == null) {
             List<LineString> edges = draft.trees.stream().flatMap(tree -> tree.edges.stream()).map(edge -> edge.line)
                     .collect(Collectors.toList());
-            draft.band = new RouteBand(edges, edges.size() + draft.trees.size(), SAME_ROUTE_M, factory);
+            draft.band = new RouteBand(edges, edges.size() + draft.trees.size(), DRAFT_ROUTE_M, factory);
         }
         return draft.band;
     }
