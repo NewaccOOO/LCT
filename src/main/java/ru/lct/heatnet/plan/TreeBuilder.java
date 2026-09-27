@@ -64,6 +64,17 @@ final class TreeBuilder {
     private static final double PORTAL_MAX_M = 30;
     /** Сколько точек границы пробуется как начало финального участка: ближайшая, затем ближайшие точки сторон. */
     private static final int PORTAL_TRIES = 8;
+    /**
+     * Шаг точек входа вдоль сторон контура ({@link #entries}), точек выхода на луче ({@link #entered}) и проверки
+     * подхода финального участка к своему зданию ({@link #recedes}). В зоне отступа участок не подходит к зданию
+     * ближе, чем был, больше чем на APPROACH_M (у check18.py шаг тот же, предел 0,05 м). Вход финального участка
+     * считается ближайшим, если он дальше ближайшей точки контура не больше чем на ENTRY_TOL_M (у check18.py 0,1 м).
+     */
+    private static final double ENTRY_STEP_M = 0.05;
+    private static final double APPROACH_M = 0.04;
+    private static final double ENTRY_TOL_M = 0.05;
+    /** Зона отступа графа шире отступа на столько (ObstacleSet.SIMPLIFY_M): выход финального участка лежит за ней. */
+    private static final double SIMPLIFY_M = 0.05;
     /** Проходы срезки углов рёбер, см. {@link #cut}. */
     static final int CUT_PASSES = 2;
     /**
@@ -81,6 +92,10 @@ final class TreeBuilder {
     private final Map<String, ExistingOks> buildingByConnection;
     /** leavesOnce по зданию, концам отрезка и отступу: те же точки выхода проверяются в каждом дереве перебора. */
     private final Map<List<Object>, Boolean> leavesOnceCache = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Точки входа по id точки подключения, см. {@link #entries}: нужны, только если ближние точки сторон закрыты. */
+    private final Map<String, List<Coordinate>> entriesByConnection = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Часть луча для выхода по зонам графа и точке входа, см. {@link #window}. */
+    private final Map<List<Object>, double[]> windowByEntry = new java.util.concurrent.ConcurrentHashMap<>();
     /** leavesZoneOnce так же: финальные отрезки одни и те же во всех деревьях перебора. */
     private final Map<List<Object>, Boolean> leavesZoneOnceCache = new java.util.concurrent.ConcurrentHashMap<>();
     private static final GeometryFactory GEOMETRY = new GeometryFactory();
@@ -354,6 +369,242 @@ final class TreeBuilder {
         return new double[] {Math.min(first, second), Math.max(first, second)};
     }
 
+    /**
+     * Точки входа финального участка на внешних контурах ближе limit к cp по возрастанию расстояния: ближайшие точки
+     * сторон и точки через ENTRY_STEP_M вдоль них. Дырки полигона — не граница входа (толкование п. 2.2).
+     */
+    static List<Coordinate> entries(Geometry building, Coordinate cp, double limit) {
+        List<Coordinate> result = new ArrayList<>();
+        for (int g = 0; g < building.getNumGeometries(); g++) {
+            Coordinate[] ring = ((org.locationtech.jts.geom.Polygon) building.getGeometryN(g)).getExteriorRing().getCoordinates();
+            for (int k = 0; k + 1 < ring.length; k++) {
+                LineSegment side = new LineSegment(ring[k], ring[k + 1]);
+                if (side.distance(cp) >= limit) {
+                    continue;
+                }
+                result.add(side.closestPoint(cp));
+                int steps = Math.max(1, (int) Math.ceil(side.getLength() / ENTRY_STEP_M));
+                for (int i = 0; i <= steps; i++) {
+                    result.add(side.pointAlong((double) i / steps));
+                }
+            }
+        }
+        result.removeIf(entry -> cp.distance(entry) >= limit);
+        result.sort(Comparator.comparingDouble(cp::distance));
+        return result;
+    }
+
+    /**
+     * Отрезок cp–exit от выхода из здания удаляется от него, пока ближе clearance: расстояние до здания через
+     * ENTRY_STEP_M не убывает больше чем на APPROACH_M. Отступ к своему полигону снят с части финального участка в
+     * зоне перед границей входа, а не с подхода к другой стене (толкование п. 2.2 в docs/interpretation.md).
+     */
+    static boolean recedes(Geometry building, Coordinate cp, Coordinate exit, double clearance) {
+        List<LineSegment> sides = new ArrayList<>();
+        Geometry boundary = building.getBoundary();
+        for (int g = 0; g < boundary.getNumGeometries(); g++) {
+            Coordinate[] ring = boundary.getGeometryN(g).getCoordinates();
+            for (int k = 0; k + 1 < ring.length; k++) {
+                if (near(cp, exit, ring[k], ring[k + 1], clearance) != null) {
+                    sides.add(new LineSegment(ring[k], ring[k + 1]));
+                }
+            }
+        }
+        LineSegment line = new LineSegment(cp, exit);
+        double length = line.getLength();
+        double start = length;
+        for (LineSegment side : sides) {
+            Coordinate cross = line.intersection(side);
+            if (cross != null) {
+                start = Math.min(start, cp.distance(cross));
+            }
+        }
+        double farthest = 0;
+        for (double t = start; t <= length; t += ENTRY_STEP_M) {
+            Coordinate at = line.pointAlong(t / length);
+            double distance = Double.POSITIVE_INFINITY;
+            for (LineSegment side : sides) {
+                distance = Math.min(distance, side.distance(at));
+            }
+            if (distance >= clearance) {
+                return true;
+            }
+            if (distance < farthest - APPROACH_M) {
+                return false;
+            }
+            farthest = Math.max(farthest, distance);
+        }
+        return true;
+    }
+
+    /**
+     * Ребро coords к точке в здании building с финальным участком от ближайшей допустимой точки входа (приложение
+     * 18.09, п. 2.2; толкование в docs/interpretation.md), если его вход дальше ближайшей точки контура больше чем на
+     * ENTRY_TOL_M. Точки входа ({@link #entries}) ближе прежнего входа пробуются по возрастанию расстояния, выход — по
+     * лучу через ENTRY_STEP_M от выхода из зоны отступа zones, пока луч не вошёл в зону снова. Луч до выхода допустим
+     * ({@link #window}), а новое звено от прежней вершины перед выходом до выхода держит запасы строгой формы
+     * ({@link Router#CUT_MARGIN_M} до зон и спецобъектов, {@link Router#CUT_PIECE_M}, повороты в концах от
+     * MIN_TURN_DEG до {@link Router#MAX_TURN_DEG}, CUT_APART_M до отрезков apart). before — вершина ребра-родителя
+     * перед камерой, из которой выходит ребро: поворот на пути точки в ней тоже до MAX_TURN_DEG; fromRoot — ребро от
+     * врезки. null — вход и так ближайший или ближе входа с таким звеном нет.
+     */
+    Coordinate[] entered(ExistingOks building, Coordinate[] coords, ObstacleSet zones,
+            Set<String> ignored, Coordinate before, List<LineSegment> apart, boolean fromRoot) {
+        int n = coords.length;
+        Coordinate cp = coords[n - 1];
+        Geometry polygon = building.getGeometry();
+        double inside = farEntry(polygon, coords);
+        if (Double.isNaN(inside)) {
+            return null;
+        }
+        List<Coordinate[]> rings = rings(polygon);
+        Coordinate[] head = Arrays.copyOf(coords, Math.max(1, n - 2));
+        Coordinate a = head[head.length - 1];
+        Coordinate pre = head.length > 1 ? head[head.length - 2] : before;
+        List<LineSegment> others = new ArrayList<>(apart);
+        for (int i = 0; i + 1 < head.length; i++) {
+            others.add(new LineSegment(head[i], head[i + 1]));
+        }
+        Set<String> own = new HashSet<>(ignored);
+        own.add(building.getId());
+        for (Coordinate entry : entries(polygon, cp, inside - ENTRY_TOL_M)) {
+            double r = cp.distance(entry);
+            if (r < 1e-6) {
+                continue;
+            }
+            double ux = (entry.x - cp.x) / r;
+            double uy = (entry.y - cp.y) / r;
+            // выход дальше проекции вершины a на луч поворачивает к ней круче 90°
+            double reach = (a.x - cp.x) * ux + (a.y - cp.y) * uy;
+            double[] window = reach > r ? window(zones, building, rings, cp, entry) : new double[0];
+            if (window.length == 0) {
+                continue;
+            }
+            reach = Math.min(reach, window[1]);
+            for (double t = window[0]; t < reach; t += ENTRY_STEP_M) {
+                Coordinate exit = new Coordinate(cp.x + ux * t, cp.y + uy * t);
+                if (zones.insideForbid(exit, false)) {
+                    break;
+                }
+                double turn = Router.deflectionDeg(a, exit, cp);
+                if (a.distance(exit) < Router.CUT_PIECE_M || turn < MIN_TURN_DEG || turn > Router.MAX_TURN_DEG
+                        || pre != null && Router.deflectionDeg(pre, a, exit) > Router.MAX_TURN_DEG) {
+                    continue;
+                }
+                if (Double.isNaN(zones.edgeWeight(cp, exit, own))) {
+                    break;
+                }
+                if (zones.covers(a, exit) && zones.plain(a, exit, ignored, Router.CUT_MARGIN_M)
+                        && (!fromRoot || head.length > 1 || leavesNetwork(new LineSegment(exit, a), ignored))
+                        && Router.apart(new LineSegment(a, exit), others) && Router.apart(new LineSegment(exit, cp), others)) {
+                    Coordinate[] result = Arrays.copyOf(head, head.length + 2);
+                    result[head.length] = exit;
+                    result[head.length + 1] = cp;
+                    return result;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Часть луча от cp через точку входа entry, где может стоять выход финального участка ({@link #entered}): от
+     * первой точки через ENTRY_STEP_M вне зон запрета zones, до которой участок выходит из здания и его зоны отступа
+     * по одному разу ({@link #leavesOnce}) и в зоне не подходит к другой стене ({@link #recedes}), до нового входа
+     * луча в зону отступа перед зданием; пустой массив — такой части нет. От дерева не зависит, поэтому одна на все
+     * варианты.
+     */
+    private double[] window(ObstacleSet zones, ExistingOks building, List<Coordinate[]> rings, Coordinate cp, Coordinate entry) {
+        return windowByEntry.computeIfAbsent(List.of(zones, building.getId(), cp.x, cp.y, entry.x, entry.y), key -> {
+            double r = cp.distance(entry);
+            if (r < 1e-6) {
+                return new double[0];
+            }
+            double ux = (entry.x - cp.x) / r;
+            double uy = (entry.y - cp.y) / r;
+            double clearance = zones.oksClearance();
+            double limit = reach(rings, cp, entry, clearance + SIMPLIFY_M);
+            double t = r + ENTRY_STEP_M * Math.ceil((clearance + SIMPLIFY_M) / ENTRY_STEP_M);
+            while (t < limit && zones.insideForbid(new Coordinate(cp.x + ux * t, cp.y + uy * t), false)) {
+                t += ENTRY_STEP_M;
+            }
+            Coordinate first = new Coordinate(cp.x + ux * t, cp.y + uy * t);
+            return t < limit && leavesOnce(building, cp, first, clearance) && recedes(building.getGeometry(), cp, first, clearance)
+                    ? new double[] {t, limit} : new double[0];
+        });
+    }
+
+    /**
+     * Докуда по лучу от cp через точку входа entry может стоять выход финального участка при зоне отступа zone, м от
+     * cp: зона кончается не ближе r + zone, а перед новым входом луча в здание начинается снова; не дальше
+     * r + zone + PORTAL_MAX_M. Дешёвый отсев: у большинства точек входа изрезанного фасада луч снова входит в здание.
+     */
+    static double reach(List<Coordinate[]> rings, Coordinate cp, Coordinate entry, double zone) {
+        double r = cp.distance(entry);
+        double limit = r + zone + PORTAL_MAX_M;
+        for (double hit : crossings(rings, cp, (entry.x - cp.x) / r, (entry.y - cp.y) / r, limit)) {
+            if (hit > r + TOUCH_M) {
+                return Math.min(limit, hit - zone);
+            }
+        }
+        return limit;
+    }
+
+    /**
+     * Вход финального участка ребра coords в здание polygon, м от точки, если он дальше ближайшей точки внешнего
+     * контура больше чем на ENTRY_TOL_M; NaN — вход у ближайшей точки.
+     */
+    static double farEntry(Geometry polygon, Coordinate[] coords) {
+        int n = coords.length;
+        Coordinate cp = coords[n - 1];
+        double nearest = Double.POSITIVE_INFINITY;
+        for (int g = 0; g < polygon.getNumGeometries(); g++) {
+            Coordinate[] ring = ((org.locationtech.jts.geom.Polygon) polygon.getGeometryN(g)).getExteriorRing().getCoordinates();
+            for (int k = 0; k + 1 < ring.length; k++) {
+                nearest = Math.min(nearest, new LineSegment(ring[k], ring[k + 1]).distance(cp));
+            }
+        }
+        double length = coords[n - 2].distance(cp);
+        double[] out = crossings(rings(polygon), cp, (coords[n - 2].x - cp.x) / length, (coords[n - 2].y - cp.y) / length, length);
+        return out.length > 0 && out[0] > nearest + ENTRY_TOL_M ? out[0] : Double.NaN;
+    }
+
+    /** Внешние контуры и дырки частей полигона. */
+    static List<Coordinate[]> rings(Geometry polygon) {
+        List<Coordinate[]> rings = new ArrayList<>();
+        for (int g = 0; g < polygon.getNumGeometries(); g++) {
+            org.locationtech.jts.geom.Polygon part = (org.locationtech.jts.geom.Polygon) polygon.getGeometryN(g);
+            rings.add(part.getExteriorRing().getCoordinates());
+            for (int h = 0; h < part.getNumInteriorRing(); h++) {
+                rings.add(part.getInteriorRingN(h).getCoordinates());
+            }
+        }
+        return rings;
+    }
+
+    /** Расстояния от cp по лучу (ux, uy) до пересечений со сторонами колец rings, от 0 до limit, по возрастанию. */
+    static double[] crossings(List<Coordinate[]> rings, Coordinate cp, double ux, double uy, double limit) {
+        List<Double> found = new ArrayList<>();
+        for (Coordinate[] ring : rings) {
+            for (int k = 0; k + 1 < ring.length; k++) {
+                double ex = ring[k + 1].x - ring[k].x;
+                double ey = ring[k + 1].y - ring[k].y;
+                double den = ux * ey - uy * ex;
+                if (Math.abs(den) < 1e-12) {
+                    continue;
+                }
+                double wx = ring[k].x - cp.x;
+                double wy = ring[k].y - cp.y;
+                double t = (wx * ey - wy * ex) / den;
+                double side = (uy * wx - ux * wy) / den;
+                if (side >= 0 && side <= 1 && t > 0 && t <= limit) {
+                    found.add(t);
+                }
+            }
+        }
+        return found.stream().mapToDouble(Double::doubleValue).sorted().toArray();
+    }
+
     private final class Run {
         final Router router;
         final ObstacleSet obstacles;
@@ -518,6 +769,24 @@ final class TreeBuilder {
                 }
                 log.debug("portal: {} anchor {} rejected: forbid={} area={} once={} along={}", connection.getId(),
                         tries, inForbid, inArea, once, along);
+            }
+            // ближние точки сторон закрыты: ближайшая допустимая точка входа среди всех точек внешнего контура
+            // (приложение 18.09, п. 2.2; толкование в docs/interpretation.md)
+            List<Coordinate> entries = entriesByConnection.computeIfAbsent(connection.getId(),
+                    id -> entries(building.getGeometry(), cp, Double.POSITIVE_INFINITY));
+            List<Coordinate[]> rings = rings(building.getGeometry());
+            for (int i = 0; i < entries.size(); i++) {
+                double[] window = window(zones, building, rings, cp, entries.get(i));
+                if (window.length == 0) {
+                    continue;
+                }
+                double r = cp.distance(entries.get(i));
+                Coordinate exit = new Coordinate(cp.x + (entries.get(i).x - cp.x) / r * window[0],
+                        cp.y + (entries.get(i).y - cp.y) / r * window[0]);
+                if (area.contains(exit) && !Double.isNaN(zones.edgeWeight(cp, exit, own))) {
+                    log.debug("portal: {} entry {} at {} m", connection.getId(), i + 1, r);
+                    return new Exit(exit, branchRouter, PORTAL_TRIES + 1 + i);
+                }
             }
             return NO_EXIT;
         }

@@ -155,6 +155,17 @@ class TreeBuilderTest {
     }
 
     @Test
+    void finalPieceDoesNotApproachAnotherWallInsideClearanceZone() {
+        // луч от стены y=10 к крылу x=20 того же здания в зоне отступа подходит к нему, как у ОКС 10 датасета при
+        // входе между стенами: такой вход недопустим; луч прямо от стены удаляется от здания
+        Geometry building = PlanFixture.rect(0, 0, 30, 10).union(PlanFixture.rect(20, 10, 30, 30));
+        Coordinate cp = new Coordinate(10, 8);
+
+        assertFalse(TreeBuilder.recedes(building, cp, new Coordinate(19, 12.5), 5.3));
+        assertTrue(TreeBuilder.recedes(building, cp, new Coordinate(10, 20), 5.3));
+    }
+
+    @Test
     void exitLinkSplitsTurnSteeperThan90IntoTwoAllowedTurns() {
         // маршрут от выхода уходит назад к стене на 0,41° круче перпендикуляра, как у точки 4 датасета
         Coordinate cp = new Coordinate(0, 0);
