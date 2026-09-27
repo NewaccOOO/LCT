@@ -492,7 +492,8 @@ final class NetworkAssembler {
             if (points == null) {
                 return false;
             }
-            Geometry close = line.intersection(special.geometry.buffer(need - DIST_EPS_M));
+            // буфер тот же для всех участков и черновиков: на городе с линиями вдоль улиц их строилось тысячи
+            Geometry close = line.intersection(special.buffers.computeIfAbsent(need - DIST_EPS_M, special.geometry::buffer));
             for (Coordinate point : points) {
                 double radius = need + ObstacleSet.CROSS_CIRCLE_M + CIRCLE_SLACK_M;
                 close = close.difference(factory.createPoint(point).buffer(radius));

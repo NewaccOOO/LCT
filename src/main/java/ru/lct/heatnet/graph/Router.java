@@ -170,7 +170,9 @@ public final class Router {
     /** С коридором: узлы и препятствия только внутри полигона corridor, см. {@link ObstacleSet}. */
     public Router(ObstacleIndex index, Rules rules, Envelope area, int dn, RouteCache cache, org.locationtech.jts.geom.Geometry corridor) {
         this.cache = cache;
+        long started = System.nanoTime();
         obstacles = new ObstacleSet(index, rules, area, dn, corridor, cache);
+        long built = System.nanoTime();
         nodes = obstacles.nodes();
         int n = nodes.size();
         nodeXY = new double[2 * n];
@@ -230,6 +232,8 @@ public final class Router {
         for (int i = 0; i < n; i++) {
             edgeStart[i + 1] = edgeStart[i] + adjacency[i].length;
         }
+        LOG.debug("router: dn={} nodes={} edges={} obstacles ms={} edges ms={}", dn, n, edgeStart[n] / 2,
+                (built - started) / 1_000_000, (System.nanoTime() - built) / 1_000_000);
     }
 
     public ObstacleSet obstacles() {
