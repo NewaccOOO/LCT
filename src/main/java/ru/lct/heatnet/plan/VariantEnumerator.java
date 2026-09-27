@@ -168,6 +168,8 @@ public final class VariantEnumerator {
     private static final double TURN_STEP_M = 0.1;
     private static final double TURN_MAX_M = 10;
     private static final double TURN_TOLERANCE_S = 0.002;
+    private static final boolean TURN_GRID = Boolean.parseBoolean(System.getProperty("heatnet.turn.grid", "true"));
+    private static final boolean TURN_DETACH = Boolean.parseBoolean(System.getProperty("heatnet.turn.detach", "true"));
     /** Спрямление излома у технического узла не дороже этого, рубли: запас на ошибку сложения, см. {@link #evened}. */
     private static final double EVEN_EPS_RUB = 1e-3;
     /** Сколько годных правок поворота круче MAX_TURN_DEG сравнивает по S {@link #unsharpened}. */
@@ -561,7 +563,7 @@ public final class VariantEnumerator {
             if (REROUTE) {
                 try {
                     trees = polished(rerouted(draft));
-                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, trees, draft.unconnected);
+                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, trees, unconnected(draft, trees));
                 } catch (IllegalStateException | IllegalArgumentException e) {
                     // узлы врезки собирались по отдельности, а вместе нет: вариант как найден поиском
                     log.info("rerouted: вариант {} не собран: {}", i + 1, e.getMessage());
@@ -570,7 +572,7 @@ public final class VariantEnumerator {
             if (variant == null) {
                 try {
                     trees = polished(draft.trees);
-                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, trees, draft.unconnected);
+                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, trees, unconnected(draft, trees));
                 } catch (IllegalStateException | IllegalArgumentException e) {
                     log.info("unkinked: вариант {} не собран: {}", i + 1, e.getMessage());
                 }
@@ -779,6 +781,12 @@ public final class VariantEnumerator {
                 s.getExistingChamberTieInCost(), s.getUnconnectedPenalty(), s.getCalculatedCost(), s.getNewNetworkLength(),
                 s.getScore(), s.getUnconnectedOksIds());
         return new Variant(id, segments, chambers, nodes, summary);
+    }
+
+    /** ОКС без сети у черновика с деревьями trees после правок: правка поворота могла снять точки, см. {@link #detached}. */
+    private List<FutureOks> unconnected(Draft draft, List<Tree> trees) {
+        int before = draft.trees.stream().mapToInt(tree -> tree.connected().size()).sum();
+        return trees.stream().mapToInt(tree -> tree.connected().size()).sum() < before ? missing(trees) : draft.unconnected;
     }
 
     /** ОКС входа, которых нет в деревьях. */
@@ -2788,6 +2796,9 @@ public final class VariantEnumerator {
                     List<TreeBuilder.Slide> slides = new ArrayList<>(builder.turnSlides(tree, junction, zones, dnByEdge,
                             priceRub, maxGainRub, TURN_STEP_M, TURN_MAX_M));
                     slides.addAll(builder.bends(tree, junction, zones, priceRub, maxGainRub));
+                    if (TURN_GRID) {
+                        slides.addAll(builder.turnMoves(tree, junction, zones, dnByEdge, priceRub, maxGainRub));
+                    }
                     slides.sort(Comparator.comparingDouble(slide -> slide.gain));
                     for (TreeBuilder.Slide slide : slides) {
                         Tree attempt = unkinked(tree, slide, tree.tie, dnByEdge, region, area, true);
@@ -2809,6 +2820,13 @@ public final class VariantEnumerator {
                 }
                 if (changed == null) {
                     changed = unsharpened(tree, unit, others, dnByEdge, priceRub, region, area);
+                    if (changed == null && TURN_DETACH) {
+                        changed = detached(tree, dnByEdge, region, area);
+                        if (changed != null) {
+                            log.warn("turned: поворот в камере {} не снят, без сети остаются {}", sharpTurns(tree).get(0).key,
+                                    changed.unconnected.subList(tree.unconnected.size(), changed.unconnected.size()).stream().map(ConnectionPoint::getId).collect(Collectors.toList()));
+                        }
+                    }
                     if (changed == null) {
                         sharpTurns(tree).forEach(junction -> log.info("turned: поворот в камере {} не снят", junction.key));
                         break;
@@ -2841,6 +2859,9 @@ public final class VariantEnumerator {
                     TURN_STEP_M, TURN_MAX_M));
             slides.addAll(builder.bends(tree, junction, zones, priceRub, Double.POSITIVE_INFINITY));
             slides.addAll(builder.fans(tree, junction, zones, priceRub));
+            if (TURN_GRID) {
+                slides.addAll(builder.turnMoves(tree, junction, zones, dnByEdge, priceRub, Double.POSITIVE_INFINITY));
+            }
         }
         slides.sort(Comparator.comparingDouble(slide -> slide.gain));
         // обходов по одному на ветку, они первыми: камера и спецпроход уходят, S часто ниже
@@ -2872,6 +2893,79 @@ public final class VariantEnumerator {
             }
         }
         return best;
+    }
+
+    /**
+     * Последняя мера, когда поворот круче MAX_TURN_DEG в камере не снимает ни одна правка: правило его не допускает
+     * (п. 2.1, разъяснение 5), поэтому ветки первой такой камеры, куда путь поворачивает круче, снимаются вместе с
+     * деревом под ними, а их точки остаются без сети. Камера с одной оставшейся веткой сливается с ребром к родителю
+     * в строгой форме, как у {@link #bypassed}; null — веток у камеры не осталось или форма не собралась.
+     */
+    private Tree detached(Tree tree, Map<Tree.Edge, Integer> dnByEdge, Region region, Envelope area) {
+        Tree.Node junction = sharpTurns(tree).get(0);
+        Tree.Edge up = tree.edges.stream().filter(edge -> edge.to == junction).findFirst().orElseThrow();
+        Coordinate before = up.line.getCoordinateN(up.line.getNumPoints() - 2);
+        Set<Tree.Node> gone = new HashSet<>();
+        List<Tree.Edge> rest = new ArrayList<>();
+        for (Tree.Edge edge : tree.edges) {
+            if (edge.from == junction) {
+                if (Router.deflectionDeg(before, junction.point, edge.line.getCoordinateN(1)) > Router.MAX_TURN_DEG) {
+                    gone.add(edge.to);
+                } else {
+                    rest.add(edge);
+                }
+            }
+        }
+        // ponytail: без веток камера оставила бы тупик к родителю; такой случай не встречался, вариант выходит как был
+        if (rest.isEmpty()) {
+            return null;
+        }
+        // рёбра идут от врезки к листьям, поэтому поддерево набирается одним проходом по порядку рёбер дерева
+        for (Tree.Edge edge : tree.edges) {
+            if (gone.contains(edge.from)) {
+                gone.add(edge.to);
+            }
+        }
+        Tree.Edge merged = rest.size() == 1 ? rest.get(0) : null;
+        Tree result = new Tree(tree.tie);
+        result.unconnected.addAll(tree.unconnected);
+        result.narrow = tree.narrow;
+        Map<Integer, LineString> change = new LinkedHashMap<>();
+        Map<Integer, Fresh> found = new HashMap<>();
+        for (Tree.Edge edge : tree.edges) {
+            if (gone.contains(edge.to)) {
+                if (edge.to.kind == Tree.Kind.CONNECTION) {
+                    result.unconnected.add(edge.to.connection);
+                }
+                continue;
+            }
+            if (edge == merged) {
+                continue;
+            }
+            Tree.Node from = edge.from == tree.root ? result.root : edge.from;
+            if (edge != up || merged == null) {
+                result.edges.add(from == edge.from ? edge : new Tree.Edge(from, edge.to, edge.line));
+                continue;
+            }
+            Coordinate[] a = up.line.getCoordinates();
+            Coordinate[] b = merged.line.getCoordinates();
+            Coordinate[] line = Arrays.copyOf(a, a.length + b.length - 1);
+            System.arraycopy(b, 1, line, a.length, b.length - 1);
+            int dn = Math.max(dnByEdge.get(up), dnByEdge.get(merged));
+            Router router = shaper(region, area, dn);
+            if (router == null) {
+                return null;
+            }
+            Tree.Edge fresh = new Tree.Edge(from, merged.to, factory.createLineString(line));
+            change.put(result.edges.size(), fresh.line);
+            found.put(result.edges.size(), new Fresh(fresh.line, router, region.obstacles(dn, area)));
+            result.edges.add(fresh);
+        }
+        if (change.isEmpty()) {
+            return result;
+        }
+        Map<Integer, LineString> sharp = sharpened(result, change, found, true);
+        return sharp == null ? null : replaced(result, sharp);
     }
 
     /**
