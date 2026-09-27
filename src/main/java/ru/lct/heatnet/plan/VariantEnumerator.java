@@ -57,7 +57,7 @@ import ru.lct.heatnet.rules.Rules;
 /**
  * Варианты подключения (D-11). Стратегии: каждый ОКС своей лучшей врезкой; группы близких ОКС общими деревьями;
  * те же разбиения с другой врезкой; группы из трёх и больше ОКС, разбитые k-means на две. Из собранных вариантов
- * выбираются до трёх лучших по score, попарно различающихся набором врезок или разбиением ОКС по деревьям.
+ * выбираются до трёх лучших по score, попарно различных по трассе (см. {@link #sameRoute}).
  */
 public final class VariantEnumerator {
     private static final Logger log = LoggerFactory.getLogger(VariantEnumerator.class);
@@ -67,12 +67,12 @@ public final class VariantEnumerator {
     /** Запас области графа вокруг ОКС и кандидатов врезки (D-6). */
     private static final double AREA_MARGIN_M = 150;
     private static final double WIDE_AREA_MARGIN_M = 600;
-    /** Врезка дальше этого от всех врезок другого варианта делает варианты разными (правило variants). */
+    /** Другая врезка черновиков для вариантов 2 и 3: другой объект или точка дальше этого от прежней. */
     private static final double OTHER_TIE_M = 20;
-    /** R-11: варианты одинаковы, если больше этой доли длины меньшего лежит в полосе SAME_ROUTE_M от другого. */
     /**
-     * 0,8 отсекало варианты с другой врезкой у одного из блоков (S 13,59 против 14,41 у следующего принятого),
-     * а это по разделу 10 CONSTRAINTS.md другой вариант; при 0,9 остаётся только смещение той же трассы.
+     * Варианты одинаковы, если у каждого больше этой доли длины меньшего лежит в полосе SAME_ROUTE_M от другого
+     * (разд. 6 ТП: смещение той же трассы вариантом не считается). Другая врезка или разбиение ОКС без этого отличием
+     * не считаются: на датасете варианты с врезкой, сдвинутой на 21,5 м по той же трубе, расходились на 5 % длины.
      */
     private static final double SAME_ROUTE_SHARE = 0.9;
     private static final double SAME_ROUTE_M = 1.0;
@@ -549,7 +549,28 @@ public final class VariantEnumerator {
             variants.add(variant != null ? variant
                     : assembler.assemble(String.valueOf(i + 1), i + 1, draft.trees, draft.unconnected));
         }
-        return new Result(variants, input.getNumericIds());
+        return new Result(distinct(variants), input.getNumericIds());
+    }
+
+    /**
+     * Варианты без совпавших по трассе с лучшими (см. {@link #sameRoute}), с номерами подряд: перенос и сдвиг камер
+     * и прокладка заново двигают трассу после отбора черновиков.
+     */
+    private List<Variant> distinct(List<Variant> variants) {
+        List<Variant> kept = new ArrayList<>();
+        List<RouteBand> bands = new ArrayList<>();
+        for (Variant variant : variants) {
+            List<LineString> lines = variant.getSegments().stream().map(NewSegment::getGeometry).collect(Collectors.toList());
+            RouteBand band = new RouteBand(lines, lines.size(), SAME_ROUTE_M, factory);
+            if (bands.stream().anyMatch(other -> RouteBand.same(other, band, SAME_ROUTE_SHARE))) {
+                log.info("variants: вариант {} совпал по трассе с лучшим и не выдаётся", variant.getId());
+                continue;
+            }
+            String id = String.valueOf(kept.size() + 1);
+            kept.add(variant.getId().equals(id) ? variant : renumbered(variant, id, kept.size() + 1));
+            bands.add(band);
+        }
+        return kept;
     }
 
     /**
@@ -1167,8 +1188,8 @@ public final class VariantEnumerator {
     }
 
     /**
-     * До трёх лучших по score черновиков, попарно различных по правилу variants и по трассе (R-11). Черновик, где
-     * без сети осталось больше точек, чем в лучшем, не берётся: намеренное неподключение запрещено (п. 2.5).
+     * До трёх лучших по score черновиков, попарно различных по трассе. Черновик, где без сети осталось больше
+     * точек, чем в лучшем, не берётся: намеренное неподключение запрещено (п. 2.5).
      */
     private List<Draft> pick(List<Draft> drafts) {
         drafts.removeIf(Objects::isNull);
@@ -1177,18 +1198,9 @@ public final class VariantEnumerator {
         drafts.sort(Comparator.comparingDouble(Draft::score));
         List<Draft> picked = new ArrayList<>();
         for (Draft draft : drafts) {
-            if (picked.size() < MAX_VARIANTS && picked.stream().allMatch(p -> differ(p, draft) && !sameRoute(p, draft))) {
+            if (picked.size() < MAX_VARIANTS && picked.stream().noneMatch(p -> sameRoute(p, draft))) {
                 picked.add(draft);
             }
-        }
-        if (picked.size() < 2) {
-            // R-11 оставил меньше двух вариантов: добираем по правилу различия врезок и разбиения
-            for (Draft draft : drafts) {
-                if (picked.size() < MAX_VARIANTS && !picked.contains(draft) && picked.stream().allMatch(p -> differ(p, draft))) {
-                    picked.add(draft);
-                }
-            }
-            picked.sort(Comparator.comparingDouble(Draft::score));
         }
         return picked;
     }
@@ -1569,8 +1581,7 @@ public final class VariantEnumerator {
 
     /**
      * Выбранные варианты с перенесёнными камерами ветвления, по возрастанию score. Варианты независимы и считаются
-     * параллельно. Перенос не берётся, если с ним вариант совпал бы по трассе с уже взятым, а без него не совпадал
-     * (R-11).
+     * параллельно. Перенос не берётся, если с ним вариант совпал бы по трассе с уже взятым.
      */
     private List<Draft> relaid(List<Draft> picked) {
         long started = System.nanoTime();
@@ -1579,7 +1590,7 @@ public final class VariantEnumerator {
         for (int i = 0; i < picked.size(); i++) {
             Draft draft = moved.get(i);
             for (int j = 0; j < i && draft != picked.get(i); j++) {
-                if (sameRoute(draft, result.get(j)) && !sameRoute(picked.get(i), picked.get(j))) {
+                if (sameRoute(draft, result.get(j))) {
                     draft = picked.get(i);
                 }
             }
@@ -3120,42 +3131,7 @@ public final class VariantEnumerator {
         return Math.max(degree[0], degree[1]);
     }
 
-    /**
-     * Правило variants: другой existing_object_id, врезка дальше 20 м от всех врезок другого или другое разбиение.
-     * Другой объект врезки ближе 20 м оставлен отличием: без него на 19 сценариях S10–S13 оставался один вариант при
-     * подключённых ОКС, а docs/interpretation.md допускает один вариант только без врезок.
-     */
-    private boolean differ(Draft a, Draft b) {
-        Set<String> idsA = new HashSet<>();
-        Set<String> idsB = new HashSet<>();
-        a.trees.forEach(tree -> idsA.add(tree.tie.getExistingObjectId()));
-        b.trees.forEach(tree -> idsB.add(tree.tie.getExistingObjectId()));
-        return !idsA.equals(idsB) || farTie(a, b) || farTie(b, a) || !partition(a).equals(partition(b));
-    }
-
-    private static boolean farTie(Draft mine, Draft others) {
-        for (Tree tree : mine.trees) {
-            boolean far = true;
-            for (Tree other : others.trees) {
-                far &= tree.tie.getPoint().distance(other.tie.getPoint()) > OTHER_TIE_M;
-            }
-            if (far) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static Set<Set<String>> partition(Draft draft) {
-        Map<String, Set<String>> byRoot = new HashMap<>();
-        for (Tree tree : draft.trees) {
-            Set<String> oks = byRoot.computeIfAbsent(tree.root.key, key -> new HashSet<>());
-            tree.connected().forEach(connection -> oks.add(connection.getOksId()));
-        }
-        return new HashSet<>(byRoot.values());
-    }
-
-    /** R-11: больше 90 % длины меньшего варианта совпадает с трассой другого. */
+    /** Больше SAME_ROUTE_SHARE длины меньшего варианта у каждого лежит в полосе SAME_ROUTE_M от другого. */
     private boolean sameRoute(Draft a, Draft b) {
         return RouteBand.same(band(a), band(b), SAME_ROUTE_SHARE);
     }
