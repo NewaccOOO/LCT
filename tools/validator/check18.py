@@ -108,6 +108,10 @@ SAME_ROUTE_SHARE = 0.9
 # E7: score сводки — S разд. 6 от её calculated_cost и new_network_length, округлённый до 4 знаков, как 0,6913 в
 # примере п. 7.3; допуск — половина последнего знака
 SCORE_TOL = 0.00005 + 1e-9
+# B10, B11: обычная часть трассы у пересечения линии может быть ближе нормы к ней только в круге радиусом «норма +
+# CROSS_CIRCLE_M» вокруг точки пересечения спецучастком: столько даёт пересечение под прямым углом (толкование разд. 4,
+# ObstacleSet.CROSS_CIRCLE_M)
+CROSS_CIRCLE_M = 0.1
 # --no-shape отключает B16–B18, B20–B22: так старые категории сверяются с прежними прогонами
 SHAPE = "--no-shape" not in sys.argv
 
@@ -796,10 +800,9 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
 
     Зона спецпрохода объекта (п. 4, табл. 2, docs/interpretation.md) на прогоне спецучастков (связные через узлы
     спецучастки): у линии — margin_m вдоль трассы от точки пересечения в обе стороны; у полигона — часть прогона в
-    полигоне и margin_m вдоль трассы от каждой точки на его границе, а дальше — пока прогон ближе нормы отступа к
-    полигону (обычный участок там отступ не держал бы). Вдоль трассы меряется расстоянием до точки пересечения:
-    спецучасток прямой. Пересечение сети в точке врезки (не дальше 0,5 м от врезки) пересечением не считается. На
-    каждой смене набора зон начинается новый участок (п. 4, разъяснение 8, B14)."""
+    полигоне и margin_m вдоль трассы от каждой точки на его границе. Вдоль трассы меряется расстоянием до точки
+    пересечения: спецучасток прямой. Пересечение сети в точке врезки (не дальше 0,5 м от врезки) пересечением не
+    считается. На каждой смене набора зон начинается новый участок (п. 4, разъяснение 8, B14)."""
     if not segs:
         return []
     sid_of = {id(s): str(s["properties"]["id"]) for s in segs}
@@ -836,7 +839,6 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
         line = line_of[id(s)]
         run = run_of[id(s)]
         z = {}
-        norm_w2 = DN[s["properties"]["diameter"]]["width_m"] / 2
         for rid, rt, rg, _ in trees["spec_near"](line, max(MARGIN.values()) + ZONE_TOL):
             obj[(rt, rid)] = rg
             if rg.geom_type == "Point":
@@ -845,10 +847,8 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
             if not xs:
                 continue
             area = [x.buffer(MARGIN[rt] + ZONE_TOL) for x in xs]
-            if areal(rt, rg):
-                # полигон (у оси — нулевой ширины) и дальше margin_m полоса нормы: обычный участок в ней был бы ближе
-                # отступа
-                area += ([rg] if rg.geom_type.endswith("Polygon") else []) + [rg.buffer(_TYPES[rt]["clearance_m"] + norm_w2)]
+            if areal(rt, rg) and rg.geom_type.endswith("Polygon"):
+                area.append(rg)
             z[(rt, rid)] = line.intersection(shapely.union_all(area))
         zones[id(s)] = {k: g for k, g in z.items() if g.length > ZONE_TOL}
 
@@ -907,7 +907,7 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
 
     # B22: звенья короче SHORT_PIECE_M у узла спецпрохода и на сколько спецучасток, продолженный до вершины на их
     # конце, вышел бы за точную зону своих объектов: margin_m вдоль трассы от точек пересечения прогона, у полигона
-    # ещё сам полигон и полоса нормы отступа, как у зон выше
+    # ещё сам полигон, как у зон выше
     short_links = []
     for node, lst in adj.items():
         for t in (u for u in lst if u["properties"]["laying_method"] == "special" and zones[id(u)]):
@@ -917,9 +917,8 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
             for rt, rid in zones[id(t)]:
                 rg = obj[(rt, rid)]
                 exact += [x.buffer(MARGIN[rt]) for part in run_of[id(t)] for x in crossings(part, rt, rg)]
-                if areal(rt, rg):
-                    exact += [rg] if rg.geom_type.endswith("Polygon") else []
-                    exact += [rg.buffer(_TYPES[rt]["clearance_m"] + DN[t["properties"]["diameter"]]["width_m"] / 2)]
+                if areal(rt, rg) and rg.geom_type.endswith("Polygon"):
+                    exact.append(rg)
             band = shapely.union_all(exact)
             for s in lst:
                 if s["properties"]["laying_method"] == "special":
@@ -931,10 +930,8 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
                     merged = LineString([far, v])
                     short_links.append((s, node, t, merged.length - merged.intersection(band).length))
 
-    # звенья без отступа до объекта (ключи объектов по (id участка, номер звена)): прямая от врезки до сети, которая
-    # её касается, и прямое продолжение спецучастка через линию — хвост того же прямого пересечения: зона линии
-    # margin_m вдоль трассы короче отступа. Прямая идёт через технические узлы, пока направление не меняется больше
-    # чем на 1°. За полигоном дороги обычный участок держит отступ: зона продлевается до нормы
+    # звенья без отступа до сети (ключи объектов по (id участка, номер звена)): прямая от врезки до сети, которая её
+    # касается. Прямая идёт через технические узлы, пока направление не меняется больше чем на 1°
     free = defaultdict(set)
 
     def along(node, prev, came, keys):
@@ -954,13 +951,16 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
 
     for node, pt in ties.items():
         along(node, None, None, {(rt, rid) for rid, rt, _, _ in trees["spec_near"](pt, 0.5) if rt == "heat_network"})
-    for t in special:
-        tc = list(line_of[id(t)].coords)
-        lines = {k for k in zones[id(t)] if not areal(k[0], obj[k])}
-        along(nodes_of[id(t)][0], tc[1], t, lines)
-        along(nodes_of[id(t)][1], tc[-2], t, lines)
 
-    # B10, B11: вне спецпрохода объекта участок держит отступ и объект не пересекает (п. 3.1, п. 4, разъяснение 7)
+    # точки пересечения линий спецучастками: у них круг, в котором обычная часть трассы может быть ближе нормы
+    cross = defaultdict(list)
+    for t in special:
+        for rid, rt, rg, _ in trees["spec_near"](line_of[id(t)], 0.0):
+            if not rg.geom_type.endswith("Polygon"):
+                cross[(rt, rid)] += crossings(line_of[id(t)], rt, rg)
+
+    # B10, B11: вне спецпрохода объекта участок держит отступ и объект не пересекает (п. 3.1, п. 4, разъяснение 7); у
+    # линии часть ближе нормы допустима только в круге «норма + CROSS_CIRCLE_M» у точки её пересечения
     for s in segs:
         p = s["properties"]
         sid, line = sid_of[id(s)], line_of[id(s)]
@@ -975,6 +975,15 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
             pieces = [LineString(c[i:i + 2]) for i in range(len(c) - 1) if key not in free[(id(s), i)]]
             d = min((pc.distance(rg) for pc in pieces), default=math.inf)
             if d >= need - EPS:
+                continue
+            if d > 0 and cross[key]:
+                close = shapely.union_all(pieces).intersection(rg.buffer(need - EPS, quad_segs=64))
+                circles = shapely.union_all([x.buffer(need + CROSS_CIRCLE_M, quad_segs=64) for x in cross[key]])
+                close = close.difference(circles)
+                if close.length <= EPS:
+                    continue
+                rep.add(f"{'B11' if rt == 'heat_network' else 'B10'} ближе нормы к линии вне круга «норма + "
+                        f"{CROSS_CIRCLE_M} м» у пересечения", f"{sid} {close.length:.2f} м, {d:.2f} м < {need:.2f} ({rt} {rid})")
                 continue
             cat = "B11" if rt == "heat_network" else "B10"
             what = "существующую сеть вне врезки" if rt == "heat_network" else rt

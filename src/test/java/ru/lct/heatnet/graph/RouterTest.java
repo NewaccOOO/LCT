@@ -479,6 +479,39 @@ class RouterTest {
     }
 
     @Test
+    void lineCrossingKeepsNormBeyondCircleAroundCrossing() {
+        // газопровод: норма 2 + 0,255 + 0,2 = 2,455 м, в круге 2,555 м у пересечения обычная трасса может быть ближе.
+        // Сеть Ду 100: норма 1,51 м меньше спецчасти 2 м, пересекать её можно круче asin(1,51 / 2) ≈ 49°
+        ObstacleSet gas = router(List.of(new Restriction("gas-1", line(-100, 0, 100, 0), "gas_pipeline")), List.of())
+                .obstacles();
+        ObstacleSet pipe = router(List.of(), List.of(new NetworkSegment("hn-1", line(-100, 0, 100, 0), DN, 10, "src")))
+                .obstacles();
+
+        assertFalse(Double.isNaN(gas.edgeWeight(new Coordinate(0, -30), new Coordinate(0, 30), Set.of())));
+        assertTrue(Double.isNaN(gas.edgeWeight(polar(-30, 70), polar(30, 70), Set.of())));
+        assertFalse(Double.isNaN(pipe.edgeWeight(polar(-30, 55), polar(30, 55), Set.of())));
+        assertTrue(Double.isNaN(pipe.edgeWeight(polar(-30, 45), polar(30, 45), Set.of())));
+    }
+
+    @Test
+    void routeCrossesGasPipelineAtRightAngleThroughNodePair() {
+        // прямая под 20° к газопроводу недопустима: трасса поворачивает к паре узлов и пересекает его под 90°
+        Router router = router(List.of(new Restriction("gas-1", line(-100, 0, 100, 0), "gas_pipeline")), List.of());
+
+        Route route = router.route(factory.createPoint(polar(-60, 20)), factory.createPoint(polar(60, 20)), Set.of());
+
+        assertNotNull(route);
+        assertEquals(1, route.getSpans().size());
+        assertTrue(route.getLength() < 1.1 * 120, "длина " + route.getLength());
+        Coordinate[] coords = route.getGeometry().getCoordinates();
+        for (int i = 0; i + 1 < coords.length; i++) {
+            if (coords[i].y * coords[i + 1].y < 0) {
+                assertEquals(coords[i].x, coords[i + 1].x, 1e-6, "пересечение не под прямым углом");
+            }
+        }
+    }
+
+    @Test
     void segmentParallelToGasPipelineOneMetreAwayIsRejected() {
         Router router = router(List.of(new Restriction("gas-1", line(-100, 0, 100, 0), "gas_pipeline")), List.of());
 
