@@ -23,6 +23,12 @@ jobs:
           distribution: temurin
           cache: maven
 
+      # интеграционный тест прогоняет выход через tools/validator/check18.py под uv
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: tools/uv.lock
+
       # интеграционные тесты сами поднимают PostgreSQL через Docker раннера
       - name: Тесты
         run: mvn -B verify
