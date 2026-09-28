@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # ручной запуск: Actions → CI/CD → Run workflow; на main после тестов выкатывает на сервер
+  workflow_dispatch:
 
 # два деплоя подряд не накладываются друг на друга
 concurrency:
@@ -38,7 +40,7 @@ jobs:
 
   deploy:
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
     env:
       DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
