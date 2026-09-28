@@ -1,0 +1,80 @@
+{
+ "city": "nnovgorod",
+ "bbox": [
+  56.132,
+  43.5475,
+  56.422,
+  44.1548
+ ],
+ "cell_m": null,
+ "variant": "a",
+ "sources": 117,
+ "sources_on_network": 90,
+ "district_flow_tph": 94634.7,
+ "modern_form": [
+  17,
+  20.228885797093355,
+  48.198813633493195,
+  632
+ ],
+ "written": 233733,
+ "dropped": 0,
+ "future": 1514,
+ "future_scheme": 674,
+ "future_scheme_dropped": {
+  "building": 10,
+  "restriction": 13,
+  "pipe": 3,
+  "other_future": 1
+ },
+ "future_crossed_by_network": 15,
+ "k_cal": 1.0,
+ "dn_raised": 3749,
+ "dn_lowered": 1055,
+ "network": {
+  "restored_km": 958.9,
+  "sources_by_address": 59,
+  "sources_by_proximity": 28,
+  "far_buildings": 6304,
+  "avto_targets": 3802,
+  "holes": 2502,
+  "covered_by_branch": 4674,
+  "avto_reached": 888,
+  "holes_reached": 719,
+  "bridges": 280,
+  "detoured": 649,
+  "through_m": 6363.2,
+  "rings_opened": 957,
+  "no_source_km": 16.5,
+  "buildings_on_network": 18169,
+  "inferred_km": {
+   "avto/?": 1.0,
+   "avto/Автозаводский": 309.9,
+   "avto/Канавинский": 1.0,
+   "avto/Ленинский": 87.3,
+   "bridge/Канавинский": 4.0,
+   "bridge/Ленинский": 3.7,
+   "bridge/Московский": 3.5,
+   "bridge/Нижегородский": 2.3,
+   "bridge/Приокский": 4.6,
+   "bridge/Советский": 2.7,
+   "bridge/Сормовский": 2.6,
+   "hole/?": 0.6,
+   "hole/Автозаводский": 0.1,
+   "hole/Канавинский": 36.1,
+   "hole/Ленинский": 1.0,
+   "hole/Московский": 23.7,
+   "hole/Нижегородский": 55.2,
+   "hole/Приокский": 52.9,
+   "hole/Советский": 33.3,
+   "hole/Сормовский": 51.5
+  },
+  "detoured_final": 131,
+  "through_final_m": 13.8
+ },
+ "osm": {
+  "file": "nnovgorod/nizhny_novgorod_oblast-latest.osm.pbf",
+  "sha256": "ddc3ed5950ebf30ed078a4b98f6a56b60f4a448f01ca4e8443aaceef3872e22a",
+  "bytes": 77784102
+ }
+}

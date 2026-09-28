@@ -41,6 +41,7 @@ import ru.lct.heatnet.rules.Rules;
  * проверка и вес отрезка. Геометрия в EPSG:32637.
  */
 public final class ObstacleSet {
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(ObstacleSet.class);
     private static final String OKS_EXISTING = "oks_existing";
     private static final String HEAT_NETWORK = "heat_network";
     private static final double SIMPLIFY_M = 0.05;
@@ -115,6 +116,7 @@ public final class ObstacleSet {
     /** Отступ оси новой сети от полигона ОКС: отступ правила плюс полуширина пары. */
     private final double oksClearance;
     private final List<Coordinate> nodes = new ArrayList<>();
+    private final boolean withNodes;
     /** Область и коридор, в которых взяты препятствия: за ними отрезок проверить не по чему. */
     private final Envelope area;
     private final PreparedGeometry inside;
@@ -839,6 +841,17 @@ public final class ObstacleSet {
 
     /** То же с кэшем расчёта для буферов зон (null — без кэша). */
     public ObstacleSet(ObstacleIndex index, Rules rules, Envelope area, int dn, Geometry corridor, RouteCache cache) {
+        this(index, rules, area, dn, corridor, cache, true);
+    }
+
+    /**
+     * withNodes false — только зоны для проверки отрезков и отступов, без узлов графа ({@link #nodes()} недоступен):
+     * узлы и пары через линии — большая часть построения набора, а наборам проверки при другом Ду они не нужны.
+     */
+    public ObstacleSet(ObstacleIndex index, Rules rules, Envelope area, int dn, Geometry corridor, RouteCache cache,
+            boolean withNodes) {
+        long started = System.nanoTime();
+        this.withNodes = withNodes;
         this.cache = cache;
         this.area = area;
         inside = corridor == null ? null : PreparedGeometryFactory.prepare(corridor);
@@ -883,7 +896,7 @@ public final class ObstacleSet {
             } else {
                 Special special = new Special(restriction.getId(), restriction.getType(), rule, geometry, distance);
                 specialList.add(special);
-                if (special.polygon || rule.getMinAngleDeg() != null) {
+                if (withNodes && (special.polygon || rule.getMinAngleDeg() != null)) {
                     // спецпроход — один прямой участок с полосой margin_m за полигоном: внутри полосы узлов нет, а
                     // узлы для пересечения стоят у её внешней границы, чтобы отрезок через дорогу был прямым от узла до узла.
                     // Дорога или пути, заданные осью, — полигон нулевой ширины (табл. 2, разъяснение 6): без узлов
@@ -921,8 +934,8 @@ public final class ObstacleSet {
         specialOrder = ((List<?>) specials.query(all)).toArray(new Special[0]);
         specialBoxes = boxes(Arrays.stream(specialOrder).map(special -> special.zone).toArray(Zone[]::new));
 
-        List<Geometry> nodeZones = nodeZones(nodeObjects, nodeDistances);
-        List<Geometry> crossingNodeZones = nodeZones(crossingObjects, crossingDistances);
+        List<Geometry> nodeZones = withNodes ? nodeZones(nodeObjects, nodeDistances) : List.of();
+        List<Geometry> crossingNodeZones = withNodes ? nodeZones(crossingObjects, crossingDistances) : List.of();
         Map<Coordinate, Coordinate[]> candidates = new LinkedHashMap<>();
         Map<Coordinate, Double> offsets = new java.util.HashMap<>();
         for (int z = 0; z < nodeZones.size(); z++) {
@@ -935,16 +948,20 @@ public final class ObstacleSet {
                 }
             }
         }
+        int zoneCandidates = candidates.size();
         // Вдоль сторон дорог и путей нужны точки поворота, иначе при остром угле к дороге остаётся только обход её конца.
         for (Geometry nodeZone : crossingNodeZones) {
             for (Coordinate c : Densifier.densify(nodeZone.getBoundary(), CROSSING_STEP_M).getCoordinates()) {
                 candidates.putIfAbsent(c, null);
             }
         }
-        List<PreparedGeometry> margins = new ArrayList<>();
+        // полосы по рамкам в индексе: на городе их тысячи, а каждый узел-кандидат и шаг пары через линию проверялся
+        // перебором всех (четверть построения графа на СПб)
+        STRtree margins = new STRtree();
         for (Geometry marginZone : marginZones) {
-            margins.add(PreparedGeometryFactory.prepare(marginZone));
+            margins.insert(marginZone.getEnvelopeInternal(), PreparedGeometryFactory.prepare(marginZone));
         }
+        margins.build();
         // узлы только в области: зоны длинных дорог и труб иначе приносят узлы на километры вокруг, а граф O(n²)
         List<Coordinate[]> rings = new ArrayList<>();
         for (Map.Entry<Coordinate, Coordinate[]> candidate : candidates.entrySet()) {
@@ -966,8 +983,9 @@ public final class ObstacleSet {
                 addNode(halves[1], new Coordinate[] {halves[0], ring[1]}, area, inside, margins, rings);
             }
         }
+        int beforeGates = nodes.size();
         for (Special special : specialList) {
-            if (!special.polygon && !HEAT_NETWORK.equals(special.type)) {
+            if (withNodes && !special.polygon && !HEAT_NETWORK.equals(special.type)) {
                 for (Coordinate[] gate : gates(special, area, margins)) {
                     nodes.add(gate[0]);
                     rings.add(new Coordinate[] {gate[1], null});
@@ -986,6 +1004,10 @@ public final class ObstacleSet {
             around[6 * i + 4] = ring == null || ring[1] == null ? Double.NaN : ring[1].x;
             around[6 * i + 5] = ring == null || ring[1] == null ? Double.NaN : ring[1].y;
         }
+        LOG.debug("obstacles: dn={} area={}x{} forbid={} specials={} margins={} candidates zone={} crossing={} nodes={} gates={} ms={}",
+                dn, Math.round(area.getWidth()), Math.round(area.getHeight()), forbid.size(), specialList.size(), marginZones.size(),
+                zoneCandidates, candidates.size() - zoneCandidates, nodes.size(), nodes.size() - beforeGates,
+                (System.nanoTime() - started) / 1_000_000);
     }
 
     /**
@@ -993,7 +1015,7 @@ public final class ObstacleSet {
      * ребро пары пересекает линию под прямым углом. Под острым углом обычная часть трассы у пересечения ближе нормы
      * вне круга «норма + CROSS_CIRCLE_M», и без пар трасса обходит линию или ищет узлы напротив.
      */
-    private List<Coordinate[]> gates(Special special, Envelope area, List<PreparedGeometry> margins) {
+    private List<Coordinate[]> gates(Special special, Envelope area, STRtree margins) {
         List<Coordinate[]> out = new ArrayList<>();
         double offset = Math.max(special.zone.distance - SIMPLIFY_M + GATE_OFFSET_M,
                 special.rule.getMarginM() + GATE_BEYOND_M);
@@ -1022,7 +1044,7 @@ public final class ObstacleSet {
      * области и коридоре и не зашёл в зону запрета или полосу margin_m дороги; null — такой нет до GATE_REACH_M.
      */
     private Coordinate beyond(Coordinate at, double nx, double ny, double offset, Envelope area,
-            List<PreparedGeometry> margins) {
+            STRtree margins) {
         for (double t = offset; t <= offset + GATE_REACH_M; t += GATE_SHIFT_M) {
             Coordinate c = new Coordinate(at.x + nx * t, at.y + ny * t);
             if (!area.contains(c) || inside != null && !inside.intersects(factory.createPoint(c)) || forbidGrid.covers(c)
@@ -1036,7 +1058,7 @@ public final class ObstacleSet {
         return null;
     }
 
-    private void addNode(Coordinate c, Coordinate[] ring, Envelope area, PreparedGeometry inside, List<PreparedGeometry> margins,
+    private void addNode(Coordinate c, Coordinate[] ring, Envelope area, PreparedGeometry inside, STRtree margins,
             List<Coordinate[]> rings) {
         if (area.contains(c) && (inside == null || inside.intersects(factory.createPoint(c))) && !insideAnyZone(c)
                 && !insideAny(margins, c)) {
@@ -1065,10 +1087,10 @@ public final class ObstacleSet {
         return new Coordinate(from.x + (to.x - from.x) * share, from.y + (to.y - from.y) * share);
     }
 
-    private boolean insideAny(List<PreparedGeometry> polygons, Coordinate c) {
+    private boolean insideAny(STRtree polygons, Coordinate c) {
         Geometry point = factory.createPoint(c);
-        for (PreparedGeometry polygon : polygons) {
-            if (polygon.getGeometry().getEnvelopeInternal().contains(c) && polygon.intersects(point)) {
+        for (Object polygon : polygons.query(new Envelope(c))) {
+            if (((PreparedGeometry) polygon).intersects(point)) {
                 return true;
             }
         }
@@ -1126,6 +1148,9 @@ public final class ObstacleSet {
      * в одной зоне.
      */
     public List<Coordinate> nodes() {
+        if (!withNodes) {
+            throw new IllegalStateException("набор зон построен без узлов графа");
+        }
         return nodes;
     }
 

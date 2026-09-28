@@ -115,6 +115,8 @@ td.reason{text-align:left;white-space:normal;color:var(--rose);padding-left:0}
 <span><i style="background:#fb923c"></i>спецпереход</span>
 <span><i style="background:#f43f5e;height:8px;opacity:.6"></i>реконструкция</span>
 <span><i style="background:#94a3b8"></i>существующая сеть</span>
+<span><i style="background:#ef4444"></i>реальная</span>
+<span><i style="background:#f97316"></i>восстановленная</span>
 <span>○ врезка · ■ камера · ◦ техузел · ● точка подключения · ◉ источник</span>
 </div></div>
 <aside>
@@ -134,6 +136,8 @@ const NS = "http://www.w3.org/2000/svg";
 const svg = document.getElementById("svg");
 const FILL = {oks:"#334155", oks_existing:"#334155", park:"#14532d", social_area:"#4c1d95", prohibited_site:"#7f1d1d",
   water:"#1e3a8a", road:"#1f2937", tram_tracks:"#3f2d1a", railway:"#3f2d1a", metro:"#3b0764"};
+// уровень данных существующей сети (_source): реальная, восстановленная, достроенная
+const SOURCE = {real:"#ef4444", restored:"#f97316", inferred:"#94a3b8"};
 const LINE = {gas_pipeline:"#eab308", power_cable:"#a855f7", water_supply:"#06b6d4", sewer:"#78716c"};
 const NAMES = {oks_existing:"существующий ОКС", park:"парк", social_area:"социальный объект", prohibited_site:"запретная территория",
   water:"водный объект", road:"дорога", tram_tracks:"трамвайные пути", gas_pipeline:"газопровод", power_cable:"силовой кабель",
@@ -181,7 +185,7 @@ for (const f of DATA.input) {
   if (t === "restriction" || t === "oks_existing" || t === "oks_future") {
     if (f.type && f.type.includes("Polygon")) { const e = el("path", {d: d(f.parts) + "Z", fill: FILL[r] || FILL[t] || "#334155", stroke: "#0b1220", "data-w": .6, "fill-rule": "evenodd"}, layers.restrictions); e.onclick = () => select(f.props); }
     else if (f.type && f.type.includes("Line")) { const e = el("path", {d: d(f.parts), fill: "none", stroke: LINE[r] || "#64748b", "data-w": 2, "stroke-dasharray": "6 4"}, layers.restrictions); e.onclick = () => select(f.props); }
-  } else if (t === "heat_network") { const e = el("path", {d: d(f.parts), fill: "none", stroke: "#94a3b8", "data-w": 3.5, "stroke-linecap": "round", opacity: .85}, layers.existing); e.onclick = () => select(f.props); }
+  } else if (t === "heat_network") { const e = el("path", {d: d(f.parts), fill: "none", stroke: SOURCE[f.props._source] || "#94a3b8", "data-w": 3.5, "stroke-linecap": "round", opacity: .85}, layers.existing); e.onclick = () => select(f.props); }
   else if (t === "heat_chamber") { const [x,y] = f.parts[0][0]; const e = el("rect", {"data-cx": x, "data-cy": y, "data-size": 8, fill: "#0b1220", stroke: "#94a3b8", "data-w": 2}, layers.existing); e.onclick = () => select(f.props); }
   else if (t === "source") { const [x,y] = f.parts[0][0]; const e = el("circle", {cx: x, cy: y, "data-r": 9, fill: "#b45309", stroke: "#fde68a", "data-w": 2}, layers.points); e.onclick = () => select(f.props); }
   else if (t === "oks_connection_point") { const [x,y] = f.parts[0][0]; const e = el("circle", {cx: x, cy: y, "data-r": 5, fill: "#f8fafc", stroke: "#0b1220", "data-w": 1.5}, layers.points); e.onclick = () => select(f.props); }

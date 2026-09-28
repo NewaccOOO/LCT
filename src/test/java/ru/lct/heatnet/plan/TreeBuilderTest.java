@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.util.AffineTransformation;
 import ru.lct.heatnet.graph.Router;
@@ -188,6 +189,19 @@ class TreeBuilderTest {
 
         assertFalse(TreeBuilder.recedes(building, cp, new Coordinate(19, 12.5), 5.3));
         assertTrue(TreeBuilder.recedes(building, cp, new Coordinate(10, 20), 5.3));
+    }
+
+    @Test
+    void rayThroughInnerCornerOfLShapedBuildingIsNotAnExit() {
+        // oks-w857530905 СПб (18.09, сдвиг на 22580; 6665720): луч от точки через вершину внутреннего угла выходит из
+        // соседней стены в 1,2 м и в зоне отступа идёт к углу до 0,13 м — подход к другой стене (B19)
+        Geometry building = new GeometryFactory().createPolygon(new Coordinate[] {
+                new Coordinate(15.044, 32.387), new Coordinate(33.428, 19.505), new Coordinate(26.834, 10.125),
+                new Coordinate(23.141, 12.710), new Coordinate(20.785, 9.356), new Coordinate(9.834, 17.038),
+                new Coordinate(12.196, 20.392), new Coordinate(8.452, 23.017), new Coordinate(15.044, 32.387)});
+        Coordinate cp = new Coordinate(9.846, 23.261);
+
+        assertFalse(TreeBuilder.leavesOnce(building, cp, new Coordinate(9.822, 10.523), 5.44));
     }
 
     @Test

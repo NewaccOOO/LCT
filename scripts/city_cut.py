@@ -148,7 +148,7 @@ def main():
             s["unconnected_penalty"] = round(sum(PENALTY_FIXED + PENALTY_PER_TPH * flows.get(str(x), 0.0) for x in unconnected), 2)
             s["calculated_cost"] = round(s["construction_cost"] + s["unconnected_penalty"], 2)
             s["new_network_length"] = round(sum(q["length"] for q in segs), 2)
-            s["score"] = round(0.7 * s["calculated_cost"] / 25_000_000 + 0.3 * s["new_network_length"] / 100, 3)
+            s["score"] = round(0.7 * s["calculated_cost"] / 25_000_000 + 0.3 * s["new_network_length"] / 100, 4)
             s["unconnected_oks_ids"] = unconnected
             rows.append({"type": "Feature", "geometry": None, "properties": s})
         for i, f in enumerate(rows):
