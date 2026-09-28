@@ -99,6 +99,26 @@ class VariantCriteriaTest {
     }
 
     @Test
+    void coincidentPointNamesItsConnectedTwin() {
+        // b в той же координате, что подключённая a; c и d совпадают, но без сети обе — причина у них обычная
+        List<FutureOks> oks = List.of(oks("oks-a"), oks("oks-b"), oks("oks-c"), oks("oks-d"));
+        List<ConnectionPoint> points = List.of(point("oks-a", 0, 0), point("oks-b", 0, 0.004), point("oks-c", 600, 0),
+                point("oks-d", 600, 0));
+        InputData input = new InputData(null, List.of(), List.of(), oks, points, List.of(), List.of(), List.of(),
+                List.of(), java.util.Set.of());
+        VariantSummary summary = new VariantSummary("summary_1", "1", 1, 0, 0, 0, 0, 0, 0, 0, 0,
+                List.of("oks-b", "oks-c", "oks-d"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> reasons = (List<Map<String, Object>>) new VariantCriteria(input, rules)
+                .of(new Variant("1", List.of(), List.of(), List.of(), summary)).get("unconnected_reasons");
+
+        assertEquals(List.of("coincident_point", "no_route", "no_route"),
+                reasons.stream().map(r -> r.get("reason")).collect(java.util.stream.Collectors.toList()));
+        assertEquals(List.of("oks-a"), reasons.get(0).get("object_ids"));
+    }
+
+    @Test
     void nestedRingsAndFarZonesKeepEnclosure() {
         // точка в кольце воды, оно в кольце парка; парк справа от луча, вода — у самой точки; дальняя вода не на луче
         Restriction inner = new Restriction("water-1", factory.toGeometry(new Envelope(-50, 50, -50, 50))

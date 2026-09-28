@@ -76,6 +76,7 @@ public final class VariantCriteria {
     private final Map<String, Geometry> zoneCache = new ConcurrentHashMap<>();
     // точка подключения по ОКС: строится при первой причине, линейный поиск на городе был O(n²)
     private Map<String, ConnectionPoint> connectionByOks;
+    private Map<String, List<ConnectionPoint>> byPlace;
     /** Зоны запрета по рамке: здания и запретные ограничения; строится при первой причине. */
     private STRtree forbidIndex;
     /**
@@ -215,7 +216,8 @@ public final class VariantCriteria {
         wanted.parallelStream().forEach(id -> fresh.put(id, reason(id, own.get(id), flows.getOrDefault(id, 0.0))));
         reasons.putAll(fresh);
         for (String oksId : explained) {
-            unconnectedReasons.add(reasons.get(oksId));
+            Map<String, Object> twin = coincident(oksId, unconnected);
+            unconnectedReasons.add(twin != null ? twin : reasons.get(oksId));
         }
         log.info("criteria: variant {} beyond={} reasons={} new={} elapsed={}s", variant.getId(), beyondReach, explained.size(),
                 wanted.size(), (System.nanoTime() - reasoning) / 1_000_000_000L);
@@ -319,7 +321,34 @@ public final class VariantCriteria {
         if (connectionByOks == null) {
             connectionByOks = new HashMap<>();
             input.getConnectionPoints().forEach(c -> connectionByOks.putIfAbsent(c.getOksId(), c));
+            byPlace = new HashMap<>();
+            input.getConnectionPoints().forEach(c -> byPlace.computeIfAbsent(place(c), k -> new ArrayList<>()).add(c));
         }
+    }
+
+    /**
+     * Точка в той же координате, что подключённая в этом варианте: участок сети кончается в одном узле, разветвление
+     * только в камере (п. 2.1), и участок к ней лёг бы на участок к подключённой. null — таких нет.
+     */
+    private Map<String, Object> coincident(String oksId, Set<String> unconnected) {
+        ConnectionPoint connection = connectionByOks.get(oksId);
+        if (connection == null) {
+            return null;
+        }
+        List<String> twins = new ArrayList<>();
+        for (ConnectionPoint other : byPlace.get(place(connection))) {
+            if (!other.getOksId().equals(oksId) && !unconnected.contains(other.getOksId())) {
+                twins.add(other.getOksId());
+            }
+        }
+        return twins.isEmpty() ? null : reason(oksId, "coincident_point", "точка подключения совпадает с подключённой "
+                + "точкой (до 1 см): отдельный участок к ней лёг бы на участок к " + String.join(", ", twins), twins);
+    }
+
+    /** Координата точки с точностью до 1 см. */
+    private static String place(ConnectionPoint connection) {
+        Coordinate c = connection.getGeometry().getCoordinate();
+        return Math.round(c.x * 100) + ":" + Math.round(c.y * 100);
     }
 
     /**
