@@ -94,6 +94,21 @@ class NetworkAssemblerTest {
         assertEquals(73.0005, cut, 0.0005);
     }
 
+    @Test
+    void overlapOfExactZonesGoesToPartWithGreaterSpecialFactor() {
+        // газопровод в 4,97 м за кромкой: точная зона газопровода начинается в 72,97, зона дороги кончается в 73,00.
+        // Общие 3 см считаются по наибольшему Kспец (приложение 18.09, разд. 4) и уходят участку дороги, а не делятся
+        // пополам (72,985)
+        PlanFixture fixture = PlanFixture.trunk()
+                .restriction("gas-1", PlanFixture.line(250, 74.97, 450, 74.97), "gas_pipeline");
+
+        List<NewSegment> special = specials(assemble(fixture, 90, 10));
+        double cut = special.get(special.size() - 1).getGeometry().getCoordinateN(0).y;
+
+        assertEquals(2, special.size());
+        assertEquals(73.0, cut, 0.0005);
+    }
+
     /** Один прямой участок от врезки на hn-2 в (300, 0) через дорогу под углом deg к ОКС с расходом flow. */
     private Variant assemble(PlanFixture fixture, double deg, double flow) {
         return assemble(fixture, ROAD, deg, flow);

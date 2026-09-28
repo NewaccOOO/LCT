@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Прогон jar по всем наборам: CLI через очередь, check18 (город целиком или срез 3×3 км), сводка analyze.py.
-# Использование: bench_all.sh <jar> <метка> [набор ...]
+# Использование: [FULL=1] bench_all.sh <jar> <метка> [набор ...]
+# Срез покрывает 8–14 % сети города и нарушения вне окна не видит; FULL=1 добавляет полный check18 городов
+# (Москва ~30 мин, Нижний Новгород ~1 ч): без него итог города — только быстрая проверка.
 set -u
 cd "$(dirname "$0")/../../.."
 source scripts/env.sh
@@ -31,6 +33,10 @@ for s in $SETS; do
     python3 scripts/city_cut.py "${IN[$s]}" $R/out.geojson $R/cut.in.geojson $R/cut.out.geojson > /dev/null
     uv run --project tools python tools/validator/check18.py $R/cut.in.geojson $R/cut.out.geojson > $R/check18.txt 2>&1
     echo "  check18 (срез 3×3 км): $(tail -1 $R/check18.txt)" | tee -a data/cities/runs/$TAG/summary.txt
+    if [ "${FULL:-0}" = 1 ]; then
+      uv run --project tools python tools/validator/check18.py "${IN[$s]}" $R/out.geojson > $R/check18.full.txt 2>&1
+      echo "  check18 (полный): $(tail -1 $R/check18.full.txt)" | tee -a data/cities/runs/$TAG/summary.txt
+    fi
   else
     uv run --project tools python tools/validator/check18.py "${IN[$s]}" $R/out.geojson > $R/check18.txt 2>&1
     echo "  check18: $(tail -1 $R/check18.txt)" | tee -a data/cities/runs/$TAG/summary.txt

@@ -595,7 +595,9 @@ final class TreeBuilder {
         for (int i = 0; i + 1 < head.length; i++) {
             others.add(new LineSegment(head[i], head[i + 1]));
         }
-        Set<String> own = new HashSet<>(ignored);
+        // сеть врезки освобождена от отступа только на звене от самой врезки: финальный участок от выхода к точке её
+        // касается, лишь когда он и есть это звено (прямо от врезки), иначе держит отступ 1 м до неё (B11)
+        Set<String> own = new HashSet<>(fromRoot && head.length == 1 && straight ? ignored : Set.of());
         own.add(building.getId());
         for (Coordinate entry : entries) {
             double r = cp.distance(entry);
@@ -867,8 +869,8 @@ final class TreeBuilder {
             Coordinate cp = connection.getGeometry().getCoordinate();
             // сначала внешние контуры: ближайшая граница двора (дырки) ведёт внутрь зоны отступа, выхода там нет
             List<Coordinate> anchors = anchors(building.getGeometry(), cp);
-            Set<String> own = new HashSet<>(ignored);
-            own.add(building.getId());
+            // финальный участок cp–exit врезки не касается: отступ 1 м до сети врезки на нём действует (B11)
+            Set<String> own = new HashSet<>(Set.of(building.getId()));
             Coordinate centroid = building.getGeometry().getCentroid().getCoordinate();
             int tries = 0;
             Coordinate last = null;
