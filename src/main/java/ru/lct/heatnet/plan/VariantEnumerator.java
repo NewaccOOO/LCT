@@ -208,8 +208,13 @@ public final class VariantEnumerator {
     private static final boolean CITY_RETRY = Boolean.parseBoolean(System.getProperty("heatnet.city.retry", "true"));
     private static final double RETRY_NEAR_M = 150;
     private static final int RETRY_TREES = 3;
-    /** Сколько секунд от начала второго прохода варианта можно начинать его группы. */
-    private static final long CITY_RETRY_S = Long.getLong("heatnet.city.retry.deadline", 60);
+    /**
+     * Сколько секунд от начала второго прохода можно начинать его группы. Это страховка от патологического входа, а не
+     * бюджет: весь Нижний Новгород (181 группа) проходит за 52–64 с, под нагрузкой (load 13) — за 88 с, и при сроке 60 с
+     * вариант терял до 41 точки в зависимости от загрузки машины (28.09.2026). С запасом в 5 раз все группы начинаются
+     * и выход от скорости машины не зависит.
+     */
+    private static final long CITY_RETRY_S = Long.getLong("heatnet.city.retry.deadline", 300);
     /**
      * Сколько секунд от начала городского расчёта отводится районам (heatnet.city.deadline): районы идут от ближних
      * к сети к дальним, после срока оставшиеся не считаются, их точки остаются без сети. На синтетическом городе
@@ -551,6 +556,9 @@ public final class VariantEnumerator {
         }
         List<Draft> shaped = new ArrayList<>();
         List<Draft> picked = shaped(picked(), shaped);
+        if (TURN_DETACH) {
+            reattached(picked, shaped);
+        }
         List<Variant> variants = shaped.stream().map(draft -> draft.variant).collect(Collectors.toList());
         // ранг 1 — наименьший score (п. 7.2): доводка после поиска меняет S, и порядок черновиков мог разойтись с ним
         List<Integer> order = Scorer.rank(variants.stream().map(Variant::getSummary).collect(Collectors.toList()));
@@ -665,8 +673,9 @@ public final class VariantEnumerator {
      * CITY_BLOCK ОКС параллельно (вариант k — k-й черновик каждого района). Прямые подключения собираются по узлам
      * врезки параллельно с общими счётчиками ID, деревья районов — одной сборкой; дерево района, задевающее уже
      * принятое дерево соседа, не берётся. Вариант 2 — вторые по стоимости прямые подключения, если они есть.
+     * Доступен пакету: тесты считают городским режимом малую сцену, не набирая CITY_MIN точек.
      */
-    private Result city() {
+    Result city() {
         long started = System.nanoTime();
         List<ConnectionPoint> all = new ArrayList<>(connectionByOks.values());
         assembler = new NetworkAssembler(input, rules, specials, oksById);
@@ -760,6 +769,42 @@ public final class VariantEnumerator {
             }
         }
         return new Result(ranked, input.getNumericIds());
+    }
+
+    /**
+     * Точки, которые проходы формы отцепили ({@link #detached}: поворот круче 90° в камере не снят), считаются ещё раз
+     * по одной, как в {@link #city()}: у дерева одной точки камер ветвления нет. Дерево берётся в вариант, если не
+     * задевает его деревья и не переполняет общую камеру ({@link #joined}); неподключение при доступном маршруте
+     * запрещено (п. 2.5).
+     */
+    private void reattached(List<Draft> picked, List<Draft> shaped) {
+        Set<ConnectionPoint> detached = new HashSet<>();
+        for (int i = 0; i < shaped.size(); i++) {
+            lost(picked.get(i).trees, shaped.get(i).trees, detached);
+        }
+        if (detached.isEmpty()) {
+            return;
+        }
+        List<List<ConnectionPoint>> singles = detached.stream().sorted(Comparator.comparing(ConnectionPoint::getId))
+                .map(List::of).collect(Collectors.toList());
+        STRtree none = new STRtree();
+        List<List<Draft>> results = solve(singles, i -> none, System.nanoTime() + CITY_DEADLINE_S * 1_000_000_000L, null);
+        for (int i = 0; i < shaped.size(); i++) {
+            Draft draft = shaped.get(i);
+            List<Tree> added = joined(results, i, draft.trees);
+            if (added.isEmpty()) {
+                continue;
+            }
+            List<Tree> trees = new ArrayList<>(draft.trees);
+            trees.addAll(added);
+            try {
+                List<FutureOks> unconnected = missing(trees);
+                shaped.set(i, new Draft(trees, unconnected, assembler.assemble(draft.variant.getId(), i + 1, trees, unconnected)));
+                log.info("turned: variant {} detached {} connected again {}", draft.variant.getId(), singles.size(), added.size());
+            } catch (IllegalStateException | IllegalArgumentException e) {
+                log.info("turned: variant {} not assembled with detached points: {}", draft.variant.getId(), e.getMessage());
+            }
+        }
     }
 
     /** Точки деревьев before, которых нет в деревьях after, добавляются в lost. */
@@ -927,8 +972,8 @@ public final class VariantEnumerator {
                 }
             }
             if (skipped.get() > 0) {
-                log.warn("city: {} районов из {} не начаты до срока {} с, их точки остаются без сети", skipped.get(),
-                        districts.size(), CITY_DEADLINE_S);
+                log.warn("city: {} районов из {} не начаты до срока, их точки остаются без сети", skipped.get(),
+                        districts.size());
             }
             return results;
         } catch (InterruptedException e) {
@@ -1714,7 +1759,10 @@ public final class VariantEnumerator {
         Set<String> ignored = new HashSet<>();
         for (TieCandidate candidate : finder.around(connection.getGeometry(), dn, SCAN_RADIUS_M, SCAN_STEP_M)) {
             Coordinate at = candidate.getPoint().getCoordinate();
-            if (area.contains(at) && !router.obstacles().insideForbid(at)) {
+            // в районе города препятствия взяты только в коридоре (Region.corridor): врезка за ним соединялась бы
+            // с графом сквозь невидимые роутеру здания и дороги
+            if (area.contains(at) && (region.corridor == null || region.corridor.covers(candidate.getPoint()))
+                    && !router.obstacles().insideForbid(at)) {
                 left.add(candidate);
                 ignored.addAll(candidate.getIgnored());
             }

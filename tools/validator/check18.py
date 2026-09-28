@@ -290,7 +290,7 @@ class Report:
 
 def load_input(path):
     data = json.load(open(path))
-    cps, chambers, pipes, oks, forbid, special, buildings = {}, {}, [], [], [], [], []
+    cps, chambers, pipes, oks, forbid, special = {}, {}, [], [], [], []
     id_types = {}
     # формат раздела 12: расход у oks_future, точка ссылается на него через oks_id; у датасета организаторов расход
     # у самой точки
@@ -306,8 +306,8 @@ def load_input(path):
             if "oks_id" in p:
                 cps.setdefault(str(p["oks_id"]), cps[str(p["id"])])
         elif t in ("oks_existing", "oks_future"):
-            # формат раздела 12: здания — отдельные объекты; старые категории их не проверяют, B16–B18 обходят
-            buildings.append((str(p["id"]), utm(f["geometry"])))
+            # формат раздела 12: здания — отдельные объекты, правила те же, что у restriction/oks 18.09 (B3, B4, B8, B19)
+            oks.append((str(p["id"]), utm(f["geometry"])))
         elif t == "heat_chamber":
             chambers[str(p["id"])] = utm(f["geometry"])
         elif t == "heat_network":
@@ -321,8 +321,7 @@ def load_input(path):
                 special.append((str(p["id"]), rt, g))
             elif rt in FORBID or rt not in RULES["restrictions"]:
                 forbid.append((str(p["id"]), rt, g))
-    return dict(cps=cps, chambers=chambers, pipes=pipes, oks=oks, forbid=forbid, special=special, id_types=id_types,
-                buildings=buildings)
+    return dict(cps=cps, chambers=chambers, pipes=pipes, oks=oks, forbid=forbid, special=special, id_types=id_types)
 
 
 def check_variant(inp, trees, vid, feats, rep):
@@ -1905,7 +1904,7 @@ def trees_for(inp):
             for rid, rt, g in inp["special"]]
     spec += [(pid, "heat_network", g, DN.get(pdn, {"width_m": 0.0})["width_m"] / 2) for pid, g, pdn in inp["pipes"]]
     t_spec = STRtree([o[2] for o in spec])
-    all_oks = inp["oks"] + inp["buildings"]
+    all_oks = inp["oks"]
     t_all_oks = STRtree([g for _, g in all_oks])
 
     return {
