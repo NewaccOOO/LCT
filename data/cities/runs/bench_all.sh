@@ -29,7 +29,7 @@ for s in $SETS; do
   echo "$s код $code ${t} с ${m} ГБ" | tee -a data/cities/runs/$TAG/summary.txt
   [ $code -eq 0 ] || continue
   n=$(grep -c . "${IN[$s]}" 2>/dev/null)
-  if [ "$(stat -f %z "${IN[$s]}")" -gt 20000000 ]; then
+  if [ "$(stat -L -f %z "${IN[$s]}")" -gt 20000000 ]; then
     python3 scripts/city_cut.py "${IN[$s]}" $R/out.geojson $R/cut.in.geojson $R/cut.out.geojson > /dev/null
     uv run --project tools python tools/validator/check18.py $R/cut.in.geojson $R/cut.out.geojson > $R/check18.txt 2>&1
     echo "  check18 (срез 3×3 км): $(tail -1 $R/check18.txt)" | tee -a data/cities/runs/$TAG/summary.txt

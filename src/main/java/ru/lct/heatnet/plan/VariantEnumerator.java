@@ -209,12 +209,12 @@ public final class VariantEnumerator {
     private static final double RETRY_NEAR_M = 150;
     private static final int RETRY_TREES = 3;
     /**
-     * Сколько секунд от начала второго прохода можно начинать его группы. Это страховка от патологического входа, а не
-     * бюджет: весь Нижний Новгород (181 группа) проходит за 52–64 с, под нагрузкой (load 13) — за 88 с, и при сроке 60 с
-     * вариант терял до 41 точки в зависимости от загрузки машины (28.09.2026). С запасом в 5 раз все группы начинаются
-     * и выход от скорости машины не зависит.
+     * Сколько секунд от начала второго прохода можно начинать его группы. Весь Нижний Новгород (181 группа) проходит за
+     * 52–64 с, под нагрузкой (load 13) — за 88 с и теряет часть точек третьего варианта. Больше срок не делается:
+     * на синтетическом городе 3,2 ГБ групп 470, их области по 5 км, и при сроке 300 с проход заполнял кучу 12 ГБ.
+     * ponytail: срок стенных часов, выход под нагрузкой зависит от машины; бюджет групп вместо срока, если это мешает.
      */
-    private static final long CITY_RETRY_S = Long.getLong("heatnet.city.retry.deadline", 300);
+    private static final long CITY_RETRY_S = Long.getLong("heatnet.city.retry.deadline", 60);
     /**
      * Сколько секунд от начала городского расчёта отводится районам (heatnet.city.deadline): районы идут от ближних
      * к сети к дальним, после срока оставшиеся не считаются, их точки остаются без сети. На синтетическом городе
@@ -336,8 +336,11 @@ public final class VariantEnumerator {
         final Map<String, List<Option>> options = new HashMap<>();
         final Map<String, Router> routers = new java.util.concurrent.ConcurrentHashMap<>();
         final Map<String, ObstacleSet> obstacleSets = new java.util.concurrent.ConcurrentHashMap<>();
-        /** Коридор графа района или null — весь прямоугольник. */
-        final Geometry corridor;
+        private final List<Point> points;
+        private final List<TieCandidate> candidates;
+        /** Коридор графа района или null — весь прямоугольник, см. {@link #corridor()}. */
+        private Geometry corridor;
+        private boolean corridorBuilt;
 
         Region(List<ConnectionPoint> connections) {
             Diameter byFlow = rules.diameterFor(flow(connections));
@@ -362,8 +365,20 @@ public final class VariantEnumerator {
             for (TieCandidate candidate : candidates) {
                 envelope.expandToInclude(candidate.getPoint().getCoordinate());
             }
-            Geometry lanes = null;
-            if (district && CORRIDOR && !candidates.isEmpty()) {
+            this.points = points;
+            this.candidates = candidates;
+            this.wideArea = new Envelope(envelope);
+            envelope.expandBy(district ? CITY_MARGIN_M : AREA_MARGIN_M);
+            wideArea.expandBy(WIDE_AREA_MARGIN_M);
+            this.area = envelope;
+        }
+
+        /**
+         * Коридор строится при первом маршруте области: у прямых подключений города областей тысячи (синтетический
+         * город — 12 тыс.), а маршрут нужен единицам; объединение полос всех областей заранее шло 7 минут.
+         */
+        synchronized Geometry corridor() {
+            if (!corridorBuilt && district && CORRIDOR && !candidates.isEmpty()) {
                 List<Geometry> strips = new ArrayList<>();
                 for (Point point : points) {
                     for (TieCandidate candidate : candidates) {
@@ -371,18 +386,15 @@ public final class VariantEnumerator {
                         strips.add(straight.buffer(Math.max(CITY_MARGIN_M, CORRIDOR_SHARE * straight.getLength())));
                     }
                 }
-                lanes = factory.createGeometryCollection(strips.toArray(new Geometry[0])).union();
+                corridor = factory.createGeometryCollection(strips.toArray(new Geometry[0])).union();
             }
-            this.corridor = lanes;
-            this.wideArea = new Envelope(envelope);
-            envelope.expandBy(district ? CITY_MARGIN_M : AREA_MARGIN_M);
-            wideArea.expandBy(WIDE_AREA_MARGIN_M);
-            this.area = envelope;
+            corridorBuilt = true;
+            return corridor;
         }
 
         Router router(int routerDn, Envelope routerArea) {
             return routers.computeIfAbsent(routerDn + "@" + routerArea,
-                    key -> new Router(obstacleIndex, rules, routerArea, routerDn, routeCache, corridor));
+                    key -> new Router(obstacleIndex, rules, routerArea, routerDn, routeCache, corridor()));
         }
 
         /** Зоны для проверки отступов при фактическом Ду: буферы зон дороже самой проверки, поэтому по одному на Ду и область. */
@@ -1190,8 +1202,12 @@ public final class VariantEnumerator {
     /** Группы близких точек и их области расчёта, сборщик. */
     private List<List<ConnectionPoint>> regions() {
         List<List<ConnectionPoint>> groups = groups(new ArrayList<>(connectionByOks.values()));
-        for (List<ConnectionPoint> group : groups) {
-            Region region = new Region(group);
+        // области независимы; у прямых подключений города их тысячи (синтетический город — 12 тыс.), и коридоры
+        // районов в одну нить строились дольше самого расчёта
+        List<Region> built = groups.parallelStream().map(Region::new).collect(Collectors.toList());
+        for (int i = 0; i < groups.size(); i++) {
+            List<ConnectionPoint> group = groups.get(i);
+            Region region = built.get(i);
             for (ConnectionPoint connection : group) {
                 regionByConnection.put(connection.getId(), region);
             }
@@ -1761,7 +1777,7 @@ public final class VariantEnumerator {
             Coordinate at = candidate.getPoint().getCoordinate();
             // в районе города препятствия взяты только в коридоре (Region.corridor): врезка за ним соединялась бы
             // с графом сквозь невидимые роутеру здания и дороги
-            if (area.contains(at) && (region.corridor == null || region.corridor.covers(candidate.getPoint()))
+            if (area.contains(at) && (region.corridor() == null || region.corridor().covers(candidate.getPoint()))
                     && !router.obstacles().insideForbid(at)) {
                 left.add(candidate);
                 ignored.addAll(candidate.getIgnored());
