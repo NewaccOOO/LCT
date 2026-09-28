@@ -343,7 +343,8 @@ public final class VariantEnumerator {
         private boolean corridorBuilt;
 
         Region(List<ConnectionPoint> connections) {
-            Diameter byFlow = rules.diameterFor(flow(connections));
+            // сумма расходов района может превысить наибольший ДУ; тогда граф строится под наибольший
+            Diameter byFlow = rules.diameterFor(Math.min(flow(connections), rules.maxCapacityTph()));
             Diameter above = rules.nextDiameter(byFlow.getDn());
             // диаметр ствола с запасом на ступень выше и по предельной длине пути до ближайшей врезки: ДУ ветки
             // растёт с её длиной (п. 2.3), а отступы графа должны быть верны для фактического ДУ
@@ -504,7 +505,9 @@ public final class VariantEnumerator {
             oksById.put(oks.getId(), oks);
         }
         for (ConnectionPoint connection : input.getConnectionPoints()) {
-            if (oksById.containsKey(connection.getOksId())) {
+            FutureOks target = oksById.get(connection.getOksId());
+            // точка сверх пропускной способности наибольшего ДУ не подключается, причина — в VariantCriteria
+            if (target != null && target.getFlowTph() <= rules.maxCapacityTph()) {
                 connectionByOks.putIfAbsent(connection.getOksId(), connection);
             }
         }

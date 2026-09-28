@@ -106,6 +106,10 @@ public final class Rules {
         }
     }
 
+    public double maxCapacityTph() {
+        return diameters.get(diameters.size() - 1).getCapacityTph();
+    }
+
     public Diameter diameterFor(double flowTph) {
         for (Diameter diameter : diameters) {
             if (diameter.getCapacityTph() >= flowTph) {

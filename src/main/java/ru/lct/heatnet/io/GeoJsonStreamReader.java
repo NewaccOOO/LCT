@@ -56,6 +56,7 @@ import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.Polygon;
 import org.locationtech.jts.geom.impl.PackedCoordinateSequenceFactory;
 import org.locationtech.jts.index.strtree.STRtree;
+import org.locationtech.jts.operation.linemerge.LineMerger;
 import org.locationtech.jts.operation.valid.IsValidOp;
 import org.locationtech.jts.operation.valid.TopologyValidationError;
 import org.locationtech.proj4j.ProjectionException;
@@ -99,6 +100,7 @@ public class GeoJsonStreamReader {
 
     private static final List<String> POINT = List.of("Point");
     private static final List<String> LINE = List.of("LineString");
+    private static final List<String> LINES = List.of("LineString", "MultiLineString");
     private static final List<String> POLYGONS = List.of("Polygon", "MultiPolygon");
     // Приложение 18.09, п. 1.1: ограничение любого типа приходит линией или полигоном; правило дальше применяется
     // по размерности геометрии.
@@ -112,6 +114,9 @@ public class GeoJsonStreamReader {
     private static final PackedCoordinateSequenceFactory PACKED = PackedCoordinateSequenceFactory.DOUBLE_FACTORY;
     private static final GeometryFactory GEOMETRY = new GeometryFactory(PACKED);
     private static final Rules RULES = Rules.load();
+    // Точка на стене своего здания после перевода в UTM оказывается в долях миллиметра снаружи. Дальше допуск не
+    // растёт: разъяснение 3 снимает отступ только для полигона, содержащего точку.
+    private static final double OWN_REACH_M = 0.01;
     private static final Map<Integer, String> INVALID_REASONS = Map.ofEntries(
             Map.entry(TopologyValidationError.REPEATED_POINT, "повторяющаяся точка"),
             Map.entry(TopologyValidationError.HOLE_OUTSIDE_SHELL, "дырка вне внешнего контура"),
@@ -306,6 +311,7 @@ public class GeoJsonStreamReader {
         final Set<String> numericIds;
         final Map<String, String> upstreamById = new LinkedHashMap<>();
         final Map<String, Integer> unknownRestrictionTypes = new LinkedHashMap<>();
+        final Map<String, Integer> unknownObjectTypes = new LinkedHashMap<>();
         final List<Ref> refs = new ArrayList<>();
         /** Байт «]» массива features, как только его нашёл главный поток при чтении строками, см. region. */
         volatile long featuresEnd = Long.MAX_VALUE;
@@ -353,6 +359,7 @@ public class GeoJsonStreamReader {
             refs.addAll(first.refs);
             sourcePoints.addAll(first.sourcePoints);
             sources = first.sources;
+            unknownObjectTypes.putAll(first.unknownObjectTypes);
         }
 
         private Scan(boolean skipObstacles, boolean obstaclesOnly, Envelope extent, Map<String, String> typeById,
@@ -452,7 +459,7 @@ public class GeoJsonStreamReader {
                     Integer diameter = diameter(props, featureId);
                     Double flow = present(props, "flow_tph") ? flow(props, featureId) : null;
                     String upstream = present(props, "upstream_object_id") ? upstream(props, id, featureId) : null;
-                    Geometry geometry = geometry(node, featureId, LINE);
+                    Geometry geometry = line(geometry(node, featureId, LINES), featureId);
                     if (diagnostics.size() == before) {
                         rawSegments.add(new RawSegment(id, (LineString) geometry, diameter, flow, upstream));
                     }
@@ -535,14 +542,11 @@ public class GeoJsonStreamReader {
                     break;
                 }
                 default:
-                    add(featureId, "object_type", "неизвестный тип объекта " + objectType);
+                    unknownObjectTypes.merge(objectType, 1, Integer::sum);
             }
         }
 
         InputData finish() {
-            if (sources == 0) {
-                add(FILE_ID, "object_type", "во входе нет источника source");
-            }
             for (Ref ref : refs) {
                 String type = typeById.get(ref.target);
                 if (type == null) {
@@ -575,6 +579,8 @@ public class GeoJsonStreamReader {
                 }
             }
             unknownRestrictionTypes.forEach((type, count) -> warnings.add(unknownTypeWarning(type, count)));
+            unknownObjectTypes.forEach((type, count) -> warnings.add(String.format(RUSSIAN,
+                    "ПРЕДУПРЕЖДЕНИЕ: object_type \"%s\" не из приложения, объектов: %d, в расчёте не участвуют", type, count)));
             return new InputData(List.copyOf(sourcePoints), segments, chambers, future, points, existing, restrictions,
                     diagnostics, warnings, numericIds);
         }
@@ -593,6 +599,7 @@ public class GeoJsonStreamReader {
             }
             int apartSegments = 0;
             int apartChambers = 0;
+            int lonelyChambers = 0;
             for (RawSegment raw : rawSegments) {
                 apartSegments += raw.upstream == null ? 1 : 0;
                 // текущий расход существующей сети в расчёте не участвует (приложение 18.09, п. 2.4)
@@ -608,11 +615,23 @@ public class GeoJsonStreamReader {
                     }
                 }
                 if (diameter == null) {
-                    add(raw.id, "diameter", "нет diameter, и к камере не примыкает ни один участок сети");
+                    // камера на неразрезанной трубе: ДУ этой трубы
+                    for (RawSegment segment : rawSegments) {
+                        if (segment.geometry.isWithinDistance(raw.geometry, JOINT_M)) {
+                            diameter = Math.max(diameter == null ? 0 : diameter, segment.diameter);
+                        }
+                    }
+                }
+                if (diameter == null) {
+                    lonelyChambers++;
                 } else {
                     apartChambers += raw.upstream == null ? 1 : 0;
                     chambers.add(new Chamber(raw.id, raw.geometry, diameter, raw.upstream));
                 }
+            }
+            if (lonelyChambers > 0) {
+                warnings.add(String.format(RUSSIAN, "ПРЕДУПРЕЖДЕНИЕ: камер без diameter и без трубы рядом: %d, "
+                        + "в расчёте не участвуют", lonelyChambers));
             }
             if (!sourcePoints.isEmpty() && apartSegments + apartChambers > 0) {
                 warnings.add(String.format(RUSSIAN, "ПРЕДУПРЕЖДЕНИЕ: не связаны с источником по стыкам участков "
@@ -828,6 +847,20 @@ public class GeoJsonStreamReader {
                         building = i;
                     }
                 }
+                if (building < 0) {
+                    // точка на стене своего здания: иначе оно чужое, и финальный участок упирается в его зону
+                    Envelope reach = consumer.geometry.getEnvelopeInternal().copy();
+                    reach.expandBy(OWN_REACH_M);
+                    double best = OWN_REACH_M;
+                    for (Object item : index.query(reach)) {
+                        int i = (Integer) item;
+                        double distance = buildings.get(i).getGeometry().distance(consumer.geometry);
+                        if (distance <= best) {
+                            best = distance;
+                            building = i;
+                        }
+                    }
+                }
                 buildingOf[k] = building;
             });
             for (int k = 0; k < consumers.size(); k++) {
@@ -895,21 +928,34 @@ public class GeoJsonStreamReader {
             return upstream;
         }
 
+        /** MultiLineString участка сети — одна линия, если части сливаются стыками; иначе диагностика. */
+        Geometry line(Geometry geometry, String featureId) {
+            if (!(geometry instanceof org.locationtech.jts.geom.MultiLineString)) {
+                return geometry;
+            }
+            LineMerger merger = new LineMerger();
+            merger.add(geometry);
+            if (merger.getMergedLineStrings().size() != 1) {
+                add(featureId, "geometry", "MultiLineString участка сети из несвязных частей");
+                return null;
+            }
+            return (Geometry) merger.getMergedLineStrings().iterator().next();
+        }
+
         Integer diameter(JsonNode props, String featureId) {
             JsonNode value = required(props, featureId, "diameter");
             if (value == null) {
                 return null;
             }
-            if (!value.isIntegralNumber() || !value.canConvertToInt()) {
+            if (!value.isNumber() || value.doubleValue() != Math.rint(value.doubleValue()) || value.doubleValue() <= 0
+                    || value.doubleValue() > Integer.MAX_VALUE) {
                 add(featureId, "diameter", "ожидается целое число, получено " + describe(value));
                 return null;
             }
-            int dn = value.intValue();
-            if (RULES.diameters().stream().noneMatch(d -> d.getDn() == dn)) {
-                add(featureId, "diameter", "диаметра " + dn + " нет в таблице диаметров");
-                return null;
-            }
-            return dn;
+            int dn = (int) value.doubleValue();
+            // ДУ существующей сети вне таблицы 1 (350, 32) — ближайший табличный не меньше, иначе наибольший
+            return RULES.diameters().stream().mapToInt(d -> d.getDn()).filter(d -> d >= dn).min()
+                    .orElse(RULES.diameters().get(RULES.diameters().size() - 1).getDn());
         }
 
         Double flow(JsonNode props, String featureId) {
@@ -1337,6 +1383,7 @@ public class GeoJsonStreamReader {
             diagnostics.addAll(part.diagnostics);
             part.upstreamById.forEach(upstreamById::putIfAbsent);
             part.unknownRestrictionTypes.forEach((type, count) -> unknownRestrictionTypes.merge(type, count, Integer::sum));
+            part.unknownObjectTypes.forEach((type, count) -> unknownObjectTypes.merge(type, count, Integer::sum));
             refs.addAll(part.refs);
             sources += part.sources;
             sourcePoints.addAll(part.sourcePoints);
