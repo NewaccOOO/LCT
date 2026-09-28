@@ -12,6 +12,7 @@ D11 — камера врезки в полосе margin_m дороги или �
 Дорога и пути, заданные линией, — полигон нулевой ширины: угол к звену оси, зона margin_m вдоль трассы от точки
 пересечения, дальше обычный участок держит отступ от оси (разд. 1.1, 4, разъяснение 6).
 E7 — score сводки не равен S разд. 6 с точностью 0,0001 (пример п. 7.3), E8 — ранги не по возрастанию score (п. 7.2).
+E9 — точка подключения без новой сети и не названа в unconnected_oks_ids (п. 2.5, 7.2).
 Строка «i» у пар вариантов — доля расхождения трасс (разд. 6): варианты различны от 10 % длины вне полосы 10 м
 и при другом устройстве (разбиение точек по узлам врезки и объекты врезки), как у сервиса.
 """
@@ -311,7 +312,13 @@ def load_input(path):
         elif t == "heat_chamber":
             chambers[str(p["id"])] = utm(f["geometry"])
         elif t == "heat_network":
-            pipes.append((str(p["id"]), utm(f["geometry"]), p.get("diameter")))
+            # ДУ вне таблицы 1 — ближайший табличный не меньше, как у сервиса
+            dn = p.get("diameter")
+            if isinstance(dn, (int, float)):
+                dn = min((d for d in DNS if d >= dn), default=DNS[-1])
+            # MultiLineString участка сервис сливает в одну линию, так же и здесь
+            line = shapely.line_merge(utm(f["geometry"])) if f["geometry"]["type"] == "MultiLineString" else utm(f["geometry"])
+            pipes.append((str(p["id"]), line, dn))
         elif t == "restriction":
             rt = p.get("restriction_type")
             g = utm(f["geometry"])
@@ -760,6 +767,16 @@ def check_variant(inp, trees, vid, feats, rep):
     if abs(summary.get("length", summary["new_network_length"]) - summary["new_network_length"]) > 0.01:
         rep.add("E4 в S учтена длина реконструкции", f"length={summary['length']} new={summary['new_network_length']}")
     ids = summary["unconnected_oks_ids"]
+    # п. 2.5, 7.2: каждая точка либо подключена новой сетью, либо названа в unconnected_oks_ids (по id точки или её ОКС)
+    names = defaultdict(set)
+    for key, cp in inp["cps"].items():
+        names[id(cp)].add(key)
+    t_seg = STRtree([geo[str(x["properties"]["id"])] for x in segs]) if segs else None
+    listed = {str(x) for x in ids}
+    lost = [min(keys) for key, keys in names.items()
+            if not keys & listed and (t_seg is None or not len(t_seg.query(inp["cps"][next(iter(keys))][0], predicate="dwithin", distance=0.01)))]
+    if lost:
+        rep.add("E9 точка не подключена и не названа в unconnected_oks_ids (п. 2.5, 7.2)", f"{len(lost)}: {lost[:5]}")
     known = [x for x in ids if str(x) in inp["id_types"]]
     wrong_type = sum(1 for x in known if type(x).__name__ != inp["id_types"][str(x)])
     if wrong_type:

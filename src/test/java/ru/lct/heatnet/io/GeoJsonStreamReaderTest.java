@@ -3,6 +3,7 @@ package ru.lct.heatnet.io;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.core.JsonEncoding;
@@ -26,6 +27,7 @@ import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.locationtech.jts.geom.Envelope;
+import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.io.WKBWriter;
 import ru.lct.heatnet.model.Chamber;
@@ -248,6 +250,28 @@ class GeoJsonStreamReaderTest {
     }
 
     @Test
+    void pointOnWallBelongsToItsBuilding() throws IOException {
+        // точка на стене после перевода в UTM лежит в долях миллиметра от контура, здание всё равно своё (п. 2.2)
+        ArrayNode features = datasetFeatures();
+        ((ObjectNode) features.get(5)).set("geometry", geometry("Point", new double[] {37.6301, 55.76}));
+        InputData data = GeoJsonStreamReader.read(write(features));
+        Geometry building = data.getExistingOks().stream().filter(o -> o.getId().equals("40")).findFirst().orElseThrow().getGeometry();
+        assertSame(building, data.getFutureOks().stream().filter(o -> o.getId().equals("30")).findFirst().orElseThrow().getGeometry());
+    }
+
+    @Test
+    void offTableDiameterRoundsUp() throws IOException {
+        // ДУ существующей сети вне таблицы 1 и записанный с дробной частью не роняют расчёт
+        ArrayNode features = validFeatures();
+        props(features, "N1").put("diameter", 350);
+        assertEquals(400, GeoJsonStreamReader.read(write(features)).getSegments().get(0).getDiameter());
+        props(features, "N1").put("diameter", 200.0);
+        assertEquals(200, GeoJsonStreamReader.read(write(features)).getSegments().get(0).getDiameter());
+        props(features, "N1").put("diameter", 5000);
+        assertEquals(1400, GeoJsonStreamReader.read(write(features)).getSegments().get(0).getDiameter());
+    }
+
+    @Test
     void stringDiameter() throws IOException {
         ArrayNode features = validFeatures();
         props(features, "K1").put("diameter", "12");
@@ -308,7 +332,9 @@ class GeoJsonStreamReaderTest {
 
         features = validFeatures();
         props(features, "E1").put("object_type", "tree");
-        assertOnly(features, "E1", "object_type");
+        InputData tree = GeoJsonStreamReader.read(write(features));
+        assertEquals(List.of(), tree.getDiagnostics());
+        assertTrue(tree.getWarnings().stream().anyMatch(w -> w.contains("\"tree\"")), tree.getWarnings().toString());
 
         features = validFeatures();
         ((ObjectNode) features.get(1)).remove("geometry");
@@ -335,7 +361,8 @@ class GeoJsonStreamReaderTest {
         List<String> problems = GeoJsonStreamReader.read(write(features)).getDiagnostics().stream()
                 .map(d -> d.getFeatureId() + " " + d.getField())
                 .collect(Collectors.toList());
-        assertEquals(List.of("#0 object_type", "N1 upstream_object_id"), problems);
+        // без source расчёт идёт; остаётся только ссылка на удалённый источник
+        assertEquals(List.of("N1 upstream_object_id"), problems);
     }
 
     @Test
@@ -347,6 +374,7 @@ class GeoJsonStreamReaderTest {
 
     @Test
     void selfIntersectingPolygonIsReported() throws IOException {
+        // протокол 16.09.2026, п. 9: невалидная геометрия — диагностическая ошибка
         ArrayNode features = validFeatures();
         ((ObjectNode) features.get(4)).set("geometry", geometry("Polygon", new double[][][] {
             {{37.6, 55.7}, {37.61, 55.71}, {37.61, 55.7}, {37.6, 55.71}, {37.6, 55.7}}}));
@@ -560,7 +588,7 @@ class GeoJsonStreamReaderTest {
 
         assertSameRead(json, 8);
         assertSameRead("{\"type\":\"FeatureCollection\",\"features\":[1," + json.substring(json.indexOf('[') + 1), 9);
-        assertSameRead("{\"features\":[]}", 2);
+        assertSameRead("{\"features\":[]}", 1);
         // сломанный JSON в геометрии ограничения: первый проход её не разбирает, ту же ошибку даёт второй
         Path broken = dir.resolve("broken-geometry.geojson");
         Files.writeString(broken, json.replace("[37.66,55.76],[37.67,55.76]", "[37.66,55.76],,[37.67,55.76]"));
