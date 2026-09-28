@@ -444,9 +444,10 @@ def generate(preset: Preset, seed: int, rules: dict[str, Any], types: list[str])
     def diameter(flow: int) -> int:
         return next(row["dn"] for row, capacity in zip(table, capacities) if capacity >= flow)
 
-    # Текущий расход во входе не передаётся, сервис выводит его по Ду (docs/interpretation.md).
-    # ОКС ставится у участка, который его расход выводит за пропускную способность, так в сценах есть реконструкции.
-    share = rules["existing_flow"]["share"]
+    # ОКС ставится у участка, который его расход выводит за пропускную способность: так генератор делал сцены
+    # с реконструкциями до правил 18.09. Ключ existing_flow из rules.json убран в v0.5.0; share 0.0 — его последнее
+    # значение, с ним сцены тех же сидов побайтово как раньше (medium-1 даёт S 23,758, как в docs/performance.md).
+    share = rules.get("existing_flow", {}).get("share", 0.0)
     min_flows = []
     for flow in net.flows:
         index = next(i for i, capacity in enumerate(capacities) if capacity >= flow)

@@ -43,7 +43,9 @@ class OrganizerDatasetRegressionTest {
         Variant best = result.getVariants().get(0);
         assertEquals(1, best.getSummary().getRank());
         assertEquals(ORGANIZER_RANK1_SCORE, best.getSummary().getScore(), 1e-6);
-        // черновики с другой врезкой совпадают с первым по трассе, а смещение трассы вариантом не считается (разд. 6)
-        assertEquals(1, result.getVariants().size());
+        // с общим правилом выхода из здания (B19, 28.09.2026) черновик с точкой 4 отдельной частью проходит проверки и
+        // отличается от первого по устройству: второй вариант, S 13,1835; первый прежний
+        assertEquals(2, result.getVariants().size());
+        assertEquals(13.1835, result.getVariants().get(1).getSummary().getScore(), 1e-6);
     }
 }

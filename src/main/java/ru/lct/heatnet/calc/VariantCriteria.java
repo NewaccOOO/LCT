@@ -78,6 +78,33 @@ public final class VariantCriteria {
     private Map<String, ConnectionPoint> connectionByOks;
     /** Зоны запрета по рамке: здания и запретные ограничения; строится при первой причине. */
     private STRtree forbidIndex;
+    /**
+     * Касания пар зон ({@link #rayZones}) для всех причин: соседние точки без маршрута проходят одни и те же цепочки
+     * зданий, а касание буферов — перебор их сторон.
+     */
+    // ponytail: память растёт с числом проверенных пар (десятки байт на пару), чистить по району, если город упрётся в неё
+    private final Map<Touch, Boolean> touches = new ConcurrentHashMap<>();
+
+    /** Пара зон по ссылкам в порядке проверки: зоны берутся из zoneCache, у одного объекта и отступа она одна. */
+    private static final class Touch {
+        final Geometry a;
+        final Geometry b;
+
+        Touch(Geometry a, Geometry b) {
+            this.a = a;
+            this.b = b;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof Touch && ((Touch) other).a == a && ((Touch) other).b == b;
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * System.identityHashCode(a) + System.identityHashCode(b);
+        }
+    }
 
     /** Объект, который новая сеть может пересечь спецпереходом. */
     private static final class Crossable {
@@ -348,19 +375,23 @@ public final class VariantCriteria {
             return reason(oksId, "inside_forbidden_zone", "точка подключения внутри запретной зоны с учётом отступа: "
                     + "финальный прямой участок из своего здания упирается в чужую зону", inside);
         }
-        if (!zones.isEmpty() && !open(point, zones.values())) {
-            Geometry union = UnaryUnionOp.union(zones.values());
-            for (int i = 0; i < union.getNumGeometries(); i++) {
-                Geometry part = union.getGeometryN(i);
-                if (part instanceof Polygon && part.getFactory().createPolygon(((Polygon) part).getExteriorRing().getCoordinates()).contains(point)) {
-                    List<String> ring = new ArrayList<>();
-                    zones.forEach((id, zone) -> {
-                        if (zone.intersects(part)) {
-                            ring.add(id);
-                        }
-                    });
-                    return reason(oksId, "enclosed", "точка подключения окружена запретными зонами, обхода нет", ring);
-                }
+        List<Geometry> near = zones.isEmpty() ? null : rayZones(point, zones.values(), touches);
+        if (near != null) {
+            // часть объединения, чей контур содержит точку, пересекает луч, и её зоны — в группах у луча: объединяются
+            // только они. Две такие части (кольцо в кольце) — полное объединение, как раньше: там берётся первая
+            List<Geometry> parts = enclosing(UnaryUnionOp.union(near), point, false);
+            if (parts.size() > 1) {
+                parts = enclosing(UnaryUnionOp.union(zones.values()), point, true);
+            }
+            if (!parts.isEmpty()) {
+                Geometry part = parts.get(0);
+                List<String> ring = new ArrayList<>();
+                zones.forEach((id, zone) -> {
+                    if (zone.intersects(part)) {
+                        ring.add(id);
+                    }
+                });
+                return reason(oksId, "enclosed", "точка подключения окружена запретными зонами, обхода нет", ring);
             }
         }
         return reason(oksId, "no_route", "запретные зоны точку не замыкают, но допустимая трасса не найдена: "
@@ -371,9 +402,29 @@ public final class VariantCriteria {
      * Зоны точку заведомо не окружают. Кольцо зон вокруг точки пересекает любой луч из неё, поэтому проверяются только
      * группы касающихся зон у луча вправо: группа не окружает точку, если её рамка точку не содержит или её объединение —
      * один полигон, внешний контур которого точку не содержит. Объединение всех зон в радиусе 2 км на городе — 0,2 с
-     * на точку, группы у луча — миллисекунды. При сомнении false, и решает полное объединение, как раньше.
+     * на точку, группы у луча — миллисекунды. При сомнении false, и решает объединение групп у луча, см. {@link #rayZones}.
      */
     static boolean open(Point point, Collection<Geometry> zones) {
+        return rayZones(point, zones, new HashMap<>()) == null;
+    }
+
+    /** Части объединения, чей внешний контур содержит точку; first — только первая. */
+    private static List<Geometry> enclosing(Geometry union, Point point, boolean first) {
+        List<Geometry> result = new ArrayList<>();
+        for (int i = 0; i < union.getNumGeometries() && !(first && !result.isEmpty()); i++) {
+            Geometry part = union.getGeometryN(i);
+            if (part instanceof Polygon && part.getFactory().createPolygon(((Polygon) part).getExteriorRing().getCoordinates()).contains(point)) {
+                result.add(part);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * null — зоны точку заведомо не окружают, см. {@link #open}; иначе зоны всех групп у луча: кольцо вокруг точки
+     * может быть только из них. touches — память касаний пар зон.
+     */
+    private static List<Geometry> rayZones(Point point, Collection<Geometry> zones, Map<Touch, Boolean> touches) {
         List<Geometry> list = new ArrayList<>(zones);
         Envelope[] grown = new Envelope[list.size()];
         STRtree byEnvelope = new STRtree();
@@ -387,6 +438,8 @@ public final class VariantCriteria {
         Coordinate at = point.getCoordinate();
         LineString ray = point.getFactory().createLineString(new Coordinate[] {at, new Coordinate(right + 1, at.y)});
         boolean[] grouped = new boolean[list.size()];
+        List<Geometry> near = new ArrayList<>();
+        boolean doubt = false;
         for (int i = 0; i < list.size(); i++) {
             if (grouped[i] || !grown[i].intersects(ray.getEnvelopeInternal())
                     || !list.get(i).isWithinDistance(ray, TOUCH_EPS_M)) {
@@ -402,7 +455,8 @@ public final class VariantCriteria {
                 envelope.expandToInclude(grown[a]);
                 for (Object item : byEnvelope.query(grown[a])) {
                     int b = (Integer) item;
-                    if (!grouped[b] && list.get(a).isWithinDistance(list.get(b), TOUCH_EPS_M)) {
+                    if (!grouped[b] && touches.computeIfAbsent(new Touch(list.get(a), list.get(b)),
+                            pair -> pair.a.isWithinDistance(pair.b, TOUCH_EPS_M))) {
                         grouped[b] = true;
                         queue.add(b);
                     }
@@ -411,18 +465,21 @@ public final class VariantCriteria {
             if (!envelope.contains(at)) {
                 continue;
             }
+            near.addAll(group);
+            if (doubt) {
+                continue;
+            }
             // несколько полигонов у касающихся зон — касание в точке, его объединение всех зон может решить иначе
             Geometry union = group.size() == 1 ? group.get(0) : UnaryUnionOp.union(group);
             if (!(union instanceof Polygon)) {
-                return false;
+                doubt = true;
+                continue;
             }
             LinearRing shell = ((Polygon) union).getExteriorRing();
-            if (shell.isWithinDistance(point, TOUCH_EPS_M)
-                    || union.getFactory().createPolygon(shell.getCoordinates()).contains(point)) {
-                return false;
-            }
+            doubt = shell.isWithinDistance(point, TOUCH_EPS_M)
+                    || union.getFactory().createPolygon(shell.getCoordinates()).contains(point);
         }
-        return true;
+        return doubt ? near : null;
     }
 
     private void addZone(Map<String, Geometry> zones, String id, Geometry geometry, double distance, Envelope around) {

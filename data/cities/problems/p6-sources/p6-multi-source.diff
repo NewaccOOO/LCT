@@ -1,0 +1,402 @@
+diff --git a/architecture/CONSTRAINTS.md b/architecture/CONSTRAINTS.md
+index fdc5c40..4292c48 100644
+--- a/architecture/CONSTRAINTS.md
++++ b/architecture/CONSTRAINTS.md
+@@ -524,6 +524,10 @@ S = 0,7 × (C / 25 000 000) + 0,3 × (L / 100)
+ 
+ Принятые нами толкования там, где текст допускает варианты:
+ 
++- Источников `source` во входе может быть несколько, по одному на систему теплоснабжения: п. 1.1 приложения
++  18.09 их число не задаёт, а «один источник» раздела 4 нужен был только отменённой реконструкции. Новая
++  сеть присоединяется к любой допустимой точке любой существующей сети (разъяснение 11).
++
+ - Ду новой камеры на трубе — не меньше Ду этой трубы: обе части разрезанной трубы
+   примыкают к камере (п. 2.1 и 3.2).
+ - Если луч от точки подключения через ближайшую точку внешнего контура здания упирается
+diff --git a/docs/interpretation.md b/docs/interpretation.md
+index 9fad6b2..496fa96 100644
+--- a/docs/interpretation.md
++++ b/docs/interpretation.md
+@@ -17,7 +17,8 @@
+ - `id` — строка или любое число JSON, в том числе 11.0 и 11.5: по разделу 1 приложения 18.09 идентификаторы «могут быть строковыми или числовыми», а формат не интерпретируется. Число приводится к строке с тем же значением (`11.0` остаётся `11.0`, `1e2` становится `100.0`), и ссылки на него в выходе пишутся этим числом. `crs` вида `urn:ogc:def:crs:OGC:1.3:CRS84` — это долгота и широта WGS 84 в том же порядке осей, что EPSG:4326.
+ - Здание — `restriction` с `restriction_type = oks`. Все здания — препятствия с отступом по диаметру, как `oks_existing`, включая полигон с точкой подключения внутри; к такой точке ведёт один финальный прямой участок от ближайшей границы (приложение 18.09, п. 2.2).
+ - Точка подключения без `oks_id` несёт свой `flow_tph` и сама задаёт перспективный ОКС: `id` ОКС равен `id` точки, геометрия ОКС — полигон здания, в котором она лежит, а если такого нет — сама точка. В одном здании может быть несколько точек (несколько вводов), каждая — отдельный ОКС. В `unconnected_oks_ids` попадают `id` этих ОКС, то есть `id` точек подключения.
+-- Сеть без `upstream_object_id` направляется обходом от источника. Первыми идут участки, конец которых не дальше 0,5 м от источника. Участок, конец которого не дальше 0,5 м от дальнего конца уже пройденного участка, получает следующим к источнику объектом камеру в этой точке, а без камеры — сам пройденный участок. Камера без `upstream_object_id` получает участок, который первым дошёл до неё. Если обход по концам дошёл не до всех участков, он продолжается через Т-стыки: конец участка лежит не дальше 0,5 м от середины другого, а разреза там нет. Так выгрузки рабочих систем (разъяснение 17) пишут ответвление от трубы. Участок и камера, до которых обход не дошёл и так, остаются в сети и остаются местами врезки: связи сети с источником приложение не требует (п. 1.1: у `heat_network` обязательны только `id`, `object_type` и `diameter`; п. 2.4: расход сети не считается; разъяснение 11: врезка в любой допустимой точке `heat_network`). Направление сети расчёт не читает: оно было нужно реконструкции, которую редакция 18.09 отменила. CLI печатает в stderr одну строку `ПРЕДУПРЕЖДЕНИЕ: не связаны с источником по стыкам участков heat_network: <n>, камер: <m>; расчёт идёт, врезка в них допустима`, задача REST пишет её в лог.
++- `source` может быть несколько: у каждой системы теплоснабжения города свой источник. Приложение 18.09 (п. 1.1) перечисляет `source` среди объектов входа без числа, а «один источник» раздела 2.2 ТЗ — упрощение модели для реконструкции, которую редакция 18.09 отменила (расход вёлся по `upstream_object_id` до источника). Расчёт новой сети источник не читает: врезка в любую допустимую точку `heat_network` (разъяснение 11). Без единого `source` вход не считается.
++- Сеть без `upstream_object_id` направляется обходом сразу от всех источников: сеть каждой системы — от своего. Первыми идут участки, конец которых не дальше 0,5 м от источника. Участок, конец которого не дальше 0,5 м от дальнего конца уже пройденного участка, получает следующим к источнику объектом камеру в этой точке, а без камеры — сам пройденный участок. Камера без `upstream_object_id` получает участок, который первым дошёл до неё. Если обход по концам дошёл не до всех участков, он продолжается через Т-стыки: конец участка лежит не дальше 0,5 м от середины другого, а разреза там нет. Так выгрузки рабочих систем (разъяснение 17) пишут ответвление от трубы. Участок и камера, до которых обход не дошёл и так, остаются в сети и остаются местами врезки: связи сети с источником приложение не требует (п. 1.1: у `heat_network` обязательны только `id`, `object_type` и `diameter`; п. 2.4: расход сети не считается; разъяснение 11: врезка в любой допустимой точке `heat_network`). Направление сети расчёт не читает: оно было нужно реконструкции, которую редакция 18.09 отменила. CLI печатает в stderr одну строку `ПРЕДУПРЕЖДЕНИЕ: не связаны с источником по стыкам участков heat_network: <n>, камер: <m>; расчёт идёт, врезка в них допустима`, задача REST пишет её в лог.
+ - Камера без `diameter` получает наибольший Ду участков, у которых конец не дальше 0,5 м от неё.
+ - Текущий расход существующей сети в расчёте не участвует (приложение 18.09, п. 2.4): `flow_tph` участка читается, если есть, иначе 0.
+ - `railway` по таблице 2 приложения 18.09 — запрет с отступом 1,0 м.
+diff --git a/src/main/java/ru/lct/heatnet/io/GeoJsonStreamReader.java b/src/main/java/ru/lct/heatnet/io/GeoJsonStreamReader.java
+index 04db15d..dc5b77e 100644
+--- a/src/main/java/ru/lct/heatnet/io/GeoJsonStreamReader.java
++++ b/src/main/java/ru/lct/heatnet/io/GeoJsonStreamReader.java
+@@ -224,7 +224,7 @@ public class GeoJsonStreamReader {
+             JsonLocation at = e.getLocation();
+             String where = at == null ? "" : ", строка " + at.getLineNr() + ", столбец " + at.getColumnNr();
+             List<Diagnostic> broken = List.of(new Diagnostic(FILE_ID, "json", "файл не разбирается как JSON" + where));
+-            return new InputData(null, List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), broken, List.of(), Set.of());
++            return new InputData(List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), broken, List.of(), Set.of());
+         } catch (IOException e) {
+             throw new UncheckedIOException("Не удалось прочитать входной файл " + path, e);
+         }
+@@ -324,7 +324,8 @@ public class GeoJsonStreamReader {
+         /** Файл для чтения строками или срезами, см. lines и sliced; null — чтение деревьями на главном потоке. */
+         FileChannel channel;
+         boolean lines;
+-        Source source;
++        /** Источники с верной геометрией в порядке файла; sources — все фичи source, и с ошибкой геометрии. */
++        final List<Source> sourcePoints = new ArrayList<>();
+         int sources;
+         int ordinal;
+         int duplicates;
+@@ -348,7 +349,7 @@ public class GeoJsonStreamReader {
+             connectionPoints.addAll(first.connectionPoints);
+             upstreamById.putAll(first.upstreamById);
+             refs.addAll(first.refs);
+-            source = first.source;
++            sourcePoints.addAll(first.sourcePoints);
+             sources = first.sources;
+         }
+ 
+@@ -437,13 +438,11 @@ public class GeoJsonStreamReader {
+             }
+             switch (objectType) {
+                 case SOURCE: {
++                    // источников может быть несколько: у каждой системы города свой (приложение 18.09, п. 1.1)
+                     sources++;
+-                    if (sources > 1) {
+-                        add(featureId, "object_type", "во входе больше одного источника source");
+-                    }
+                     Geometry geometry = geometry(node, featureId, POINT);
+-                    if (diagnostics.size() == before && source == null) {
+-                        source = new Source(id, (Point) geometry);
++                    if (diagnostics.size() == before) {
++                        sourcePoints.add(new Source(id, (Point) geometry));
+                     }
+                     break;
+                 }
+@@ -562,19 +561,19 @@ public class GeoJsonStreamReader {
+             List<ExistingOks> existing = new ArrayList<>(existingOks);
+             consumers(future, points, existing);
+             unknownRestrictionTypes.forEach((type, count) -> warnings.add(unknownTypeWarning(type, count)));
+-            return new InputData(source, segments, chambers, future, points, existing, restrictions,
++            return new InputData(List.copyOf(sourcePoints), segments, chambers, future, points, existing, restrictions,
+                     diagnostics, warnings, numericIds);
+         }
+ 
+         /**
+-         * Направление сети обходом от источника, диаметры камер и текущий расход там, где их нет во входе. Участок и
++         * Направление сети обходом от источников, диаметры камер и текущий расход там, где их нет во входе. Участок и
+          * камера, до которых обход не дошёл, остаются в сети без upstream: приложение не требует связи сети с
+          * источником (п. 1.1 — у heat_network обязательны id, object_type и diameter; п. 2.4 — расход сети не
+          * считается; разъяснение 11 — врезка в любой допустимой точке heat_network), а направление расчёт не читает.
+          * О таких объектах предупреждает одна строка warnings.
+          */
+         void network(List<NetworkSegment> segments, List<Chamber> chambers, List<String> warnings) {
+-            if (source != null && (rawSegments.stream().anyMatch(r -> r.upstream == null)
++            if (!sourcePoints.isEmpty() && (rawSegments.stream().anyMatch(r -> r.upstream == null)
+                     || rawChambers.stream().anyMatch(r -> r.upstream == null))) {
+                 traverse();
+             }
+@@ -601,14 +600,15 @@ public class GeoJsonStreamReader {
+                     chambers.add(new Chamber(raw.id, raw.geometry, diameter, raw.upstream));
+                 }
+             }
+-            if (source != null && apartSegments + apartChambers > 0) {
++            if (!sourcePoints.isEmpty() && apartSegments + apartChambers > 0) {
+                 warnings.add(String.format(RUSSIAN, "ПРЕДУПРЕЖДЕНИЕ: не связаны с источником по стыкам участков "
+                         + "heat_network: %d, камер: %d; расчёт идёт, врезка в них допустима", apartSegments, apartChambers));
+             }
+         }
+ 
+-        // Обход в ширину от источника: участок получает следующим к источнику объектом камеру в точке стыка
+-        // или участок, от дальнего конца которого до него дошли; камера — участок, который первым дошёл до неё.
++        // Обход в ширину сразу от всех источников: участок получает следующим к источнику объектом камеру в точке
++        // стыка или участок, от дальнего конца которого до него дошли; камера — участок, который первым дошёл до неё.
++        // Сеть каждой системы города так направляется от своего источника.
+         void traverse() {
+             STRtree ends = endIndex();
+             STRtree chamberIndex = new STRtree();
+@@ -617,9 +617,10 @@ public class GeoJsonStreamReader {
+             }
+             boolean[] reached = new boolean[rawSegments.size()];
+             List<int[]> queue = new ArrayList<>();
+-            Coordinate at = source.getGeometry().getCoordinate();
+-            for (int[] end : near(ends, at)) {
+-                reach(end, source.getId(), reached, queue);
++            for (Source source : sourcePoints) {
++                for (int[] end : near(ends, source.getGeometry().getCoordinate())) {
++                    reach(end, source.getId(), reached, queue);
++                }
+             }
+             STRtree lines = null;
+             for (int head = 0; ; ) {
+@@ -640,7 +641,7 @@ public class GeoJsonStreamReader {
+                     break;
+                 }
+                 lines = lines == null ? lineIndex() : lines;
+-                if (!tees(at, lines, reached, queue)) {
++                if (!tees(lines, reached, queue)) {
+                     break;
+                 }
+             }
+@@ -687,17 +688,17 @@ public class GeoJsonStreamReader {
+          * Выгрузки рабочих систем (разъяснение 17) так пишут ответвление от середины трубы. Ищутся, только когда
+          * очередь обхода кончилась, а пройдены не все участки; false — связанных так не нашлось.
+          */
+-        boolean tees(Coordinate at, STRtree lines, boolean[] reached, List<int[]> queue) {
++        boolean tees(STRtree lines, boolean[] reached, List<int[]> queue) {
+             int before = queue.size();
+             for (int i = 0; i < reached.length; i++) {
+                 if (reached[i]) {
+                     continue;
+                 }
+                 LineString line = rawSegments.get(i).geometry;
+-                if (line.getEnvelopeInternal().distance(new Envelope(at)) <= JOINT_M
+-                        && Distance.pointToSegmentString(at, line.getCoordinates()) <= JOINT_M) {
++                Source on = sourceOn(line);
++                if (on != null) {
+                     // источник на середине участка: обход идёт от обоих его концов
+-                    reach(new int[] {i, 0}, source.getId(), reached, queue);
++                    reach(new int[] {i, 0}, on.getId(), reached, queue);
+                     queue.add(new int[] {i, 1});
+                     continue;
+                 }
+@@ -725,6 +726,19 @@ public class GeoJsonStreamReader {
+             return queue.size() > before;
+         }
+ 
++        /** Первый источник не дальше JOINT_M от участка; null — такого нет. */
++        Source sourceOn(LineString line) {
++            // ponytail: перебор всех источников на каждый непройденный участок; индекс источников — если их тысячи
++            for (Source source : sourcePoints) {
++                Coordinate at = source.getGeometry().getCoordinate();
++                if (line.getEnvelopeInternal().distance(new Envelope(at)) <= JOINT_M
++                        && Distance.pointToSegmentString(at, line.getCoordinates()) <= JOINT_M) {
++                    return source;
++                }
++            }
++            return null;
++        }
++
+         void reach(int[] end, String upstream, boolean[] reached, List<int[]> queue) {
+             if (reached[end[0]]) {
+                 return;
+@@ -998,7 +1012,7 @@ public class GeoJsonStreamReader {
+          * Фичи массива features срезами файла. Главный поток читает файл блоками и находит границы фич по скобкам
+          * с учётом строк, пул разбирает куски фич (см. part) и применяет их к своей части чтения, главный поток
+          * сливает части по порядку. Синтаксис фич проверяет разбор в пуле. Всё, в чём части могут разойтись с
+-         * чтением подряд (не объект в массиве, ошибка JSON, повтор id, второй источник), — SliceMismatch: файл
++         * чтением подряд (не объект в массиве, ошибка JSON, повтор id), — SliceMismatch: файл
+          * читается заново без срезов, и диагностики те же. Возвращает разбор корня после массива.
+          */
+         JsonParser sliced(JsonParser parser) throws IOException {
+@@ -1292,11 +1306,11 @@ public class GeoJsonStreamReader {
+ 
+         /**
+          * Часть в общее чтение. Повтор id между частями видит только общий typeById, и диагностика досталась бы
+-         * части, которая успела позже; второй источник часть не видит вовсе. Оба случая читаются подряд.
++         * части, которая успела позже; такой файл читается подряд.
+          */
+         void merge(Scan part) {
+-            if (part.duplicates > 0 || sources + part.sources > 1) {
+-                throw new SliceMismatch("повтор id или второй источник");
++            if (part.duplicates > 0) {
++                throw new SliceMismatch("повтор id");
+             }
+             rawSegments.addAll(part.rawSegments);
+             rawChambers.addAll(part.rawChambers);
+@@ -1311,9 +1325,7 @@ public class GeoJsonStreamReader {
+             part.unknownRestrictionTypes.forEach((type, count) -> unknownRestrictionTypes.merge(type, count, Integer::sum));
+             refs.addAll(part.refs);
+             sources += part.sources;
+-            if (source == null) {
+-                source = part.source;
+-            }
++            sourcePoints.addAll(part.sourcePoints);
+         }
+ 
+         List<Future<Parsed[]>> prepare(List<JsonNode> batch) {
+diff --git a/src/main/java/ru/lct/heatnet/model/InputData.java b/src/main/java/ru/lct/heatnet/model/InputData.java
+index 4e03d38..aa6e8f4 100644
+--- a/src/main/java/ru/lct/heatnet/model/InputData.java
++++ b/src/main/java/ru/lct/heatnet/model/InputData.java
+@@ -6,7 +6,8 @@ import lombok.Value;
+ 
+ @Value
+ public class InputData {
+-    Source source;
++    /** Источники теплоснабжения: у каждой системы города свой, приложение 18.09 число не ограничивает. */
++    List<Source> sources;
+     List<NetworkSegment> segments;
+     List<Chamber> chambers;
+     List<FutureOks> futureOks;
+diff --git a/src/main/java/ru/lct/heatnet/plan/NetworkAssembler.java b/src/main/java/ru/lct/heatnet/plan/NetworkAssembler.java
+index dd03b83..801a4ff 100644
+--- a/src/main/java/ru/lct/heatnet/plan/NetworkAssembler.java
++++ b/src/main/java/ru/lct/heatnet/plan/NetworkAssembler.java
+@@ -38,6 +38,7 @@ import ru.lct.heatnet.model.NetworkSegment;
+ import ru.lct.heatnet.model.NewChamber;
+ import ru.lct.heatnet.model.NewSegment;
+ import ru.lct.heatnet.model.Restriction;
++import ru.lct.heatnet.model.Source;
+ import ru.lct.heatnet.model.TechnicalNode;
+ import ru.lct.heatnet.model.Variant;
+ import ru.lct.heatnet.model.VariantSummary;
+@@ -91,8 +92,6 @@ final class NetworkAssembler {
+     private final DiameterPlanner planner;
+     /** ОКС входа по id у перечислителя: своя карта расходов на 3 млн ОКС города не строится. */
+     private final Map<String, FutureOks> oksById;
+-    /** ID источника входа; остальные ID берутся из списков входа, см. {@link #inputIds}. */
+-    private final String sourceId;
+     /** Проверки ID входа по префиксу и целиком: выходные ID с ID входа не совпадают. */
+     private final Map<String, Boolean> startsByPrefix = new ConcurrentHashMap<>();
+     private final Map<String, Boolean> knownIds = new ConcurrentHashMap<>();
+@@ -155,7 +154,6 @@ final class NetworkAssembler {
+         this.specials = specials;
+         this.costs = new CostCalculator(rules);
+         this.planner = new DiameterPlanner(rules);
+-        this.sourceId = input.getSource().getId();
+         this.oksById = oksById;
+     }
+ 
+@@ -192,7 +190,8 @@ final class NetworkAssembler {
+ 
+     /** ID входа по спискам: множество из шести миллионов ID города строилось ради считанных проверок. */
+     private Stream<String> inputIds() {
+-        return Stream.of(Stream.of(sourceId), input.getSegments().stream().map(NetworkSegment::getId),
++        return Stream.of(input.getSources().stream().map(Source::getId),
++                input.getSegments().stream().map(NetworkSegment::getId),
+                 input.getChambers().stream().map(Chamber::getId),
+                 input.getConnectionPoints().stream().map(ConnectionPoint::getId),
+                 input.getFutureOks().stream().map(FutureOks::getId),
+diff --git a/src/main/java/ru/lct/heatnet/plan/VariantEnumerator.java b/src/main/java/ru/lct/heatnet/plan/VariantEnumerator.java
+index aed5232..cc22d13 100644
+--- a/src/main/java/ru/lct/heatnet/plan/VariantEnumerator.java
++++ b/src/main/java/ru/lct/heatnet/plan/VariantEnumerator.java
+@@ -881,7 +881,7 @@ public final class VariantEnumerator {
+         connections.forEach(connection -> oks.add(oksById.get(connection.getOksId())));
+         // препятствия району дают общие индексы; в самом входе района они нужны были бы только сборщику для ID входа,
+         // а их сотни тысяч, и сборка каждого черновика перебирала их все
+-        InputData part = new InputData(input.getSource(), input.getSegments(), input.getChambers(), oks, connections,
++        InputData part = new InputData(input.getSources(), input.getSegments(), input.getChambers(), oks, connections,
+                 List.of(), List.of(), List.of(), List.of(), input.getNumericIds());
+         return new VariantEnumerator(part, rules, finder, obstacleIndex, specials, buildingByConnection, CITY_CACHE_MB, true);
+     }
+diff --git a/src/test/java/ru/lct/heatnet/io/GeoJsonStreamReaderTest.java b/src/test/java/ru/lct/heatnet/io/GeoJsonStreamReaderTest.java
+index 6e46ac8..d2c96c5 100644
+--- a/src/test/java/ru/lct/heatnet/io/GeoJsonStreamReaderTest.java
++++ b/src/test/java/ru/lct/heatnet/io/GeoJsonStreamReaderTest.java
+@@ -2,7 +2,6 @@ package ru.lct.heatnet.io;
+ 
+ import static org.junit.jupiter.api.Assertions.assertEquals;
+ import static org.junit.jupiter.api.Assertions.assertFalse;
+-import static org.junit.jupiter.api.Assertions.assertNotNull;
+ import static org.junit.jupiter.api.Assertions.assertNull;
+ import static org.junit.jupiter.api.Assertions.assertTrue;
+ 
+@@ -36,6 +35,7 @@ import ru.lct.heatnet.model.FutureOks;
+ import ru.lct.heatnet.model.InputData;
+ import ru.lct.heatnet.model.NetworkSegment;
+ import ru.lct.heatnet.model.Restriction;
++import ru.lct.heatnet.model.Source;
+ import ru.lct.heatnet.rules.Rules;
+ 
+ class GeoJsonStreamReaderTest {
+@@ -66,7 +66,7 @@ class GeoJsonStreamReaderTest {
+             counts.merge(type, 1, Integer::sum);
+         }
+         assertEquals(1, counts.get("source"));
+-        assertNotNull(data.getSource());
++        assertEquals(1, data.getSources().size());
+         assertEquals(counts.getOrDefault("heat_network", 0), data.getSegments().size());
+         assertEquals(counts.getOrDefault("heat_chamber", 0), data.getChambers().size());
+         assertEquals(counts.getOrDefault("oks_future", 0) + counts.getOrDefault("consumer", 0), data.getFutureOks().size());
+@@ -179,6 +179,32 @@ class GeoJsonStreamReaderTest {
+                 + "расчёт идёт, врезка в них допустима"), data.getWarnings());
+     }
+ 
++    @Test
++    void severalSourcesEachDirectTheirOwnNetwork() throws IOException {
++        // у каждой системы города свой источник: приложение 18.09 (п. 1.1) число source не ограничивает
++        ArrayNode features = datasetFeatures();
++        features.add(feature("Point", new double[] {37.70, 55.70}, "id", 2, "object_type", "source", "name", "котельная"));
++        features.add(feature("LineString", new double[][] {{37.70, 55.70}, {37.71, 55.70}},
++                "id", 13, "object_type", "heat_network", "diameter", 300));
++        features.add(feature("LineString", new double[][] {{37.71, 55.70}, {37.71, 55.71}},
++                "id", 14, "object_type", "heat_network", "diameter", 200));
++        features.add(feature("LineString", new double[][] {{37.80, 55.70}, {37.81, 55.70}},
++                "id", 15, "object_type", "heat_network", "diameter", 100));
++
++        InputData data = GeoJsonStreamReader.read(write(features));
++
++        assertEquals(List.of(), data.getDiagnostics());
++        assertEquals(List.of("1", "2"), data.getSources().stream().map(Source::getId).collect(Collectors.toList()));
++        Map<String, NetworkSegment> segments = data.getSegments().stream()
++                .collect(Collectors.toMap(NetworkSegment::getId, segment -> segment));
++        assertEquals("1", segments.get("10").getUpstreamId());
++        assertEquals("2", segments.get("13").getUpstreamId(), "сеть второй системы идёт от своего источника");
++        assertEquals("13", segments.get("14").getUpstreamId());
++        assertNull(segments.get("15").getUpstreamId(), "сеть без источника остаётся местом врезки");
++        assertEquals(List.of("ПРЕДУПРЕЖДЕНИЕ: не связаны с источником по стыкам участков heat_network: 1, камер: 0; "
++                + "расчёт идёт, врезка в них допустима"), data.getWarnings());
++    }
++
+     @Test
+     void branchEndOnPipeMiddleIsConnected() throws IOException {
+         // ответвление упирается концом в середину участка 12 без разреза, а за ним ещё участок: всё связано
+@@ -295,10 +321,13 @@ class GeoJsonStreamReaderTest {
+         ((ObjectNode) features.get(4)).set("geometry", geometry("Polygon", new double[][][] {{{37.6, 55.7}, {37.61, 55.7}, {37.61, 55.71}, {37.6, 55.71}}}));
+         assertOnly(features, "O1", "geometry");
+ 
++        // второй источник — вторая система теплоснабжения, не ошибка
+         features = validFeatures();
+         features.add(features.get(0).deepCopy());
+         ((ObjectNode) features.get(9).get("properties")).put("id", "S3");
+-        assertOnly(features, "S3", "object_type");
++        InputData two = GeoJsonStreamReader.read(write(features));
++        assertEquals(List.of(), two.getDiagnostics());
++        assertEquals(List.of("S", "S3"), two.getSources().stream().map(Source::getId).collect(Collectors.toList()));
+ 
+         features = validFeatures();
+         features.remove(0);
+@@ -369,7 +398,7 @@ class GeoJsonStreamReaderTest {
+ 
+         assertEquals(1, data.getDiagnostics().size(), data.getDiagnostics().toString());
+         assertEquals("#0", data.getDiagnostics().get(0).getFeatureId());
+-        assertNull(data.getSource());
++        assertTrue(data.getSources().isEmpty());
+         assertTrue(data.getSegments().isEmpty());
+     }
+ 
+@@ -543,7 +572,7 @@ class GeoJsonStreamReaderTest {
+         ObjectNode second = features.get(0).deepCopy();
+         ((ObjectNode) second.get("properties")).put("id", "S2");
+         features.add(second);
+-        assertSameRead(MAPPER.writeValueAsString(collection(features)), 10);
++        assertSameRead(MAPPER.writeValueAsString(collection(features)), 9);
+     }
+ 
+     // Файл больше блока чтения строками: фича на строке с запятой в конце или в начале следующей строки, пустые
+@@ -623,6 +652,7 @@ class GeoJsonStreamReaderTest {
+         assertEquals(expected.getDiagnostics(), actual.getDiagnostics());
+         assertEquals(expected.getWarnings(), actual.getWarnings());
+         assertEquals(expected.getNumericIds(), actual.getNumericIds());
++        assertEquals(expected.getSources(), actual.getSources());
+         assertEquals(describe(expected), describe(actual));
+     }
+ 
+diff --git a/src/test/java/ru/lct/heatnet/plan/PlanFixture.java b/src/test/java/ru/lct/heatnet/plan/PlanFixture.java
+index 9e55e03..a4f52b1 100644
+--- a/src/test/java/ru/lct/heatnet/plan/PlanFixture.java
++++ b/src/test/java/ru/lct/heatnet/plan/PlanFixture.java
+@@ -50,7 +50,7 @@ final class PlanFixture {
+     }
+ 
+     InputData input() {
+-        return new InputData(new Source("src", point(0, 0)), segments, chambers, oks, connections, existing, restrictions,
++        return new InputData(List.of(new Source("src", point(0, 0))), segments, chambers, oks, connections, existing, restrictions,
+                 List.of(), List.of(), java.util.Set.of());
+     }
+ 

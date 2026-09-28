@@ -1,0 +1,22 @@
+dataset код 0 10.75 с 0.7 ГБ
+  check18: CHECK18 OK
+dataset-corrected код 0 10.63 с 1.0 ГБ
+  check18: CHECK18 OK
+medium-1 код 0 7.91 с 0.4 ГБ
+  check18: CHECK18 OK
+medium-2 код 0 7.91 с 0.4 ГБ
+  check18: CHECK18 OK
+medium-3 код 0 7.75 с 0.4 ГБ
+  check18: CHECK18 OK
+spb код 0 28.62 с 3.1 ГБ
+  check18: CHECK18 OK
+spb-1809 код 0 25.80 с 2.7 ГБ
+  check18: CHECK18 OK
+moscow код 0 46.31 с 4.4 ГБ
+  check18 (срез 3×3 км): CHECK18 OK
+moscow-1809 код 0 49.74 с 4.4 ГБ
+  check18 (срез 3×3 км): CHECK18 VIOLATIONS 7
+nn код 0 658.81 с 3.7 ГБ
+  check18 (срез 3×3 км): CHECK18 VIOLATIONS 6
+nn-1809 код 0 325.24 с 5.5 ГБ
+  check18 (срез 3×3 км): CHECK18 VIOLATIONS 3

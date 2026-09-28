@@ -254,9 +254,11 @@ final class TreeBuilder {
 
     /**
      * Финальный участок от cp до exit выходит из своего здания и из его зоны отступа clearance по одному разу и дальше
-     * в них не входит (приложение 18.09, п. 2.2: участок «от ближайшей границы до точки», полигон ОКС непроходим, а
-     * отступ к нему снят только с части участка в зоне перед границей). Луч через ближайшую точку контура
-     * П-образного здания иначе пересекал бы второе крыло или проходил у выступа ближе отступа.
+     * в них не входит, а в зоне не подходит к другой стене ({@link #recedes}; приложение 18.09, п. 2.2: участок «от
+     * ближайшей границы до точки», полигон ОКС непроходим, а отступ к нему снят только с части участка в зоне перед
+     * границей). Луч через ближайшую точку контура П-образного здания иначе пересекал бы второе крыло или проходил у
+     * выступа ближе отступа, а луч через вершину внутреннего угла Г-образного выходил бы из соседней стены и шёл
+     * вдоль угла в его зоне.
      */
     private boolean leavesOnce(ExistingOks building, Coordinate cp, Coordinate exit, double clearance) {
         return leavesOnceCache.computeIfAbsent(List.of(building.getId(), cp.x, cp.y, exit.x, exit.y, clearance),
@@ -310,7 +312,8 @@ final class TreeBuilder {
                 pieces++;
             }
         }
-        return pieces == 1 && leavesZoneOnce(building, cp, exit, clearance);
+        return pieces == 1 && leavesZoneOnce(building, cp, exit, clearance)
+                && recedes(building, cp, exit, clearance);
     }
 
     /**
@@ -592,7 +595,9 @@ final class TreeBuilder {
         for (int i = 0; i + 1 < head.length; i++) {
             others.add(new LineSegment(head[i], head[i + 1]));
         }
-        Set<String> own = new HashSet<>(ignored);
+        // сеть врезки освобождена от отступа только на звене от самой врезки: финальный участок от выхода к точке её
+        // касается, лишь когда он и есть это звено (прямо от врезки), иначе держит отступ 1 м до неё (B11)
+        Set<String> own = new HashSet<>(fromRoot && head.length == 1 && straight ? ignored : Set.of());
         own.add(building.getId());
         for (Coordinate entry : entries) {
             double r = cp.distance(entry);
@@ -641,9 +646,9 @@ final class TreeBuilder {
     /**
      * Часть луча от cp через точку входа entry, где может стоять выход финального участка ({@link #entered}): от
      * первой точки через ENTRY_STEP_M вне зон запрета zones, до которой участок выходит из здания и его зоны отступа
-     * по одному разу ({@link #leavesOnce}) и в зоне не подходит к другой стене ({@link #recedes}), до нового входа
-     * луча в зону отступа перед зданием; пустой массив — такой части нет. От дерева не зависит, поэтому одна на все
-     * варианты.
+     * по одному разу и в зоне не подходит к другой стене ({@link #leavesOnce}), до нового входа луча в зону отступа
+     * перед зданием, но не дальше PORTAL_MAX_M от этой первой точки; пустой массив — такой части нет. От дерева не
+     * зависит, поэтому одна на все варианты.
      */
     private double[] window(ObstacleSet zones, ExistingOks building, List<Coordinate[]> rings, Coordinate cp, Coordinate entry) {
         return windowByEntry.computeIfAbsent(List.of(zones, building.getId(), cp.x, cp.y, entry.x, entry.y), key -> {
@@ -654,13 +659,16 @@ final class TreeBuilder {
             double ux = (entry.x - cp.x) / r;
             double uy = (entry.y - cp.y) / r;
             double clearance = zones.oksClearance();
-            double limit = reach(rings, cp, entry, clearance + SIMPLIFY_M);
+            // луч вдоль стены выходит из зоны отступа далеко за r + zone: предел PORTAL_MAX_M считается от выхода,
+            // как у check18.py (entry_window)
+            double far = reach(rings, cp, entry, clearance + SIMPLIFY_M, 3 * PORTAL_MAX_M);
             double t = r + ENTRY_STEP_M * Math.ceil((clearance + SIMPLIFY_M) / ENTRY_STEP_M);
-            while (t < limit && zones.insideForbid(new Coordinate(cp.x + ux * t, cp.y + uy * t), false)) {
+            while (t < far && zones.insideForbid(new Coordinate(cp.x + ux * t, cp.y + uy * t), false)) {
                 t += ENTRY_STEP_M;
             }
+            double limit = Math.min(far, t + PORTAL_MAX_M);
             Coordinate first = new Coordinate(cp.x + ux * t, cp.y + uy * t);
-            return t < limit && leavesOnce(building, cp, first, clearance) && recedes(building.getGeometry(), cp, first, clearance)
+            return t < limit && leavesOnce(building, cp, first, clearance)
                     ? new double[] {t, limit} : new double[0];
         });
     }
@@ -671,8 +679,13 @@ final class TreeBuilder {
      * r + zone + PORTAL_MAX_M. Дешёвый отсев: у большинства точек входа изрезанного фасада луч снова входит в здание.
      */
     static double reach(List<Coordinate[]> rings, Coordinate cp, Coordinate entry, double zone) {
+        return reach(rings, cp, entry, zone, PORTAL_MAX_M);
+    }
+
+    /** То же, но не дальше r + zone + beyond. */
+    static double reach(List<Coordinate[]> rings, Coordinate cp, Coordinate entry, double zone, double beyond) {
         double r = cp.distance(entry);
-        double limit = r + zone + PORTAL_MAX_M;
+        double limit = r + zone + beyond;
         for (double hit : crossings(rings, cp, (entry.x - cp.x) / r, (entry.y - cp.y) / r, limit)) {
             if (hit > r + TOUCH_M) {
                 return Math.min(limit, hit - zone);
@@ -856,8 +869,8 @@ final class TreeBuilder {
             Coordinate cp = connection.getGeometry().getCoordinate();
             // сначала внешние контуры: ближайшая граница двора (дырки) ведёт внутрь зоны отступа, выхода там нет
             List<Coordinate> anchors = anchors(building.getGeometry(), cp);
-            Set<String> own = new HashSet<>(ignored);
-            own.add(building.getId());
+            // финальный участок cp–exit врезки не касается: отступ 1 м до сети врезки на нём действует (B11)
+            Set<String> own = new HashSet<>(Set.of(building.getId()));
             Coordinate centroid = building.getGeometry().getCentroid().getCoordinate();
             int tries = 0;
             Coordinate last = null;
@@ -1703,9 +1716,25 @@ final class TreeBuilder {
     /** {@link #unkinks}; при evensOnly — только переносы, которые снимают излом меньше MIN_TURN_DEG без роста цены. */
     List<Slide> unkinks(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
             Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub, boolean evensOnly) {
+        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, evensOnly, false);
+    }
+
+    /**
+     * Переносы камеры ветвления junction по местам и прямым {@link #unkinks}, после которых поворот в ней на пути точки
+     * к врезке не круче MAX_TURN_DEG (п. 2.1, разъяснение 5), при любом числе вершин. Сдвиг вдоль звена
+     * ({@link #turnSlides}) не помогает, когда точка подключения лежит у ребра к родителю: камера должна уйти вбок.
+     */
+    List<Slide> turnMoves(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
+            Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub) {
+        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, false, true);
+    }
+
+    private List<Slide> unkinks(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
+            Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub, boolean evensOnly,
+            boolean turnsOnly) {
         Ends ends = ends(tree, junction, zones);
         int[] paths = ends == null ? null : paths(ends, ends.heads);
-        if (ends == null || (evensOnly ? paths[2] == 0 : ends.vertices == 0 && paths[1] == 0)) {
+        if (ends == null || !turnsOnly && (evensOnly ? paths[2] == 0 : ends.vertices == 0 && paths[1] == 0)) {
             return List.of();
         }
         int count = ends.heads.length;
@@ -1767,7 +1796,7 @@ final class TreeBuilder {
                     }
                 }
             }
-            if (!shorter && paths[1] == 0 && !evensOnly) {
+            if (!shorter && paths[1] == 0 && !evensOnly && !turnsOnly) {
                 continue;
             }
             Coordinate[][][] lines = new Coordinate[count][2][];
@@ -1792,8 +1821,8 @@ final class TreeBuilder {
                     gain += costs[e][option];
                     bad |= verdicts[e][option] < 0;
                 }
-                boolean fits = evensOnly ? left == ends.vertices && gain <= 0 && evens(ends, layout, paths)
-                        : left < ends.vertices || left == ends.vertices && straightens(ends, layout, paths);
+                boolean fits = turnsOnly || (evensOnly ? left == ends.vertices && gain <= 0 && evens(ends, layout, paths)
+                        : left < ends.vertices || left == ends.vertices && straightens(ends, layout, paths));
                 if (!bad && fits && gain <= maxGainRub && turnsAllowed(layout, ends.up, point)) {
                     gains.add(gain);
                     layouts.add(layout);

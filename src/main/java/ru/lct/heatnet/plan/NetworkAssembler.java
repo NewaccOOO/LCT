@@ -38,6 +38,7 @@ import ru.lct.heatnet.model.NetworkSegment;
 import ru.lct.heatnet.model.NewChamber;
 import ru.lct.heatnet.model.NewSegment;
 import ru.lct.heatnet.model.Restriction;
+import ru.lct.heatnet.model.Source;
 import ru.lct.heatnet.model.TechnicalNode;
 import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.model.VariantSummary;
@@ -91,8 +92,6 @@ final class NetworkAssembler {
     private final DiameterPlanner planner;
     /** ОКС входа по id у перечислителя: своя карта расходов на 3 млн ОКС города не строится. */
     private final Map<String, FutureOks> oksById;
-    /** ID источника входа; остальные ID берутся из списков входа, см. {@link #inputIds}. */
-    private final String sourceId;
     /** Проверки ID входа по префиксу и целиком: выходные ID с ID входа не совпадают. */
     private final Map<String, Boolean> startsByPrefix = new ConcurrentHashMap<>();
     private final Map<String, Boolean> knownIds = new ConcurrentHashMap<>();
@@ -155,7 +154,6 @@ final class NetworkAssembler {
         this.specials = specials;
         this.costs = new CostCalculator(rules);
         this.planner = new DiameterPlanner(rules);
-        this.sourceId = input.getSource().getId();
         this.oksById = oksById;
     }
 
@@ -192,7 +190,8 @@ final class NetworkAssembler {
 
     /** ID входа по спискам: множество из шести миллионов ID города строилось ради считанных проверок. */
     private Stream<String> inputIds() {
-        return Stream.of(Stream.of(sourceId), input.getSegments().stream().map(NetworkSegment::getId),
+        return Stream.of(input.getSources().stream().map(Source::getId),
+                input.getSegments().stream().map(NetworkSegment::getId),
                 input.getChambers().stream().map(Chamber::getId),
                 input.getConnectionPoints().stream().map(ConnectionPoint::getId),
                 input.getFutureOks().stream().map(FutureOks::getId),
@@ -493,7 +492,8 @@ final class NetworkAssembler {
             if (points == null) {
                 return false;
             }
-            Geometry close = line.intersection(special.geometry.buffer(need - DIST_EPS_M));
+            // буфер тот же для всех участков и черновиков: на городе с линиями вдоль улиц их строилось тысячи
+            Geometry close = line.intersection(special.buffers.computeIfAbsent(need - DIST_EPS_M, special.geometry::buffer));
             for (Coordinate point : points) {
                 double radius = need + ObstacleSet.CROSS_CIRCLE_M + CIRCLE_SLACK_M;
                 close = close.difference(factory.createPoint(point).buffer(radius));
@@ -819,6 +819,7 @@ final class NetworkAssembler {
                     }
                 }
                 List<double[]> merged = new ArrayList<>();
+                List<Set<SpecialObjects.Special>> sets = new ArrayList<>();
                 Set<SpecialObjects.Special> lastSet = null;
                 Double from = null;
                 for (double to : bounds) {
@@ -841,11 +842,13 @@ final class NetworkAssembler {
                             last[1] = to;
                         } else {
                             merged.add(new double[] {from, to, k});
+                            sets.add(set);
                             lastSet = set;
                         }
                     }
                     from = to;
                 }
+                collapseSlivers(merged, sets);
                 double length = edges.get(i).length;
                 for (double[] interval : merged) {
                     if (interval[0] <= MERGE_M) {
@@ -858,6 +861,54 @@ final class NetworkAssembler {
                 result.add(merged);
             }
             return result;
+        }
+
+        /**
+         * Кусок короче MERGE_M между двумя смежными частями cut не разрежет, он оставил бы первую его границу. Границы
+         * такого куска — концы и начала зон в сантиметрах друг от друга: на улице конец зоны дороги в 3 м за кромкой и
+         * начало зоны газопровода в 5 м за ней. Разрез ставится так, чтобы точная зона не заходила в соседний участок
+         * без неё: не раньше конца зоны, кончившейся у куска, и не позже начала зоны, начавшейся у куска. Границы
+         * перекрываются (начало раньше конца), а точные зоны нет — посередине, между точными концом и началом: границы
+         * куска отстоят от них на ZONE_GROW_M. Перекрываются и точные зоны — общий фрагмент уходит части с большим Kспец.
+         */
+        void collapseSlivers(List<double[]> merged, List<Set<SpecialObjects.Special>> sets) {
+            for (int j = 1; j + 1 < merged.size(); j++) {
+                double[] a = merged.get(j - 1);
+                double[] s = merged.get(j);
+                double[] b = merged.get(j + 1);
+                if (s[1] - s[0] >= MERGE_M || a[1] != s[0] || s[1] != b[0]) {
+                    continue;
+                }
+                Set<SpecialObjects.Special> left = sets.get(j - 1);
+                Set<SpecialObjects.Special> mid = sets.get(j);
+                Set<SpecialObjects.Special> right = sets.get(j + 1);
+                double lastEnd = !right.containsAll(mid) ? s[1] : !mid.containsAll(left) ? s[0] : Double.NaN;
+                double firstStart = !left.containsAll(mid) ? s[0] : !mid.containsAll(right) ? s[1] : Double.NaN;
+                double at;
+                if (Double.isNaN(lastEnd) || Double.isNaN(firstStart)) {
+                    at = Double.isNaN(lastEnd) ? firstStart : lastEnd;
+                } else if (lastEnd <= firstStart) {
+                    // между зонами промежуток: кусок отходит части с меньшим Kспец
+                    at = a[2] <= b[2] ? firstStart : lastEnd;
+                } else {
+                    // границы куска отстоят от точных конца и начала на ZONE_GROW_M. Точные зоны не перекрываются —
+                    // разрез посередине, между ними; перекрываются — общий фрагмент считается по наибольшему Kспец
+                    // (приложение 18.09, разд. 4) и целиком уходит части с большим
+                    double end = lastEnd - ZONE_GROW_M;
+                    double start = firstStart + ZONE_GROW_M;
+                    at = end <= start ? (lastEnd + firstStart) / 2 : a[2] >= b[2] ? end : start;
+                }
+                a[1] = at;
+                b[0] = at;
+                merged.remove(j);
+                sets.remove(j);
+                if (left.equals(right)) {
+                    a[1] = b[1];
+                    merged.remove(j);
+                    sets.remove(j);
+                }
+                j--;
+            }
         }
     }
 

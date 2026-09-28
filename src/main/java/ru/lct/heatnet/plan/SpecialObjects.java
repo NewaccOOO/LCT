@@ -3,6 +3,7 @@ package ru.lct.heatnet.plan;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
 import org.locationtech.jts.algorithm.Distance;
@@ -54,6 +55,8 @@ final class SpecialObjects {
          * куска отбрасывает разом все его стороны вдали от отрезка.
          */
         private final double[] chunks;
+        /** Буферы объекта по отступу для проверки участка у пересечения, см. NetworkAssembler.nearCrossing. */
+        final Map<Double, Geometry> buffers = new java.util.concurrent.ConcurrentHashMap<>();
 
         Special(Geometry geometry, boolean network, RestrictionRule rule, double halfWidth) {
             this.geometry = geometry;

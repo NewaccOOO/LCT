@@ -77,6 +77,8 @@ LINE_TOL_M = 1e-6
 # кандидата во входе предел строже, APPROACH_ENTRY_M, а конец участка лежит за зоной сервиса, она шире нормы на
 # ZONE_WIDER_M (ObstacleSet.SIMPLIFY_M): так проверка не требует входа, которого сервис не видит
 ENTRY_STEP_M = 0.05
+# звено от врезки не пересекает её сеть дальше TIE_TOUCH_M от врезки (TieInFinder.TOUCH_M)
+TIE_TOUCH_M = 0.5
 ENTRY_TOL_M = 0.1
 APPROACH_M = 0.05
 APPROACH_ENTRY_M = 0.03
@@ -133,16 +135,6 @@ def dn_for(flow):
     return next((d for d in DNS if DN[d]["capacity_tph"] >= flow - 1e-9), None)
 
 
-def crossing_near(line, chain, obj, margin):
-    """Зона линейного объекта: margin вдоль трассы от точки её пересечения с объектом; участок в зоне, если до точки пересечения не дальше margin."""
-    for part in chain:
-        hit = part.intersection(obj)
-        for pt in getattr(hit, "geoms", [hit]):
-            if not pt.is_empty and line.distance(pt) < margin - 0.005:
-                return True
-    return False
-
-
 def contour_points(shells, cg, limit):
     """Точки внешних контуров ближе limit к точке: через ENTRY_STEP_M вдоль сторон и ближайшая точка каждой стороны,
     по возрастанию расстояния."""
@@ -166,8 +158,8 @@ def entry_window(cg, q, own, zone, dn, trees):
 
     Луч выходит из здания один раз и в зоне отступа своего здания не подходит к нему снова (к другой стене, больше
     чем на APPROACH_ENTRY_M), конец участка лежит за зоной отступа сервиса (норма + ZONE_WIDER_M) до нового входа луча
-    в зону. Участок до конца не задевает зон чужих зданий и запретных объектов: это проверяет nearer_entry у каждого
-    конца."""
+    в зону. Участок до конца не задевает зон чужих зданий и запретных объектов и не идёт ближе отступа вдоль объекта
+    специального прохода (B10): это проверяет nearer_entry у каждого конца."""
     r = q.distance(cg)
     if r < 1e-6:
         return "точка на границе", None
@@ -223,6 +215,13 @@ def nearer_entry(cg, own, shells, dn, trees, limit, relink, points=None):
                     for _, rt, rg in trees["forbid_near"](part, max(FALLBACK, *FORBID.values()) + DN[dn]["width_m"] / 2)):
                 why = "участок задевает зону чужого здания или запретного объекта"
                 break
+            # участок вдоль объекта специального прохода ближе отступа, не пересекая его, — B10. Зона сервиса —
+            # буфер шире нормы на ZONE_WIDER_M, упрощённый с тем же допуском (ObstacleSet.zone): вход, который проходит
+            # у объекта в полосе 2 × ZONE_WIDER_M за нормой, сервис не видит
+            if any(0 < part.distance(rg) < _TYPES[rt]["clearance_m"] + DN[dn]["width_m"] / 2 + extra + 2 * ZONE_WIDER_M
+                   for _, rt, rg, extra in trees["spec_near"](part, trees["spec_reach"] + DN[dn]["width_m"] / 2)):
+                why = "участок ближе отступа к объекту специального прохода"
+                break
             why = relink((end.x, end.y))
             if why is None:
                 return q, end, reasons
@@ -242,6 +241,14 @@ def turn_deg(a, b, c):
     if nu == 0 or nv == 0:
         return 0.0
     return math.degrees(math.acos(max(-1.0, min(1.0, (ux * vx + uy * vy) / nu / nv))))
+
+
+def on_axis(line, part):
+    """Части прямого участка line как отрезки оси x от его начала: объединение и разность зон разных объектов не
+    зависят от округления координат пересечения (две зоны на одной прямой в GEOS почти никогда не лежат одна на
+    другой точно и не сливаются)."""
+    return shapely.union_all([LineString([(line.project(Point(g.coords[0])), 0), (line.project(Point(g.coords[-1])), 0)])
+                              for g in getattr(part, "geoms", [part]) if g.geom_type == "LineString" and g.length > 0])
 
 
 def areal(rt, rg):
@@ -283,7 +290,7 @@ class Report:
 
 def load_input(path):
     data = json.load(open(path))
-    cps, chambers, pipes, oks, forbid, special, buildings = {}, {}, [], [], [], [], []
+    cps, chambers, pipes, oks, forbid, special = {}, {}, [], [], [], []
     id_types = {}
     # формат раздела 12: расход у oks_future, точка ссылается на него через oks_id; у датасета организаторов расход
     # у самой точки
@@ -299,8 +306,8 @@ def load_input(path):
             if "oks_id" in p:
                 cps.setdefault(str(p["oks_id"]), cps[str(p["id"])])
         elif t in ("oks_existing", "oks_future"):
-            # формат раздела 12: здания — отдельные объекты; старые категории их не проверяют, B16–B18 обходят
-            buildings.append((str(p["id"]), utm(f["geometry"])))
+            # формат раздела 12: здания — отдельные объекты, правила те же, что у restriction/oks 18.09 (B3, B4, B8, B19)
+            oks.append((str(p["id"]), utm(f["geometry"])))
         elif t == "heat_chamber":
             chambers[str(p["id"])] = utm(f["geometry"])
         elif t == "heat_network":
@@ -314,8 +321,7 @@ def load_input(path):
                 special.append((str(p["id"]), rt, g))
             elif rt in FORBID or rt not in RULES["restrictions"]:
                 forbid.append((str(p["id"]), rt, g))
-    return dict(cps=cps, chambers=chambers, pipes=pipes, oks=oks, forbid=forbid, special=special, id_types=id_types,
-                buildings=buildings)
+    return dict(cps=cps, chambers=chambers, pipes=pipes, oks=oks, forbid=forbid, special=special, id_types=id_types)
 
 
 def check_variant(inp, trees, vid, feats, rep):
@@ -719,35 +725,22 @@ def check_variant(inp, trees, vid, feats, rep):
             if d < FORBID.get(rt, FALLBACK) + DN[dn]["width_m"] / 2 - EPS:
                 rep.add(f"B7 {'пересекает' if d == 0 else 'ближе отступа к'} {rt}", f"{p['id']} {d:.2f} м ({rt} {rid})")
     ties = {n: node_geom(n)[0] for n in tie_nodes}
-    short_links = check_specials(trees, segs, geo, adj, kinds, ties, rep)
+    short_links, zones = check_specials(trees, segs, geo, adj, kinds, ties, rep)
     # путь точки к месту присоединения в узле: участок ниже узла и участок к месту присоединения; в месте присоединения
     # путь новой сети кончается, направление теплоносителя в существующей сети не задано
     path_pairs = {n: [(cs, s) for _, cs in down[n]] for n, (_, s) in parent.items() if n in geo}
     if SHAPE:
         check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pairs, inp["cps"], short_links, rep)
 
-    # E. стоимость участков по правилам 18.09 (без надбавки за поворот)
+    # E. стоимость участков по правилам 18.09 (без надбавки за поворот): Kспец — наибольший по зонам участка, тем же,
+    # что у B13, B14 (margin_m вдоль трассы от точек пересечения на всём прогоне спецучастков)
     seg_cost_new = 0.0
     for s in segs:
         p = s["properties"]
         line = geo[str(p["id"])]
         k = 1.0
         if p["laying_method"] == "special":
-            chain = [line]
-            for node in (str(p["start_node_id"]), str(p["end_node_id"])):
-                for t in adj.get(node, []):
-                    if t is not s and t["properties"]["laying_method"] == "special":
-                        chain.append(geo[str(t["properties"]["id"])])
-            hit = []
-            for rid, rt, rg in trees["special_near"](line, 3.1):
-                if rg.geom_type in ("Polygon", "MultiPolygon"):
-                    if line.intersects(rg.buffer(MARGIN[rt] + 0.001)) and any(rg.intersects(part) for part in chain):
-                        hit.append(rt)
-                elif crossing_near(line, chain, rg, MARGIN[rt]):
-                    hit.append(rt)
-            if any(crossing_near(line, chain, pg, MARGIN["heat_network"]) for pg in trees["pipes_near"](line)):
-                hit.append("heat_network")
-            k = max((K_SPECIAL[rt] for rt in hit), default=1.0)
+            k = max((K_SPECIAL[rt] for rt, _ in zones[id(s)]), default=1.0)
         cost = line.length * DN[p["diameter"]]["new_rub_m"] * k
         seg_cost_new += cost
         if abs(cost - p["cost"]) > max(1.0, 0.01 * DN[p["diameter"]]["new_rub_m"] * k):
@@ -804,7 +797,7 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
     пересечения: спецучасток прямой. Пересечение сети в точке врезки (не дальше 0,5 м от врезки) пересечением не
     считается. На каждой смене набора зон начинается новый участок (п. 4, разъяснение 8, B14)."""
     if not segs:
-        return []
+        return [], {}
     sid_of = {id(s): str(s["properties"]["id"]) for s in segs}
     line_of = {id(s): geo[sid_of[id(s)]] for s in segs}
     nodes_of = {id(s): (str(s["properties"]["start_node_id"]), str(s["properties"]["end_node_id"])) for s in segs}
@@ -849,7 +842,7 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
             area = [x.buffer(MARGIN[rt] + ZONE_TOL) for x in xs]
             if areal(rt, rg) and rg.geom_type.endswith("Polygon"):
                 area.append(rg)
-            z[(rt, rid)] = line.intersection(shapely.union_all(area))
+            z[(rt, rid)] = on_axis(line, line.intersection(shapely.union_all(area)))
         zones[id(s)] = {k: g for k, g in z.items() if g.length > ZONE_TOL}
 
     for s in special:
@@ -1011,7 +1004,7 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
         if not rest.is_empty and rest.distance(lines[j]) < 0.001:
             rep.add("B15 новые участки пересекаются или касаются вне общего узла",
                     f"{sid_of[id(a)]} и {sid_of[id(b)]} {rest.distance(lines[j]) * 1000:.1f} мм")
-    return short_links
+    return short_links, zones
 
 
 def micro(a, b, c):
@@ -1121,6 +1114,11 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
                 norm = _TYPES[rt]["clearance_m"] + w2 + extra
                 if (rt, rid) not in exempt and link.distance(rg) < norm + CUT_MARGIN_M:
                     return f"отступ до {rt} {rid} {link.distance(rg):.2f} м < {norm:.2f} + {CUT_MARGIN_M} м"
+                # звено от врезки освобождено от отступа до её сети, но дальше TIE_TOUCH_M от врезки её не
+                # пересекает (TreeBuilder.leavesNetwork)
+                tie = new[i] if i == 0 and (rt, rid) in tie_keys.get(start, set()) else new[i + 1]
+                if (rt, rid) in exempt and link.difference(Point(tie).buffer(TIE_TOUCH_M)).intersects(rg):
+                    return f"звено от врезки снова пересекает её сеть {rt} {rid}"
             why = crowded(k, new[i:i + 2], moved) if apart else None
             if why:
                 return why
@@ -1906,7 +1904,7 @@ def trees_for(inp):
             for rid, rt, g in inp["special"]]
     spec += [(pid, "heat_network", g, DN.get(pdn, {"width_m": 0.0})["width_m"] / 2) for pid, g, pdn in inp["pipes"]]
     t_spec = STRtree([o[2] for o in spec])
-    all_oks = inp["oks"] + inp["buildings"]
+    all_oks = inp["oks"]
     t_all_oks = STRtree([g for _, g in all_oks])
 
     return {

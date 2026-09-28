@@ -276,7 +276,7 @@ final class DirectTies {
         List<Object> nearPipes = pipes.isEmpty() ? List.of() : nearest(pipes, point);
         for (Object item : nearPipes) {
             NetworkSegment segment = (NetworkSegment) item;
-            TieCandidate tie = finder.pipeCandidate(segment, point, dn);
+            TieCandidate tie = finder.pipeCandidate(segment, point, dn, false);
             if (tie == null || !shared.seen.add(tie.nodeKey())) {
                 continue;
             }
@@ -308,7 +308,7 @@ final class DirectTies {
         double at = new LengthIndexedLine(axis).project(point.getCoordinate());
         for (int sign : new int[] {-1, 1}) {
             for (double shift : SHIFTS_M) {
-                TieCandidate tie = finder.pipeCandidate(segment, at + sign * shift, dn);
+                TieCandidate tie = finder.pipeCandidate(segment, at + sign * shift, dn, false);
                 if (tie == null || !shared.seen.add(tie.nodeKey())
                         || building != null && !building.getGeometry().isWithinDistance(tie.getPoint(), clearance)) {
                     continue;
@@ -698,7 +698,6 @@ final class DirectTies {
                     }
                     Coordinate exit = exit(cp, entry, building, clearance);
                     if (exit != null && TreeBuilder.leavesOnce(building.getGeometry(), cp, exit, clearance)
-                            && TreeBuilder.recedes(building.getGeometry(), cp, exit, clearance)
                             && !closed(cp, exit, shared.dn, building.getId())) {
                         shared.portal = new Portal(exit, false);
                         break;
