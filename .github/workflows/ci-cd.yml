@@ -6,80 +6,71 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  REGISTRY: docker.io
-  IMAGE_NAME: lct
+# два деплоя подряд не накладываются друг на друга
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   test:
     runs-on: ubuntu-22.04
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: heatnet
-          POSTGRES_USER: heatnet
-          POSTGRES_PASSWORD: heatnet
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up JDK 11
-        uses: actions/setup-java@v4
+
+      - uses: actions/setup-java@v4
         with:
           java-version: '11'
-          distribution: 'temurin'
+          distribution: temurin
           cache: maven
 
-      - name: Build and test with Maven
+      # интеграционные тесты сами поднимают PostgreSQL через Docker раннера
+      - name: Тесты
         run: mvn -B verify
 
-  build:
-    needs: test
-    runs-on: ubuntu-22.04
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    permissions:
-      contents: read
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
-        run: docker build -t ${{ env.IMAGE_NAME }}:${{ github.sha }} .
+      - name: Сборка образа
+        run: docker build -t lct:${{ github.sha }} .
 
   deploy:
-    needs: build
-    runs-on: ubuntu-22.04
+    needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
+    runs-on: ubuntu-22.04
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy to server
+      - name: Ключ SSH
         env:
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
           mkdir -p ~/.ssh
-          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H $DEPLOY_HOST >> ~/.ssh/known_hosts 2>/dev/null
-          ssh -i ~/.ssh/deploy_key -o BatchMode=yes $DEPLOY_USER@$DEPLOY_HOST << 'DEPLOY'
-          set -e
-          cd /opt/lct
-          git fetch origin main:main
-          git checkout main
-          docker-compose up -d --build
-          docker-compose ps
-          DEPLOY
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      # .env на сервере хранит его настройки (куча JVM, порт БД только на localhost) и не перезаписывается
+      - name: Выкладка кода
+        run: |
+          rsync -az --delete --exclude .git --exclude .env \
+            -e "ssh -i ~/.ssh/deploy_key -o BatchMode=yes" \
+            ./ "$DEPLOY_USER@$DEPLOY_HOST:/opt/lct/"
+
+      # docker-compose 1.29.2 из ТЗ со свежим Docker падает при пересоздании контейнера ('ContainerConfig'),
+      # поэтому образ собирается отдельно, контейнер приложения удаляется и создаётся заново; база не трогается
+      - name: Перезапуск и проверка
+        run: |
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" '
+            set -e
+            cd /opt/lct
+            docker-compose build app
+            docker-compose rm -sf app
+            docker-compose up -d
+            docker image prune -f
+            for i in $(seq 1 30); do
+              curl -fs http://localhost:8080/actuator/health && exit 0
+              sleep 5
+            done
+            docker-compose logs --tail=100 app
+            exit 1
+          '
