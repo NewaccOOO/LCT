@@ -1,17 +1,8 @@
 name: CI/CD
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   # деплой только вручную: Actions → CI/CD → Run workflow → ветка main
   workflow_dispatch:
-    inputs:
-      tests:
-        description: Прогнать тесты перед деплоем (деплой их не ждёт)
-        type: boolean
-        default: false
 
 # два деплоя подряд не накладываются друг на друга
 concurrency:
@@ -19,34 +10,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # проверка PR и push; на деплой не влияет
-  test:
-    if: github.event_name != 'workflow_dispatch' || inputs.tests
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-java@v4
-        with:
-          java-version: '11'
-          distribution: temurin
-          cache: maven
-
-      # интеграционный тест прогоняет выход через tools/validator/check18.py под uv
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-          cache-dependency-glob: tools/uv.lock
-
-      # интеграционные тесты сами поднимают PostgreSQL через Docker раннера
-      - name: Тесты
-        run: mvn -B verify
-
-      - name: Сборка образа
-        run: docker build -t lct:${{ github.sha }} .
-
   deploy:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
     env:
       DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}

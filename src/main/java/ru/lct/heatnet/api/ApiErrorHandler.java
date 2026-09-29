@@ -20,7 +20,7 @@ public class ApiErrorHandler {
 
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
     ResponseEntity<ApiError> mediaType() {
-        String message = "Тело запроса принимается только с Content-Type application/json или application/geo+json";
+        String message = "Тело запроса принимается только с Content-Type application/json, application/geo+json или application/octet-stream";
         return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE).body(new ApiError(message, List.of()));
     }
 }
