@@ -108,15 +108,15 @@ public class JobController {
                     required = true,
                     description = "Входной GeoJSON FeatureCollection в EPSG:4326",
                     content = {
+                            // первым, чтобы Swagger UI по умолчанию показывал кнопку выбора файла
+                            @Content(mediaType = MediaType.APPLICATION_OCTET_STREAM_VALUE, schema = @Schema(type = "string", format = "binary")),
                             @Content(mediaType = GEO_JSON, schema = @Schema(type = "object"), examples = @ExampleObject(
                                     name = "Источник",
                                     summary = "Файл из одного источника",
                                     value = "{\"type\": \"FeatureCollection\", \"features\": [{\"type\": \"Feature\", "
                                             + "\"geometry\": {\"type\": \"Point\", \"coordinates\": [37.578354495, 55.767196407]}, "
                                             + "\"properties\": {\"id\": \"src-1\", \"object_type\": \"source\"}}]}")),
-                            @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(type = "object")),
-                            // тот же файл как есть: в Swagger UI у этого типа появляется кнопка выбора файла
-                            @Content(mediaType = MediaType.APPLICATION_OCTET_STREAM_VALUE, schema = @Schema(type = "string", format = "binary"))
+                            @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(type = "object"))
                     }),
             responses = {
                     @ApiResponse(responseCode = "202", description = "Задача принята и стоит в очереди",
