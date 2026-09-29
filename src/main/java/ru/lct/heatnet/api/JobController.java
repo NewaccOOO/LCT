@@ -114,7 +114,9 @@ public class JobController {
                                     value = "{\"type\": \"FeatureCollection\", \"features\": [{\"type\": \"Feature\", "
                                             + "\"geometry\": {\"type\": \"Point\", \"coordinates\": [37.578354495, 55.767196407]}, "
                                             + "\"properties\": {\"id\": \"src-1\", \"object_type\": \"source\"}}]}")),
-                            @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(type = "object"))
+                            @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(type = "object")),
+                            // тот же файл как есть: в Swagger UI у этого типа появляется кнопка выбора файла
+                            @Content(mediaType = MediaType.APPLICATION_OCTET_STREAM_VALUE, schema = @Schema(type = "string", format = "binary"))
                     }),
             responses = {
                     @ApiResponse(responseCode = "202", description = "Задача принята и стоит в очереди",
@@ -124,10 +126,10 @@ public class JobController {
                             content = @Content(schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(
                                     value = "{\"message\": \"Тело запроса должно быть JSON-объектом GeoJSON FeatureCollection\", "
                                             + "\"errors\": []}"))),
-                    @ApiResponse(responseCode = "415", description = "Content-Type не application/json и не application/geo+json",
+                    @ApiResponse(responseCode = "415", description = "Content-Type не application/json, application/geo+json или application/octet-stream",
                             content = @Content(schema = @Schema(implementation = ApiError.class)))
             })
-    @PostMapping(consumes = {MediaType.APPLICATION_JSON_VALUE, GEO_JSON}, produces = MediaType.APPLICATION_JSON_VALUE)
+    @PostMapping(consumes = {MediaType.APPLICATION_JSON_VALUE, GEO_JSON, MediaType.APPLICATION_OCTET_STREAM_VALUE}, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<JobCreated> create(HttpServletRequest request) throws IOException {
         UUID id = UUID.randomUUID();
         Path dir = dataDir.resolve("jobs").resolve(id.toString());
