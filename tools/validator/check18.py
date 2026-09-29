@@ -8,7 +8,8 @@ E — стоимость и сводка), строки «i» — справоч
 B19 — финальный участок снова заходит в зону отступа своего здания или подходит в ней к другой стене (п. 2.2).
 B22 — звено короче 1 м у узла спецпрохода, когда вершину на его конце можно убрать или совместить с узлом (п. 5,
 разъяснение 6); --no-shape отключает и его.
-D11 — камера врезки в полосе margin_m дороги или трамвайных путей, хотя на трубе есть место вне полосы (разъяснение 6).
+Камера врезки в полигоне или полосе margin_m дороги и трамвайных путей допустима (разъяснение 13 от 29.09), строка «i».
+C7 — ДУ меняется на цепочке постоянного расхода (разъяснение 20 от 29.09).
 Дорога и пути, заданные линией, — полигон нулевой ширины: угол к звену оси, зона margin_m вдоль трассы от точки
 пересечения, дальше обычный участок держит отступ от оси (разд. 1.1, 4, разъяснение 6).
 E7 — score сводки не равен S разд. 6 с точностью 0,0001 (пример п. 7.3), E8 — ранги не по возрастанию score (п. 7.2).
@@ -86,14 +87,9 @@ APPROACH_ENTRY_M = 0.03
 ZONE_WIDER_M = 0.05
 # B21: перенос камеры снимает излом, если S растёт не больше TURN_TOLERANCE_S (TreeBuilder.unkinks)
 TURN_TOLERANCE_S = 0.002
-# D11: камера врезки в трубу не стоит в полосе margin_m полигона спецпрохода (дорога, трамвайные пути), если на трубе
-# есть место вне полосы (разъяснение 6: спецпроход — один прямой участок, угол — в точке входа). Камера в полосе, если
-# до полигона меньше margin_m − BAND_TOL (буфер строится хордами); место на трубе — как у сервиса
-# (TieInFinder.pipeCandidate): не ближе к концам трубы, чем отступ до сети плюс полуширины пар и END_GAP_M, и длиной
-# больше BAND_ROOM_M
+# камера врезки в полосе margin_m полигона спецпрохода (дорога, трамвайные пути) — справочная строка: разъяснение 13
+# от 29.09 допускает камеру на сети и в самом полигоне. Камера в полосе, если до полигона меньше margin_m − BAND_TOL
 BAND_TOL = 0.01
-BAND_ROOM_M = 0.1
-END_GAP_M = 1.0
 # B22: звено короче SHORT_PIECE_M у узла спецпрохода — нарушение, если вершину на его конце можно убрать с запасами
 # B16 или совместить с узлом: спецучасток до этой вершины выходит за зону спецпрохода не больше чем на ZONE_TOL
 SHORT_PIECE_M = 1.0
@@ -508,6 +504,14 @@ def check_variant(inp, trees, vid, feats, rep):
         rep.count["C5 превышена предельная длина ДУ на пути"] += over
         for w in sorted(worst, reverse=True)[:3]:
             rep.sample["C5 превышена предельная длина ДУ на пути"].append(f"точка {w[1]} ДУ{w[2]} {w[3]:.0f} м > {DN[w[2]]['max_length_m']}")
+    # разъяснение 20 от 29.09: на цепочке постоянного расхода ДУ один (узел с одним дочерним участком того же расхода)
+    for n, (up, s) in parent.items():
+        kids = down[n]
+        if len(kids) == 1:
+            c = kids[0][1]["properties"]
+            p = s["properties"]
+            if abs(c["flow_tph"] - p["flow_tph"]) < 1e-6 and c["diameter"] != p["diameter"]:
+                rep.add("C7 ДУ меняется на цепочке постоянного расхода", f"{c['id']} ДУ{c['diameter']} → {p['id']} ДУ{p['diameter']}")
     # завышение ДУ: жадный минимум снизу вверх по цепочкам постоянного расхода — между узлами смены расхода ДУ один
     # (технические узлы цепочку не рвут); ДУ цепочки не меньше ДУ по расходу и ДУ детей, затем подъём, пока самый
     # длинный путь одного ДУ через цепочку не уложится в предел (п. 2.3, разъяснение 1)
@@ -589,13 +593,9 @@ def check_variant(inp, trees, vid, feats, rep):
             band = [f"{rt} {rid} {rg.distance(g):.2f} м" for rid, rt, rg in trees["special_near"](g, max(MARGIN.values()))
                     if areal(rt, rg) and rg.distance(g) < MARGIN[rt] - BAND_TOL]
             if band:
-                room = tie_room(trees, g, new_dn)
-                if room > BAND_ROOM_M:
-                    rep.add("D11 камера врезки в полосе margin_m полигона спецпрохода, на трубе есть место вне полосы",
-                            f"{cid} {band}, вне полос {room:.1f} м трубы")
-                else:
-                    rep.add("i  камера врезки в полосе margin_m полигона спецпрохода: вне полос места на трубе нет (D11)",
-                            f"{cid} {band}")
+                # разъяснение 13 от 29.09: камера на сети в полигоне дороги или путей допустима, строка справочная
+                rep.add("i  камера врезки в полосе margin_m полигона спецпрохода (допустимо, разъяснение 13)",
+                        f"{cid} {band}")
 
     # tie_in старого формата: пересчёт в правила 18.09
     ties_old = [f for f in feats if f["properties"]["object_type"] == "tie_in"]
@@ -1850,23 +1850,6 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
             where = "камере" if kinds.get(n) == "heat_chamber" else "узле"
             rep.add(f"B20 поворот на пути точки в {where} круче 90°",
                     f"{n}: " + ", ".join(f"{cs['properties']['id']} → {s['properties']['id']} {a:.2f}°" for cs, s, a in sharp))
-
-
-def tie_room(trees, g, dn):
-    """Метров трубы под камерой g вне полос margin_m полигонов спецпрохода, где сервис может поставить врезку для
-    новой сети dn: не ближе к концам трубы, чем отступ до сети плюс полуширины пар и END_GAP_M (см. D11)."""
-    room = 0.0
-    for _, pg, pdn in trees["pipes_near_ids"](g):
-        if pg.distance(g) > NODE_TOL or pdn not in DN:
-            continue
-        gap = _TYPES["heat_network"]["clearance_m"] + DN[dn]["width_m"] / 2 + DN[pdn]["width_m"] / 2 + END_GAP_M
-        if pg.length <= 2 * gap:
-            continue
-        window = shapely.ops.substring(pg, gap, pg.length - gap)
-        band = shapely.union_all([rg.buffer(MARGIN[rt]) for _, rt, rg in trees["special_near"](window, max(MARGIN.values()))
-                                  if areal(rt, rg)])
-        room = max(room, window.difference(band).length)
-    return room
 
 
 def project_line(p, a, b):
