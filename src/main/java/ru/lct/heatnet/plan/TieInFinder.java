@@ -251,9 +251,9 @@ final class TieInFinder {
 
     /**
      * Врезки у проекции точки на участки узла врезки tie, как у {@link #find}: на трубу врезки или на трубы камеры
-     * врезки. Проекцию ближе max_dist_m к камере со свободным местом {@link #pipeCandidate} отдаёт камере, и тогда
-     * пробуется ещё новая камера сразу за этим пределом вдоль оси: приложение 18.09, п. 2.4 обязывает врезаться в
-     * камеру только ближе, а новая камера на трубе Ду до 200 дешевле врезки в существующую.
+     * врезки. Проекцию ближе max_dist_m к камере со свободным местом {@link #pipeCandidate} отдаёт камере. Новую
+     * камеру сразу за этим пределом сервис не ставит: по разъяснению 9 от 29.09 правило 10 м запрещает строить новую
+     * камеру рядом с существующей.
      */
     List<TieCandidate> ownPipes(TieCandidate tie, Point point, int dn) {
         Chamber own = tie.isChamber() ? chamberById.get(tie.getExistingObjectId()) : null;
@@ -266,16 +266,6 @@ final class TieInFinder {
                 continue;
             }
             result.add(candidate);
-            if (candidate.isChamber()) {
-                LengthIndexedLine indexed = new LengthIndexedLine(segment.getGeometry());
-                double at = indexed.project(point.getCoordinate());
-                double chamber = indexed.project(chamberById.get(candidate.getExistingObjectId()).getGeometry().getCoordinate());
-                double beyond = rules.chamberRule().getMaxDistM() + 2 * DIST_MARGIN_M;
-                TieCandidate free = pipeCandidate(segment, at < chamber ? chamber - beyond : chamber + beyond, dn);
-                if (free != null && !free.isChamber()) {
-                    result.add(free);
-                }
-            }
         }
         return result;
     }
