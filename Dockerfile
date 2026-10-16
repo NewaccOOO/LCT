@@ -3,6 +3,7 @@ WORKDIR /build
 COPY pom.xml .
 RUN mvn -B -q dependency:go-offline
 COPY rules rules
+COPY platform platform
 COPY src src
 RUN mvn -B -DskipTests package
 
