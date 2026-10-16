@@ -105,6 +105,16 @@ class VariantEnumeratorTest {
     }
 
     @Test
+    void bestVariantTakesCheaperTreeOfAnotherVariant() {
+        InputData input = VariantEnumerator.read(Path.of("src/test/resources/synth/medium-3.geojson"), rules);
+
+        List<Variant> variants = new VariantEnumerator(input, rules).run().getVariants();
+
+        assertEquals(20.3036, variants.get(0).getSummary().getScore(), 1e-6);
+        assertTrue(variants.get(0).getSummary().getUnconnectedOksIds().isEmpty());
+    }
+
+    @Test
     void chamberAtPipeEndAndPipeGiveTwoDifferentVariants() {
         // у ОКС одна ближайшая врезка — камера на конце трубы; врезка в саму трубу — другой объект врезки
         PlanFixture fixture = new PlanFixture().pipe("hn-1", 0, 0, 300, 0, 150, 50, "src")

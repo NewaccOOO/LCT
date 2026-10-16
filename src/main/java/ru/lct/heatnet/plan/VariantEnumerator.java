@@ -98,6 +98,7 @@ public final class VariantEnumerator {
     /** Дерево ОКС идёт в обход, если оно длиннее прямой до ближайшего кандидата врезки больше чем во столько раз. */
     private static final double DETOUR_RATIO = 1.1;
     static final double TREES_APART_M = 0.5;
+    private static final double SWAP_GAIN = 1e-6;
     /** Сдвиг врезки к стволу берётся, если ствол короче хотя бы на столько, см. slid. */
     private static final double SLIDE_MIN_M = 1.0;
     static final double SHARED_ROOT_CLIP_M = 0.15;
@@ -630,6 +631,22 @@ public final class VariantEnumerator {
         if (TURN_DETACH) {
             reattached(picked, shaped);
         }
+        List<List<Tree>> recombined = recombined(shaped.stream().map(draft -> draft.trees).collect(Collectors.toList()),
+                shaped.stream().mapToDouble(draft -> exact(draft.variant)).toArray(),
+                trees -> assembler.assemble("0", 0, trees, missing(trees)));
+        for (int i = 0; i < shaped.size(); i++) {
+            List<Tree> trees = recombined.get(i);
+            if (trees != shaped.get(i).trees) {
+                List<FutureOks> unconnected = missing(trees);
+                try {
+                    Variant variant = assembler.assemble(shaped.get(i).variant.getId(), i + 1, trees, unconnected);
+                    shaped.set(i, new Draft(trees, unconnected, variant));
+                    picked.set(i, shaped.get(i));
+                } catch (IllegalStateException | IllegalArgumentException e) {
+                    log.info("recombined: вариант {} не собран: {}", i + 1, e.getMessage());
+                }
+            }
+        }
         List<Variant> variants = shaped.stream().map(draft -> draft.variant).collect(Collectors.toList());
         // ранг 1 — наименьший score (п. 7.2): доводка после поиска меняет S, и порядок черновиков мог разойтись с ним
         List<Integer> order = Scorer.rank(variants.stream().map(Variant::getSummary).collect(Collectors.toList()));
@@ -839,8 +856,17 @@ public final class VariantEnumerator {
         List<Variant> variants = new ArrayList<>();
         for (int k = 0; k < candidates.size(); k++) {
             List<Tree> trees = candidates.get(k);
-            Variant variant = assembleParts(String.valueOf(k + 1), k + 1, trees, missing(trees));
-            variants.add(variant);
+            variants.add(assembleParts(String.valueOf(k + 1), k + 1, trees, missing(trees)));
+        }
+        List<List<Tree>> recombined = recombined(candidates, variants.stream().mapToDouble(this::exact).toArray(),
+                trees -> assembleParts("0", 0, trees, missing(trees)));
+        for (int k = 0; k < candidates.size(); k++) {
+            List<Tree> trees = recombined.get(k);
+            if (trees != candidates.get(k)) {
+                candidates.set(k, trees);
+                variants.set(k, assembleParts(String.valueOf(k + 1), k + 1, trees, missing(trees)));
+            }
+            Variant variant = variants.get(k);
             log.info("city: candidate {} trees={} score={} unconnected={} elapsed={}s", k + 1, trees.size(),
                     variant.getSummary().getScore(), variant.getSummary().getUnconnectedOksIds().size(),
                     (System.nanoTime() - started) / 1_000_000_000L);
@@ -945,6 +971,142 @@ public final class VariantEnumerator {
         Set<String> left = new HashSet<>(variant.getSummary().getUnconnectedOksIds());
         return trees.stream().filter(tree -> tree.connected().stream().noneMatch(c -> left.contains(c.getOksId())))
                 .collect(Collectors.toList());
+    }
+
+    private List<List<Tree>> recombined(List<List<Tree>> variants, double[] scores,
+            java.util.function.Function<List<Tree>, Variant> assemble) {
+        long started = System.nanoTime();
+        int best = IntStream.range(0, scores.length).reduce((a, b) -> scores[b] < scores[a] ? b : a).orElse(0);
+        List<List<Tree>> result = new ArrayList<>();
+        for (int k = 0; k < variants.size(); k++) {
+            List<Tree> trees = new ArrayList<>(variants.get(k));
+            Quadtree index = new Quadtree();
+            Map<String, List<Tree>> byUnit = new HashMap<>();
+            for (Tree tree : trees) {
+                index.insert(tree.envelope(), tree);
+                byUnit.computeIfAbsent(tree.root.key, any -> new ArrayList<>()).add(tree);
+            }
+            int swaps = 0;
+            for (int j = 0; j < variants.size(); j++) {
+                if (j == k) {
+                    continue;
+                }
+                for (List<List<Tree>> part : parts(trees, variants.get(j))) {
+                    List<Tree> replaced = part.get(0);
+                    List<Tree> offer = part.get(1);
+                    if (offer.isEmpty() || k != best && !replaced.isEmpty()) {
+                        continue;
+                    }
+                    Set<String> covered = new HashSet<>();
+                    offer.forEach(tree -> tree.connected().forEach(c -> covered.add(c.getOksId())));
+                    Set<String> had = new HashSet<>();
+                    replaced.forEach(tree -> tree.connected().forEach(c -> had.add(c.getOksId())));
+                    if (!covered.containsAll(had)) {
+                        continue;
+                    }
+                    double penalties = 0;
+                    for (String id : covered) {
+                        if (!had.contains(id)) {
+                            penalties += rules.score(rules.penalty(oksById.get(id).getFlowTph()), 0);
+                        }
+                    }
+                    Set<String> units = new HashSet<>();
+                    replaced.forEach(tree -> units.add(tree.root.key));
+                    offer.forEach(tree -> units.add(tree.root.key));
+                    Set<Tree> gone = Collections.newSetFromMap(new IdentityHashMap<>());
+                    gone.addAll(replaced);
+                    List<Tree> added = new ArrayList<>();
+                    for (Tree tree : offer) {
+                        Envelope around = new Envelope(tree.envelope());
+                        around.expandBy(TREES_APART_M + 1);
+                        List<Tree> close = new ArrayList<>();
+                        for (Object item : index.query(around)) {
+                            Tree t = (Tree) item;
+                            if (!gone.contains(t) && t.envelope().intersects(around)) {
+                                close.add(t);
+                            }
+                        }
+                        added.stream().filter(t -> t.envelope().intersects(around)).forEach(close::add);
+                        if (!compatible(tree, close)) {
+                            added = null;
+                            break;
+                        }
+                        added.add(tree);
+                    }
+                    if (added == null) {
+                        continue;
+                    }
+                    List<Tree> before = units.stream().flatMap(unit -> byUnit.getOrDefault(unit, List.of()).stream())
+                            .collect(Collectors.toList());
+                    List<Tree> after = before.stream().filter(tree -> !gone.contains(tree)).collect(Collectors.toList());
+                    after.addAll(added);
+                    if (!((before.isEmpty() ? 0 : unitScore(before)) - unitScore(after) + penalties > SWAP_GAIN)) {
+                        continue;
+                    }
+                    trees.removeIf(gone::contains);
+                    trees.addAll(added);
+                    for (Tree tree : replaced) {
+                        index.remove(tree.envelope(), tree);
+                        byUnit.get(tree.root.key).remove(tree);
+                    }
+                    for (Tree tree : added) {
+                        index.insert(tree.envelope(), tree);
+                        byUnit.computeIfAbsent(tree.root.key, any -> new ArrayList<>()).add(tree);
+                    }
+                    swaps++;
+                }
+            }
+            if (swaps > 0) {
+                double after;
+                try {
+                    after = exact(assemble.apply(trees));
+                } catch (IllegalStateException | IllegalArgumentException e) {
+                    after = Double.NaN;
+                }
+                if (after < scores[k]) {
+                    log.info("recombined: вариант {} заменил {} групп деревьев деревьями других вариантов, S {} вместо {}",
+                            k + 1, swaps, after, scores[k]);
+                } else {
+                    log.info("recombined: вариант {}: деревья других вариантов не снижают S ({} против {})", k + 1, after,
+                            scores[k]);
+                    swaps = 0;
+                }
+            }
+            result.add(swaps > 0 ? trees : variants.get(k));
+        }
+        log.info("recombined: elapsed={}ms", (System.nanoTime() - started) / 1_000_000);
+        return result;
+    }
+
+    private static List<List<List<Tree>>> parts(List<Tree> own, List<Tree> other) {
+        List<Tree> all = new ArrayList<>(own);
+        Set<Tree> mine = Collections.newSetFromMap(new IdentityHashMap<>());
+        mine.addAll(own);
+        other.stream().filter(tree -> !mine.contains(tree) && !tree.connected().isEmpty()).forEach(all::add);
+        int[] parent = IntStream.range(0, all.size()).toArray();
+        Map<String, Integer> first = new HashMap<>();
+        for (int i = 0; i < all.size(); i++) {
+            for (ConnectionPoint c : all.get(i).connected()) {
+                Integer seen = first.putIfAbsent(c.getOksId(), i);
+                if (seen != null) {
+                    parent[root(parent, i)] = root(parent, seen);
+                }
+            }
+        }
+        Map<Integer, List<List<Tree>>> byRoot = new LinkedHashMap<>();
+        for (int i = 0; i < all.size(); i++) {
+            List<List<Tree>> part = byRoot.computeIfAbsent(root(parent, i), any -> List.of(new ArrayList<>(), new ArrayList<>()));
+            part.get(i < own.size() ? 0 : 1).add(all.get(i));
+        }
+        return new ArrayList<>(byRoot.values());
+    }
+
+    private static int root(int[] parent, int i) {
+        while (parent[i] != i) {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        return i;
     }
 
     /** Точки деревьев before, которых нет в деревьях after, добавляются в lost. */
