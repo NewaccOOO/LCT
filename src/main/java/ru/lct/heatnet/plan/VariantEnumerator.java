@@ -591,6 +591,32 @@ public final class VariantEnumerator {
         }
     }
 
+    /**
+     * Режим с учётом глубины (§5): те же варианты с продольным профилем, Kгл в стоимости и своим ранжированием по S.
+     * Номера вариантов в отдельном файле режима начинаются с 1, как и в 2D.
+     */
+    public Result depth(Result flat) {
+        long started = System.nanoTime();
+        DepthProfiler profiler = new DepthProfiler(rules, specials);
+        List<Variant> profiled = flat.getVariants().stream().map(profiler::profile).collect(Collectors.toList());
+        List<Integer> order = Scorer.rank(profiled.stream().map(Variant::getSummary).collect(Collectors.toList()));
+        List<Variant> ranked = new ArrayList<>();
+        for (int i = 0; i < order.size(); i++) {
+            Variant variant = profiled.get(order.get(i));
+            VariantSummary s = variant.getSummary();
+            ranked.add(new Variant(variant.getId(), variant.getSegments(), variant.getChambers(), variant.getNodes(),
+                    new VariantSummary(s.getId(), s.getVariantId(), i + 1, s.getConstructionCost(),
+                            s.getChamberConstructionCost(), s.getExistingChamberTieInCount(),
+                            s.getExistingChamberTieInCost(), s.getUnconnectedPenalty(), s.getCalculatedCost(),
+                            s.getNewNetworkLength(), s.getScore(), s.getUnconnectedOksIds())));
+        }
+        profiler.conflicts.forEach((variant, chains) -> log.warn("depth: вариант {}: профиль с уклоном {} не помещается "
+                + "на {} цепочках (ручная проработка), первые: {}", variant, rules.depth().getMaxSlope(), chains.size(),
+                chains.subList(0, Math.min(5, chains.size()))));
+        log.info("depth: {} вариантов elapsed={}ms", ranked.size(), (System.nanoTime() - started) / 1_000_000);
+        return new Result(ranked, flat.getNumericIds());
+    }
+
     public Result run() {
         if (connectionByOks.size() > CITY_MIN) {
             return city();
@@ -789,6 +815,7 @@ public final class VariantEnumerator {
         if (CITY_RETRY) {
             candidates = retried(candidates, near, System.nanoTime() + CITY_RETRY_S * 1_000_000_000L);
         }
+        candidates.forEach(this::unsquaredWhereTouching);
         List<Variant> variants = new ArrayList<>();
         for (int k = 0; k < candidates.size(); k++) {
             List<Tree> trees = candidates.get(k);
@@ -815,7 +842,6 @@ public final class VariantEnumerator {
     /**
      * Точки, которые проходы формы отцепили ({@link #detached}: поворот круче 90° в камере не снят), считаются ещё раз
      * по одной, как в {@link #city()}: у дерева одной точки камер ветвления нет. Дерево берётся в вариант, если не
-        candidates.forEach(this::unsquaredWhereTouching);
      * задевает его деревья и не переполняет общую камеру ({@link #joined}); неподключение при доступном маршруте
      * запрещено (п. 2.5).
      */
@@ -849,32 +875,6 @@ public final class VariantEnumerator {
         }
     }
 
-    /** Точки деревьев before, которых нет в деревьях after, добавляются в lost. */
-    private static void lost(List<Tree> before, List<Tree> after, Set<ConnectionPoint> lost) {
-        Set<ConnectionPoint> kept = new HashSet<>();
-        after.forEach(tree -> kept.addAll(tree.connected()));
-        before.forEach(tree -> tree.connected().stream().filter(c -> !kept.contains(c)).forEach(lost::add));
-    }
-
-    /** Вариант по частям: каждый узел врезки — своя сборка, параллельно, с общими счётчиками ID. */
-    private Variant assembleParts(String variantId, int rank, List<Tree> trees, List<FutureOks> unconnected) {
-        Map<String, List<Tree>> units = new LinkedHashMap<>();
-        for (Tree tree : trees) {
-            units.computeIfAbsent(tree.root.key, key -> new ArrayList<>()).add(tree);
-        }
-        NetworkAssembler.Counters counters = new NetworkAssembler.Counters();
-        List<Variant> parts = new ArrayList<>(units.values()).parallelStream().map(unit -> {
-            try {
-                return assembler.assemble(variantId, rank, unit, List.of(), counters);
-            } catch (IllegalStateException | IllegalArgumentException e) {
-                // узел врезки, чьи деревья по отдельности собирались, а вместе нет: его точки остаются без сети
-                log.debug("city: unit {} not assembled: {}", unit.get(0).root.key, e.getMessage());
-                return null;
-            }
-        }).collect(Collectors.toList());
-        List<NewSegment> segments = new ArrayList<>();
-        List<NewChamber> chambers = new ArrayList<>();
-        List<TechnicalNode> nodes = new ArrayList<>();
     /**
      * Деревья, по которым собирается вариант черновика: в районе города — до ортогональной формы ({@link #basis}),
      * чтобы выбор черновиков района и подключённость точек не зависели от неё; форму по осям город ставит в конце
@@ -921,6 +921,32 @@ public final class VariantEnumerator {
         log.info("city: squared trees kept unsquared (touching others) {}", kept);
     }
 
+    /** Точки деревьев before, которых нет в деревьях after, добавляются в lost. */
+    private static void lost(List<Tree> before, List<Tree> after, Set<ConnectionPoint> lost) {
+        Set<ConnectionPoint> kept = new HashSet<>();
+        after.forEach(tree -> kept.addAll(tree.connected()));
+        before.forEach(tree -> tree.connected().stream().filter(c -> !kept.contains(c)).forEach(lost::add));
+    }
+
+    /** Вариант по частям: каждый узел врезки — своя сборка, параллельно, с общими счётчиками ID. */
+    private Variant assembleParts(String variantId, int rank, List<Tree> trees, List<FutureOks> unconnected) {
+        Map<String, List<Tree>> units = new LinkedHashMap<>();
+        for (Tree tree : trees) {
+            units.computeIfAbsent(tree.root.key, key -> new ArrayList<>()).add(tree);
+        }
+        NetworkAssembler.Counters counters = new NetworkAssembler.Counters();
+        List<Variant> parts = new ArrayList<>(units.values()).parallelStream().map(unit -> {
+            try {
+                return assembler.assemble(variantId, rank, unit, List.of(), counters);
+            } catch (IllegalStateException | IllegalArgumentException e) {
+                // узел врезки, чьи деревья по отдельности собирались, а вместе нет: его точки остаются без сети
+                log.debug("city: unit {} not assembled: {}", unit.get(0).root.key, e.getMessage());
+                return null;
+            }
+        }).collect(Collectors.toList());
+        List<NewSegment> segments = new ArrayList<>();
+        List<NewChamber> chambers = new ArrayList<>();
+        List<TechnicalNode> nodes = new ArrayList<>();
         int tieIns = 0;
         Set<String> connected = new HashSet<>();
         List<List<Tree>> unitList = new ArrayList<>(units.values());
@@ -3789,32 +3815,6 @@ public final class VariantEnumerator {
         return result;
     }
 
-    /** Камеры ветвления дерева, где путь точки к врезке поворачивает круче MAX_TURN_DEG. */
-    private static List<Tree.Node> sharpTurns(Tree tree) {
-        List<Tree.Node> result = new ArrayList<>();
-        for (Tree.Edge in : tree.edges) {
-            if (in.to.kind != Tree.Kind.JUNCTION) {
-                continue;
-            }
-            Coordinate[] c = in.line.getCoordinates();
-            for (Tree.Edge out : tree.edges) {
-                if (out.from == in.to && Router.deflectionDeg(c[c.length - 2], in.to.point,
-                        out.line.getCoordinateN(1)) > Router.MAX_TURN_DEG) {
-                    result.add(in.to);
-                    break;
-                }
-            }
-        }
-        return result;
-    }
-
-    /**
-     * Дерево, у которого новая камера врезки на трубе сдвинута вдоль трубы до RETIE_MAX_M с шагом RETIE_STEP_M так, что
-     * уходит первая вершина её ребра с изломом ({@link TreeBuilder#retie}); null — такого сдвига нет. Излом снимается,
-     * если эта вершина не нужна для отступов: прямая от врезки к следующей вершине обычная. Место врезки даёт
-     * {@link TieInFinder#shifted}: у камеры не дальше 10 м врезка идёт в неё, и такой сдвиг не берётся. Сдвиги
-     * пробуются по возрастанию цены рёбер и берутся, как у камер ветвления, если S узла из одного дерева tree не
-     * растёт; others — деревья других узлов врезки.
     /**
      * Деревья варианта с рёбрами по осям застройки (замечание экспертов 16.10.2026: прямые вдоль стен и дорог, поворот
      * 90° вместо двух по 45°): обычные участки рёбер перекладываются по прямым вдоль преобладающего у ребра
@@ -4365,6 +4365,32 @@ public final class VariantEnumerator {
         return Math.toRadians(weighted / best);
     }
 
+    /** Камеры ветвления дерева, где путь точки к врезке поворачивает круче MAX_TURN_DEG. */
+    private static List<Tree.Node> sharpTurns(Tree tree) {
+        List<Tree.Node> result = new ArrayList<>();
+        for (Tree.Edge in : tree.edges) {
+            if (in.to.kind != Tree.Kind.JUNCTION) {
+                continue;
+            }
+            Coordinate[] c = in.line.getCoordinates();
+            for (Tree.Edge out : tree.edges) {
+                if (out.from == in.to && Router.deflectionDeg(c[c.length - 2], in.to.point,
+                        out.line.getCoordinateN(1)) > Router.MAX_TURN_DEG) {
+                    result.add(in.to);
+                    break;
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Дерево, у которого новая камера врезки на трубе сдвинута вдоль трубы до RETIE_MAX_M с шагом RETIE_STEP_M так, что
+     * уходит первая вершина её ребра с изломом ({@link TreeBuilder#retie}); null — такого сдвига нет. Излом снимается,
+     * если эта вершина не нужна для отступов: прямая от врезки к следующей вершине обычная. Место врезки даёт
+     * {@link TieInFinder#shifted}: у камеры не дальше 10 м врезка идёт в неё, и такой сдвиг не берётся. Сдвиги
+     * пробуются по возрастанию цены рёбер и берутся, как у камер ветвления, если S узла из одного дерева tree не
+     * растёт; others — деревья других узлов врезки.
      */
     private Tree retied(Tree tree, Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, Region region,
             Envelope area, List<Tree> others) {

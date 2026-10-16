@@ -29,6 +29,8 @@ public class GeoJsonStreamWriter {
     private static final int MONEY_SCALE = 2;
     private static final int LENGTH_SCALE = 2;
     private static final int FLOW_SCALE = 3;
+    /** Глубина до мм. */
+    private static final int DEPTH_SCALE = 3;
     /** score с четырьмя знаками, как в примере п. 7.3 приложения 18.09 (0,6913). */
     private static final int SCORE_SCALE = 4;
 
@@ -74,8 +76,8 @@ public class GeoJsonStreamWriter {
             decimal(json, "length", segment.getLength(), LENGTH_SCALE);
             json.writeStringField("laying_method", segment.getLayingMethod());
             // Глубина относится к дополнительному режиму, в 2D-выходе всегда явный null.
-            json.writeNullField("depth_start");
-            json.writeNullField("depth_end");
+            depth(json, "depth_start", segment.getDepthStart());
+            depth(json, "depth_end", segment.getDepthEnd());
             decimal(json, "cost", segment.getCost(), MONEY_SCALE);
             end(json);
         }
@@ -104,6 +106,14 @@ public class GeoJsonStreamWriter {
         }
         json.writeEndArray();
         end(json);
+    }
+
+    private static void depth(JsonGenerator json, String field, Double value) throws IOException {
+        if (value == null) {
+            json.writeNullField(field);
+        } else {
+            decimal(json, field, value, DEPTH_SCALE);
+        }
     }
 
     /** Ссылка на узел: число, если так был записан id объекта входа. */
