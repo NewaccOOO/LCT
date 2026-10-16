@@ -178,8 +178,8 @@ public final class VariantEnumerator {
     private static final double EVEN_EPS_RUB = 1e-3;
     /** Ортогональная форма рёбер готового варианта, см. {@link #squared}. */
     private static final boolean SQUARE = Boolean.parseBoolean(System.getProperty("heatnet.square", "true"));
-    /** Во сколько раз ортогональный участок может быть длиннее прежнего: диагональ под 45° к застройке даёт √2. */
-    private static final double SQUARE_RATIO = Double.parseDouble(System.getProperty("heatnet.square.ratio", "1.5"));
+    /** Во сколько раз ортогональный участок может быть длиннее прежнего. */
+    private static final double SQUARE_RATIO = Double.parseDouble(System.getProperty("heatnet.square.ratio", "1.3"));
     /** Штраф за поворот при поиске ортогонального участка, м: из двух равных по длине берётся с меньшим числом стыков. */
     private static final double SQUARE_TURN_M = Double.parseDouble(System.getProperty("heatnet.square.turnM", "10"));
     /** Стены и стороны ограничений не дальше этого от ребра задают его оси, см. {@link #axis}. */
@@ -709,7 +709,15 @@ public final class VariantEnumerator {
         List<Tree> unkinked = unkinked(turned(trees));
         Set<Tree> same = Collections.newSetFromMap(new IdentityHashMap<>());
         same.addAll(unkinked);
-        return entered(squared(unkinked(unkinked(evened(entered(bent(unkinked))), false, same), true)));
+        List<Tree> squared = squared(unkinked(unkinked(evened(entered(bent(unkinked))), false, same), true));
+        List<Tree> result = entered(unkinked(squared));
+        for (int t = 0; t < result.size(); t++) {
+            Tree tree = result.get(t);
+            if (tree != squared.get(t) && tree.unsquared == null && squared.get(t).unsquared != null) {
+                tree.unsquared = squared.get(t).unsquared;
+            }
+        }
+        return result;
     }
 
     /**
@@ -3908,6 +3916,23 @@ public final class VariantEnumerator {
         return moved;
     }
 
+    private static int bends(Tree tree, List<Integer> incident) {
+        int count = 0;
+        for (int e : incident) {
+            Coordinate[] c = tree.edges.get(e).line.getCoordinates();
+            for (int v = 1; v + 1 < c.length; v++) {
+                if (Router.deflectionDeg(c[v - 1], c[v], c[v + 1]) >= TreeBuilder.MIN_TURN_DEG) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    private static int pairs(Tree tree, List<Integer> incident) {
+        return incident.stream().mapToInt(e -> Router.pairs(tree.edges.get(e).line.getCoordinates())).sum();
+    }
+
     /** Дерево result[t] с камерой junction на новом месте и её рёбрами по осям, см. {@link #junctionPass}, или null. */
     private Tree squaredJunction(List<Tree> result, int t, Tree.Node junction) {
         Tree tree = result.get(t);
@@ -4026,6 +4051,8 @@ public final class VariantEnumerator {
                         workOff, bestOff, workLength, SQUARE_RATIO * length, better));
             }
             if (better && workLength <= SQUARE_RATIO * length && sharpPairs(work) <= sharpPairs(tree)
+                    && bends(work, incident) <= bends(tree, incident)
+                    && pairs(work, incident) <= pairs(tree, incident)
                     && accepted(result, t, unit, work)) {
                 best = work;
                 bestOff = workOff;

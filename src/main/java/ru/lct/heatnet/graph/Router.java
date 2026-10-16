@@ -1405,6 +1405,17 @@ public final class Router {
         return false;
     }
 
+    public static int pairs(Coordinate[] coords) {
+        double[] turns = turns(Arrays.asList(coords));
+        int count = 0;
+        for (int v = 1; v + 2 < coords.length; v++) {
+            if (Math.abs(turns[v]) >= MIN_TURN_DEG && Math.abs(turns[v + 1]) >= MIN_TURN_DEG && turns[v] * turns[v + 1] > 0) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     /** Повороты ломаной в вершинах со знаком (плюс — влево), 0 у концов; для {@link #chains}. */
     static double[] turns(List<Coordinate> coords) {
         double[] turns = new double[coords.size()];
@@ -1887,8 +1898,9 @@ public final class Router {
      * Ортогональная форма (замечание экспертов 16.10.2026: трасса прямыми вдоль застройки, один поворот 90° вместо
      * двух по 45°, без зигзагов; п. 2.1 приложения): обычные участки ломаной между неподвижными вершинами — концами,
      * keep и вершинами у специальных частей ({@link #held}) — перекладываются по прямым вдоль axis и axis + 90°
-     * ({@link #squarePath}). Новый участок берётся, если он не длиннее ratio старого, вершин у ломаной не больше чем на
-     * одну больше, чем было (прямую заменяет один поворот 90°, а не ступенька), а ломаная проходит те же
+     * ({@link #squarePath}). Новый участок берётся, если он не длиннее ratio старого, вершин и соседних поворотов в одну
+     * сторону у ломаной не больше, чем было, ни одну её вершину нельзя убрать прямой ({@link #removable}), двух соседних
+     * поворотов в одну сторону не заменяет одна вершина ({@link #bend}), а ломаная проходит те же
      * проверки, что после {@link #sharpen}: зоны и отступы, CUT_APART_M до apart и своих отрезков, повороты до
      * MAX_TURN_DEG, в том числе к before и after, без изломов меньше MIN_TURN_DEG. true — coords заменены.
      */
@@ -1960,9 +1972,8 @@ public final class Router {
                         shape.remove(v);
                     }
                 }
-                // прямую заменяет один поворот 90°, а не ступенька: вершин ребра не больше чем на одну больше прежнего
-                // (считается после слияния: последнее звено по оси часто продолжает финальный участок, и выход уходит)
-                if (shape.size() > coords.size() + 1) {
+                if (shape.size() > coords.size() || pairs(shape.toArray(new Coordinate[0])) > pairs(coords.toArray(new Coordinate[0]))
+                        || bendable(zones, shape, keep, ignored, apart, before, after)) {
                     debug(coords, i, j, String.format(java.util.Locale.ROOT, "вершин %d против %d", shape.size() - 2,
                             coords.size() - 2), path);
                     continue;
@@ -2005,6 +2016,19 @@ public final class Router {
         List<Coordinate> without = new ArrayList<>(shape);
         without.remove(v);
         return removalFits(zones, without, v - 1, ignored, apart, before, after);
+    }
+
+    private boolean bendable(ObstacleSet zones, List<Coordinate> shape, Coordinate keep, Set<String> ignored,
+            List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
+        List<Coordinate> probe = new ArrayList<>(shape);
+        List<SpecialSpan> spans = zones.spans(factory.createLineString(probe.toArray(new Coordinate[0])), ignored);
+        boolean[] held = held(probe, keep, spans);
+        for (int v = 1; v + 1 < probe.size(); v++) {
+            if (!held[v] && removable(zones, probe, v, ignored, apart, before, after)) {
+                return true;
+            }
+        }
+        return bend(zones, probe, held, spans, ignored, apart, before, after);
     }
 
     /** Отладка {@link #square} (свойство heatnet.square.debug): почему участок не лёг по осям. */

@@ -51,18 +51,23 @@ class RouterTest {
     }
 
     @Test
-    void squareReplacesDiagonalWithOneRightTurnAroundPark() {
-        // диагональ (0,0)–(30,40) по осям 0°/90°: угол (30,0) в зоне парка, остаётся один поворот 90° через (0,40)
+    void squareKeepsStraightDiagonalAndReplacesKinkWithOneRightTurn() {
         Geometry park = rect(25, -10, 45, 10);
-        Router router = router(List.of(new Restriction("park-1", park, "park")), List.of());
-        List<Coordinate> coords = new ArrayList<>(List.of(new Coordinate(0, 0), new Coordinate(30, 40)));
+        Router open = router(List.of(new Restriction("park-1", park, "park")), List.of());
+        List<Coordinate> straight = new ArrayList<>(List.of(new Coordinate(0, 0), new Coordinate(30, 40)));
 
-        assertTrue(router.square(router.obstacles(), coords, Set.of(), null, List.of(), null, List.of(), 0, 1.5, 10));
+        assertFalse(open.square(open.obstacles(), straight, Set.of(), null, List.of(), null, List.of(), 0, 1.5, 10));
+        assertEquals(List.of(new Coordinate(0, 0), new Coordinate(30, 40)), straight);
 
-        assertEquals(List.of(new Coordinate(0, 0), new Coordinate(0, 40), new Coordinate(30, 40)), coords);
-        assertEquals(90, Router.deflectionDeg(coords.get(0), coords.get(1), coords.get(2)), EPS);
-        // длиннее ratio прежнего участка — не перекладывается
-        List<Coordinate> tight = new ArrayList<>(List.of(new Coordinate(0, 0), new Coordinate(30, 40)));
+        Geometry pond = rect(13, 18, 17, 22);
+        Router router = router(List.of(new Restriction("park-1", park, "park"), new Restriction("park-2", pond, "park")), List.of());
+        List<Coordinate> kinked = new ArrayList<>(List.of(new Coordinate(0, 0), new Coordinate(10, 25), new Coordinate(30, 40)));
+
+        assertTrue(router.square(router.obstacles(), kinked, Set.of(), null, List.of(), null, List.of(), 0, 1.5, 10));
+
+        assertEquals(List.of(new Coordinate(0, 0), new Coordinate(0, 40), new Coordinate(30, 40)), kinked);
+        assertEquals(90, Router.deflectionDeg(kinked.get(0), kinked.get(1), kinked.get(2)), EPS);
+        List<Coordinate> tight = new ArrayList<>(List.of(new Coordinate(0, 0), new Coordinate(10, 25), new Coordinate(30, 40)));
         assertFalse(router.square(router.obstacles(), tight, Set.of(), null, List.of(), null, List.of(), 0, 1.3, 10));
     }
 
