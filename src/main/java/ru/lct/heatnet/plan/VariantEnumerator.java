@@ -634,7 +634,7 @@ public final class VariantEnumerator {
         // ранг 1 — наименьший score (п. 7.2): доводка после поиска меняет S, и порядок черновиков мог разойтись с ним
         List<Integer> order = Scorer.rank(variants.stream().map(Variant::getSummary).collect(Collectors.toList()));
         return new Result(distinct(order.stream().map(variants::get).collect(Collectors.toList()),
-                order.stream().map(picked::get).collect(Collectors.toList())), input.getNumericIds());
+                order.stream().map(i -> picked.get(i).trees).collect(Collectors.toList())), input.getNumericIds());
     }
 
     /**
@@ -724,9 +724,9 @@ public final class VariantEnumerator {
     /**
      * Варианты без совпавших с лучшими по устройству ({@link #layout}) или трассе (полоса SAME_ROUTE_M), с номерами
      * подряд. Перенос и сдвиг камер и прокладка заново двигают трассу после отбора черновиков, поэтому трасса берётся
-     * по участкам варианта, а устройство — по его черновику из drafts.
+     * по участкам варианта, а устройство — по деревьям варианта из trees.
      */
-    private List<Variant> distinct(List<Variant> variants, List<Draft> drafts) {
+    private List<Variant> distinct(List<Variant> variants, List<List<Tree>> trees) {
         List<Variant> kept = new ArrayList<>();
         List<RouteBand> bands = new ArrayList<>();
         List<Set<String>> layouts = new ArrayList<>();
@@ -734,7 +734,7 @@ public final class VariantEnumerator {
             Variant variant = variants.get(i);
             List<LineString> lines = variant.getSegments().stream().map(NewSegment::getGeometry).collect(Collectors.toList());
             RouteBand band = new RouteBand(lines, lines.size(), SAME_ROUTE_M, factory);
-            Set<String> layout = layout(drafts.get(i).trees);
+            Set<String> layout = layout(trees.get(i));
             if (layouts.contains(layout) || bands.stream().anyMatch(other -> RouteBand.same(other, band, SAME_ROUTE_SHARE))) {
                 log.info("variants: вариант {} совпал с лучшим по устройству или трассе и не выдаётся", variant.getId());
                 continue;
@@ -838,17 +838,17 @@ public final class VariantEnumerator {
                     (System.nanoTime() - started) / 1_000_000_000L);
         }
         List<Integer> order = Scorer.rank(variants.stream().map(Variant::getSummary).collect(Collectors.toList()));
-        List<Variant> ranked = new ArrayList<>();
-        for (int i = 0; i < order.size(); i++) {
-            Variant variant = variants.get(order.get(i));
-            String id = String.valueOf(i + 1);
-            if (variant.getId().equals(id)) {
-                ranked.add(variant);
-            } else {
-                ranked.add(renumbered(variant, id, i + 1));
-            }
+        long distinctStarted = System.nanoTime();
+        List<Variant> sorted = new ArrayList<>();
+        List<List<Tree>> layouts = new ArrayList<>();
+        for (int k : order) {
+            sorted.add(variants.get(k));
+            layouts.add(assembled(candidates.get(k), variants.get(k)));
         }
-        return new Result(ranked, input.getNumericIds());
+        List<Variant> kept = distinct(sorted, layouts);
+        log.info("city: distinct variants={} of {} elapsed={}ms", kept.size(), variants.size(),
+                (System.nanoTime() - distinctStarted) / 1_000_000);
+        return new Result(kept, input.getNumericIds());
     }
 
     /**
@@ -931,6 +931,12 @@ public final class VariantEnumerator {
             }
         }
         log.info("city: squared trees kept unsquared (touching others) {}", kept);
+    }
+
+    private static List<Tree> assembled(List<Tree> trees, Variant variant) {
+        Set<String> left = new HashSet<>(variant.getSummary().getUnconnectedOksIds());
+        return trees.stream().filter(tree -> tree.connected().stream().noneMatch(c -> left.contains(c.getOksId())))
+                .collect(Collectors.toList());
     }
 
     /** Точки деревьев before, которых нет в деревьях after, добавляются в lost. */

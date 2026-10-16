@@ -79,6 +79,18 @@ class VariantEnumeratorTest {
     }
 
     @Test
+    void cityTieShiftedAlongSamePipeIsNotSecondVariant() {
+        PlanFixture fixture = new PlanFixture().pipe("hn-1", 0, 0, 400, 0, 200, 100, "src").oks("o-1", 200, 60, 30);
+        fixture.existing.add(new ExistingOks("wall", PlanFixture.rect(170, 25, 230, 35)));
+
+        List<Variant> variants = new VariantEnumerator(fixture.input(), rules).city().getVariants();
+
+        assertEquals(1, variants.size(), "вариантов " + variants.size());
+        assertEquals("1", variants.get(0).getId());
+        assertTrue(variants.get(0).getSummary().getUnconnectedOksIds().isEmpty());
+    }
+
+    @Test
     void chamberAtPipeEndAndPipeGiveTwoDifferentVariants() {
         // у ОКС одна ближайшая врезка — камера на конце трубы; врезка в саму трубу — другой объект врезки
         PlanFixture fixture = new PlanFixture().pipe("hn-1", 0, 0, 300, 0, 150, 50, "src")
