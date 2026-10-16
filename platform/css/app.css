@@ -44,6 +44,7 @@ header.top { display: flex; align-items: center; gap: 10px; padding: 0 12px; bac
 .variants { display: flex; gap: 6px; }
 .variants button { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.1; padding: 4px 12px; min-height: 40px; }
 .variants small { color: var(--muted); font-size: 11.5px; }
+.variants .vs { display: none; }
 .menu { position: absolute; top: 42px; left: 0; min-width: 270px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 6px; box-shadow: 0 12px 32px rgba(0,0,0,.45); z-index: 50; display: grid; gap: 2px; }
 .menu button { background: none; border: 0; text-align: left; display: flex; justify-content: space-between; align-items: center; gap: 12px; border-radius: 8px; }
 .menu button:hover, .menu button:focus-visible { background: var(--card2); }
@@ -114,6 +115,10 @@ tr.cur td { color: var(--accent); }
 .note.fix { background: #0e2a1f; border: 1px solid #166534; }
 .note.prob { background: #2a0e17; border: 1px solid #7f1d1d; }
 .note.info { background: #0c2238; border: 1px solid #1e4b72; }
+.note.warn { background: #2a2208; border: 1px solid #854d0e; color: #fde68a; font-size: 12.5px; }
+.note button { min-height: 30px; padding: 3px 10px; font-size: 13px; }
+td.best { color: #86efac; font-weight: 600; }
+.verdict { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 8px 10px; font-size: 13px; margin-bottom: 8px; }
 
 /* ---------- правая панель свойств ---------- */
 /* карточка лежит поверх сцены: 3D-окно не меняет размер, навигация плавно отъезжает */
@@ -157,11 +162,18 @@ body.propsOpen #profile { margin-right: var(--props); }
 #legBody { display: grid; grid-template-columns: 22px 1fr; gap: 3px 8px; align-items: center; padding: 4px 10px 8px; color: var(--muted); }
 #legBody .h { grid-column: 1 / 3; color: var(--text); font-weight: 600; margin-top: 4px; }
 #legBody .sw { width: 22px; }
+.exchip { position: absolute; left: 140px; bottom: 6px; z-index: 5; min-height: 26px; padding: 2px 10px; font-size: 12px; border-radius: 999px; background: rgba(16,27,46,.9); color: var(--muted); }
+.exchip b { color: var(--sel); }
+#plEnd { flex: 1 1 100%; display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
+#plEnd button { min-height: 30px; padding: 3px 10px; font-size: 13px; }
+body.propsOpen #player, body.propsOpen #measure { left: calc(50% - var(--props) / 2); }
+body.leftHidden #left { display: none; }
+#errBody { margin: 8px 0; }
 #measure { left: 50%; transform: translateX(-50%); top: 12px; display: flex; gap: 12px; align-items: center; font-size: 13.5px; }
 #player { left: 50%; transform: translateX(-50%); bottom: 14px; display: flex; gap: 10px; align-items: center; width: min(640px, calc(100% - 24px)); }
 #player input[type=range] { flex: 1; accent-color: var(--sel); padding: 0; border: 0; background: none; }
 #player #plTxt { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--muted); white-space: nowrap; }
-.coach { position: absolute; left: 12px; bottom: 76px; z-index: 8; width: 320px; background: rgba(16,27,46,.97); border: 1px solid var(--accent2); border-radius: 14px; padding: 12px 14px; box-shadow: 0 10px 30px rgba(0,0,0,.45); }
+.coach { position: absolute; left: 12px; top: 12px; z-index: 8; width: 320px; background: rgba(16,27,46,.97); border: 1px solid var(--accent2); border-radius: 14px; padding: 12px 14px; box-shadow: 0 10px 30px rgba(0,0,0,.45); }
 .coach .cg { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 8px 0 10px; font-size: 13.5px; }
 .coach .k, .k { font-size: 12px; background: var(--card2); border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; white-space: nowrap; text-align: center; }
 .row { display: flex; gap: 8px; }
@@ -188,6 +200,7 @@ body.propsOpen #profile { margin-right: var(--props); }
 .lbl.src { border-color: var(--bad); }
 .lbl.node { color: #bae6fd; border-color: rgba(56,189,248,.5); font-size: 11.5px; }
 .lbl.meas { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.lbl.clip { border-color: var(--sel); color: var(--sel); }
 
 /* ---------- профиль ---------- */
 #profile { position: relative; height: 320px; flex: none; border-top: 1px solid var(--line); background: var(--bg); display: flex; flex-direction: column; z-index: 4; }
@@ -256,17 +269,20 @@ table.cmp th, table.cmp td { font-size: 12px; white-space: nowrap; }
   .search { min-width: 0; margin-left: 0; }
   .variants button { min-height: 36px; padding: 2px 10px; justify-content: center; }
   .variants .vl { display: none; }
+  .variants .vs { display: inline; }
   .search input { font-size: 16px; padding-right: 10px; }
   #toasts { top: 60px; bottom: auto; }
   #left { position: absolute; left: 0; top: 0; bottom: 0; width: min(88vw, 360px); transform: translateX(-102%); transition: transform .2s; box-shadow: 8px 0 30px rgba(0,0,0,.5); z-index: 25; }
   body.leftOpen #left { transform: none; }
   /* нижний лист, как в мобильных Картах: свёрнут — виден заголовок, развёрнут — половина экрана */
   #props { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: 50%; border-left: 0; border-top: 1px solid var(--line); border-radius: 16px 16px 0 0; box-shadow: 0 -10px 30px rgba(0,0,0,.5); z-index: 24; padding-top: 4px; transition: max-height .2s ease; }
-  #props.min { max-height: 76px; overflow: hidden; }
+  #props.min { max-height: 128px; overflow: hidden; }
+  #props .acts { margin-top: 8px; }
   #props .grab { display: block; width: 44px; height: 5px; border-radius: 3px; background: #475569; margin: 4px auto 8px; }
   body.propsOpen #navR { right: 10px; }
-  body.propsOpen #profile { margin-right: 0; margin-bottom: 76px; }
-  body.flying #props { max-height: 76px; overflow: hidden; }
+  body.propsOpen #profile { margin-right: 0; margin-bottom: 128px; }
+  body.flying #props { max-height: 70px; overflow: hidden; }
+  .acts .only-m { display: inline-flex; }
   #player { left: 8px; right: 8px; width: auto; transform: none; flex-wrap: wrap; bottom: 8px; }
   #player input[type=range] { flex: 1 1 100%; order: -1; }
   .mact { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 10px 10px 0; }
@@ -282,7 +298,14 @@ table.cmp th, table.cmp td { font-size: 12px; white-space: nowrap; }
   .phead .legend { display: none; }
   .phead .sp { display: none; }
   .phead button { min-height: 30px; padding: 3px 10px; font-size: 13px; }
-  .coach { left: 8px; right: 8px; width: auto; bottom: 12px; }
+  .coach { left: 8px; right: 8px; width: auto; top: 8px; padding: 10px 12px; }
+  .coach .cg { grid-template-columns: auto 1fr; font-size: 12.5px; gap: 4px 10px; margin: 6px 0 8px; }
+  .exchip { left: 8px; bottom: 30px; }
+  body.propsOpen #player, body.propsOpen #measure { left: 8px; }
+  body.leftHidden #left { display: flex; }
+  body.flying .toolbar, body.flying #legend { display: none; }
+  .sugg { position: fixed; top: 56px; left: 8px; right: 8px; }
+  .sugg button { flex-direction: column; gap: 0; }
   #legend { bottom: 30px; }
   .helpgrid { grid-template-columns: 1fr; }
 }

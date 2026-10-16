@@ -50,3 +50,11 @@ test('spb-kupchino: глубины, пересечения и неподключ
   const c = cx.find(c => c.ok === false);
   assert.ok(Math.abs(c.below - (c.top + c.eh + c.need)) < 1e-9);
 });
+
+test('пикетаж ПК', async () => {
+  const {pk} = await import('../js/profile.js');
+  assert.equal(pk(0), 'ПК0+00');
+  assert.equal(pk(0.07), 'ПК0+00,1');
+  assert.equal(pk(235.25), 'ПК2+35,3');
+  assert.equal(pk(1999.96), 'ПК20+00');
+});

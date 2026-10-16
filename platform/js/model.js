@@ -337,6 +337,7 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
     proj, bbox: Number.isFinite(x0) ? [x0, y0, x1, y1] : [-100, -100, 100, 100],
     utilities, surfaces, points, oks, variants, segs, nodes, crossings, recon, byInputId, zonesAt,
     hasOutput: fout.length > 0,
+    hasAddresses: oks.some(o => o.name) || [...BUILDING_KEYS].some(k => (surfaces[k] || []).some(it => it.p.address)),
     skipped: [...skipped.entries()].sort((a, b) => b[1] - a[1]),
     hasDepth: segs.some(s => s.p.depth_start != null),
     stats: {input: fin.length, output: fout.length, utilities: count(utilities), surfaces: count(surfaces), points: count(points)},

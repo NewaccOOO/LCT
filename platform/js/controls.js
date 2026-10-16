@@ -158,7 +158,7 @@ export class CameraRig {
     };
     const startMode = (m, x, y) => {
       g.mode = m;
-      if (m === 'orbit') { g.P = this.pivotAt(x, y); this.hooks.onPivot?.(g.P); }
+      if (m === 'orbit') { g.P = this.hooks.orbitPivot?.(x, y) || this.pivotAt(x, y); this.hooks.onPivot?.(g.P); }
       if (m === 'pan') {
         const P = this.pivotAt(x, y);
         g.h = P.z;   // тащим ту плоскость, за которую взялись: трубу на глубине — за её глубину
@@ -176,7 +176,8 @@ export class CameraRig {
       if (ptrs.size === 2) {
         g = null;
         const [a, b] = [...ptrs.values()];
-        t2 = {a: {...a}, b: {...b}, P: this.pivotAt((a.x + b.x) / 2, (a.y + b.y) / 2)};
+        t2 = {a: {...a}, b: {...b}, a0: {...a}, b0: {...b}, mode: null, P: this.pivotAt((a.x + b.x) / 2, (a.y + b.y) / 2)};
+        clearTimeout(this._lp);
         this.hooks.onPivot?.(t2.P);
         return;
       }
@@ -186,7 +187,7 @@ export class CameraRig {
       if (g.touch) {
         const gg = g;
         clearTimeout(this._lp);
-        this._lp = setTimeout(() => { if (g === gg && !gg.on) { gg.long = true; this.hooks.onContext?.(gg.x0, gg.y0, e); } }, 550);
+        this._lp = setTimeout(() => { if (g === gg && !gg.on && !this.noContext) { gg.long = true; this.hooks.onContext?.(gg.x0, gg.y0, e); } }, 550);
       }
     });
 
@@ -232,16 +233,24 @@ export class CameraRig {
       const my0 = (t2.a.y + t2.b.y) / 2, my1 = (a.y + b.y) / 2;
       let dAng = ang1 - ang0; dAng = Math.atan2(Math.sin(dAng), Math.cos(dAng));
       const zoom = d0 / Math.max(d1, 1), dy = my1 - my0;
-      const sameDir = (a.y - t2.a.y) * (b.y - t2.b.y) > 0 && Math.abs(dy) > Math.abs(d1 - d0) * 1.2;
-      t2.mode ||= null;
-      // первые пиксели решают, что это: наклон (оба пальца вверх-вниз) или щипок с поворотом
-      if (!t2.mode && (Math.abs(dy) > 4 || Math.abs(d1 - d0) > 4 || Math.abs(dAng) > 0.04)) t2.mode = sameDir ? 'tilt' : 'pinch';
+      // что это за жест, решаем по сдвигу каждого пальца от начала: пальцы приходят отдельными событиями,
+      // поэтому сравнивать надо накопленный путь, а не последнее событие
+      if (!t2.mode) {
+        const da = a.y - t2.a0.y, db = b.y - t2.b0.y;
+        const dd = Math.hypot(b.x - a.x, b.y - a.y) - Math.hypot(t2.b0.x - t2.a0.x, t2.b0.y - t2.a0.y);
+        let ang = Math.atan2(b.y - a.y, b.x - a.x) - Math.atan2(t2.b0.y - t2.a0.y, t2.b0.x - t2.a0.x); ang = Math.atan2(Math.sin(ang), Math.cos(ang));
+        if (Math.abs(da) > 6 && Math.abs(db) > 6 && da * db > 0 && Math.abs(dd) < Math.min(Math.abs(da), Math.abs(db)) * 0.8) t2.mode = 'tilt';
+        else if (Math.abs(dd) > 10 || Math.abs(ang) > 0.08) t2.mode = 'pinch';
+        if (!t2.mode) return;
+        t2.a = {...t2.a0}; t2.b = {...t2.b0};
+        return twoFinger();
+      }
       if (t2.mode === 'tilt') this.rotateAround(t2.P, 0, -dy / r.height * Math.PI * 0.8);
-      else if (t2.mode === 'pinch') {
+      else {
         if (Math.abs(zoom - 1) > 0.002) this.zoomTo(t2.P, zoom);
         if (Math.abs(dAng) > 0.002) this.rotateAround(t2.P, -dAng, 0);
       }
-      if (t2.mode || Math.abs(dy) > 4 || Math.abs(d1 - d0) > 4) { t2.a = {...a}; t2.b = {...b}; }
+      t2.a = {...a}; t2.b = {...b};
     };
 
     const end = e => {

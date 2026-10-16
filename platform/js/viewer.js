@@ -13,7 +13,8 @@ THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 const YAX = new THREE.Vector3(0, 1, 0);
 const col = h => new THREE.Color(h);
 export const PALETTE = {
-  selection: '#fde047', problem: '#ff1f4b', ok: '#22c55e', special: '#fb923c',
+  // проблема — малиновая: красный уже занят существующей теплосетью, один цвет — одно значение
+  selection: '#fde047', problem: '#ff2fd1', ok: '#22c55e', special: '#fb923c',
   connected: '#22c55e', unconnected: '#f43f5e', future: '#e8dcc0', chamberOld: '#64748b', chamberNew: '#38bdf8',
 };
 // Новая сеть — свой бирюзовый цвет, которого нет ни у одной существующей сети (вода синяя, кабель фиолетовый,
@@ -526,7 +527,20 @@ export class Viewer {
     this.applyOpts();
   }
 
-  // Другой вариант поверх текущего — розовым пунктиром, чтобы сравнить трассы на месте
+  // «Что если»: обход пересечения — полупрозрачная зелёная труба на рекомендуемой глубине
+  setDetour(pts, r) {
+    let old = this.g.tools.getObjectByName('detour');
+    if (old) { this.g.tools.remove(old); old.traverse(x => { x.geometry?.dispose(); x.material?.dispose?.(); if (x.isCSS2DObject) x.element.remove(); }); }
+    if (!pts) { this.redraw(); return; }
+    const ex = this.ex, P = pts.map(p => [p[0], p[1], -(p[2] + r) * ex]), pieces = [];
+    for (let i = 0; i + 1 < P.length; i++) pieces.push({a: P[i], b: P[i + 1], r, color: '#4ade80'});
+    const m = tubeMesh(pieces, {radial: 12, material: new THREE.MeshBasicMaterial({color: 0xffffff, transparent: true, opacity: 0.55, depthWrite: false}), overlap: true});
+    m.name = 'detour'; m.renderOrder = 25;
+    this.g.tools.add(m);
+    this.redraw();
+  }
+
+  // Другой вариант поверх текущего — белым пунктиром, чтобы сравнить трассы на месте
   setGhost(v) {
     this.clear(this.g.ghost);
     this.ghost = v;
@@ -536,7 +550,7 @@ export class Viewer {
       const P = s.pts.map((p, i) => [p[0], p[1], -(s.depth[i] + s.row.h / 2) * this.ex]);
       for (let i = 0; i + 1 < P.length; i++) seg.push(...P[i], ...P[i + 1]);
     }
-    const ln = fatLines(seg, {width: 3, color: '#f472b6', opacity: 0.9, dashed: true});
+    const ln = fatLines(seg, {width: 3, color: '#f1f5f9', opacity: 0.9, dashed: true});
     ln.renderOrder = 17;
     this.g.ghost.add(this.trackLines(ln));
     this.redraw();
@@ -650,10 +664,12 @@ export class Viewer {
     const solid = this.g.buildings.getObjectByName('buildings'), flat = this.g.buildings.getObjectByName('buildingsFlat');
     if (solid) {
       solid.visible = on('buildings') && o.buildings === 'solid';
-      solid.traverse(x => { x.renderOrder = o.xray ? 11 : 10; });
-      this.bldMat.opacity = o.xray ? 0.18 : 1;
-      this.bldMat.transparent = o.xray;
-      this.bldMat.depthWrite = !o.xray;
+      // рентген — здания почти прозрачные; выбрана трасса — здания приглушены, чтобы трасса не пряталась за домом
+      const op = o.xray ? 0.18 : o.dim ? 0.5 : 1;
+      solid.traverse(x => { x.renderOrder = op < 1 ? 11 : 10; });
+      this.bldMat.opacity = op;
+      this.bldMat.transparent = op < 1;
+      this.bldMat.depthWrite = op === 1;
       this.bldMat.needsUpdate = true;
     }
     if (flat) flat.visible = on('buildings') && o.buildings !== 'hidden';
@@ -674,13 +690,17 @@ export class Viewer {
         new THREE.Plane(new THREE.Vector3(0, 0, 1), -z0), new THREE.Plane(new THREE.Vector3(0, 0, -1), z1));
     }
     let box3 = this.scene.getObjectByName('clipBox');
-    if (box3) { this.scene.remove(box3); box3.geometry.dispose(); }
+    if (box3) { this.scene.remove(box3); box3.geometry.dispose(); box3.traverse(x => { if (x.isCSS2DObject) x.element.remove(); }); }
     if (box) {
       const [x0, y0, z0, x1, y1, z1] = box;
       const g = new THREE.EdgesGeometry(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0));
       box3 = new THREE.LineSegments(g, new THREE.LineBasicMaterial({color: 0xfde047, transparent: true, opacity: 0.7}));
       box3.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
       box3.name = 'clipBox';
+      // размер рамки подписан, как у Section Box: в плане и по глубине (в настоящих метрах)
+      const lb = this.label(`срез ${Math.round(x1 - x0)} × ${Math.round(y1 - y0)} м · глубже ${(Math.max(0, -z0) / this.ex).toFixed(1).replace('.', ',')} м`, 'lbl clip');
+      lb.position.set(0, 0, (z1 - z0) / 2);
+      box3.add(lb);
       this.scene.add(box3);
     }
     this.scene.traverse(o => { if (o.material && !o.material.isLineMaterial && o.name !== 'clipBox') { o.material.clippingPlanes = this.clipPlanes; o.material.needsUpdate = true; } });

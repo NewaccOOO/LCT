@@ -85,6 +85,7 @@
       </div>
       <div id="legend" class="floatcard"><button id="legBtn" aria-expanded="false">Условные обозначения <span class="caret">▸</span></button><div id="legBody" hidden></div></div>
       <div id="scale" aria-hidden="true"><div class="bar"></div><span></span></div>
+      <button id="exChip" class="exchip" title="Вертикаль растянута для наглядности, диаметры настоящие. Щёлкните — переключить ×1 / растянуть"></button>
       <div id="measure" class="floatcard" hidden></div>
       <div id="player" class="floatcard" hidden>
       <button id="plPlay" class="icon" aria-label="Пауза">❚❚</button>
@@ -92,6 +93,7 @@
       <span id="plTxt"></span>
       <select id="plSpeed" aria-label="Скорость"><option value="0.5">0,5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
       <button id="plStop" title="Выйти из пролёта (Esc)">Выйти</button>
+      <div id="plEnd" hidden>Пролёт завершён: <button id="plAgain">↻ Повторить</button><button id="plToEnd">🏢 К зданию</button></div>
       </div>
       <div id="ctx" class="menu ctx" role="menu" hidden></div>
       <div id="tip" role="tooltip" hidden></div>
@@ -150,6 +152,15 @@
   </form>
 </dialog>
 
+<dialog id="errDlg" aria-labelledby="errH">
+  <form method="dialog" class="dlg">
+    <h2 id="errH">Файл не распознан</h2>
+    <div id="errBody"></div>
+    <p class="mut">Открытый набор остался на месте — ничего не потеряно.</p>
+    <div class="row end"><button type="button" id="errOpen">Открыть другой файл</button><button class="primary" value="ok">Понятно</button></div>
+  </form>
+</dialog>
+
 <dialog id="openDlg" aria-labelledby="openH">
   <form method="dialog" class="dlg wide">
     <h2 id="openH">Открыть данные</h2>
@@ -160,10 +171,11 @@
       <div class="pick"><span class="lbl">Исходные данные <b>обязательно</b></span><label class="btn" for="fIn">Выбрать файл…</label><span class="fname" id="fInN">не выбран</span><input type="file" id="fIn" accept=".geojson,.json,application/geo+json,application/json"></div>
       <div class="pick"><span class="lbl">Результат трассировки</span><label class="btn" for="fOut">Выбрать файл…</label><span class="fname" id="fOutN">не выбран</span><input type="file" id="fOut" accept=".geojson,.json,application/geo+json,application/json"></div>
       <details class="fmt"><summary>Какой GeoJSON подходит</summary>
-        <p>У каждого объекта в <code>properties</code> есть <code>id</code> и <code>object_type</code> (раздел 12 CONSTRAINTS.md):</p>
+        <p>У каждого объекта в <code>properties</code> есть номер <code>id</code> и тип <code>object_type</code>:</p>
         <ul><li><code>heat_network</code> (линия, <code>diameter</code>), <code>heat_chamber</code> и <code>source</code> (точки) — существующая теплосеть;</li>
           <li><code>oks_connection_point</code> (точка, <code>flow_tph</code>, <code>oks_id</code>) и <code>oks_future</code> / <code>oks_existing</code> (полигоны, <code>levels</code>) — здания;</li>
           <li><code>restriction</code> с <code>restriction_type</code>: <code>gas_pipeline</code>, <code>power_cable</code>, <code>water_supply</code>, <code>sewer</code> (линии), <code>road</code>, <code>tram_tracks</code>, <code>railway</code>, <code>park</code>, <code>water</code>, <code>prohibited_site</code>, <code>oks</code> (полигоны).</li></ul>
+        <p>Это тот же файл, что принимает сервис трассировки, — его готовят из ГИС или выгрузки сетей.</p>
         <p>Результат — файл, который вернул сервис (<code>variant_summary</code>, участки <code>heat_network</code> с <code>variant_id</code>). Объекты без <code>object_type</code> пропускаются, их число будет в отчёте.
         Пример входа: <a href="demo/small-1.in.geojson" download="пример-входа.geojson">скачать small-1</a>.</p></details>
       <div class="row end"><button type="button" class="primary" id="fGo" disabled>Открыть</button></div>

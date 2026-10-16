@@ -6,6 +6,12 @@ import {UTILITIES, UNDER, NORMAL_DEPTH, MIN_DEPTH, pointAt} from './model.js';
 import {fmt} from './util.js';
 
 const BAND = 3 * 17 + 4;   // подвал: три строки
+// пикетаж, как на чертежах: ПК — сотня метров, плюс — метры внутри неё
+export function pk(s) {
+  s = Math.round(s * 10) / 10;
+  const k = Math.floor(s / 100 + 1e-9), m = Math.max(0, s - k * 100), t = (Math.round(m * 10) / 10).toFixed(1).split('.');
+  return `ПК${k}+${t[0].padStart(2, '0')}${t[1] !== '0' ? ',' + t[1] : ''}`;
+}
 
 export class Profile {
   constructor(canvas, hooks) {
@@ -65,8 +71,11 @@ export class Profile {
     if (cur && cur.type) zones.push(cur);
     this.zones = zones;
     this.cxs = route.segs.flatMap(s => s.cx.map(c => ({...c, S: s.s0 + c.s, ref: c})));
+    this.detour = null;
     this.draw();
   }
+  // обход пересечения на профиле: [{S, d}] и подпись
+  setDetour(d) { this.detour = d; this.draw(); }
   setCursor(at) {
     this.cursor = at;
     // при пролёте окно профиля едет за камерой
@@ -111,7 +120,7 @@ export class Profile {
     const L = this.layout(), {X, Y, pl, W, pt, maxD, a: wa, b: wb} = L;
     const css = getComputedStyle(document.documentElement);
     const muted = css.getPropertyValue('--muted').trim() || '#94a3b8', line = css.getPropertyValue('--line').trim() || '#253349';
-    const pipe = '#2ee6d0', bad = '#ff1f4b';
+    const pipe = '#2ee6d0', bad = '#ff2fd1';
     g.font = '12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
     const clip = () => { g.save(); g.beginPath(); g.rect(pl, 0, W, r.height); g.clip(); };
 
@@ -160,6 +169,16 @@ export class Profile {
       g.fillStyle = bad;
       g.fillRect(X(c.S - 2), Y(p.d) - 1, Math.max(4, X(c.S + 2) - X(c.S - 2)), Y(p.d + c.H) - Y(p.d) + 2);
     }
+    // обход пересечения — зелёный пунктир на рекомендуемой глубине
+    if (this.detour) {
+      const D = this.detour;
+      g.strokeStyle = '#4ade80'; g.lineWidth = 2; g.setLineDash([5, 4]);
+      g.beginPath(); D.pts.forEach((p, i) => i ? g.lineTo(X(p.S), Y(p.d)) : g.moveTo(X(p.S), Y(p.d))); g.stroke();
+      g.beginPath(); D.pts.forEach((p, i) => i ? g.lineTo(X(p.S), Y(p.d + D.h)) : g.moveTo(X(p.S), Y(p.d + D.h))); g.stroke();
+      g.setLineDash([]); g.lineWidth = 1;
+      const mid = D.pts[Math.floor(D.pts.length / 2)];
+      g.fillStyle = '#86efac'; g.fillText(D.label, Math.min(X(mid.S) + 8, pl + W - g.measureText(D.label).width - 4), Y(mid.d + D.h) + 14);
+    }
     // камеры на стыках участков — вертикаль и подпись (повороты без подписи)
     g.strokeStyle = 'rgba(226,232,240,.35)'; g.fillStyle = muted;
     let lastX = -1e9;
@@ -197,22 +216,28 @@ export class Profile {
     const raw = (wb - wa) / Math.max(1, W / 90), mag = Math.pow(10, Math.floor(Math.log10(raw || 1)));
     const step = [1, 2, 5, 10].map(k => k * mag).find(v => v >= raw) || mag * 10;
     g.fillStyle = muted; g.strokeStyle = line;
-    for (let s = Math.ceil(wa / step) * step; s <= wb + 1e-6; s += step) { g.fillText(`${fmt(s)} м`, X(s) - 10, Y(maxD) + 14); g.beginPath(); g.moveTo(X(s), Y(maxD)); g.lineTo(X(s), Y(maxD) + 4); g.stroke(); }
+    for (let s = Math.ceil(wa / step) * step; s <= wb + 1e-6; s += step) { const t = pk(s); g.fillText(t, Math.max(pl, X(s) - g.measureText(t).width / 2), Y(maxD) + 14); g.beginPath(); g.moveTo(X(s), Y(maxD)); g.lineTo(X(s), Y(maxD) + 4); g.stroke(); }
     // подвал: Ду, уклон, длина по участкам — как в Civil 3D
     const by = Y(maxD) + 20;
     ['Ду', 'Уклон', 'Длина, м'].forEach((t, i) => { g.fillStyle = muted; g.fillText(t, 6, by + i * 17 + 12); g.strokeStyle = line; g.beginPath(); g.moveTo(pl, by + i * 17); g.lineTo(pl + W, by + i * 17); g.stroke(); });
     g.beginPath(); g.moveTo(pl, by + 3 * 17); g.lineTo(pl + W, by + 3 * 17); g.stroke();
     clip();
     for (const s of R.segs) {
-      const x0 = X(s.s0), x1 = X(s.s0 + s.len), w = x1 - x0;
+      const x0 = X(s.s0), x1 = X(s.s0 + s.len);
       g.strokeStyle = line; g.beginPath(); g.moveTo(x0, by); g.lineTo(x0, by + 3 * 17); g.stroke();
-      const vals = [String(s.p.diameter), fmt(Math.abs(s.d1 - s.d0) / s.len, 3), fmt(s.len, s.len < 10 ? 1 : 0)];
-      g.fillStyle = s.issues.length ? '#fda4af' : '#cbd5e1';
-      vals.forEach((t, i) => { const tw = g.measureText(t).width; if (tw + 4 < w) g.fillText(t, x0 + (w - tw) / 2, by + i * 17 + 12); });
+      // подписи — по видимой части участка: при приближении строки не пустеют
+      const v0 = Math.max(x0, pl), v1 = Math.min(x1, pl + W), w = v1 - v0;
+      if (w <= 0) continue;
+      const slope = Math.abs(s.d1 - s.d0) / s.len;
+      const vals = [String(s.p.diameter), fmt(slope, 3), fmt(s.len, s.len < 10 ? 1 : 0)];
+      vals.forEach((t, i) => {
+        g.fillStyle = s.issues.length ? '#f9a8d4' : i === 1 && slope < 0.002 ? '#fcd34d' : '#cbd5e1';
+        const tw = g.measureText(t).width; if (tw + 4 < w) g.fillText(t, v0 + (w - tw) / 2, by + i * 17 + 12);
+      });
     }
     g.restore();
     g.fillStyle = this.win ? '#fde047' : muted;
-    g.fillText(this.win ? `показан участок ${fmt(wa)}–${fmt(wb)} м · двойной щелчок — вся трасса` : 'колесо — масштаб по длине · тащить — сдвиг', pl + 4, r.height - 5);
+    g.fillText(this.win ? `показан участок ${pk(wa)} – ${pk(wb)} · двойной щелчок — вся трасса` : 'колесо — масштаб по длине · тащить — сдвиг · жёлтым — уклон меньше 0,002 (СП 124.13330, правилами кейса не проверяется)', pl + 4, r.height - 5);
 
     // курсор: пролёт или мышь
     const cur = this.mouse ? this.atX(this.mouse[0]) : this.cursor;
@@ -223,7 +248,7 @@ export class Profile {
     g.beginPath(); g.moveTo(x, Y(-0.6)); g.lineTo(x, Y(maxD)); g.stroke(); g.lineWidth = 1;
     g.fillStyle = '#fde047'; g.beginPath(); g.arc(x, Y(p.d), 4, 0, Math.PI * 2); g.fill();
     const n = this.mouse && this.nearCx(this.mouse[0]);
-    const lines = [`${fmt(cur)} м от врезки`, `верх трубы ${fmt(p.d, 2)} м · Ду ${p.seg.p.diameter}${p.seg.special ? ' · спецпереход' : ''}`];
+    const lines = [`${pk(cur)} · ${fmt(cur)} м от врезки`, `верх трубы ${fmt(p.d, 2)} м · Ду ${p.seg.p.diameter}${p.seg.special ? ' · спецпереход' : ''}`];
     if (n) {
       const u = UTILITIES[n.type].name.toLowerCase();
       lines.push(n.ok === false ? (n.gap < 0 ? `⚠ ${u}: трубы пересекаются, наложение ${fmt(-n.gap, 2)} м` : `⚠ ${u}: зазор ${fmt(n.gap, 2)} из ${fmt(n.need, 2)} м`) : `${u}: зазор ${fmt(n.gap, 2)} м`, 'щёлкните — показать в 3D');
