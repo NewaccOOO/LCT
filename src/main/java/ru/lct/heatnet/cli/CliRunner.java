@@ -28,7 +28,8 @@ import ru.lct.heatnet.plan.VariantEnumerator;
 import ru.lct.heatnet.rules.Rules;
 
 /**
- * Режим CLI (D-16): {@code java -jar heatnet.jar --cli [--rules=<файл правил>] <input> <output>}, без веба и базы.
+ * Режим CLI (D-16): {@code java -jar heatnet.jar --cli [--depth] [--rules=<файл правил>] <input> <output>}, без веба и
+ * базы. {@code --depth} — режим с учётом глубины (§5): глубины участков, Kгл, свои варианты; без него — 2D.
  * Рядом с выходом пишется {@code <output>.criteria.json} с дополнительными критериями вариантов.
  */
 @Component
@@ -48,13 +49,13 @@ public class CliRunner implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        int code = execute(args.getNonOptionArgs());
+        int code = execute(args.getNonOptionArgs(), args.containsOption("depth"));
         System.exit(SpringApplication.exit(context, () -> code));
     }
 
-    private int execute(List<String> files) {
+    private int execute(List<String> files, boolean depth) {
         if (files.size() != 2) {
-            System.err.println("Использование: java -jar heatnet.jar --cli [--rules=<файл правил>] <входной GeoJSON> <выходной GeoJSON>");
+            System.err.println("Использование: java -jar heatnet.jar --cli [--depth] [--rules=<файл правил>] <входной GeoJSON> <выходной GeoJSON>");
             return FAILED;
         }
         long started = System.nanoTime();
@@ -67,7 +68,7 @@ public class CliRunner implements ApplicationRunner {
                 }
                 return INVALID_INPUT;
             }
-            Result result = pipeline.run(input);
+            Result result = pipeline.run(input, depth);
             Path output = Path.of(files.get(1)).toAbsolutePath();
             // каталог выхода создаётся сам: в свежей копии репозитория data/out ещё нет
             try {
