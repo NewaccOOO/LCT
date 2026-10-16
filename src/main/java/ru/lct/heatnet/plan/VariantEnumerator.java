@@ -173,6 +173,32 @@ public final class VariantEnumerator {
     private static final boolean TURN_DETACH = Boolean.parseBoolean(System.getProperty("heatnet.turn.detach", "true"));
     /** Спрямление излома у технического узла не дороже этого, рубли: запас на ошибку сложения, см. {@link #evened}. */
     private static final double EVEN_EPS_RUB = 1e-3;
+    /** Ортогональная форма рёбер готового варианта, см. {@link #squared}. */
+    private static final boolean SQUARE = Boolean.parseBoolean(System.getProperty("heatnet.square", "true"));
+    /** Во сколько раз ортогональный участок может быть длиннее прежнего: диагональ под 45° к застройке даёт √2. */
+    private static final double SQUARE_RATIO = Double.parseDouble(System.getProperty("heatnet.square.ratio", "1.5"));
+    /** Штраф за поворот при поиске ортогонального участка, м: из двух равных по длине берётся с меньшим числом стыков. */
+    private static final double SQUARE_TURN_M = Double.parseDouble(System.getProperty("heatnet.square.turnM", "10"));
+    /** Стены и стороны ограничений не дальше этого от ребра задают его оси, см. {@link #axis}. */
+    private static final double AXIS_NEAR_M = 30;
+    /** Куда дальше этого от прежнего места камера ветвления не переносится ради осей, см. {@link #junctionPass}. */
+    private static final double JUNCTION_MOVE_M = 30;
+    /** Поворот за отрезком у перенесённой камеры не мельче этого (мелкий излом, как SMALL_BEND_DEG у TreeBuilder). */
+    private static final double JUNCTION_BEND_DEG = 30;
+    /** Вершина ребра ближе этого к перенесённой камере убирается: она стояла у прежнего места (звено до 10 м). */
+    private static final double JUNCTION_NEAR_M = 10;
+    /** Перенос камеры берётся, если длина отрезков не по оси у неё падает хотя бы до этой доли прежней. */
+    private static final double JUNCTION_GAIN = 0.75;
+    /** Сколько ближайших мест камеры перебирает {@link #junctionPass}. */
+    private static final int JUNCTION_SPOTS = 40;
+    /** Шаг сдвига камеры вдоль своего ребра по оси, см. {@link #squaredJunction}. */
+    private static final double JUNCTION_STEP_M = 2;
+    /** Отрезок отходит от оси больше этого — не по оси, см. {@link #offAxis}. */
+    private static final double OFF_AXIS_RAD = Math.toRadians(1);
+    /** Стороны короче этого (зубцы детального контура) на оси не влияют. */
+    private static final double AXIS_SIDE_M = 8;
+    /** Сколько раз повторяется проход {@link #squared}: ребро, переложенное по осям, открывает повороты соседям. */
+    private static final int SQUARE_PASSES = 3;
     /** Сколько годных правок поворота круче MAX_TURN_DEG сравнивает по S {@link #unsharpened}. */
     private static final int TURN_FIXES = 8;
     /** Сдвиг камер ветвления в деревьях выбранных вариантов (heatnet.slide.junctions), см. {@link #shifted(Draft)}. */
@@ -565,6 +591,32 @@ public final class VariantEnumerator {
         }
     }
 
+    /**
+     * Режим с учётом глубины (§5): те же варианты с продольным профилем, Kгл в стоимости и своим ранжированием по S.
+     * Номера вариантов в отдельном файле режима начинаются с 1, как и в 2D.
+     */
+    public Result depth(Result flat) {
+        long started = System.nanoTime();
+        DepthProfiler profiler = new DepthProfiler(rules, specials);
+        List<Variant> profiled = flat.getVariants().stream().map(profiler::profile).collect(Collectors.toList());
+        List<Integer> order = Scorer.rank(profiled.stream().map(Variant::getSummary).collect(Collectors.toList()));
+        List<Variant> ranked = new ArrayList<>();
+        for (int i = 0; i < order.size(); i++) {
+            Variant variant = profiled.get(order.get(i));
+            VariantSummary s = variant.getSummary();
+            ranked.add(new Variant(variant.getId(), variant.getSegments(), variant.getChambers(), variant.getNodes(),
+                    new VariantSummary(s.getId(), s.getVariantId(), i + 1, s.getConstructionCost(),
+                            s.getChamberConstructionCost(), s.getExistingChamberTieInCount(),
+                            s.getExistingChamberTieInCost(), s.getUnconnectedPenalty(), s.getCalculatedCost(),
+                            s.getNewNetworkLength(), s.getScore(), s.getUnconnectedOksIds())));
+        }
+        profiler.conflicts.forEach((variant, chains) -> log.warn("depth: вариант {}: профиль с уклоном {} не помещается "
+                + "на {} цепочках (ручная проработка), первые: {}", variant, rules.depth().getMaxSlope(), chains.size(),
+                chains.subList(0, Math.min(5, chains.size()))));
+        log.info("depth: {} вариантов elapsed={}ms", ranked.size(), (System.nanoTime() - started) / 1_000_000);
+        return new Result(ranked, flat.getNumericIds());
+    }
+
     public Result run() {
         if (connectionByOks.size() > CITY_MIN) {
             return city();
@@ -609,7 +661,7 @@ public final class VariantEnumerator {
             if (REROUTE) {
                 try {
                     trees = polished(rerouted(draft));
-                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, trees, unconnected(draft, trees));
+                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, ranked(trees), unconnected(draft, trees));
                 } catch (IllegalStateException | IllegalArgumentException e) {
                     // узлы врезки собирались по отдельности, а вместе нет: вариант как найден поиском
                     log.info("rerouted: вариант {} не собран: {}", i + 1, e.getMessage());
@@ -618,7 +670,7 @@ public final class VariantEnumerator {
             if (variant == null) {
                 try {
                     trees = polished(draft.trees);
-                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, trees, unconnected(draft, trees));
+                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, ranked(trees), unconnected(draft, trees));
                 } catch (IllegalStateException | IllegalArgumentException e) {
                     log.info("unkinked: вариант {} не собран: {}", i + 1, e.getMessage());
                 }
@@ -654,7 +706,7 @@ public final class VariantEnumerator {
         List<Tree> unkinked = unkinked(turned(trees));
         Set<Tree> same = Collections.newSetFromMap(new IdentityHashMap<>());
         same.addAll(unkinked);
-        return unkinked(unkinked(evened(entered(bent(unkinked))), false, same), true);
+        return entered(squared(unkinked(unkinked(evened(entered(bent(unkinked))), false, same), true)));
     }
 
     /**
@@ -763,6 +815,7 @@ public final class VariantEnumerator {
         if (CITY_RETRY) {
             candidates = retried(candidates, near, System.nanoTime() + CITY_RETRY_S * 1_000_000_000L);
         }
+        candidates.forEach(this::unsquaredWhereTouching);
         List<Variant> variants = new ArrayList<>();
         for (int k = 0; k < candidates.size(); k++) {
             List<Tree> trees = candidates.get(k);
@@ -820,6 +873,52 @@ public final class VariantEnumerator {
                 log.info("turned: variant {} not assembled with detached points: {}", draft.variant.getId(), e.getMessage());
             }
         }
+    }
+
+    /**
+     * Деревья, по которым собирается вариант черновика: в районе города — до ортогональной формы ({@link #basis}),
+     * чтобы выбор черновиков района и подключённость точек не зависели от неё; форму по осям город ставит в конце
+     * ({@link #unsquaredWhereTouching}).
+     */
+    private List<Tree> ranked(List<Tree> trees) {
+        return district ? basis(trees) : trees;
+    }
+
+    /** Дерево до ортогональной формы ({@link #squared}): по нему город решает, какие деревья берутся. */
+    private static Tree basis(Tree tree) {
+        return tree.unsquared != null ? tree.unsquared : tree;
+    }
+
+    private static List<Tree> basis(List<Tree> trees) {
+        return trees.stream().map(VariantEnumerator::basis).collect(Collectors.toList());
+    }
+
+    /**
+     * Город отбирает деревья районов и прямых подключений по их виду до ортогональной формы ({@link #basis}): по осям
+     * дерево шире и задевало бы соседей, а точки оставались бы без сети (п. 2.5). Здесь дерево варианта получает форму
+     * по осям, если она не задевает остальные деревья варианта, иначе остаётся прежним.
+     */
+    private void unsquaredWhereTouching(List<Tree> trees) {
+        int kept = 0;
+        for (int i = 0; i < trees.size(); i++) {
+            Tree tree = trees.get(i);
+            if (tree.unsquared == null) {
+                continue;
+            }
+            Envelope around = new Envelope(tree.envelope());
+            around.expandBy(TREES_APART_M + 1);
+            List<Tree> close = new ArrayList<>();
+            for (int j = 0; j < trees.size(); j++) {
+                if (j != i && trees.get(j).envelope().intersects(around)) {
+                    close.add(trees.get(j));
+                }
+            }
+            if (!compatible(tree, close)) {
+                trees.set(i, tree.unsquared);
+                kept++;
+            }
+        }
+        log.info("city: squared trees kept unsquared (touching others) {}", kept);
     }
 
     /** Точки деревьев before, которых нет в деревьях after, добавляются в lost. */
@@ -1038,7 +1137,7 @@ public final class VariantEnumerator {
         List<Tree> accepted = new ArrayList<>();
         Quadtree index = new Quadtree();
         for (Tree tree : ties) {
-            index.insert(geometry(tree).getEnvelopeInternal(), tree);
+            index.insert(geometry(basis(tree)).getEnvelopeInternal(), tree);
         }
         Set<String> connected = new HashSet<>();
         ties.forEach(tree -> tree.connected().forEach(c -> connected.add(c.getOksId())));
@@ -1051,16 +1150,16 @@ public final class VariantEnumerator {
                 if (tree.connected().stream().anyMatch(c -> connected.contains(c.getOksId()))) {
                     continue;
                 }
-                Envelope envelope = geometry(tree).getEnvelopeInternal();
+                Envelope envelope = geometry(basis(tree)).getEnvelopeInternal();
                 Envelope around = new Envelope(envelope);
                 around.expandBy(TREES_APART_M + 1);
                 List<Tree> near = new ArrayList<>();
                 for (Object item : index.query(around)) {
-                    if (geometry((Tree) item).getEnvelopeInternal().intersects(around)) {
+                    if (geometry(basis((Tree) item)).getEnvelopeInternal().intersects(around)) {
                         near.add((Tree) item);
                     }
                 }
-                if (compatible(tree, near)) {
+                if (compatible(basis(tree), basis(near))) {
                     accepted.add(tree);
                     tree.connected().forEach(c -> connected.add(c.getOksId()));
                     index.insert(envelope, tree);
@@ -1173,11 +1272,12 @@ public final class VariantEnumerator {
                 trees.removeIf(old::contains);
                 List<Tree> added = new ArrayList<>();
                 for (Tree tree : fresh) {
-                    Envelope around = new Envelope(tree.envelope());
+                    Envelope around = new Envelope(basis(tree).envelope());
                     around.expandBy(TREES_APART_M + 1);
-                    List<Tree> close = trees.stream().filter(t -> t.envelope().intersects(around)).collect(Collectors.toList());
+                    List<Tree> close = trees.stream().filter(t -> basis(t).envelope().intersects(around))
+                            .collect(Collectors.toList());
                     close.addAll(added);
-                    if (!compatible(tree, close)) {
+                    if (!compatible(basis(tree), basis(close))) {
                         added = null;
                         break;
                     }
@@ -3713,6 +3813,556 @@ public final class VariantEnumerator {
         }
         log.info("evened: edges={} elapsed={}ms", taken, (System.nanoTime() - started) / 1_000_000);
         return result;
+    }
+
+    /**
+     * Деревья варианта с рёбрами по осям застройки (замечание экспертов 16.10.2026: прямые вдоль стен и дорог, поворот
+     * 90° вместо двух по 45°): обычные участки рёбер перекладываются по прямым вдоль преобладающего у ребра
+     * направления стен ({@link #axis}), см. {@link Router#square}. Правка берётся, если узел врезки собирается, Ду
+     * рёбер не выросли, а дерево не касается других; стоимость и длина при этом могут вырасти до SQUARE_RATIO.
+     */
+    private List<Tree> squared(List<Tree> trees) {
+        if (!SQUARE) {
+            return trees;
+        }
+        long started = System.nanoTime();
+        List<Tree> result = new ArrayList<>(trees);
+        int taken = 0;
+        for (int pass = 0, before = -1; pass < SQUARE_PASSES && taken > before; pass++) {
+            before = taken;
+            taken = squarePass(result, taken);
+        }
+        int moved = junctionPass(result);
+        for (int pass = 0, before = -1; moved > 0 && pass < SQUARE_PASSES && taken > before; pass++) {
+            before = taken;
+            taken = squarePass(result, taken);
+        }
+        log.info("squared: edges={} junctions moved={} elapsed={}ms", taken, moved, (System.nanoTime() - started) / 1_000_000);
+        return result;
+    }
+
+    /** Один проход {@link #squared} по деревьям result на месте; возвращает taken плюс число переложенных рёбер. */
+    private int squarePass(List<Tree> result, int taken) {
+        for (int t = 0; t < result.size(); t++) {
+            // от листьев к врезке: ребро к камере выбирает приход по уже переложенным веткам из неё
+            for (int e = result.get(t).edges.size() - 1; e >= 0; e--) {
+                Tree tree = result.get(t);
+                List<Tree> unit = unit(result, tree);
+                Tree changed;
+                try {
+                    changed = squaredEdge(tree, e, assembler.diameters(unit), axis(tree.edges.get(e).line.getEnvelopeInternal()));
+                } catch (IllegalStateException | IllegalArgumentException ex) {
+                    break;
+                }
+                if (changed == null) {
+                    continue;
+                }
+                if (!accepted(result, t, unit, changed)) {
+                    log.info("squared: ребро к {} по осям не переложено", tree.edges.get(e).to.key);
+                    continue;
+                }
+                changed.unsquared = tree.unsquared != null ? tree.unsquared : tree;
+                result.set(t, changed);
+                taken++;
+            }
+        }
+        return taken;
+    }
+
+    /**
+     * Перенос камер ветвления под оси: камера, у рёбер которой остались отрезки не по оси, переносится в ближайшее
+     * место (до JUNCTION_MOVE_M) на пересечении осевых прямых через её соседние вершины и концы её рёбер или с шагом
+     * JUNCTION_STEP_M вдоль её же отрезков по оси, и рёбра камеры
+     * перекладываются по осям заново. Берётся место с наименьшей длиной отрезков не по оси (не больше JUNCTION_GAIN
+     * прежней и хотя бы на метр меньше), затем с наименьшей длиной рёбер камеры; рёбра не длиннее SQUARE_RATIO прежних, отрезки у камеры
+     * и повороты в ней проходят проверки нового отрезка, поворотов круче 90° в камерах дерева не больше, чем было,
+     * дерево — {@link #accepted}. Возвращает число перенесённых камер.
+     */
+    private int junctionPass(List<Tree> result) {
+        int moved = 0;
+        for (int t = 0; t < result.size(); t++) {
+            // камера ветвления — конец ровно одного ребра; перенос не меняет порядок рёбер
+            for (int e = 0; e < result.get(t).edges.size(); e++) {
+                Tree tree = result.get(t);
+                if (tree.edges.get(e).to.kind != Tree.Kind.JUNCTION) {
+                    continue;
+                }
+                Tree better = squaredJunction(result, t, tree.edges.get(e).to);
+                if (better != null) {
+                    better.unsquared = tree.unsquared != null ? tree.unsquared : tree;
+                    result.set(t, better);
+                    moved++;
+                }
+            }
+        }
+        return moved;
+    }
+
+    /** Дерево result[t] с камерой junction на новом месте и её рёбрами по осям, см. {@link #junctionPass}, или null. */
+    private Tree squaredJunction(List<Tree> result, int t, Tree.Node junction) {
+        Tree tree = result.get(t);
+        List<Integer> incident = new ArrayList<>();
+        Envelope envelope = new Envelope();
+        for (int e = 0; e < tree.edges.size(); e++) {
+            Tree.Edge edge = tree.edges.get(e);
+            if (edge.from == junction || edge.to == junction) {
+                incident.add(e);
+                envelope.expandToInclude(edge.line.getEnvelopeInternal());
+            }
+        }
+        double axis = axis(envelope);
+        if (Double.isNaN(axis)) {
+            return null;
+        }
+        double off = offAxis(tree, incident, axis);
+        if (off < 1) {
+            return null;
+        }
+        if (JUNCTION_DEBUG) {
+            System.err.printf(Locale.ROOT, "JUNCTION %.1f,%.1f не по оси %.1f м, рёбер %d%n", junction.point.x, junction.point.y,
+                    off, incident.size());
+        }
+        double length = 0;
+        double c = Math.cos(axis);
+        double s = Math.sin(axis);
+        List<Coordinate> marks = new ArrayList<>();
+        marks.add(junction.point);
+        for (int e : incident) {
+            Coordinate[] line = tree.edges.get(e).line.getCoordinates();
+            length += tree.edges.get(e).line.getLength();
+            boolean out = tree.edges.get(e).from == junction;
+            marks.add(out ? line[1] : line[line.length - 2]);
+            marks.add(out ? line[line.length - 1] : line[0]);
+        }
+        List<Coordinate> spots = new ArrayList<>();
+        for (Coordinate a : marks) {
+            for (Coordinate b : marks) {
+                double u = a.x * c + a.y * s;
+                double v = -b.x * s + b.y * c;
+                Coordinate spot = new Coordinate(u * c - v * s, u * s + v * c);
+                double d = spot.distance(junction.point);
+                if (d > Router.CUT_PIECE_M && d <= JUNCTION_MOVE_M && spots.stream().noneMatch(x -> x.distance(spot) < 0.5)) {
+                    spots.add(spot);
+                }
+            }
+        }
+        // сдвиг вдоль своих рёбер по оси: камера на стволе уходит на несколько метров, и ветка к ней ложится углом 90°
+        for (int e : incident) {
+            Coordinate[] line = tree.edges.get(e).line.getCoordinates();
+            boolean out = tree.edges.get(e).from == junction;
+            Coordinate next = out ? line[1] : line[line.length - 2];
+            double reach = Math.min(JUNCTION_MOVE_M, junction.point.distance(next) - Router.CUT_PIECE_M);
+            double heading = Math.atan2(next.y - junction.point.y, next.x - junction.point.x);
+            if (Math.abs(Math.IEEEremainder(heading - axis, Math.PI / 2)) > OFF_AXIS_RAD) {
+                continue;
+            }
+            for (double d = JUNCTION_STEP_M; d <= reach; d += JUNCTION_STEP_M) {
+                Coordinate spot = new Coordinate(junction.point.x + d * Math.cos(heading), junction.point.y + d * Math.sin(heading));
+                if (spots.stream().noneMatch(x -> x.distance(spot) < 0.5)) {
+                    spots.add(spot);
+                }
+            }
+        }
+        spots.sort(Comparator.comparingDouble(spot -> spot.distance(junction.point)));
+        List<Tree> unit = unit(result, tree);
+        Tree best = null;
+        double bestOff = Math.min(off - 1, JUNCTION_GAIN * off);
+        double bestLength = SQUARE_RATIO * length;
+        for (Coordinate spot : spots.subList(0, Math.min(JUNCTION_SPOTS, spots.size()))) {
+            Tree work = moved(tree, junction, spot);
+            Tree.Node node = work.edges.get(incident.get(0)).from.key.equals(Tree.Node.junction(spot).key)
+                    ? work.edges.get(incident.get(0)).from : work.edges.get(incident.get(0)).to;
+            try {
+                // ветки камеры, затем ребро к ней: приход выбирается по уже переложенным веткам
+                for (int k = incident.size() - 1; k >= 0; k--) {
+                    int e = incident.get(k);
+                    Tree squared = squaredEdge(work, e, assembler.diameters(swapped(unit, tree, work)), axis);
+                    work = squared != null ? squared : work;
+                }
+                work = straightenedExits(work, incident, assembler.diameters(swapped(unit, tree, work)));
+                work = droppedAtJunction(work, node.key, incident, assembler.diameters(swapped(unit, tree, work)), axis);
+                // перенос ради осей не множит диагонали у камеры: иначе у неё выходит звезда из коротких отрезков
+                String why = diagonals(work, node.key, incident, axis) > diagonals(tree, junction.key, incident, axis)
+                        ? "диагоналей у камеры больше" : keptExitDiagonal(tree, work, junction, node.key, incident, axis)
+                        ? "галочка к прежнему месту" : !junctionFits(work, node.key, incident, assembler.diameters(swapped(unit, tree, work)))
+                        ? "отрезок у камеры не годится" : null;
+                if (why != null) {
+                    if (JUNCTION_DEBUG) {
+                        StringBuilder h = new StringBuilder();
+                        for (int e : incident) {
+                            Coordinate[] cc = work.edges.get(e).line.getCoordinates();
+                            boolean o = work.edges.get(e).from.key.equals(node.key);
+                            Coordinate a = o ? cc[0] : cc[cc.length - 2];
+                            Coordinate b = o ? cc[1] : cc[cc.length - 1];
+                            h.append(String.format(Locale.ROOT, " %s:%.1f°/%d", work.edges.get(e).to.key,
+                                    Math.toDegrees(Math.atan2(b.y - a.y, b.x - a.x)), cc.length));
+                        }
+                        why += h;
+                    }
+                    junctionDebug(spot, junction, why);
+                    continue;
+                }
+            } catch (IllegalStateException | IllegalArgumentException ex) {
+                continue;
+            }
+            double workOff = offAxis(work, incident, axis);
+            double workLength = 0;
+            for (int e : incident) {
+                workLength += work.edges.get(e).line.getLength();
+            }
+            boolean better = workOff < bestOff - 1e-9 || Math.abs(workOff - bestOff) <= 1e-9 && workLength < bestLength;
+            if (JUNCTION_DEBUG) {
+                junctionDebug(spot, junction, String.format(Locale.ROOT, "не по оси %.1f м (нужно < %.1f), длина %.1f из %.1f, лучше=%b",
+                        workOff, bestOff, workLength, SQUARE_RATIO * length, better));
+            }
+            if (better && workLength <= SQUARE_RATIO * length && sharpPairs(work) <= sharpPairs(tree)
+                    && accepted(result, t, unit, work)) {
+                best = work;
+                bestOff = workOff;
+                bestLength = workLength;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Рёбра incident к точкам в зданиях без вершины перед финальным участком, если прямое звено к точке входит у
+     * ближайшей точки контура ({@link TreeBuilder#straightened}): после переноса камеры прежнее её место, оставленное
+     * выходом, бывает лишним.
+     */
+    private Tree straightenedExits(Tree tree, List<Integer> incident, Map<Tree.Edge, Integer> dnByEdge) {
+        Map<Integer, LineString> lines = new HashMap<>();
+        for (int e : incident) {
+            Tree.Edge edge = tree.edges.get(e);
+            ExistingOks building = edge.to.kind == Tree.Kind.CONNECTION ? buildingByConnection.get(edge.to.connection.getId()) : null;
+            EdgeShape shape = building == null ? null : shape(tree, e, dnByEdge);
+            Coordinate[] line = shape == null ? null : builder.straightened(building, edge.line.getCoordinates(), shape.zones,
+                    tree.tie.getIgnored(), shape.before, shape.apart, edge.from == tree.root);
+            if (line != null) {
+                lines.put(e, factory.createLineString(line));
+            }
+        }
+        return lines.isEmpty() ? tree : replaced(tree, lines);
+    }
+
+    /**
+     * Рёбра incident без вершины рядом с камерой key, если её соседей соединяет годная прямая ({@link Router#removable}),
+     * а отрезок от камеры к ней не по оси axis: вершина стояла ради прежнего места камеры. Точка выхода остаётся.
+     */
+    private Tree droppedAtJunction(Tree tree, String key, List<Integer> incident, Map<Tree.Edge, Integer> dnByEdge,
+            double axis) {
+        Map<Integer, LineString> lines = new HashMap<>();
+        for (int e : incident) {
+            Tree.Edge edge = tree.edges.get(e);
+            List<Coordinate> line = new ArrayList<>(Arrays.asList(edge.line.getCoordinates()));
+            int v = edge.from.key.equals(key) ? 1 : line.size() - 2;
+            EdgeShape shape = line.size() > 2 ? shape(tree, e, dnByEdge) : null;
+            Coordinate at = edge.from.key.equals(key) ? line.get(0) : line.get(line.size() - 1);
+            // отрезок к вершине по оси остаётся: прямая вместо него была бы диагональю
+            if (shape == null || line.get(v) == shape.exit
+                    || Math.abs(Math.IEEEremainder(Math.atan2(line.get(v).y - at.y, line.get(v).x - at.x) - axis, Math.PI / 2)) <= OFF_AXIS_RAD) {
+                continue;
+            }
+            if (shape.router.removable(shape.zones, line, v, tree.tie.getIgnored(), shape.apart, shape.before, shape.after)) {
+                line.remove(v);
+                lines.put(e, factory.createLineString(line.toArray(new Coordinate[0])));
+            }
+        }
+        return lines.isEmpty() ? tree : replaced(tree, lines);
+    }
+
+    /** Точка spot на прямой a–b: камера скользит вдоль своего отрезка, и его дальняя вершина остаётся. */
+    private static boolean along(Coordinate a, Coordinate b, Coordinate spot) {
+        return new LineSegment(a, b).distancePerpendicular(spot) < 0.05;
+    }
+
+    /** Вершина v ребра edge к точке подключения — точка выхода перед финальным участком: её перенос не убирает. */
+    private static boolean keptExit(Tree.Edge edge, List<Coordinate> line, int v) {
+        return edge.to.kind == Tree.Kind.CONNECTION && v == line.size() - 2;
+    }
+
+    /** Отладка {@link #junctionPass} (свойство heatnet.square.debug). */
+    private static final boolean JUNCTION_DEBUG = Boolean.getBoolean("heatnet.square.debug");
+
+    private static void junctionDebug(Coordinate spot, Tree.Node junction, String why) {
+        if (JUNCTION_DEBUG) {
+            System.err.printf(Locale.ROOT, "JUNCTION   место %.1f,%.1f (%.1f м): %s%n", spot.x, spot.y, spot.distance(junction.point), why);
+        }
+    }
+
+    /** Деревья unit с after вместо before. */
+    private static List<Tree> swapped(List<Tree> unit, Tree before, Tree after) {
+        List<Tree> result = new ArrayList<>();
+        for (Tree tree : unit) {
+            result.add(tree == before ? after : tree);
+        }
+        return result;
+    }
+
+    /**
+     * Дерево tree с камерой junction в точке spot: концы её рёбер переходят туда же, а у финального участка прямо из
+     * камеры к точке в здании прежнее место камеры остаётся вершиной выхода.
+     */
+    private static Tree moved(Tree tree, Tree.Node junction, Coordinate spot) {
+        Tree.Node node = Tree.Node.junction(spot);
+        Tree result = new Tree(tree.tie);
+        result.unconnected.addAll(tree.unconnected);
+        for (Tree.Edge edge : tree.edges) {
+            Tree.Node from = edge.from == tree.root ? result.root : edge.from == junction ? node : edge.from;
+            Tree.Node to = edge.to == junction ? node : edge.to;
+            if (from == edge.from && to == edge.to) {
+                result.edges.add(edge);
+                continue;
+            }
+            List<Coordinate> line = new ArrayList<>(Arrays.asList(edge.line.getCoordinates()));
+            if (from == node && edge.to.kind == Tree.Kind.CONNECTION && line.size() == 2) {
+                // финальный участок прямо из камеры: прежнее место камеры остаётся точкой выхода из здания
+                line.add(0, spot);
+            } else if (from == node) {
+                line.set(0, spot);
+                // вершина, нужная только прежнему месту камеры: ближе JUNCTION_NEAR_M к новому или с мелким изломом от него
+                if (line.size() > 2 && !keptExit(edge, line, 1) && (line.get(1).distance(spot) < Router.CUT_PIECE_M
+                        || !along(junction.point, line.get(1), spot) && line.get(1).distance(spot) < JUNCTION_NEAR_M
+                        || Router.deflectionDeg(spot, line.get(1), line.get(2)) < JUNCTION_BEND_DEG)) {
+                    line.remove(1);
+                }
+            }
+            if (to == node) {
+                line.set(line.size() - 1, spot);
+                int v = line.size() - 2;
+                if (line.size() > 2 && (line.get(v).distance(spot) < Router.CUT_PIECE_M
+                        || !along(junction.point, line.get(v), spot) && line.get(v).distance(spot) < JUNCTION_NEAR_M
+                        || Router.deflectionDeg(line.get(v - 1), line.get(v), spot) < JUNCTION_BEND_DEG)) {
+                    line.remove(v);
+                }
+            }
+            result.edges.add(new Tree.Edge(from, to, new GeometryFactory().createLineString(line.toArray(new Coordinate[0]))));
+        }
+        return result;
+    }
+
+    /**
+     * У камеры с ключом key отрезки рёбер incident годятся как новые ({@link Router#pieceFitsAt}), поворот за ними не
+     * мелкий, а путь точки в камере поворачивает не круче MAX_TURN_DEG.
+     */
+    private boolean junctionFits(Tree tree, String key, List<Integer> incident, Map<Tree.Edge, Integer> dnByEdge) {
+        Coordinate before = null;
+        List<Coordinate> after = new ArrayList<>();
+        Coordinate at = null;
+        for (int e : incident) {
+            Tree.Edge edge = tree.edges.get(e);
+            EdgeShape shape = shape(tree, e, dnByEdge);
+            if (shape == null) {
+                return false;
+            }
+            List<Coordinate> line = Arrays.asList(edge.line.getCoordinates());
+            boolean out = edge.from.key.equals(key);
+            // финальный участок прямо из камеры к точке в здании проверил TreeBuilder#straightened
+            boolean last = out && line.size() == 2 && shape.exit != null;
+            if (!last && !shape.router.pieceFitsAt(shape.zones, line, out ? 0 : line.size() - 2, tree.tie.getIgnored(), shape.apart)) {
+                return false;
+            }
+            // поворот за отрезком у камеры — не мелкий излом: иначе вершина там лишняя (п. 2.1)
+            int v = out ? 1 : line.size() - 2;
+            if (line.size() > 2 && Router.deflectionDeg(line.get(v - 1), line.get(v), line.get(v + 1)) < JUNCTION_BEND_DEG) {
+                return false;
+            }
+            at = out ? line.get(0) : line.get(line.size() - 1);
+            if (out) {
+                after.add(line.get(1));
+            } else {
+                before = line.get(line.size() - 2);
+            }
+        }
+        for (Coordinate next : after) {
+            if (before != null && Router.deflectionDeg(before, at, next) > Router.MAX_TURN_DEG) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * У ребра, которое шло финальным участком прямо из камеры junction, после переноса осталось прежнее место камеры
+     * вершиной выхода, а отрезок к нему от новой камеры key не по оси: выходит «галочка» у камеры.
+     */
+    private boolean keptExitDiagonal(Tree before, Tree after, Tree.Node junction, String key, List<Integer> incident,
+            double axis) {
+        for (int e : incident) {
+            Tree.Edge was = before.edges.get(e);
+            Coordinate[] c = after.edges.get(e).line.getCoordinates();
+            if (was.from == junction && was.to.kind == Tree.Kind.CONNECTION && was.line.getNumPoints() == 2
+                    && after.edges.get(e).from.key.equals(key) && c.length > 2
+                    && Math.abs(Math.IEEEremainder(Math.atan2(c[1].y - c[0].y, c[1].x - c[0].x) - axis, Math.PI / 2)) > OFF_AXIS_RAD) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Сколько отрезков рёбер incident у камеры с ключом key идут не по оси axis, кроме финальных участков. */
+    private int diagonals(Tree tree, String key, List<Integer> incident, double axis) {
+        int count = 0;
+        for (int e : incident) {
+            Tree.Edge edge = tree.edges.get(e);
+            Coordinate[] c = edge.line.getCoordinates();
+            boolean out = edge.from.key.equals(key);
+            boolean last = out && c.length == 2 && edge.to.kind == Tree.Kind.CONNECTION
+                    && buildingByConnection.containsKey(edge.to.connection.getId());
+            Coordinate a = out ? c[0] : c[c.length - 2];
+            Coordinate b = out ? c[1] : c[c.length - 1];
+            if (!last && Math.abs(Math.IEEEremainder(Math.atan2(b.y - a.y, b.x - a.x) - axis, Math.PI / 2)) > OFF_AXIS_RAD) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** Длина отрезков рёбер incident не по оси axis, кроме финальных участков к точкам в зданиях. */
+    private double offAxis(Tree tree, List<Integer> incident, double axis) {
+        double off = 0;
+        for (int e : incident) {
+            Tree.Edge edge = tree.edges.get(e);
+            Coordinate[] c = edge.line.getCoordinates();
+            int last = edge.to.kind == Tree.Kind.CONNECTION && buildingByConnection.containsKey(edge.to.connection.getId())
+                    ? c.length - 2 : c.length - 1;
+            for (int i = 0; i < last; i++) {
+                double heading = Math.atan2(c[i + 1].y - c[i].y, c[i + 1].x - c[i].x);
+                if (Math.abs(Math.IEEEremainder(heading - axis, Math.PI / 2)) > OFF_AXIS_RAD) {
+                    off += c[i].distance(c[i + 1]);
+                }
+            }
+        }
+        return off;
+    }
+
+    /** Деревья result с тем же узлом врезки, что у tree. */
+    private static List<Tree> unit(List<Tree> result, Tree tree) {
+        List<Tree> unit = new ArrayList<>();
+        for (Tree other : result) {
+            if (other.root.key.equals(tree.root.key)) {
+                unit.add(other);
+            }
+        }
+        return unit;
+    }
+
+    /** Дерево changed вместо result[t] не задевает другие деревья, узел врезки собирается, Ду рёбер не выросли. */
+    private boolean accepted(List<Tree> result, int t, List<Tree> unit, Tree changed) {
+        Tree tree = result.get(t);
+        List<Tree> others = new ArrayList<>(result);
+        others.remove(t);
+        List<Tree> attempt = new ArrayList<>();
+        for (Tree other : unit) {
+            attempt.add(other == tree ? changed : other);
+        }
+        return compatible(changed, others) && !Double.isNaN(unitScore(attempt)) && !thicker(tree, unit, changed, attempt);
+    }
+
+    /** Окружение ребра для {@link Router#square}: маршрутизатор и зоны по Ду ребра, соседние вершины, выход. */
+    private final class EdgeShape {
+        Router router;
+        ObstacleSet zones;
+        Coordinate before;
+        final List<Coordinate> after = new ArrayList<>();
+        final List<LineSegment> apart = new ArrayList<>();
+        Coordinate exit;
+    }
+
+    /** Окружение ребра e дерева tree или null — у дерева нет области или маршрутизатора нужного Ду. */
+    private EdgeShape shape(Tree tree, int e, Map<Tree.Edge, Integer> dnByEdge) {
+        Tree.Edge edge = tree.edges.get(e);
+        Region region = regionByConnection.get(tree.connected().get(0).getId());
+        Envelope area = region.area.contains(tree.envelope()) ? region.area : region.wideArea;
+        Integer dn = dnByEdge.get(edge);
+        if (!area.contains(tree.envelope()) || dn == null) {
+            return null;
+        }
+        EdgeShape shape = new EdgeShape();
+        shape.router = shaper(region, area, dn);
+        if (shape.router == null) {
+            return null;
+        }
+        shape.zones = region.obstacles(dn, area);
+        for (Tree.Edge other : tree.edges) {
+            Coordinate[] c = other.line.getCoordinates();
+            for (int i = 0; other != edge && i + 1 < c.length; i++) {
+                shape.apart.add(new LineSegment(c[i], c[i + 1]));
+            }
+            if (edge.from.kind == Tree.Kind.JUNCTION && other.to == edge.from) {
+                shape.before = c[c.length - 2];
+            }
+            if (edge.to.kind == Tree.Kind.JUNCTION && other.from == edge.to) {
+                shape.after.add(c[1]);
+            }
+        }
+        Coordinate[] coords = edge.line.getCoordinates();
+        shape.exit = edge.to.kind == Tree.Kind.CONNECTION
+                && buildingByConnection.containsKey(edge.to.connection.getId()) ? coords[coords.length - 2] : null;
+        return shape;
+    }
+
+    /** Дерево с ребром e по осям axis ({@link Router#square}) или null — ребро не изменилось. */
+    private Tree squaredEdge(Tree tree, int e, Map<Tree.Edge, Integer> dnByEdge, double axis) {
+        EdgeShape shape = Double.isNaN(axis) ? null : shape(tree, e, dnByEdge);
+        if (shape == null) {
+            return null;
+        }
+        List<Coordinate> line = new ArrayList<>(Arrays.asList(tree.edges.get(e).line.getCoordinates()));
+        if (!shape.router.square(shape.zones, line, tree.tie.getIgnored(), shape.exit, shape.apart, shape.before,
+                shape.after, axis, SQUARE_RATIO, SQUARE_TURN_M)) {
+            return null;
+        }
+        return replaced(tree, Map.of(e, factory.createLineString(line.toArray(new Coordinate[0]))));
+    }
+
+    /**
+     * Ось застройки у рамки envelope: преобладающее по суммарной длине направление сторон зданий и ограничений не
+     * дальше AXIS_NEAR_M, по модулю 90°, радианы; NaN — сторон рядом нет.
+     */
+    private double axis(Envelope envelope) {
+        Envelope near = new Envelope(envelope);
+        near.expandBy(AXIS_NEAR_M);
+        List<Geometry> shapes = new ArrayList<>();
+        obstacleIndex.existingOks(near).forEach(oks -> shapes.add(oks.getGeometry()));
+        obstacleIndex.restrictions(near).forEach(restriction -> shapes.add(restriction.getGeometry()));
+        double[] bins = new double[90];
+        double[] degs = new double[90];
+        double total = 0;
+        for (Geometry shape : shapes) {
+            for (Object part : org.locationtech.jts.geom.util.LinearComponentExtracter.getLines(shape)) {
+                Coordinate[] c = ((LineString) part).getCoordinates();
+                for (int i = 0; i + 1 < c.length; i++) {
+                    double length = c[i].distance(c[i + 1]);
+                    if (length < AXIS_SIDE_M || !near.intersects(c[i], c[i + 1])) {
+                        continue;
+                    }
+                    double deg = (Math.toDegrees(Math.atan2(c[i + 1].y - c[i].y, c[i + 1].x - c[i].x)) % 90 + 90) % 90;
+                    bins[(int) deg % 90] += length;
+                    degs[(int) deg % 90] += length * deg;
+                    total += length;
+                }
+            }
+        }
+        if (total == 0) {
+            return Double.NaN;
+        }
+        int peak = 0;
+        double best = -1;
+        for (int k = 0; k < 90; k++) {
+            double sum = bins[(k + 89) % 90] + bins[k] + bins[(k + 1) % 90];
+            if (sum > best) {
+                best = sum;
+                peak = k;
+            }
+        }
+        // среднее направление сторон в трёх корзинах у пика; корзина за 0° или 90° сдвигается на 90°
+        double weighted = 0;
+        for (int k = -1; k <= 1; k++) {
+            int bin = (peak + k + 90) % 90;
+            weighted += degs[bin] + (peak + k < 0 ? -90 : peak + k > 89 ? 90 : 0) * bins[bin];
+        }
+        return Math.toRadians(weighted / best);
     }
 
     /** Камеры ветвления дерева, где путь точки к врезке поворачивает круче MAX_TURN_DEG. */

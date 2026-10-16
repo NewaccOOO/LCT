@@ -28,11 +28,14 @@ import ru.lct.heatnet.rules.Rules;
  * к ближайшей допустимой точке контура, п. 2.2; 12.751 до финального участка без вершины, когда прямое звено входит
  * не дальше 0,1 м от ближайшей точки контура, и до переноса камеры, который снимает мелкий излом пути в ней; 12.749
  * до вывода score с четырьмя знаками, п. 7.3; 12.7488 до переноса камеры, который без роста S снимает излом меньше
- * 3° в ней: v1_ch_6 на прямой v1_ch_5–v1_ch_7).
+ * 3° в ней: v1_ch_6 на прямой v1_ch_5–v1_ch_7; 12.7483 до ортогональной формы по замечанию экспертов 16.10.2026:
+ * рёбра по осям застройки, поворот 90° вместо двух по 45°, длина трассы растёт, S тоже; 13.434 до переноса камер
+ * * ветвления под оси: ствол v1_ch_6–v1_ch_10 одной прямой; 13.5176 до сдвига камер вдоль своих рёбер и оси по отрезку, из
+ * которого выходит ребро).
  * Менять константу только при намеренной смене качества.
  */
 class OrganizerDatasetRegressionTest {
-    private static final double ORGANIZER_RANK1_SCORE = 12.7483;
+    private static final double ORGANIZER_RANK1_SCORE = 13.6408;
 
     @Test
     void rank1ScoreMatchesBaseline() throws Exception {
@@ -44,8 +47,8 @@ class OrganizerDatasetRegressionTest {
         assertEquals(1, best.getSummary().getRank());
         assertEquals(ORGANIZER_RANK1_SCORE, best.getSummary().getScore(), 1e-6);
         // с общим правилом выхода из здания (B19, 28.09.2026) черновик с точкой 4 отдельной частью проходит проверки и
-        // отличается от первого по устройству: второй вариант, S 13,1835; первый прежний
+        // отличается от первого по устройству: второй вариант (S 13,1835 до ортогональной формы); первый прежний
         assertEquals(2, result.getVariants().size());
-        assertEquals(13.1835, result.getVariants().get(1).getSummary().getScore(), 1e-6);
+        assertEquals(14.1148, result.getVariants().get(1).getSummary().getScore(), 1e-6);
     }
 }

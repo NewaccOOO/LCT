@@ -10,7 +10,7 @@ RULES ?=
 ENV := . scripts/env.sh
 PY := uv run --project tools
 
-.PHONY: help up down logs jar cli synth validate run real test test-unit test-java viz
+.PHONY: help up down logs jar cli synth validate run real test test-unit test-java viz ui3d
 
 help: ## список команд
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -39,6 +39,10 @@ validate: ## проверить OUT по правилам кейса (tools/vali
 
 viz: ## офлайн HTML-карта результата OUT рядом с ним
 	python3 scripts/visualize.py $(IN) $(OUT)
+
+ui3d: ## 3D-просмотр: сцена из IN/OUT (NAME=имя) и сервер http://localhost:8090/?scene=NAME
+	python3 scripts/ui3d/prep.py $(IN) $(OUT) $(if $(NAME),--name $(NAME))
+	python3 -m http.server -d scripts/ui3d 8090
 
 run: cli validate ## посчитать IN и проверить выход
 

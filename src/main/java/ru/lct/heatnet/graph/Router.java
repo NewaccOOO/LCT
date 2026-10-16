@@ -26,8 +26,12 @@ import ru.lct.heatnet.rules.Rules;
  */
 public final class Router {
     private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(Router.class);
-    /** Допустимый поворот 90° с запасом на округление координат выхода до 9 знаков градуса. */
-    public static final double MAX_TURN_DEG = 89.9;
+    /**
+     * Допустимый поворот — до 90° включительно (п. 2.1): ортогональная трасса ({@link #square}) поворачивает ровно на
+     * 90°, запас — на ошибку double. Округление координат выхода до 9 знаков градуса сдвигает угол на тысячные доли
+     * градуса у отрезков от метра.
+     */
+    public static final double MAX_TURN_DEG = 90 + 1e-6;
     private static final double MIN_TURN_DEG = 3;
     private static final double MIN_PIECE_M = 1;
     /** Излом после сдвига вершины с запасом к 3°: соседние вершины при сдвиге тоже меняют излом. */
@@ -1853,5 +1857,483 @@ public final class Router {
             }
         }
         return false;
+    }
+
+    /** Отрезок ломаной уже идёт по оси, см. {@link #square}: отклонение от axis или axis + 90° меньше этого. */
+    private static final double SQUARE_TOL_RAD = Math.toRadians(0.5);
+    /**
+     * Поворот между оставленным прежним отрезком и участком по осям, см. {@link #square}: мельче этого — лишняя вершина
+     * (мелкий излом, как SMALL_BEND_DEG у TreeBuilder).
+     */
+    private static final double SQUARE_KEPT_DEG = 30;
+    /** Финальный участок задаёт ось ребра к выходу из здания, если отходит от неё меньше этого, см. {@link #squarePath}. */
+    private static final double SQUARE_EXIT_DEG = 15;
+    /** Прямые сетки ближе этого друг к другу сливаются, см. {@link #squarePath}: звено не короче CUT_PIECE_M. */
+    private static final double SQUARE_MERGE_M = 1.5;
+    /**
+     * Звено из конца участка не идёт вдоль объекта врезки: луч от SQUARE_LEAVE_M до SQUARE_PROBE_M по звену дальше
+     * SQUARE_LEAVE_TOL_M от него — так звено уходит от трубы под углом от ~20°. ObstacleSet#alongIgnored короткие
+     * звенья сетки не ловит, а плановые отступы к объекту врезки не проверяются.
+     */
+    private static final double SQUARE_LEAVE_M = 1.5;
+    private static final double SQUARE_PROBE_M = 4;
+    private static final double SQUARE_LEAVE_TOL_M = 0.5;
+    /** Звено сетки из конца участка не идёт по соседнему ребру из той же точки: угол между ними от этого. */
+    private static final double SQUARE_FAN_RAD = Math.toRadians(10);
+    /** Запас сетки за крайними вершинами участка: обход стены на шаг в сторону. */
+    private static final double SQUARE_MARGIN_M = 3;
+
+    /**
+     * Ортогональная форма (замечание экспертов 16.10.2026: трасса прямыми вдоль застройки, один поворот 90° вместо
+     * двух по 45°, без зигзагов; п. 2.1 приложения): обычные участки ломаной между неподвижными вершинами — концами,
+     * keep и вершинами у специальных частей ({@link #held}) — перекладываются по прямым вдоль axis и axis + 90°
+     * ({@link #squarePath}). Новый участок берётся, если он не длиннее ratio старого, вершин у ломаной не больше чем на
+     * одну больше, чем было (прямую заменяет один поворот 90°, а не ступенька), а ломаная проходит те же
+     * проверки, что после {@link #sharpen}: зоны и отступы, CUT_APART_M до apart и своих отрезков, повороты до
+     * MAX_TURN_DEG, в том числе к before и after, без изломов меньше MIN_TURN_DEG. true — coords заменены.
+     */
+    public boolean square(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
+            List<LineSegment> apart, Coordinate before, List<Coordinate> after, double axis, double ratio, double turnM) {
+        int n = coords.size();
+        List<SpecialSpan> spans = zones.spans(factory.createLineString(coords.toArray(new Coordinate[0])), ignored);
+        double[] at = new double[n];
+        for (int v = 1; v < n; v++) {
+            at[v] = at[v - 1] + coords.get(v - 1).distance(coords.get(v));
+        }
+        boolean[] held = held(coords, keep, spans);
+        List<Integer> anchors = new ArrayList<>();
+        anchors.add(0);
+        for (int v = 1; v + 1 < n; v++) {
+            if (held[v]) {
+                anchors.add(v);
+            }
+        }
+        anchors.add(n - 1);
+        boolean changed = false;
+        // с конца: замена участка не сдвигает вершины и длины до него
+        for (int k = anchors.size() - 2; k >= 0; k--) {
+            int i0 = anchors.get(k);
+            int j0 = anchors.get(k + 1);
+            if (overlapsSpan(spans, at[i0] + SPAN_EPS_M, at[j0] - SPAN_EPS_M)) {
+                continue;
+            }
+            // весь участок, затем без первого или последнего прежнего отрезка: у врезки на изломе существующей сети
+            // и у камеры прямая по оси упирается в отступ, а прежний отрезок там годится
+            int[][] tries = {{i0, j0}, {i0 + 1, j0}, {i0, j0 - 1}, {i0 + 1, j0 - 1}};
+            for (int[] range : tries) {
+                int i = range[0];
+                int j = range[1];
+                if (i >= j || squared(coords, i, j, axis)) {
+                    continue;
+                }
+                List<Coordinate> path = squarePath(zones, coords, i, j, ignored, apart, before, after, axis, turnM,
+                        keep != null && coords.get(j) == keep && j + 1 < coords.size());
+                if (path == null) {
+                    debug(coords, i, j, "нет пути по сетке");
+                    continue;
+                }
+                double length = 0;
+                for (int v = 1; v < path.size(); v++) {
+                    length += path.get(v - 1).distance(path.get(v));
+                }
+                if (length > ratio * (at[j] - at[i])) {
+                    debug(coords, i, j, String.format(java.util.Locale.ROOT, "путь %.1f м длиннее %.1f × %.1f м", length, ratio,
+                            at[j] - at[i]), path);
+                    continue;
+                }
+                List<Coordinate> shape = new ArrayList<>(coords.subList(0, i));
+                shape.addAll(path);
+                shape.addAll(coords.subList(j + 1, coords.size()));
+                int hi = i + path.size() - 1;
+                if (!squareFits(zones, shape, i, hi, ignored, apart, before, after)
+                        || i > i0 && deflectionDeg(shape.get(i - 1), shape.get(i), shape.get(i + 1)) < SQUARE_KEPT_DEG
+                        || j < j0 && deflectionDeg(shape.get(hi - 1), shape.get(hi), shape.get(hi + 1)) < SQUARE_KEPT_DEG
+                        || i > i0 && removable(zones, shape, i, ignored, apart, before, after)
+                        || j < j0 && removable(zones, shape, hi, ignored, apart, before, after)) {
+                    debug(coords, i, j, "форма не прошла проверки (отступы, соседние рёбра, повороты)", path);
+                    continue;
+                }
+                // концы участка, через которые ломаная идёт прямо: отрезки по обе стороны уже проверены по отдельности
+                for (int v : new int[] {hi, i}) {
+                    if (v > 0 && v + 1 < shape.size()
+                            && deflectionDeg(shape.get(v - 1), shape.get(v), shape.get(v + 1)) < Math.toDegrees(SQUARE_TOL_RAD)) {
+                        shape.remove(v);
+                    }
+                }
+                // прямую заменяет один поворот 90°, а не ступенька: вершин ребра не больше чем на одну больше прежнего
+                // (считается после слияния: последнее звено по оси часто продолжает финальный участок, и выход уходит)
+                if (shape.size() > coords.size() + 1) {
+                    debug(coords, i, j, String.format(java.util.Locale.ROOT, "вершин %d против %d", shape.size() - 2,
+                            coords.size() - 2), path);
+                    continue;
+                }
+                coords.clear();
+                coords.addAll(shape);
+                changed = true;
+                break;
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * Отрезок k ломаной coords годится как новый ({@link #pieceFits}), а повороты на его концах внутри ломаной — от
+     * MIN_TURN_DEG до MAX_TURN_DEG. Так проверяется отрезок у перенесённой камеры (VariantEnumerator#squared).
+     */
+    public boolean pieceFitsAt(ObstacleSet zones, List<Coordinate> coords, int k, Set<String> ignored, List<LineSegment> apart) {
+        int n = coords.size();
+        for (int v = Math.max(1, k); v <= Math.min(n - 2, k + 1); v++) {
+            Coordinate a = coords.get(v - 1);
+            Coordinate b = coords.get(v);
+            Coordinate c = coords.get(v + 1);
+            if (!turnAllowed(a, b, c) || deflectionDeg(a, b, c) < MIN_TURN_DEG) {
+                return false;
+            }
+        }
+        return pieceFits(zones, coords, k, ignored, apart);
+    }
+
+    /**
+     * Вершину v ломаной shape можно убрать: соседей соединяет прямая, годная как у {@link #sharpen} ({@link #removalFits}).
+     * Такую вершину на стыке оставленного прежнего отрезка и участка по осям {@link #square} не создаёт.
+     */
+    public boolean removable(ObstacleSet zones, List<Coordinate> shape, int v, Set<String> ignored, List<LineSegment> apart,
+            Coordinate before, List<Coordinate> after) {
+        if (v <= 0 || v + 1 >= shape.size()) {
+            return false;
+        }
+        List<Coordinate> without = new ArrayList<>(shape);
+        without.remove(v);
+        return removalFits(zones, without, v - 1, ignored, apart, before, after);
+    }
+
+    /** Отладка {@link #square} (свойство heatnet.square.debug): почему участок не лёг по осям. */
+    private static final boolean SQUARE_DEBUG = Boolean.getBoolean("heatnet.square.debug");
+
+    private static void debug(List<Coordinate> coords, int i, int j, String why) {
+        debug(coords, i, j, why, null);
+    }
+
+    private static void debug(List<Coordinate> coords, int i, int j, String why, List<Coordinate> path) {
+        if (SQUARE_DEBUG) {
+            StringBuilder line = new StringBuilder();
+            for (Coordinate c : path == null ? List.<Coordinate>of() : path) {
+                line.append(String.format(java.util.Locale.ROOT, " %.2f %.2f", c.x, c.y));
+            }
+            System.err.printf(java.util.Locale.ROOT, "SQUARE %.1f,%.1f..%.1f,%.1f [%d..%d из %d]: %s |%s%n", coords.get(i).x,
+                    coords.get(i).y, coords.get(j).x, coords.get(j).y, i, j, coords.size(), why, line);
+        }
+    }
+
+    /** Все отрезки coords от i до j идут вдоль axis или axis + 90°. */
+    private static boolean squared(List<Coordinate> coords, int i, int j, double axis) {
+        for (int v = i; v < j; v++) {
+            double off = Math.abs(Math.IEEEremainder(heading(coords.get(v), coords.get(v + 1)) - axis, Math.PI / 2));
+            if (off > SQUARE_TOL_RAD) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Кратчайшая с штрафом turnM за поворот ломаная от coords[i] до coords[j] по сетке прямых вдоль axis и axis + 90°
+     * через вершины участка (и середины между ними, и с запасом SQUARE_MARGIN_M за крайними), или null. Звено сетки
+     * годится, если оно в зонах, не задевает отступы и объекты специального прохода и держит CUT_APART_M до apart;
+     * поворот в начале к предыдущей вершине (или before) и в конце к следующей (или after) — до MAX_TURN_DEG и не
+     * мелкий излом. exit — coords[j] точка выхода из здания перед финальным участком. Концы — те же объекты
+     * Coordinate, что в coords: keep сравнивается по ссылке.
+     */
+    private List<Coordinate> squarePath(ObstacleSet zones, List<Coordinate> coords, int i, int j, Set<String> ignored,
+            List<LineSegment> apart, Coordinate before, List<Coordinate> after, double axis, double turnM, boolean exit) {
+        Coordinate p = coords.get(i);
+        Coordinate q = coords.get(j);
+        Coordinate in = i > 0 ? coords.get(i - 1) : before;
+        List<Coordinate> outs = j + 1 < coords.size() ? List.of(coords.get(j + 1)) : after;
+        // финальный участок к точке в здании перпендикулярен его стене и задаёт ось ребра, если близок к ней: иначе
+        // у выхода остаётся излом в несколько градусов, и вершина выхода лишняя
+        // соседний отрезок почти по оси задаёт её точно: иначе продолжение прямо через узел — излом меньше MIN_TURN_DEG
+        // первым — отрезок, из которого выходит участок: поворот в камере от него ровно 90°, а не 90,05°, иначе он
+        // круче MAX_TURN_DEG; почти прямой подход к выходу потом убирает вершину выхода
+        List<Double> near = new ArrayList<>();
+        List<Double> limit = new ArrayList<>();
+        if (in != null) {
+            near.add(heading(in, p));
+            limit.add(Math.toRadians(MIN_TURN_DEG));
+        }
+        outs.forEach(out -> {
+            near.add(heading(q, out));
+            limit.add(Math.toRadians(MIN_TURN_DEG));
+        });
+        if (exit) {
+            near.add(heading(q, outs.get(0)));
+            limit.add(Math.toRadians(SQUARE_EXIT_DEG));
+        }
+        for (int k = 0; k < near.size(); k++) {
+            double off = Math.IEEEremainder(near.get(k) - axis, Math.PI / 2);
+            if (Math.abs(off) < limit.get(k)) {
+                axis += off;
+                break;
+            }
+        }
+        double c = Math.cos(axis);
+        double s = Math.sin(axis);
+        double[] us = new double[j - i + 1];
+        double[] vs = new double[j - i + 1];
+        Envelope box = new Envelope();
+        for (int v = i; v <= j; v++) {
+            us[v - i] = coords.get(v).x * c + coords.get(v).y * s;
+            vs[v - i] = -coords.get(v).x * s + coords.get(v).y * c;
+            box.expandToInclude(coords.get(v));
+        }
+        // углы зон у участка (узлы графа): по прямым через них трасса обходит стену вплотную к отступу
+        box.expandBy(SQUARE_MARGIN_M);
+        List<double[]> corners = new ArrayList<>();
+        for (int k = 0; k < nodes.size(); k++) {
+            if (box.contains(nodeXY[2 * k], nodeXY[2 * k + 1])) {
+                corners.add(new double[] {nodeXY[2 * k] * c + nodeXY[2 * k + 1] * s, -nodeXY[2 * k] * s + nodeXY[2 * k + 1] * c});
+            }
+        }
+        double[] u = lines(us, corners, 0);
+        double[] w = lines(vs, corners, 1);
+        int nu = u.length;
+        int nw = w.length;
+        int start = Arrays.binarySearch(u, us[0]) * nw + Arrays.binarySearch(w, vs[0]);
+        int end = Arrays.binarySearch(u, us[j - i]) * nw + Arrays.binarySearch(w, vs[j - i]);
+        if (start == end) {
+            return null;
+        }
+        Coordinate[] node = new Coordinate[nu * nw];
+        for (int a = 0; a < nu; a++) {
+            for (int b = 0; b < nw; b++) {
+                node[a * nw + b] = new Coordinate(u[a] * c - w[b] * s, u[a] * s + w[b] * c);
+            }
+        }
+        node[start] = p;
+        node[end] = q;
+        // отрезки с общим концом участка проверяются на ломаной целиком ({@link #squareFits}): короткое звено сетки
+        // у камеры подходит к соседнему ребру ближе CUT_APART_M там, где длинный отрезок по той же прямой годится
+        List<LineSegment> far = new ArrayList<>();
+        List<Coordinate[]> fan = new ArrayList<>();
+        for (LineSegment other : apart) {
+            for (Coordinate tip : new Coordinate[] {p, q}) {
+                if (other.p0.equals2D(tip) || other.p1.equals2D(tip)) {
+                    fan.add(new Coordinate[] {tip, other.p0.equals2D(tip) ? other.p1 : other.p0});
+                }
+            }
+            if (!other.p0.equals2D(p) && !other.p1.equals2D(p) && !other.p0.equals2D(q) && !other.p1.equals2D(q)) {
+                far.add(other);
+            }
+        }
+        // состояние — узел и направление прихода: 0 +u, 1 +v, 2 -u, 3 -v
+        int states = 4 * nu * nw;
+        double[] cost = new double[states];
+        int[] pred = new int[states];
+        Arrays.fill(cost, Double.POSITIVE_INFINITY);
+        Arrays.fill(pred, -1);
+        Map<Long, Boolean> link = new HashMap<>();
+        java.util.PriorityQueue<double[]> queue = new java.util.PriorityQueue<>(Comparator.comparingDouble(e -> e[0]));
+        int[] du = {1, 0, -1, 0};
+        int[] dw = {0, 1, 0, -1};
+        for (int d = 0; d < 4; d++) {
+            int next = step(start, d, nu, nw, du, dw);
+            if (next >= 0 && (in == null || turnAllowed(in, p, node[next]) && !micro(in, p, node[next]))
+                    && open(zones, node[start], node[next], start, d, ignored, far, fan, p, q, link)) {
+                int state = 4 * next + d;
+                cost[state] = node[start].distance(node[next]);
+                pred[state] = -1 - start;
+                queue.add(new double[] {cost[state], state});
+            }
+        }
+        int best = -1;
+        while (!queue.isEmpty()) {
+            double[] top = queue.poll();
+            int state = (int) top[1];
+            if (top[0] > cost[state]) {
+                continue;
+            }
+            int at = state / 4;
+            int d = state % 4;
+            if (at == end) {
+                Coordinate from = node[pred[state] < 0 ? -1 - pred[state] : pred[state] / 4];
+                boolean fits = true;
+                for (Coordinate out : outs) {
+                    // почти прямо через выход — вершина выхода потом уходит ({@link #square})
+                    fits &= turnAllowed(from, q, out) && (!micro(from, q, out)
+                            || exit && deflectionDeg(from, q, out) < Math.toDegrees(SQUARE_TOL_RAD));
+                }
+                if (fits) {
+                    best = state;
+                    break;
+                }
+                continue;
+            }
+            for (int e = 0; e < 4; e++) {
+                int next = e == (d + 2) % 4 ? -1 : step(at, e, nu, nw, du, dw);
+                if (next < 0 || !open(zones, node[at], node[next], at, e, ignored, far, fan, p, q, link)) {
+                    continue;
+                }
+                double fresh = cost[state] + node[at].distance(node[next]) + (e == d ? 0 : turnM);
+                int to = 4 * next + e;
+                if (fresh < cost[to]) {
+                    cost[to] = fresh;
+                    pred[to] = state;
+                    queue.add(new double[] {fresh, to});
+                }
+            }
+        }
+        String dumpAt = System.getProperty("heatnet.square.dump");
+        if (dumpAt != null) {
+            String[] xy = dumpAt.split(",");
+            if (p.distance(new Coordinate(Double.parseDouble(xy[0]), Double.parseDouble(xy[1]))) < 0.5) {
+                for (int a = 0; a < nu * nw; a++) {
+                    for (int d = 0; d < 4; d++) {
+                        Boolean ok = link.get(4L * a + d);
+                        int nx = step(a, d, nu, nw, du, dw);
+                        if (ok != null && nx >= 0) {
+                            System.err.printf(java.util.Locale.ROOT, "DUMP %.2f %.2f %.2f %.2f %b%n", node[a].x, node[a].y,
+                                    node[nx].x, node[nx].y, ok);
+                        }
+                    }
+                }
+                System.err.printf(java.util.Locale.ROOT, "DUMPPQ %.2f %.2f %.2f %.2f best=%d%n", p.x, p.y, q.x, q.y, best);
+            }
+        }
+        if (best < 0) {
+            if (SQUARE_DEBUG) {
+                int open = 0;
+                for (int k = 0; k < states; k++) {
+                    open += cost[k] < Double.POSITIVE_INFINITY ? 1 : 0;
+                }
+                System.err.printf(java.util.Locale.ROOT, "SQUARE   сетка %dx%d, достижимых состояний %d, ось %.1f°%n", nu, nw, open,
+                        Math.toDegrees(axis));
+            }
+            return null;
+        }
+        // путь от конца к началу, вершины только в поворотах
+        List<Coordinate> path = new ArrayList<>();
+        path.add(q);
+        for (int state = best; ; ) {
+            int prev = pred[state];
+            if (prev < 0) {
+                path.add(p);
+                break;
+            }
+            if (prev % 4 != state % 4) {
+                path.add(node[prev / 4]);
+            }
+            state = prev;
+        }
+        java.util.Collections.reverse(path);
+        return path;
+    }
+
+    /**
+     * Сетка по значениям координаты: сами значения, углы зон (координата axis из corners), середины между ними и
+     * запас по краям; прямые ближе SQUARE_MERGE_M — одна.
+     */
+    private static double[] lines(double[] values, List<double[]> corners, int axis) {
+        java.util.TreeSet<Double> raw = new java.util.TreeSet<>();
+        for (double value : values) {
+            raw.add(value);
+        }
+        corners.forEach(corner -> raw.add(corner[axis]));
+        Double[] sorted = raw.toArray(new Double[0]);
+        for (int k = 0; k + 1 < sorted.length; k++) {
+            raw.add((sorted[k] + sorted[k + 1]) / 2);
+        }
+        raw.add(sorted[0] - SQUARE_MARGIN_M);
+        raw.add(sorted[sorted.length - 1] + SQUARE_MARGIN_M);
+        // значения концов и вершин остаются точными: binarySearch находит концы участка
+        List<Double> kept = new ArrayList<>();
+        for (double value : values) {
+            kept.add(value);
+        }
+        for (double value : raw) {
+            if (kept.stream().noneMatch(other -> Math.abs(other - value) < SQUARE_MERGE_M)) {
+                kept.add(value);
+            }
+        }
+        return kept.stream().mapToDouble(Double::doubleValue).distinct().sorted().toArray();
+    }
+
+    /** Соседний узел сетки от at в направлении d или -1 за краем. */
+    private static int step(int at, int d, int nu, int nw, int[] du, int[] dw) {
+        int a = at / nw + du[d];
+        int b = at % nw + dw[d];
+        return a < 0 || a >= nu || b < 0 || b >= nw ? -1 : a * nw + b;
+    }
+
+    /**
+     * Звено сетки от a к b годится, см. {@link #squarePath}; fan — соседние рёбра из концов участка (точка и дальний
+     * конец отрезка), вдоль которых звено не идёт. Ответы по узлу и направлению в link.
+     */
+    private boolean open(ObstacleSet zones, Coordinate a, Coordinate b, int at, int d, Set<String> ignored,
+            List<LineSegment> apart, List<Coordinate[]> fan, Coordinate p, Coordinate q, Map<Long, Boolean> link) {
+        long key = 4L * at + d;
+        Boolean known = link.get(key);
+        if (known == null) {
+            known = zones.covers(a, b) && zones.plain(a, b, ignored, CUT_MARGIN_M) && apart(new LineSegment(a, b), apart);
+            for (Coordinate from : new Coordinate[] {p, q}) {
+                Coordinate to = from.equals2D(a) ? b : from.equals2D(b) ? a : null;
+                if (known && to != null && !ignored.isEmpty()) {
+                    double length = from.distance(to);
+                    LineSegment ray = new LineSegment(from, to);
+                    known = !zones.nearIgnored(ray.pointAlong(SQUARE_LEAVE_M / length), ray.pointAlong(SQUARE_PROBE_M / length),
+                            ignored, SQUARE_LEAVE_TOL_M);
+                }
+            }
+            for (Coordinate[] other : fan) {
+                Coordinate from = other[0].equals2D(a) ? a : other[0].equals2D(b) ? b : null;
+                Coordinate to = from == a ? b : a;
+                known &= from == null || Math.abs(Angle.diff(heading(from, to), heading(from, other[1]))) >= SQUARE_FAN_RAD;
+            }
+            link.put(key, known);
+        }
+        return known;
+    }
+
+    /**
+     * Ломаная shape с новыми вершинами lo..hi годится: отрезки lo..hi-1 — как новый отрезок {@link #pieceFits},
+     * повороты в вершинах lo..hi и к before и after до MAX_TURN_DEG, изломов меньше MIN_TURN_DEG нет, а отрезки от
+     * CUT_PIECE_M.
+     */
+    private boolean squareFits(ObstacleSet zones, List<Coordinate> shape, int lo, int hi, Set<String> ignored,
+            List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
+        int n = shape.size();
+        for (int v = Math.max(1, lo); v <= Math.min(n - 2, hi); v++) {
+            Coordinate a = shape.get(v - 1);
+            Coordinate b = shape.get(v);
+            Coordinate c = shape.get(v + 1);
+            double turn = deflectionDeg(a, b, c);
+            // на конце участка прямая может продолжить соседний отрезок: вершину потом убирает square
+            boolean through = (v == lo || v == hi) && turn < Math.toDegrees(SQUARE_TOL_RAD);
+            if (!turnAllowed(a, b, c) || turn < MIN_TURN_DEG && !through) {
+                return false;
+            }
+        }
+        if (lo == 0 && before != null && (!startFits(shape, 0, before) || micro(before, shape.get(0), shape.get(1)))
+                || hi == n - 1 && (!endFits(shape, n - 2, after)
+                || after.stream().anyMatch(x -> micro(shape.get(n - 2), shape.get(n - 1), x)))) {
+            return false;
+        }
+        // ступенька: два поворота в разные стороны через звено короче SHORT_LINK_M (п. 2.1: без ступенчатых фрагментов)
+        for (int v = Math.max(1, lo); v + 1 <= Math.min(n - 2, hi + 1); v++) {
+            if (v + 1 > n - 2 || v - 1 < 0) {
+                continue;
+            }
+            double first = turnDeg(shape.get(v - 1), shape.get(v), shape.get(v), shape.get(v + 1));
+            double second = turnDeg(shape.get(v), shape.get(v + 1), shape.get(v + 1), shape.get(v + 2));
+            if (first * second < 0 && Math.abs(first) >= MIN_TURN_DEG && Math.abs(second) >= MIN_TURN_DEG
+                    && shape.get(v).distance(shape.get(v + 1)) < SHORT_LINK_M) {
+                return false;
+            }
+        }
+        for (int k = lo; k < hi; k++) {
+            if (!pieceFits(zones, shape, k, ignored, apart)) {
+                return false;
+            }
+        }
+        return true;
     }
 }

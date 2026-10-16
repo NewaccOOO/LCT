@@ -1522,6 +1522,19 @@ public final class ObstacleSet {
      * у врезки ложится на трубу врезки или пересекает её, а проверка отступов их для него пропускает (как
      * leavesNetwork в TreeBuilder).
      */
+    /** Отрезок a–b ближе tol к объекту из ignored (объекту врезки), см. Router#square. */
+    public boolean nearIgnored(Coordinate a, Coordinate b, Set<String> ignored, double tol) {
+        Envelope envelope = new Envelope(a, b);
+        envelope.expandBy(tol);
+        for (Object item : specials.query(envelope)) {
+            Special special = (Special) item;
+            if (ignored.contains(special.id) && special.near(a, b, tol)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public boolean alongIgnored(Coordinate a, Coordinate b, Set<String> ignored) {
         double length = a.distance(b);
         if (ignored.isEmpty() || length <= ALONG_SKIP_M) {

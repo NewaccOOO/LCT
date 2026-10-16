@@ -15,4 +15,11 @@ public class PipelineImpl implements Pipeline {
     public Result run(InputData input) {
         return new VariantEnumerator(input, RULES).run();
     }
+
+    @Override
+    public Result run(InputData input, boolean depth) {
+        VariantEnumerator enumerator = new VariantEnumerator(input, RULES);
+        Result flat = enumerator.run();
+        return depth ? enumerator.depth(flat) : flat;
+    }
 }
