@@ -104,6 +104,11 @@ make run IN=data/samples/small-1.geojson OUT=data/out/small-1.geojson
 
 Swagger UI: `http://localhost:8080/swagger-ui/index.html`. Все команды `make` — в `make help`.
 
+**Платформа инженера в 3D** — [platform/README.md](platform/README.md): после `make up` открывается на
+`http://localhost:8080/` (расчёт и история прямо из интерфейса), без сервиса — `make platform` и
+`http://localhost:8091/` с демо-наборами. Трубы под землёй объёмом, полёт WASD, куб видов, продольный профиль,
+пролёт камерой вдоль трассы, проблемы по высоте и сравнение вариантов.
+
 ## ⚙️ Как считает
 
 ```mermaid

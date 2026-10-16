@@ -210,7 +210,17 @@ export class Viewer {
     for (const m of this.lineMats) m.resolution.set(w, h);
     this.dirty = true;
   }
+  // Уровень детализации по высоте камеры: над районом существующие сети гаснут, новая становится толще
+  lod() {
+    const h = Math.abs(this.camera.position.z), k = Math.min(1, Math.max(0, (h - 300) / 2500));
+    if (this._lodK != null && Math.abs(this._lodK - k) < 0.02) return;
+    this._lodK = k;
+    for (const l of this.g.utilLines.children) l.material.opacity = 0.55 - 0.35 * k;
+    const net = this.g.netLines.getObjectByName('netLine');
+    if (net) net.material.linewidth = 3.4 + 1.8 * k;
+  }
   render() {
+    this.lod();
     if (this.groundMat) this.groundMat.uniforms.uCam.value.copy(this.camera.position);
     this.renderer.render(this.scene, this.camera);
     this.labels.render(this.scene, this.camera);
@@ -334,8 +344,10 @@ export class Viewer {
       const mesh = tubeMesh(pieces, {radial: 8, material: this.material('standard', {color: 0xffffff, roughness: 0.55, metalness: 0.15})});
       mesh.name = 'util:' + type; mesh.userData.key = 'u:' + type;
       this.g.utilities.add(mesh);
-      const ln = fatLines(seg, {width: 1.4, color: u.color, opacity: 0.85});
+      // существующие сети — фон: тоньше и тусклее новой, чтобы обзор района не превращался в паутину
+      const ln = fatLines(seg, {width: 1.1, color: u.color, opacity: 0.5});
       ln.name = 'utilLine:' + type; ln.userData.key = 'u:' + type;
+      this._lodK = null;
       this.g.utilLines.add(this.trackLines(ln));
     }
     // существующие камеры: колодец от крышки до камеры у трубы
@@ -430,10 +442,11 @@ export class Viewer {
     const jm = sphereMesh(joints, mat, 12);
     jm.renderOrder = 15;
     this.g.network.add(jm);
-    const ln = fatLines(seg, {width: 2.8, colors, opacity: 0.999});
+    const ln = fatLines(seg, {width: 3.4, colors, opacity: 0.999});
     ln.renderOrder = 16;
     ln.name = 'netLine';
     this.g.netLines.add(this.trackLines(ln));
+    this._lodK = null;
     // проекция трассы на землю — видно сверху сквозь непрозрачную землю (отвес «где копать»)
     const tr = fatLines(trace, {width: 1.2, color: '#67e8f9', opacity: 0.55, dashed: true});
     tr.name = 'trace';
@@ -569,7 +582,7 @@ export class Viewer {
     const on = k => L[k] !== false;
     const gop = o.xray ? Math.min(o.groundOpacity, 0.15) : o.groundOpacity;
     if (this.groundMat) { this.groundMat.uniforms.uOpacity.value = gop; this.ground.visible = on('ground'); }
-    for (const m of this.g.surface.children) { m.visible = on('p:' + m.userData.key); if (m.material.opacity !== undefined && m.material.transparent) m.material.opacity = Math.max(0.12, gop * 0.95); }
+    for (const m of this.g.surface.children) { m.visible = on('p:' + m.userData.key); if (m.material.opacity !== undefined && m.material.transparent) m.material.opacity = Math.max(0.1, gop * 0.75); }
     const solid = this.g.buildings.getObjectByName('buildings'), flat = this.g.buildings.getObjectByName('buildingsFlat');
     if (solid) {
       solid.visible = on('buildings') && o.buildings === 'solid';

@@ -75,6 +75,7 @@ async function load({input, output, outText = null, ds}) {
     renderVariants();
     setVariant(model.variants[0]?.id, {quiet: true});
     renderLayers();
+    renderLegend();
     // адрес с видом и выбором применяем только при первом открытии; новый набор — с исходного вида
     const fromLink = !S.opened && applyHash();
     S.opened = true;
@@ -130,6 +131,7 @@ function setVariant(id, {quiet = false} = {}) {
   clearSel();
   viewer.setVariant(v);
   if (S.ghost === id) { S.ghost = null; viewer.setGhost(null); }
+  if (booted && S.model) renderLegend();
   renderSummary(); renderOks(); renderCx();
   if (keep && keep.kind === 'oks') select(keep, {fly: false});
   if (!quiet && v) toast(`Вариант ${esc(v.id)}: S ${fmt(v.score, 2)}`, 'info', 1800);
@@ -180,7 +182,7 @@ function renderSummary() {
     if (tr) return setVariant(tr.dataset.v);
     const gb = e.target.closest('button[data-ghost]');
     if (gb) { S.ghost = S.ghost === gb.dataset.ghost ? null : gb.dataset.ghost; viewer.setGhost(S.model.variants.find(x => x.id === S.ghost) || null);
-      if (S.ghost) toast(`Вариант ${esc(S.ghost)} показан розовым пунктиром поверх текущего`, 'info', 2500); renderSummary(); return; }
+      if (S.ghost) toast(`Вариант ${esc(S.ghost)} показан розовым пунктиром поверх текущего`, 'info', 2500); renderSummary(); renderLegend(); return; }
     const b = e.target.closest('button[data-go]');
     if (!b) return;
     if (b.dataset.go === 'help') $('#helpDlg').showModal();
@@ -301,9 +303,31 @@ function renderLayers() {
   $('#ex').onchange = e => setEx(+e.target.value);
   $('#gop').oninput = e => { o.groundOpacity = e.target.value / 100; $('#gopV').textContent = e.target.value + '%'; viewer.applyOpts(); store.set('gop', o.groundOpacity); };
   $('#bld').onclick = e => { const b = e.target.closest('button'); if (!b) return; o.buildings = b.dataset.b; mark(); viewer.applyOpts(); store.set('bld', o.buildings); };
-  $('#cby').onclick = e => { const b = e.target.closest('button'); if (!b) return; o.colorBy = b.dataset.c; mark(); viewer.buildNetwork(); refreshHighlight(); };
+  $('#cby').onclick = e => { const b = e.target.closest('button'); if (!b) return; o.colorBy = b.dataset.c; mark(); viewer.buildNetwork(); refreshHighlight(); renderLegend(); };
   el.onchange = e => { const k = e.target.dataset?.k; if (!k) return; L[k] = e.target.checked; viewer.applyOpts(); store.set('layers', L); };
 }
+// Условные обозначения на сцене — как на чертеже и в ГИС; состав зависит от набора и режима цвета
+function renderLegend() {
+  const M = S.model, o = viewer.opts;
+  if (!M) return;
+  const sw = (c, dash) => `<i class="sw" style="${dash ? `background:none;border-top:2px dashed ${c};height:0` : `background:${c}`}"></i>`;
+  const dot = c => `<i class="dot" style="background:${c};margin-left:5px"></i>`;
+  const grad = [50, 150, 400, 1400].map(d => '#' + dnColor(d).getHexString()).join(',');
+  const rows = ['<div class="h">Новая сеть</div>'];
+  if (o.colorBy === 'status') rows.push(sw(PALETTE.ok) + '<span>труба без проблем</span>', sw(PALETTE.problem) + '<span>труба с проблемой по высоте</span>');
+  else if (o.colorBy === 'depth') rows.push('<i class="sw" style="background:linear-gradient(90deg,#22d3ee,#facc15,#f97316)"></i><span>глубина верха: мельче → глубже</span>');
+  else rows.push(`<i class="sw" style="background:linear-gradient(90deg,${grad})"></i><span>труба, цвет по Ду (50 → 1400)</span>`, sw(PALETTE.special) + '<span>спецпереход (футляр)</span>');
+  rows.push(sw(PALETTE.selection) + '<span>выбранная трасса</span>', sw('#67e8f9', true) + '<span>трасса на поверхности (где копать)</span>');
+  if (S.ghost) rows.push(sw('#f472b6', true) + `<span>вариант ${esc(S.ghost)} для сравнения</span>`);
+  rows.push(dot(PALETTE.chamberNew) + '<span>новая камера (колодец)</span>');
+  if (M.oks.length) rows.push(dot(PALETTE.connected) + '<span>здание подключено</span>', dot(PALETTE.unconnected) + '<span>здание не подключено</span>');
+  rows.push('<div class="h">Существующее под землёй</div>');
+  for (const k of Object.keys(M.utilities)) rows.push(sw(UTILITIES[k].color) + `<span>${UTILITIES[k].name.toLowerCase()}, верх ${fmt(UTILITIES[k].top, 1)} м${UTILITIES[k].assumed ? ' (условно)' : ''}</span>`);
+  if (M.points.heat_chamber?.length) rows.push(dot(PALETTE.chamberOld) + '<span>существующая камера</span>');
+  $('#legBody').innerHTML = rows.join('');
+}
+$('#legBtn').onclick = () => { const b = $('#legBody'); b.hidden = !b.hidden; $('#legBtn').setAttribute('aria-expanded', String(!b.hidden)); $('#legBtn .caret').textContent = b.hidden ? '▸' : '▾'; store.set('legend', !b.hidden); };
+
 function setEx(ex) {
   const P = rig.center(), oldEx = viewer.ex;
   viewer.setExaggeration(ex);
@@ -617,8 +641,8 @@ function homeBox() {
   const M = S.model;
   if (S.v && S.v.segs.length) {
     const b = [Infinity, Infinity, -Infinity, -Infinity];
+    // новая сеть — главное на экране: кадр по ней, а не по всем зданиям района
     for (const s of S.v.segs) for (const p of s.pts) { b[0] = Math.min(b[0], p[0]); b[1] = Math.min(b[1], p[1]); b[2] = Math.max(b[2], p[0]); b[3] = Math.max(b[3], p[1]); }
-    for (const o of M.oks) { b[0] = Math.min(b[0], o.xy[0]); b[1] = Math.min(b[1], o.xy[1]); b[2] = Math.max(b[2], o.xy[0]); b[3] = Math.max(b[3], o.xy[1]); }
     return [b[0], b[1], -10, b[2], b[3], 20];
   }
   const [x0, y0, x1, y1] = M.bbox;
@@ -1032,6 +1056,7 @@ async function start() {
       '<span class="k">Повернуть двумя</span><span>вращать</span><span class="k">Два пальца вверх-вниз</span><span>наклонить</span><span class="k">Двойное касание</span><span>приблизить сюда</span>';
   }
   if (!store.get('coach', 0)) $('#coach').hidden = false;
+  if (store.get('legend', false)) $('#legBtn').click();
   await detectServer();
   try { demos = await (await fetch('demo/index.json')).json(); } catch (e) { demos = []; }
   const q = new URLSearchParams(location.search);
