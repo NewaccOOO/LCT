@@ -167,7 +167,7 @@ export class Profile {
     clip();
     const dash = (d, c, t) => { g.setLineDash([6, 5]); g.strokeStyle = c; g.beginPath(); g.moveTo(pl, Y(d)); g.lineTo(pl + W, Y(d)); g.stroke(); g.setLineDash([]); g.fillStyle = c; g.fillText(t, pl + W - g.measureText(t).width - 4, Y(d) - 4); };
     dash(NORMAL_DEPTH, 'rgba(46,230,208,.6)', 'обычная глубина 3 м');
-    dash(MIN_DEPTH, 'rgba(148,163,184,.8)', 'мельче 0,7 м нельзя');
+    dash(MIN_DEPTH, 'rgba(148,163,184,.8)', 'минимальная глубина 0,7 м');
     g.fillStyle = '#a16207'; g.fillRect(pl, Y(0) - 3, W, 3);
     g.fillStyle = '#d6a64a'; g.fillText('поверхность', Math.max(pl, X(0)) + 4, Y(0) - 6);
     // спецпереходы — светлым фоном и рамкой футляра
@@ -222,7 +222,8 @@ export class Profile {
       }
       g.fillStyle = color;
       g.beginPath(); g.ellipse(x, (Y(c.top) + Y(c.top + c.eh)) / 2, 5, Math.max(3, (Y(c.top + c.eh) - Y(c.top)) / 2), 0, 0, Math.PI * 2); g.fill();
-      const t = `${UTILITIES[c.type]?.short || c.type}${c.ok === false ? ' ⚠' : ''}`, w = g.measureText(t).width;
+      g.font = `${c.ok === false ? 'bold ' : ''}12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+      const t = UTILITIES[c.type]?.short || c.type, w = g.measureText(t).width;
       const lx = Math.max(pl + 2, Math.min(x - w / 2, pl + W - w - 2));
       let row = rows.findIndex(end => end < lx - 4);
       if (row < 0) { if (rows.length >= 3) continue; row = rows.length; rows.push(0); }
@@ -276,7 +277,7 @@ export class Profile {
     const lines = [`${pk(cur)} · ${fmt(cur)} м от врезки`, `верх трубы ${fmt(p.d, 2)} м · Ду ${p.seg.p.diameter}${p.seg.special ? ' · спецпереход' : ''}`];
     if (n) {
       const u = UTILITIES[n.type].name.toLowerCase();
-      lines.push(n.ok === false ? (n.gap < 0 ? `⚠ ${u}: трубы пересекаются, наложение ${fmt(-n.gap, 2)} м` : `⚠ ${u}: зазор ${fmt(n.gap, 2)} из ${fmt(n.need, 2)} м`) : `${u}: зазор ${fmt(n.gap, 2)} м`, 'щёлкните — показать в 3D');
+      lines.push(n.gap < 0 ? `${u}: трубы перекрываются по высоте на ${fmt(-n.gap, 2)} м` : n.ok === false ? `${u}: зазор ${fmt(n.gap, 2)} м, нужно ${fmt(n.need, 2)} м` : `${u}: зазор ${fmt(n.gap, 2)} м`, 'щёлкните, чтобы показать в 3D');
     }
     const w = Math.max(...lines.map(t => g.measureText(t).width)) + 16, bx = x + 12 + w > r.width ? x - 12 - w : x + 12;
     g.fillStyle = 'rgba(5,10,22,.92)'; g.strokeStyle = line;

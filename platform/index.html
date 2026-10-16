@@ -11,21 +11,21 @@
 </head>
 <body>
 <header class="top">
-  <button class="icon only-m" id="leftBtn" aria-label="Панель слева" title="Панель слева">☰</button>
+  <button class="icon" id="leftBtn" aria-label="Показать или скрыть панель слева" title="Показать или скрыть панель слева"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
   <div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#12203a"/><path d="M5 21h8v-6h7v-5h7" stroke="#22d3ee" stroke-width="3.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Теплосеть&nbsp;3D</span></div>
   <div class="dd" id="fileDd">
     <button id="fileBtn" aria-haspopup="menu" aria-expanded="false">Файл <span class="caret">▾</span></button>
     <div class="menu" role="menu" hidden>
-      <button role="menuitem" data-act="open">📂 Открыть данные…<kbd>Ctrl O</kbd></button>
-      <button role="menuitem" data-act="run" class="srv">⚙️ Новый расчёт на сервере…</button>
-      <button role="menuitem" data-act="jobs" class="srv">🕘 История расчётов…</button>
+      <button role="menuitem" data-act="open">Открыть данные…<kbd>Ctrl O</kbd></button>
+      <button role="menuitem" data-act="run" class="srv">Новый расчёт на сервере…</button>
+      <button role="menuitem" data-act="jobs" class="srv">История расчётов…</button>
       <hr>
-      <button role="menuitem" data-act="png">🖼 Снимок экрана (PNG)</button>
-      <button role="menuitem" data-act="geojson">⬇ Скачать результат (GeoJSON)</button>
-      <button role="menuitem" data-act="link">🔗 Скопировать ссылку на вид</button>
+      <button role="menuitem" data-act="png">Сохранить снимок экрана (PNG)</button>
+      <button role="menuitem" data-act="geojson">Скачать результат трассировки (GeoJSON)</button>
+      <button role="menuitem" data-act="link">Скопировать ссылку на этот вид</button>
     </div>
   </div>
-  <button class="dataset" id="dsBtn" title="Набор данных — сменить"><span id="dsName">Загрузка…</span><span class="caret">▾</span></button>
+  <button class="dataset" id="dsBtn" title="Открытый набор данных. Щёлкните, чтобы открыть другой"><span id="dsName">Загрузка…</span><span class="caret">▾</span></button>
   <div class="search" role="search">
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
     <input id="q" type="search" autocomplete="off" placeholder="Найти здание, трубу, камеру или координаты" aria-label="Поиск по объектам">
@@ -39,8 +39,8 @@
 <main>
   <aside id="left" aria-label="Обзор и списки">
     <div class="mact only-m">
-      <button data-act="open">📂 Открыть данные</button><button data-act="ds" id="dsBtnM">Набор ▾</button>
-      <button data-act="link">🔗 Ссылка на вид</button><button data-act="help">? Справка</button>
+      <button data-act="open">Открыть данные</button><button data-act="ds" id="dsBtnM">Набор данных</button>
+      <button data-act="link">Скопировать ссылку</button><button data-act="help">Справка</button>
     </div>
     <nav class="tabs" role="tablist">
       <button role="tab" data-tab="sum" class="on">Обзор</button>
@@ -67,9 +67,9 @@
         <button id="zOut" title="Отдалить (−)" aria-label="Отдалить"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
         <button id="v2d" title="Вид сверху или 3D-наклон (T)" aria-label="2D или 3D"><span class="v2">2D</span><span class="v3">3D</span></button>
         <hr>
-        <button id="modeBtn" title="Мышь: обзор или полёт (V)" aria-label="Режим мыши"><svg id="modeIco" viewBox="0 0 24 24"></svg><small id="modeT">Обзор</small></button>
+        <button id="modeBtn" title="Режим мыши: орбита или полёт (V)" aria-label="Режим мыши"><svg id="modeIco" viewBox="0 0 24 24"></svg><small id="modeT">Орбита</small></button>
         <button id="xrayBtn" title="Рентген: земля и здания прозрачные (X)" aria-label="Рентген"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><small>Рентген</small></button>
-        <button id="clipBtn" title="Срез: показать только то, что вокруг выбранного (B)" aria-label="Срез"><svg viewBox="0 0 24 24"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M12 12v9M12 12l9-4.5M12 12 3 7.5" opacity=".5"/></svg><small>Срез</small></button>
+        <button id="clipBtn" title="Срез: оставить только то, что вокруг выбранного (B)" aria-label="Срез"><svg viewBox="0 0 24 24"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M12 12v9M12 12l9-4.5M12 12 3 7.5" opacity=".5"/></svg><small>Срез</small></button>
         <button id="measureBtn" title="Линейка: измерить расстояние (M)" aria-label="Линейка"><svg viewBox="0 0 24 24"><path d="m3 17 14-14 4 4L7 21z"/><path d="m7 9 2 2m1-5 2 2m1-5 2 2M4 12l2 2"/></svg><small>Линейка</small></button>
       </div>
       </div>
@@ -86,28 +86,28 @@
       <div id="legend" class="floatcard"><button id="legBtn" aria-expanded="false">Условные обозначения <span class="caret">▸</span></button><div id="legBody" hidden></div></div>
       <div id="scale" aria-hidden="true"><div class="bar"></div><span></span></div>
       <div id="camChip" class="camchip" hidden></div>
-      <button id="exChip" class="exchip" title="Вертикаль растянута для наглядности, диаметры настоящие. Щёлкните — переключить ×1 / растянуть"></button>
+      <button id="exChip" class="exchip" title="Глубина растянута, чтобы трубы на 3 м было видно на фоне района. Диаметры не меняются. Щёлкните, чтобы переключить на настоящий масштаб и обратно"></button>
       <div id="measure" class="floatcard" hidden></div>
       <div id="player" class="floatcard" hidden>
-      <button id="plPlay" class="icon" aria-label="Пауза">❚❚</button>
+      <button id="plPlay" class="icon" aria-label="Пауза" title="Пауза (пробел)"></button>
       <input id="plPos" type="range" min="0" max="1000" value="0" aria-label="Положение на трассе">
       <span id="plTxt"></span>
       <select id="plSpeed" aria-label="Скорость"><option value="0.5">0,5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
       <button id="plStop" title="Выйти из пролёта (Esc)">Выйти</button>
-      <div id="plEnd" hidden>Пролёт завершён: <button id="plAgain">↻ Повторить</button><button id="plToEnd">🏢 К зданию</button></div>
+      <div id="plEnd" hidden>Пролёт закончен. <button id="plAgain">Повторить</button><button id="plToEnd">Показать здание</button></div>
       </div>
       <div id="ctx" class="menu ctx" role="menu" hidden></div>
       <div id="tip" role="tooltip" hidden></div>
-      <div id="loading" class="loading"><div class="spin"></div><div id="loadT">Загрузка платформы…</div><div class="bar"><i id="loadBar"></i></div></div>
-      <div id="drop" hidden><div>Отпустите файлы GeoJSON<br><small>вход сервиса и, если есть, результат расчёта</small></div></div>
+      <div id="loading" class="loading"><div class="spin"></div><div id="loadT">Загрузка…</div><div class="bar"><i id="loadBar"></i></div></div>
+      <div id="drop" hidden><div>Отпустите файлы GeoJSON<br><small>исходные данные и, если есть, результат трассировки</small></div></div>
     </div>
     <section id="profile" hidden aria-label="Продольный профиль трассы">
       <div class="grip" id="pGrip" title="Потяните, чтобы изменить высоту"></div>
       <div class="phead">
         <b id="pTitle">Профиль</b>
-        <span class="legend"><i class="sw" style="background:#38bdf8"></i>новая труба <i class="sw" style="background:#f43f5e"></i>с проблемой <i class="sw" style="background:rgba(251,146,60,.5)"></i>спецпереход <i class="sw dash"></i>нужный зазор</span>
+        <span class="legend"><i class="sw" style="background:#2ee6d0"></i>новая труба <i class="sw" style="background:#ff2fd1"></i>место конфликта <i class="sw" style="background:none;border:1px solid #f8fafc;height:8px"></i>футляр спецперехода <i class="sw dash"></i>нужный зазор</span>
         <span class="sp"></span>
-        <button id="pFly" class="primary" title="Пролететь камерой вдоль трассы (P)">▶ Пролёт по трассе</button>
+        <button id="pFly" class="primary" title="Провести камеру вдоль трассы под землёй (P)">Пролёт по трассе</button>
         <button id="pClose" class="icon" title="Закрыть профиль" aria-label="Закрыть профиль">×</button>
       </div>
       <canvas id="pc"></canvas>
@@ -129,26 +129,26 @@
 <dialog id="helpDlg" aria-labelledby="helpH">
   <form method="dialog" class="dlg">
     <h2 id="helpH">Как пользоваться</h2>
-    <p class="mut">Управление собрано из программ, к которым вы привыкли: Яндекс/Google Карт, AutoCAD/Revit и игр.</p>
+    <p class="mut">Управление работает так же, как в Яндекс и Google Картах, AutoCAD и Revit, а также в играх. Все три способа действуют одновременно, выбирать режим не нужно.</p>
     <div class="helpgrid">
       <section><h3>Как в Картах</h3>
         <dl><dt>Левая кнопка, тащить</dt><dd>двигать сцену</dd><dt>Правая кнопка, тащить</dt><dd>вращать и наклонять вокруг точки под курсором</dd>
         <dt>Колесо</dt><dd>приблизить к курсору</dd><dt>Двойной щелчок</dt><dd>приблизить сюда</dd><dt>Правый щелчок</dt><dd>меню: что здесь, измерить, координаты</dd>
-        <dt>Тачпад</dt><dd>два пальца — двигать, щипок — масштаб, ⌥ + два пальца — вращать</dd><dt>Телефон</dt><dd>палец — двигать, щипок — масштаб, повернуть двумя — вращать, два пальца вверх-вниз — наклон</dd></dl></section>
+        <dt>Тачпад</dt><dd>два пальца — двигать, щипок — масштаб, Option (Alt) + два пальца — вращать</dd><dt>Телефон</dt><dd>палец — двигать, щипок — масштаб, повернуть двумя — вращать, два пальца вверх-вниз — наклон</dd></dl></section>
       <section><h3>Как в AutoCAD и Revit</h3>
         <dl><dt>Средняя кнопка</dt><dd>двигать</dd><dt>Shift + средняя / Shift + левая</dt><dd>вращать</dd><dt>Куб видов</dt><dd>грань — вид с этой стороны, ребро или угол — под 45°, тащить — вращать</dd>
-        <dt>Домик, Home или H</dt><dd>исходный вид</dd><dt>Backspace</dt><dd>предыдущий вид, как Zoom Previous</dd><dt>Срез (B)</dt><dd>секущий бокс вокруг выбранного, [ ] — меньше/больше</dd></dl></section>
+        <dt>Домик, Home или H</dt><dd>исходный вид</dd><dt>Стрелка под домиком, Backspace</dt><dd>предыдущий вид, как Zoom Previous</dd><dt>Двойной щелчок средней</dt><dd>показать всё</dd><dt>Срез (B)</dt><dd>секущий бокс вокруг выбранного; [ и ] — меньше и больше</dd></dl></section>
       <section><h3>Как в играх и Unity</h3>
         <dl><dt>W A S D, стрелки</dt><dd>лететь вперёд, назад, вбок</dd><dt>Q / E</dt><dd>вниз / вверх</dd><dt>Shift</dt><dd>быстрее</dd>
-        <dt>Режим «Полёт» (V)</dt><dd>мышь осматривается на месте; правая + колесо — скорость</dd><dt>F</dt><dd>показать выбранное</dd></dl></section>
+        <dt>Режим «Полёт» (V)</dt><dd>мышь поворачивает взгляд на месте; правая кнопка + колесо — скорость; Esc — выйти</dd><dt>F</dt><dd>показать выбранное</dd></dl></section>
       <section><h3>Остальное</h3>
         <dl><dt>/ или Ctrl K</dt><dd>поиск</dd><dt>Щелчок по трубе</dt><dd>трасса до здания и профиль</dd><dt>P</dt><dd>пролёт по выбранной трассе</dd>
-        <dt>X</dt><dd>рентген</dd><dt>M</dt><dd>линейка</dd><dt>T</dt><dd>сверху / 3D</dd><dt>Esc</dt><dd>снять выбор, выйти из режима</dd></dl></section>
+        <dt>X</dt><dd>рентген: земля и здания прозрачные</dd><dt>M</dt><dd>линейка</dd><dt>T</dt><dd>вид сверху или 3D</dd><dt>1–9</dt><dd>вариант решения</dd><dt>Esc</dt><dd>снять выбор, выйти из режима</dd></dl></section>
     </div>
     <h3>С чего начать</h3>
-    <ol class="steps"><li>Вверху выберите вариант — у лучшего ★ и самая низкая оценка S.</li>
-      <li>Слева «Здания» — щёлкните здание: появится трасса, её профиль и кнопка «Пролёт».</li>
-      <li>«Проблемы» — места, где труба слишком близко по высоте к газу, кабелю или теплосети, и как их обойти.</li></ol>
+    <ol class="steps"><li>Вверху выберите вариант решения. У лучшего самый низкий показатель S, он подписан «лучший».</li>
+      <li>Во вкладке «Здания» щёлкните здание: появятся его трасса, продольный профиль и кнопка «Пролёт».</li>
+      <li>Во вкладке «Проблемы» собраны места, где новая труба проходит по высоте слишком близко к газу, кабелю, теплосети или сквозь другую сеть. Для каждого есть подсказка, как обойти.</li></ol>
     <div class="row end"><button class="primary" value="ok">Понятно</button></div>
   </form>
 </dialog>
@@ -157,7 +157,7 @@
   <form method="dialog" class="dlg">
     <h2 id="errH">Файл не распознан</h2>
     <div id="errBody"></div>
-    <p class="mut">Открытый набор остался на месте — ничего не потеряно.</p>
+    <p class="mut">Открытый набор данных остался на месте.</p>
     <div class="row end"><button type="button" id="errOpen">Открыть другой файл</button><button class="primary" value="ok">Понятно</button></div>
   </form>
 </dialog>
@@ -176,9 +176,9 @@
         <ul><li><code>heat_network</code> (линия, <code>diameter</code>), <code>heat_chamber</code> и <code>source</code> (точки) — существующая теплосеть;</li>
           <li><code>oks_connection_point</code> (точка, <code>flow_tph</code>, <code>oks_id</code>) и <code>oks_future</code> / <code>oks_existing</code> (полигоны, <code>levels</code>) — здания;</li>
           <li><code>restriction</code> с <code>restriction_type</code>: <code>gas_pipeline</code>, <code>power_cable</code>, <code>water_supply</code>, <code>sewer</code> (линии), <code>road</code>, <code>tram_tracks</code>, <code>railway</code>, <code>park</code>, <code>water</code>, <code>prohibited_site</code>, <code>oks</code> (полигоны).</li></ul>
-        <p>Это тот же файл, что принимает сервис трассировки, — его готовят из ГИС или выгрузки сетей.</p>
-        <p>Результат — файл, который вернул сервис (<code>variant_summary</code>, участки <code>heat_network</code> с <code>variant_id</code>). Объекты без <code>object_type</code> пропускаются, их число будет в отчёте.
-        Пример входа: <a href="demo/small-1.in.geojson" download="пример-входа.geojson">скачать small-1</a>.</p></details>
+        <p>Это тот же файл, который принимает сервис трассировки. Его обычно готовят из ГИС или выгрузки сетей.</p>
+        <p>Результат трассировки — файл, который вернул сервис (<code>variant_summary</code>, участки <code>heat_network</code> с <code>variant_id</code>). Объекты без <code>object_type</code> пропускаются, их число будет в отчёте.
+        Пример исходных данных: <a href="demo/small-1.in.geojson" download="пример-исходных-данных.geojson">скачать small-1</a>.</p></details>
       <div class="row end"><button type="button" class="primary" id="fGo" disabled>Открыть</button></div>
     </div>
     <div data-op="srv" hidden>
@@ -186,7 +186,7 @@
         <div class="pick"><span class="lbl">Новый расчёт: исходные данные GeoJSON</span><label class="btn" for="jIn">Выбрать файл…</label><span class="fname" id="jInN">не выбран</span><input type="file" id="jIn" accept=".geojson,.json"></div>
         <button type="button" class="primary" id="jGo">Отправить на расчёт</button>
       </div>
-      <label class="tog"><input type="checkbox" id="jDepth" checked> С учётом глубины — сервис подберёт глубину каждого участка и обойдёт коммуникации по высоте (дольше)</label>
+      <label class="tog"><input type="checkbox" id="jDepth" checked> С учётом глубины: сервис подберёт глубину каждого участка и обойдёт сети по высоте. Расчёт идёт дольше</label>
       <div id="jobState" class="mut"></div>
       <h3>История расчётов</h3>
       <div id="jobList" class="list"></div>

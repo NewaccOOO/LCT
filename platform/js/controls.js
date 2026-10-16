@@ -282,7 +282,7 @@ export class CameraRig {
     el.addEventListener('pointercancel', end);
     this._tapXY = [0, 0];
 
-    // Колесо: мышь — масштаб к курсору; тачпад — два пальца двигают, щипок — масштаб, ⌥ + два пальца — вращать
+    // Колесо: мышь — масштаб к курсору; тачпад — два пальца двигают, щипок — масштаб, Option (Alt) + два пальца — вращать
     let wheelP = null, wheelT = 0;
     el.addEventListener('wheel', e => {
       if (!this.enabled) return;

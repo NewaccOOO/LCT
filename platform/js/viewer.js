@@ -618,7 +618,9 @@ export class Viewer {
     this.g.overlay.add(this.trackLines(dl));
     // пересечения по трассе: кольца и подписи
     for (const s of route.segs) for (const c of s.cx) {
-      const lb = this.label(`${UTILITIES[c.type]?.short || c.type}${c.ok === false ? ' ⚠' : ''} <small>${c.gap.toFixed(2).replace('.', ',')} м</small>`,
+      const f2 = v => v.toFixed(2).replace('.', ',');
+      const gap = c.gap < 0 ? `наложение ${f2(-c.gap)} м` : c.ok === false && c.need != null ? `${f2(c.gap)} из ${f2(c.need)} м` : `${f2(c.gap)} м`;
+      const lb = this.label(`${UTILITIES[c.type]?.short || c.type} <small>${gap}</small>`,
         'lbl cx ' + (c.ok === false ? 'bad' : c.ok ? 'ok' : 'mut'));
       lb.position.set(c.x, c.y, -(c.hn + c.H / 2) * ex);
       lb.userData.cx = c;
