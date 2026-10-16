@@ -658,7 +658,7 @@ function describe(sel) {
       if (r.building) rows.push(['Этажей', r.building.p.levels ?? '—']);
       if (v) rows.push(['Подключено', conn ? 'да' : 'нет']);
       if (R) rows.push(['Трасса от врезки', meters(R.len)], ['Участков', R.segs.length], ['Стоимость трассы', rub(R.cost)], ['Ду на вводе', `Ду ${R.segs[R.segs.length - 1].p.diameter}`], ['Врезка', nn(R.start)]);
-      rows.push(['Номер во входе', r.oksId || r.id], ['Точка подключения', r.id]);
+      rows.push(['Номер в исходных данных', r.oksId || r.id], ['Точка подключения', r.id]);
       const flatN = R ? R.segs.filter(s => Math.abs(s.d1 - s.d0) / s.len < 0.002).length : 0;
       return {kind: 'Здание к подключению', title: r.label, rows, info: flatN ? `${flatN} из ${R.segs.length} ${plural(R.segs.length, 'участка', 'участков', 'участков')} с уклоном меньше 0,002. ${SLOPE_NOTE}` : null,
         problem: v && !conn ? `В этом варианте здание не подключено. Причину сервис не сообщает: проверьте запретные зоны и отступы рядом со зданием и предельную длину трассы для нужного Ду. За неподключённое здание начисляется штраф ${rub(500000 * (r.flow || 0) + 1e8)}.${M.variants.length > 1 ? ' Посмотрите, подключено ли оно в других вариантах.' : ''}` : R?.bad ? `На трассе ${R.bad} ${plural(R.bad, 'проблема', 'проблемы', 'проблем')} по высоте. Они отмечены малиновыми метками в 3D и на профиле внизу.` : null,
