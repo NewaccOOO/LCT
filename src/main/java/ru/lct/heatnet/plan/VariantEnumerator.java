@@ -99,6 +99,9 @@ public final class VariantEnumerator {
     private static final double DETOUR_RATIO = 1.1;
     static final double TREES_APART_M = 0.5;
     private static final double SWAP_GAIN = 1e-6;
+    private static final double PAIR_MIN_DEG = 60;
+    private static final double PAIR_MAX_DEG = 120;
+    private static final double PAIR_LINK_M = 30;
     /** Сдвиг врезки к стволу берётся, если ствол короче хотя бы на столько, см. slid. */
     private static final double SLIDE_MIN_M = 1.0;
     static final double SHARED_ROOT_CLIP_M = 0.15;
@@ -973,7 +976,7 @@ public final class VariantEnumerator {
                 .collect(Collectors.toList());
     }
 
-    private List<List<Tree>> recombined(List<List<Tree>> variants, double[] scores,
+    List<List<Tree>> recombined(List<List<Tree>> variants, double[] scores,
             java.util.function.Function<List<Tree>, Variant> assemble) {
         long started = System.nanoTime();
         int best = IntStream.range(0, scores.length).reduce((a, b) -> scores[b] < scores[a] ? b : a).orElse(0);
@@ -1040,7 +1043,8 @@ public final class VariantEnumerator {
                             .collect(Collectors.toList());
                     List<Tree> after = before.stream().filter(tree -> !gone.contains(tree)).collect(Collectors.toList());
                     after.addAll(added);
-                    if (!((before.isEmpty() ? 0 : unitScore(before)) - unitScore(after) + penalties > SWAP_GAIN)) {
+                    if (shape(after)[0] > shape(before)[0] || shape(after)[1] > shape(before)[1]
+                            || !((before.isEmpty() ? 0 : unitScore(before)) - unitScore(after) + penalties > SWAP_GAIN)) {
                         continue;
                     }
                     trees.removeIf(gone::contains);
@@ -1076,6 +1080,33 @@ public final class VariantEnumerator {
         }
         log.info("recombined: elapsed={}ms", (System.nanoTime() - started) / 1_000_000);
         return result;
+    }
+
+    private static int[] shape(List<Tree> trees) {
+        int turns = 0;
+        int count = 0;
+        for (Tree tree : trees) {
+            for (Tree.Edge edge : tree.edges) {
+                Coordinate[] c = edge.line.getCoordinates();
+                double last = 0;
+                Coordinate at = null;
+                for (int i = 1; i + 1 < c.length; i++) {
+                    double turn = Math.toDegrees(org.locationtech.jts.algorithm.Angle.normalize(
+                            Math.atan2(c[i + 1].y - c[i].y, c[i + 1].x - c[i].x) - Math.atan2(c[i].y - c[i - 1].y, c[i].x - c[i - 1].x)));
+                    if (Math.abs(turn) < TreeBuilder.MIN_TURN_DEG) {
+                        continue;
+                    }
+                    turns++;
+                    double sum = Math.abs(turn + last);
+                    if (at != null && turn * last > 0 && sum >= PAIR_MIN_DEG && sum <= PAIR_MAX_DEG && at.distance(c[i]) < PAIR_LINK_M) {
+                        count++;
+                    }
+                    last = turn;
+                    at = c[i];
+                }
+            }
+        }
+        return new int[] {turns, count};
     }
 
     private static List<List<List<Tree>>> parts(List<Tree> own, List<Tree> other) {

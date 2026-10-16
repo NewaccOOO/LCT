@@ -13,12 +13,14 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
+import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.LinearRing;
 import org.locationtech.jts.geom.Polygon;
 import ru.lct.heatnet.calc.CostCalculator;
 import ru.lct.heatnet.model.ConnectionPoint;
 import ru.lct.heatnet.model.ExistingOks;
+import ru.lct.heatnet.model.FutureOks;
 import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.NewSegment;
 import ru.lct.heatnet.model.Result;
@@ -106,12 +108,43 @@ class VariantEnumeratorTest {
 
     @Test
     void bestVariantTakesCheaperTreeOfAnotherVariant() {
-        InputData input = VariantEnumerator.read(Path.of("src/test/resources/synth/medium-3.geojson"), rules);
+        PlanFixture fixture = PlanFixture.trunk().oks("o-1", 100, 60, 5).oks("o-2", 500, 60, 5);
+        InputData input = fixture.input();
+        TieInFinder finder = new TieInFinder(input, rules);
+        Tree near = tree(finder, fixture, "o-1", 0, 0);
+        Tree far = tree(finder, fixture, "o-1", -60, 50);
+        Tree bent = tree(finder, fixture, "o-2", 40, 30);
+        Tree straight = tree(finder, fixture, "o-2", 0, 0);
+        VariantEnumerator enumerator = new VariantEnumerator(input, rules);
+        enumerator.run();
+        NetworkAssembler assembler = new NetworkAssembler(input, rules, new SpecialObjects(input, rules),
+                input.getFutureOks().stream().collect(Collectors.toMap(FutureOks::getId, oks -> oks)));
+        java.util.function.Function<List<Tree>, Variant> assemble = trees -> assembler.assemble("0", 0, trees, List.of());
+        List<List<Tree>> variants = List.of(List.of(near, bent), List.of(far, straight));
+        double[] scores = variants.stream().map(assemble).mapToDouble(v -> rules.score(v.getSummary().getCalculatedCost(),
+                v.getSummary().getNewNetworkLength())).toArray();
 
-        List<Variant> variants = new VariantEnumerator(input, rules).run().getVariants();
+        List<List<Tree>> result = enumerator.recombined(variants, scores, assemble);
 
-        assertEquals(20.3036, variants.get(0).getSummary().getScore(), 1e-6);
-        assertTrue(variants.get(0).getSummary().getUnconnectedOksIds().isEmpty());
+        assertTrue(result.get(0).contains(near) && result.get(0).contains(straight) && result.get(0).size() == 2,
+                "вариант 1: " + result.get(0));
+        assertTrue(result.get(1) == variants.get(1), "вариант 2 не меняется");
+    }
+
+    private static Tree tree(TieInFinder finder, PlanFixture fixture, String oksId, double dx, double dy) {
+        ConnectionPoint connection = fixture.connection(oksId);
+        Coordinate at = connection.getGeometry().getCoordinate();
+        TieCandidate tie = finder.find(List.of(connection.getGeometry()), 100).get(0);
+        Coordinate root = tie.getPoint().getCoordinate();
+        Tree tree = new Tree(tie);
+        List<Coordinate> line = new ArrayList<>(List.of(root));
+        if (dx != 0 || dy != 0) {
+            line.add(new Coordinate(at.x + dx, root.y + dy / 2));
+            line.add(new Coordinate(at.x + dx, at.y - 10));
+        }
+        line.add(at);
+        tree.edges.add(new Tree.Edge(tree.root, Tree.Node.connection(connection), GEOMETRY.createLineString(line.toArray(new Coordinate[0]))));
+        return tree;
     }
 
     @Test
