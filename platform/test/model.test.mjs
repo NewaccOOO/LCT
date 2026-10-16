@@ -40,4 +40,13 @@ test('spb-kupchino: глубины, пересечения и неподключ
   assert.equal(sc.oks.length - v.connected.size, v.summary.unconnected_oks_ids.length);
   assert.ok(v.crossings.length > 0);
   for (const c of v.crossings) if (c.type !== 'segment') assert.ok(Number.isFinite(c.gap));
+  // те же пересечения, что считает scripts/ui3d/prep.py: 68, из них 3 с теплосетью без нужного зазора;
+  // уклон 0,100 из округлённых до мм глубин нарушением не считаем
+  const cx = v.crossings.filter(c => c.type !== 'segment');
+  assert.equal(cx.length, 68);
+  assert.equal(cx.filter(c => c.ok === false && c.type === 'heat_network').length, 3);
+  assert.equal(v.crossings.filter(c => c.type === 'segment').length, 0);
+  // подсказка «как обойти»: опуститься — не мельче верх + габарит + зазор
+  const c = cx.find(c => c.ok === false);
+  assert.ok(Math.abs(c.below - (c.top + c.eh + c.need)) < 1e-9);
 });

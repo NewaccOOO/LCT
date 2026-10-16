@@ -41,6 +41,21 @@ const profile = new Profile($('#pc'), {
   },
 });
 
+// «Предыдущий вид», как Zoom Previous в AutoCAD и «Назад» в браузере: каждый перелёт запоминает, откуда летели
+const viewStack = [];
+{
+  const anim = rig.animateTo.bind(rig);
+  rig.animateTo = (target, ms) => {
+    if (!target.back) { viewStack.push(rig.state); if (viewStack.length > 30) viewStack.shift(); }
+    anim(target, ms);
+  };
+}
+function backView() {
+  const s = viewStack.pop();
+  if (!s) return toast('Предыдущих видов нет', 'info', 1500);
+  rig.animateTo({pos: new THREE.Vector3(...s.pos), yaw: s.yaw * D, pitch: s.pitch * D, back: true}, 600);
+}
+
 function pickAt(x, y) {
   if (!S.model) return null;
   return viewer.pick(x, y, rig.ray(x, y));
@@ -609,6 +624,7 @@ function showCtx(x, y) {
   const coords = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
   menu.innerHTML = `${sel ? `<button data-c="sel">🔎 Что здесь: ${esc(describe(sel).title).slice(0, 40)}</button>` : ''}
     <button data-c="zoom">➕ Приблизить сюда</button>
+    ${viewStack.length ? '<button data-c="back">↩ Предыдущий вид <kbd>⌫</kbd></button>' : ''}
     <button data-c="top">⬇ Смотреть сверху сюда</button>
     <button data-c="side">↔ Смотреть сбоку на эту точку</button>
     <button data-c="clip">✂️ Срез вокруг этой точки</button>
@@ -626,6 +642,7 @@ function showCtx(x, y) {
     const c = b.dataset.c, dist = rig.pos.distanceTo(P);
     if (c === 'sel') select(sel, {fly: false});
     if (c === 'zoom') rig.animateTo({pos: P.clone().add(rig.pos.clone().sub(P).multiplyScalar(0.35)), yaw: rig.yaw, pitch: rig.pitch}, 500);
+    if (c === 'back') backView();
     if (c === 'top') rig.lookAtFrom(P, rig.yaw, -90 * D, Math.max(60, dist * 0.7));
     if (c === 'side') rig.lookAtFrom(P, rig.yaw, -8 * D, Math.max(18, Math.min(dist, 80)));
     if (c === 'clip') setClip(boxAround(P, 40));
@@ -700,7 +717,7 @@ function setClip(box) {
   S.clip = box;
   viewer.setClipBox(box);
   $('#clipBtn').classList.toggle('on', !!box);
-  if (box) status('Срез включён — видно только то, что внутри рамки. B — выключить');
+  if (box) status('Срез: видно только то, что внутри рамки · [ ] — меньше/больше · B — выключить');
 }
 function toggleClip(force) {
   if (S.clip && !force) return setClip(null);
@@ -1017,6 +1034,7 @@ addEventListener('keydown', e => {
     return;
   }
   if (e.code === 'Space' && S.fly) { e.preventDefault(); $('#plPlay').click(); return; }
+  if (e.code === 'Backspace') { e.preventDefault(); backView(); return; }
   const k = e.code;
   if (k === 'KeyF') frameSel();
   else if (k === 'KeyH' || k === 'Home') home();
@@ -1024,6 +1042,12 @@ addEventListener('keydown', e => {
   else if (k === 'KeyV') setMode(rig.mode === 'fly' ? 'orbit' : 'fly');
   else if (k === 'KeyX') setXray(!S.xray);
   else if (k === 'KeyB') toggleClip();
+  else if ((k === 'BracketLeft' || k === 'BracketRight') && S.clip) {
+    // [ и ] — сжать или расширить рамку среза по плану на 20 %
+    const b = S.clip, f = k === 'BracketRight' ? 1.2 : 1 / 1.2, cx = (b[0] + b[3]) / 2, cy = (b[1] + b[4]) / 2;
+    const hx = Math.max(4, (b[3] - b[0]) / 2 * f), hy = Math.max(4, (b[4] - b[1]) / 2 * f);
+    setClip([cx - hx, cy - hy, b[2], cx + hx, cy + hy, b[5]]);
+  }
   else if (k === 'KeyM') setMeasure(!S.measure);
   else if (k === 'KeyP') S.fly ? stopFly() : startFly();
 });
