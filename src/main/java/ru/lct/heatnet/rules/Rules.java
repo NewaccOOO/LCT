@@ -35,6 +35,7 @@ public final class Rules {
     private final double scoreWLength;
     private final Map<String, RestrictionRule> restrictions;
     private final RestrictionRule fallback;
+    private final DepthRules depth;
 
     @Value
     private static class ChamberPrice {
@@ -82,6 +83,23 @@ public final class Rules {
         }
         restrictions = Map.copyOf(byType);
         fallback = restrictionRule(FALLBACK, restrictionsNode.required(FALLBACK));
+        depth = root.has("depth") ? depthRules(root.get("depth")) : null;
+    }
+
+    private static DepthRules depthRules(JsonNode node) {
+        Map<String, DepthRules.Crossing> crossings = new HashMap<>();
+        node.required("crossings").fields().forEachRemaining(field -> crossings.put(field.getKey(), new DepthRules.Crossing(
+                number(field.getValue(), "top_m"), optionalNumber(field.getValue(), "height_m"),
+                number(field.getValue(), "clear_m"))));
+        Map<String, Double> minTop = new HashMap<>();
+        node.required("min_top_m").fields().forEachRemaining(field -> minTop.put(field.getKey(), field.getValue().doubleValue()));
+        return new DepthRules(number(node, "normal_m"), number(node, "min_m"), number(node, "max_slope"),
+                number(node, "k_per_m"), Map.copyOf(crossings), Map.copyOf(minTop));
+    }
+
+    /** Правила режима с учётом глубины; null — в файле правил их нет. */
+    public DepthRules depth() {
+        return depth;
     }
 
     /**

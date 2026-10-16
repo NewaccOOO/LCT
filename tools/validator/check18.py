@@ -61,7 +61,12 @@ SHORT_LINK_M = 10.0
 # CUT_PIECE_M): отступ до зон с запасом сверх нормы, зазор до других участков новой сети, поворот и звено
 CUT_MARGIN_M = 0.15
 CUT_APART_M = 0.5
-MAX_TURN_DEG = 89.9
+MAX_TURN_DEG = 90 + 1e-6
+# поворот ровно 90° после округления координат выхода до 9 знаков градуса меряется с ошибкой в тысячные доли градуса
+ROUND_TURN_DEG = 0.01
+# прямой угол трассы по осям застройки не лишняя вершина (B16, B21): эксперты 16.10.2026 — трасса прямыми вдоль стен
+# и дорог, один поворот 90° вместо двух по 45°, хотя диагональ короче
+RIGHT_TOL_DEG = 2.0
 CUT_PIECE_M = 1.05
 # место камеры ветвления в B21 как у сервиса (TreeBuilder.spotAllowed, SpecialObjects.near): не ближе 3 м по участку
 # к точке подключения, отступ от объектов специального прохода и сети с запасом 0,1 м
@@ -113,6 +118,11 @@ SCORE_TOL = 0.00005 + 1e-9
 CROSS_CIRCLE_M = 0.1
 # --no-shape отключает B16–B18, B20–B22: так старые категории сверяются с прежними прогонами
 SHAPE = "--no-shape" not in sys.argv
+# --depth: выход режима с учётом глубины (§5 приложения 18.09): глубины обязательны, Kгл в стоимости, проверки G
+DEPTH = "--depth" in sys.argv
+DEPTH_RULES = RULES.get("depth")
+# допуски G: глубины в выходе до мм, длина до см
+DEPTH_TOL = 0.0015
 
 
 def to_utm(geom):
@@ -384,7 +394,7 @@ def check_variant(inp, trees, vid, feats, rep):
             rep.add("B2 специальный проход не одним прямым участком", f"{p['id']} вершин {len(c)}")
         if abs(line.length - p["length"]) > 0.05:
             rep.add("E0 length не равна длине геометрии", f"{p['id']}")
-        if p.get("depth_start") is not None or p.get("depth_end") is not None:
+        if not DEPTH and (p.get("depth_start") is not None or p.get("depth_end") is not None):
             rep.add("E0 depth не null в 2D", f"{p['id']}")
         if p.get("diameter") not in DN:
             rep.add("C0 диаметр не из таблицы", f"{p['id']}")
@@ -405,7 +415,8 @@ def check_variant(inp, trees, vid, feats, rep):
         if a > 90 + 0.5:
             rep.add("B1 поворот больше 90° в technical_node", f"{node} {a:.1f}°")
         p0, p1 = (s["properties"] for s in lst)
-        if p0["laying_method"] == p1["laying_method"] == "base" and p0["diameter"] == p1["diameter"]:
+        if p0["laying_method"] == p1["laying_method"] == "base" and p0["diameter"] == p1["diameter"] \
+                and not (DEPTH and profile_break(node, p0, p1)):
             rep.add("D2 technical_node без смены параметров", f"{node}")
         if p0["diameter"] != p1["diameter"] and abs(p0["flow_tph"] - p1["flow_tph"]) < 1e-6:
             rep.add("C3 смена ДУ без смены расхода (technical_node)", f"{node} {p0['diameter']}/{p1['diameter']}")
@@ -748,6 +759,9 @@ def check_variant(inp, trees, vid, feats, rep):
         k = 1.0
         if p["laying_method"] == "special":
             k = max((K_SPECIAL[rt] for rt, _ in zones[id(s)]), default=1.0)
+        if DEPTH:
+            # §5–6: Kгл участков плана, склеенных из кусков профиля (plan_view): стоимость частей отдельно
+            k *= p.get("_kgl", 1.0)
         cost = line.length * DN[p["diameter"]]["new_rub_m"] * k
         seg_cost_new += cost
         if abs(cost - p["cost"]) > max(1.0, 0.01 * DN[p["diameter"]]["new_rub_m"] * k):
@@ -803,6 +817,192 @@ def check_variant(inp, trees, vid, feats, rep):
     return dict(variant=vid, score_out=summary["score"], score_1809=round(score, 4), unconnected=len(ids),
                 construction_out=summary["construction_cost"], construction_1809=round(construction, 2),
                 tie_new_chambers=new_tie_chambers, existing_tie_ins=existing_tie_ins)
+
+
+def k_depth(h):
+    normal = DEPTH_RULES["normal_m"]
+    return 1 + DEPTH_RULES["k_per_m"] * (h - normal) if h > normal else 1.0
+
+
+def profile_break(node, p0, p1):
+    """В техническом узле меняется профиль глубины: другой уклон или переход через обычную глубину."""
+    def slope_from(p):
+        d0, d1, length = p["depth_start"], p["depth_end"], p["length"] or 1e-9
+        # уклон по ходу от узла
+        return (d1 - d0) / length if str(p["start_node_id"]) == node else (d0 - d1) / length
+    if None in (p0.get("depth_start"), p0.get("depth_end"), p1.get("depth_start"), p1.get("depth_end")):
+        return False
+    at = p0["depth_end"] if str(p0["end_node_id"]) == node else p0["depth_start"]
+    if abs(at - DEPTH_RULES["normal_m"]) < 1e-6:
+        return True
+    return abs(slope_from(p0) + slope_from(p1)) > 0.002
+
+
+def plan_view(feats):
+    """Выход режима с глубиной в плане: обычные участки, разделённые техническим узлом только из-за профиля глубины
+    (тот же Ду), склеиваются обратно. Форма трассы и спецпроходы (A–F) проверяются по плану, как в 2D:
+    исключения формы (финальный участок, точка выхода) привязаны к участку целиком. В _kgl — Kгл участка плана:
+    стоимость частей с их Kгл, делённая на стоимость без него."""
+    segs = [f for f in feats if f["properties"]["object_type"] == "heat_network"]
+    tech = {str(f["properties"]["id"]) for f in feats if f["properties"]["object_type"] == "technical_node"}
+    by_start = defaultdict(list)
+    ins = Counter()
+    for f in segs:
+        by_start[str(f["properties"]["start_node_id"])].append(f)
+        ins[str(f["properties"]["end_node_id"])] += 1
+
+    def mergeable(node, a):
+        nxt = by_start.get(node, [])
+        if node not in tech or ins[node] != 1 or len(nxt) != 1:
+            return None
+        b = nxt[0]["properties"]
+        pa = a["properties"]
+        # профиль делит только обычные участки; спецучастки на стыке разных зон разделены уже в 2D
+        if not (b["laying_method"] == pa["laying_method"] == "base") or b["diameter"] != pa["diameter"]:
+            return None
+        return nxt[0]
+
+    merged, dropped = [], set()
+    for f in segs:
+        start = str(f["properties"]["start_node_id"])
+        if start in tech and ins[start] == 1 and len(by_start[start]) == 1:
+            prev = [g for g in segs if str(g["properties"]["end_node_id"]) == start]
+            if prev and mergeable(start, prev[0]) is f:
+                continue
+        parts = [f]
+        while True:
+            nxt = mergeable(str(parts[-1]["properties"]["end_node_id"]), parts[-1])
+            if nxt is None:
+                break
+            dropped.add(str(parts[-1]["properties"]["end_node_id"]))
+            parts.append(nxt)
+        coords = list(parts[0]["geometry"]["coordinates"])
+        for q in parts[1:]:
+            nxt = q["geometry"]["coordinates"]
+            # точка разреза на прямой — не вершина плана: поворот в ней от округления координат (меньше 1° — B5 в 2D)
+            if len(coords) > 1 and len(nxt) > 1:
+                a, b, c = (TO_UTM.transform(*xy) for xy in (coords[-2], coords[-1], nxt[1]))
+                if turn_deg(a, b, c) < 1.0:
+                    coords.pop()
+                    coords += nxt[1:]
+                    continue
+            coords += nxt[1:]
+        props = dict(parts[0]["properties"])
+        props["end_node_id"] = parts[-1]["properties"]["end_node_id"]
+        props["length"] = round(sum(q["properties"]["length"] for q in parts), 2)
+        props["cost"] = sum(q["properties"]["cost"] for q in parts)
+        flat = sum(q["properties"]["cost"] / ((k_depth(q["properties"]["depth_start"]) + k_depth(q["properties"]["depth_end"])) / 2)
+                   if q["properties"].get("depth_start") is not None else q["properties"]["cost"] for q in parts)
+        props["_kgl"] = props["cost"] / flat if flat else 1.0
+        props["depth_start"] = props["depth_end"] = None
+        merged.append({"type": "Feature", "geometry": {"type": "LineString", "coordinates": coords}, "properties": props})
+    rest = [f for f in feats if f["properties"]["object_type"] != "heat_network"
+            and not (f["properties"]["object_type"] == "technical_node" and str(f["properties"]["id"]) in dropped)]
+    return rest + merged
+
+
+def check_depth(inp, feats, rep):
+    """G: режим с учётом глубины (§5, табл. 2 приложения 18.09) по участкам выхода как есть. h — глубина до верха
+    габарита новой сети."""
+    dr = DEPTH_RULES
+    segs = [f for f in feats if f["properties"]["object_type"] == "heat_network"]
+    geo = {str(f["properties"]["id"]): utm(f["geometry"]) for f in feats if f["geometry"]}
+    kinds, adj = {}, defaultdict(list)
+    for f in feats:
+        if f["properties"]["object_type"] == "technical_node":
+            kinds[str(f["properties"]["id"])] = "technical_node"
+    for s in segs:
+        for key in ("start_node_id", "end_node_id"):
+            adj[str(s["properties"][key])].append(s)
+    normal, slope_max = dr["normal_m"], dr["max_slope"]
+    lines = []  # (тип, геометрия, верх, высота, просвет)
+    for rt, c in dr["crossings"].items():
+        if rt == "heat_network":
+            for pid, g, dn in inp["pipes"]:
+                h = DN[dn]["height_m"] if dn in DN else DN[DNS[-1]]["height_m"]
+                lines.append((f"heat_network {pid}", g, c["top_m"], h, c["clear_m"]))
+        else:
+            for rid, t, g in inp["special"]:
+                if t == rt and g.geom_type in ("LineString", "MultiLineString"):
+                    lines.append((f"{rt} {rid}", g, c["top_m"], c["height_m"], c["clear_m"]))
+    under = [(f"{t} {rid}", g, dr["min_top_m"][t]) for rid, t, g in inp["special"]
+             if t in dr["min_top_m"] and g.geom_type in ("Polygon", "MultiPolygon")]
+    tree_lines = STRtree([g for _, g, *_ in lines]) if lines else None
+    tree_under = STRtree([g for _, g, _ in under]) if under else None
+    at_node = defaultdict(list)
+    by_end = {}
+    for s in segs:
+        p = s["properties"]
+        d0, d1 = p.get("depth_start"), p.get("depth_end")
+        if d0 is None or d1 is None:
+            rep.add("G1 нет глубины участка в режиме с глубиной", f"{p['id']}")
+            continue
+        line = geo[str(p["id"])]
+        length = line.length
+        if min(d0, d1) < dr["min_m"] - DEPTH_TOL:
+            rep.add("G2 глубина мельче минимальной", f"{p['id']} {min(d0, d1)} < {dr['min_m']}")
+        if length > 0 and abs(d1 - d0) > slope_max * length + DEPTH_TOL:
+            rep.add("G3 уклон круче допустимого", f"{p['id']} {abs(d1 - d0) / length:.4f} > {slope_max}")
+        if (d0 - normal) * (d1 - normal) < -1e-9:
+            rep.add("G4 участок проходит обычную глубину без technical_node", f"{p['id']} {d0}→{d1}")
+        at_node[str(p["start_node_id"])].append(d0)
+        at_node[str(p["end_node_id"])].append(d1)
+        by_end[(str(p["start_node_id"]), 0)] = s
+        by_end[(str(p["end_node_id"]), 1)] = s
+        h_new = DN[p["diameter"]]["height_m"]
+
+        def depth_at(pt):
+            t = line.project(pt) / length if length > 0 else 0
+            return d0 + (d1 - d0) * t
+
+        ends = (Point(line.coords[0]), Point(line.coords[-1]))
+        for i in (tree_lines.query(line) if tree_lines is not None else []):
+            name, g, top, h_obj, clear = lines[i]
+            meet = line.intersection(g)
+            pts = [Point(c) for c in shapely.get_coordinates(meet)] if not meet.is_empty else []
+            for pt in pts:
+                if min(pt.distance(e) for e in ends) <= NODE_TOL and kinds.get(
+                        str(p["start_node_id"] if pt.distance(ends[0]) <= NODE_TOL else p["end_node_id"])) != "technical_node":
+                    continue  # врезка или подключение в узле, а не пересечение
+                h = depth_at(pt)
+                gap = max(top - (h + h_new), h - (top + h_obj))
+                if gap < clear - DEPTH_TOL:
+                    rep.add("G6 вертикальный просвет у пересечения меньше нормы",
+                            f"{p['id']} {name}: h={h:.3f}, просвет {gap:.3f} < {clear}")
+                # §5: у пересечения участок на постоянной глубине, табл. 2: по 2 м с каждой стороны
+                s_at = line.project(pt)
+                margin = MARGIN.get(name.split()[0], 2.0)
+                ok = abs(d1 - d0) <= DEPTH_TOL
+                def flat(cur, node, need):
+                    # 2 м по трассе от пересечения на глубине h: через технические узлы, через камеру — во все ветви
+                    # (у сервиса зона спецпрохода тоже идёт через узлы); в конце трассы (ОКС, врезка) полоса кончается
+                    if need <= ZONE_TOL:
+                        return True
+                    for o in adj.get(node, []):
+                        if o is cur:
+                            continue
+                        q = o["properties"]
+                        if abs(q["depth_start"] - h) > DEPTH_TOL or abs(q["depth_end"] - h) > DEPTH_TOL:
+                            return False
+                        far = str(q["end_node_id"] if str(q["start_node_id"]) == node else q["start_node_id"])
+                        if not flat(o, far, need - q["length"]):
+                            return False
+                    return True
+                for side, need in ((0, margin - s_at), (1, margin - (length - s_at))):
+                    ok = ok and flat(s, str(p["start_node_id"] if side == 0 else p["end_node_id"]), need)
+                if not ok:
+                    rep.add("G7 у пересечения нет участка постоянной глубины по 2 м в каждую сторону",
+                            f"{p['id']} {name}: {d0}→{d1}")
+        for i in (tree_under.query(line) if tree_under is not None else []):
+            name, g, need = under[i]
+            inside = line.intersection(g)
+            for c in shapely.get_coordinates(inside):
+                h = depth_at(Point(c))
+                if h < need - DEPTH_TOL:
+                    rep.add("G8 под дорогой или трамваем мельче нормы", f"{p['id']} {name}: h={h:.3f} < {need}")
+    for node, ds in at_node.items():
+        if max(ds) - min(ds) > DEPTH_TOL:
+            rep.add("G5 глубина участков в узле разная", f"{node} {sorted(set(ds))}")
 
 
 def check_specials(trees, segs, geo, adj, kinds, ties, rep):
@@ -1323,6 +1523,10 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
         for i in range(1, len(c) - 1):
             if i in fixed:
                 continue
+            if abs(turn_deg(c[i - 1], c[i], c[i + 1]) - 90) <= RIGHT_TOL_DEG:
+                rep.add("i  прямой угол оставлен: трасса по осям застройки (B16)",
+                        f"{sid} вершина {i}")
+                continue
             why = blocked(k, c[:i] + c[i + 1:], [i - 1])
             if why is None:
                 rep.add("B16 лишняя вершина: соседей можно соединить прямой",
@@ -1580,6 +1784,10 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
                         spots.append(project_line(at, out[id(r)][-1], next_to(geo, t, far)))
         return spots
 
+    def bent(c):
+        """Вершины ломаной, кроме прямых углов по осям застройки (RIGHT_TOL_DEG)."""
+        return sum(1 for i in range(1, len(c) - 1) if abs(turn_deg(c[i - 1], c[i], c[i + 1]) - 90) > RIGHT_TOL_DEG)
+
     for cid in sorted(n for n, kind in kinds.items() if kind == "heat_chamber" and n not in ties):
         g = geo[cid]
         at = (g.x, g.y)
@@ -1592,7 +1800,7 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
             out[id(s)] = c if Point(c[0]).distance(g) <= NODE_TOL else c[::-1]
         up = parent[cid][1] if cid in parent else None
         width = DN[max(s["properties"]["diameter"] for s in inc)]["width_m"] / 2
-        vertices = sum(len(c) - 2 for c in out.values())
+        vertices = sum(bent(c) for c in out.values())
         straight0, small0, micro0 = path_counts(cid, at, out, inc)
         if not vertices and not small0 and not micro0:
             continue
@@ -1609,7 +1817,7 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
                         lines_r[tuple(map(tuple, line))] = line
                 options.append(list(lines_r.values()))
             for combo in itertools.product(*options):
-                left = sum(len(line) - 2 for line in combo)
+                left = sum(bent(line) for line in combo)
                 if left > vertices:
                     continue
                 new = {id(r): line for r, line in zip(inc, combo)}
@@ -1632,7 +1840,7 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
         first = None
         for ds, x, new, evens in found:
             why = move_blocked(cid, x, new, inc, out, up, width, evens)
-            left = sum(len(line) - 2 for line in new.values())
+            left = sum(bent(line) for line in new.values())
             counts = path_counts(cid, x, new, inc)
             text = f"{cid}: перенос {math.dist(x, at):.2f} м, вершин у камеры {vertices} → {left}, " \
                    f"мелких изломов пути {small0} → {counts[1]}, изломов меньше {TURN_DEG}° {micro0} → {counts[2]}, " \
@@ -1845,7 +2053,7 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
     for n, pairs in sorted(path_pairs.items()):
         g = geo[n]
         sharp = [(cs, s, turn_deg(next_to(geo, cs, n), (g.x, g.y), next_to(geo, s, n))) for cs, s in pairs]
-        sharp = [(cs, s, a) for cs, s, a in sharp if a > 90.0]
+        sharp = [(cs, s, a) for cs, s, a in sharp if a > 90.0 + ROUND_TURN_DEG]
         if sharp:
             where = "камере" if kinds.get(n) == "heat_chamber" else "узле"
             rep.add(f"B20 поворот на пути точки в {where} круче 90°",
@@ -1959,8 +2167,9 @@ def layout(inp, trees, feats):
 
 
 def main():
-    inp = load_input(sys.argv[1])
-    out = json.load(open(sys.argv[2]))
+    files = [a for a in sys.argv[1:] if not a.startswith("--")]
+    inp = load_input(files[0])
+    out = json.load(open(files[1]))
     trees = trees_for(inp)
     variants = defaultdict(list)
     for f in out["features"]:
@@ -1977,7 +2186,11 @@ def main():
             rep.add("A0 неуникальные id во всём файле", str(dup))
         if vid == min(variants) and any(a[1] > b[1] for a, b in zip(ranked, ranked[1:])):
             rep.add("E8 ранги не по возрастанию score (п. 7.2)", str(ranked))
-        res = check_variant(inp, trees, vid, variants[vid], rep)
+        if DEPTH:
+            check_depth(inp, variants[vid], rep)
+            res = check_variant(inp, trees, vid, plan_view(variants[vid]), rep)
+        else:
+            res = check_variant(inp, trees, vid, variants[vid], rep)
         print(f"== вариант {vid}: {res}")
         for key in sorted(rep.count):
             print(f"  {key}: {rep.count[key]}  {rep.sample.get(key, [])}")

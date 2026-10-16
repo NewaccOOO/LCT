@@ -29,6 +29,16 @@
   "chamber_rule": {"max_dist_m": 10, "max_segments": 4, "max_branches": 3},
   "penalty": {"fixed": 100000000, "per_tph": 500000},
   "score": {"cost_base": 25000000, "length_base_m": 100, "w_cost": 0.7, "w_length": 0.3},
+  "depth": {
+    "_comment": "режим с учётом глубины, приложение 18.09 §5 и табл. 2: h — глубина до верха габарита, м",
+    "normal_m": 3.0, "min_m": 0.7, "max_slope": 0.10, "k_per_m": 0.10,
+    "crossings": {
+      "gas_pipeline": {"top_m": 2.8, "height_m": 0.40, "clear_m": 0.2},
+      "power_cable": {"top_m": 2.7, "height_m": 0.20, "clear_m": 0.5},
+      "heat_network": {"top_m": 3.0, "clear_m": 0.5, "_comment": "высота габарита — по Ду из таблицы 1"}
+    },
+    "min_top_m": {"road": 1.0, "tram_tracks": 1.2}
+  },
   "restrictions": {
     "oks_existing": {"rule": "forbid", "clearance_m": [{"dn_max": 400, "m": 5}, {"dn_max": 800, "m": 7}, {"dn_max": 1400, "m": 9}], "_comment": "dn_max включительно: DN500 попадает во второй диапазон, 7 м"},
     "park": {"rule": "forbid", "clearance_m": 1.0},

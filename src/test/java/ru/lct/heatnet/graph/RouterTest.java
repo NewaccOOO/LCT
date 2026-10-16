@@ -51,6 +51,22 @@ class RouterTest {
     }
 
     @Test
+    void squareReplacesDiagonalWithOneRightTurnAroundPark() {
+        // диагональ (0,0)–(30,40) по осям 0°/90°: угол (30,0) в зоне парка, остаётся один поворот 90° через (0,40)
+        Geometry park = rect(25, -10, 45, 10);
+        Router router = router(List.of(new Restriction("park-1", park, "park")), List.of());
+        List<Coordinate> coords = new ArrayList<>(List.of(new Coordinate(0, 0), new Coordinate(30, 40)));
+
+        assertTrue(router.square(router.obstacles(), coords, Set.of(), null, List.of(), null, List.of(), 0, 1.5, 10));
+
+        assertEquals(List.of(new Coordinate(0, 0), new Coordinate(0, 40), new Coordinate(30, 40)), coords);
+        assertEquals(90, Router.deflectionDeg(coords.get(0), coords.get(1), coords.get(2)), EPS);
+        // длиннее ratio прежнего участка — не перекладывается
+        List<Coordinate> tight = new ArrayList<>(List.of(new Coordinate(0, 0), new Coordinate(30, 40)));
+        assertFalse(router.square(router.obstacles(), tight, Set.of(), null, List.of(), null, List.of(), 0, 1.3, 10));
+    }
+
+    @Test
     void plainCountsMarginFromRuleClearance() {
         // зона шире нормы на 0,05 м, а запас формы трассы 0,15 м отсчитывается от нормы, иначе вершины с запасом
         // прямой 0,15–0,2 м остаются лишними (п. 5)

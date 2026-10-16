@@ -33,3 +33,5 @@ data/cities/problems/**/*.json
 data/cities/problems/**/*.txt
 data/cities/problems/**/runs/
 data/cities/raw/**/*.csv.gz
+bin/
+scripts/ui3d/data/

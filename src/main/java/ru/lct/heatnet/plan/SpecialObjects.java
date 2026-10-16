@@ -23,6 +23,7 @@ import ru.lct.heatnet.graph.ObstacleSet;
 import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.NetworkSegment;
 import ru.lct.heatnet.model.Restriction;
+import ru.lct.heatnet.rules.Diameter;
 import ru.lct.heatnet.rules.RestrictionRule;
 import ru.lct.heatnet.rules.Rules;
 
@@ -46,6 +47,8 @@ final class SpecialObjects {
         final RestrictionRule rule;
         /** Полуширина самого объекта: половина ширины существующей трубы или half_width_m линии. */
         final double halfWidth;
+        /** Высота габарита существующей трубы по Ду (табл. 1), у ограничений 0: для режима с глубиной. */
+        final double height;
         /** Объект зоны band для быстрой проверки, задевает ли его ребро: наложение JTS считается только тогда. */
         final PreparedGeometry prepared;
         /** Стороны линейного объекта или колец полигона. */
@@ -59,7 +62,12 @@ final class SpecialObjects {
         final Map<Double, Geometry> buffers = new java.util.concurrent.ConcurrentHashMap<>();
 
         Special(Geometry geometry, boolean network, RestrictionRule rule, double halfWidth) {
+            this(geometry, network, rule, halfWidth, 0);
+        }
+
+        Special(Geometry geometry, boolean network, RestrictionRule rule, double halfWidth, double height) {
             this.geometry = geometry;
+            this.height = height;
             this.polygon = geometry.getDimension() == 2;
             this.band = polygon || rule.getMinAngleDeg() != null;
             this.network = network;
@@ -204,7 +212,8 @@ final class SpecialObjects {
         this.rules = rules;
         RestrictionRule network = rules.restriction(TieCandidate.HEAT_NETWORK);
         for (NetworkSegment segment : input.getSegments()) {
-            all.add(new Special(segment.getGeometry(), true, network, rules.diameter(segment.getDiameter()).getWidthM() / 2));
+            Diameter dn = rules.diameter(segment.getDiameter());
+            all.add(new Special(segment.getGeometry(), true, network, dn.getWidthM() / 2, dn.getHeightM()));
         }
         for (Restriction restriction : input.getRestrictions()) {
             RestrictionRule rule = rules.restriction(restriction.getType());
