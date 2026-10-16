@@ -1,0 +1,805 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Теплосеть 3D</title>
+<script src="vendor/deck.min.js"></script>
+<style>
+:root{--bg:#0b1220;--card:#111a2e;--card2:#16223b;--line:#22314d;--text:#e8eef7;--muted:#9fb0c8;--blue:#38bdf8;--orange:#fb923c;--red:#f43f5e;--green:#22c55e;--yellow:#facc15;--r:10px}
+*{box-sizing:border-box}[hidden]{display:none!important}
+body{margin:0;font:15px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);height:100vh;display:grid;grid-template-columns:1fr 460px;grid-template-rows:auto 1fr auto;overflow:hidden}
+button,select,input{font:inherit;color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:var(--r);min-height:40px;padding:6px 12px}
+button{cursor:pointer;transition:border-color .15s,background .15s}button:hover{border-color:var(--blue);background:var(--card2)}
+button.on{border-color:var(--blue);background:#0c2a44}
+button.primary{background:#0369a1;border-color:#0369a1}button.primary:hover{background:#0284c7}
+input:focus,select:focus,button:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+header{grid-column:1/3;display:flex;gap:16px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.brand{font-size:19px;font-weight:700;margin-right:4px}
+.fld{display:flex;flex-direction:column;gap:2px}.fld>span{font-size:12px;color:var(--muted)}
+.seg{display:flex;gap:6px;flex-wrap:wrap}.seg button{min-width:110px;text-align:left;line-height:1.15}.seg small{display:block;color:var(--muted);font-size:12px}
+.search{display:flex;gap:6px;flex:1;min-width:280px;max-width:560px}.search input{flex:1;font-size:16px}
+#map{position:relative;min-width:0;min-height:0}
+.panel{position:absolute;z-index:5;background:rgba(17,26,46,.95);border:1px solid var(--line);border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.35)}
+#nav{left:16px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:6px;padding:8px}
+#nav button{width:138px;white-space:nowrap;display:flex;gap:8px;align-items:center;justify-content:flex-start;padding:6px 10px}
+#nav button b{font-size:18px;width:20px;text-align:center}
+#nav hr{border:0;border-top:1px solid var(--line);margin:2px 0;width:100%}
+#look{right:16px;top:16px;width:300px;padding:6px}#look #lookB{padding:4px 8px 6px}
+#look #lookH{width:100%;display:flex;justify-content:space-between;align-items:center;font-size:14px}
+#look .f{margin:10px 0}#look .f label{display:flex;justify-content:space-between;font-size:14px}#look .f small{color:var(--muted);font-size:12px}
+#look input[type=range]{width:100%;min-height:24px;padding:0;accent-color:var(--blue)}
+.tog{display:flex;align-items:center;gap:10px;font-size:14px;cursor:pointer;min-height:32px}.tog input{width:20px;height:20px;min-height:0;accent-color:var(--blue)}
+#info{left:174px;top:16px;max-width:min(440px,calc(100% - 520px));padding:10px 14px;display:flex;gap:10px;align-items:flex-start;font-size:14px}
+#info button{min-height:28px;padding:2px 10px;margin-left:auto}
+#ctl{right:16px;bottom:16px;padding:6px;max-width:440px;font-size:13px;color:var(--muted)}#ctl button{min-height:34px;font-size:14px}#ctlB{padding:6px 8px 2px;display:grid;gap:6px}#ctlB b{color:var(--text)}
+.kk{display:inline-block;min-width:22px;text-align:center;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:0 4px;margin:0 2px;color:var(--text);background:var(--card2);font-size:12px}
+#legend{left:174px;bottom:16px;padding:6px;max-width:calc(100% - 640px);font-size:13px;color:var(--muted)}#legend .items{display:flex;flex-wrap:wrap;gap:6px 16px;padding:6px 8px 4px}#legend button{min-height:34px;font-size:14px}
+.sw{display:inline-block;width:18px;height:6px;border-radius:3px;margin-right:6px;vertical-align:middle}
+.dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:6px;vertical-align:middle;border:2px solid #0b1220}
+#tip{position:fixed;pointer-events:none;background:rgba(5,10,22,.97);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:14px;max-width:360px;white-space:pre-wrap;display:none;z-index:20}
+#tip b{display:block;margin-bottom:2px}
+aside{grid-row:2/4;grid-column:2;border-left:1px solid var(--line);overflow:hidden;padding:0 16px 12px;display:flex;flex-direction:column;min-height:0}
+aside section{order:2;flex:1 1 auto;overflow:auto;min-height:0;padding-right:4px}
+aside .tabs{order:1;flex:none}
+.tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;position:sticky;top:0;background:var(--bg);padding:12px 0 10px;z-index:2}
+.tabs button{display:flex;flex-direction:column;align-items:center;gap:0;padding:6px 4px;font-size:14px}.tabs button span{font-size:12px;color:var(--muted)}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:18px 0 8px}
+.kpi{display:grid;grid-template-columns:1fr 1fr;gap:8px}.kpi div{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:10px 12px}
+.kpi b{display:block;font-size:20px;font-variant-numeric:tabular-nums}.kpi span{font-size:13px;color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:6px 0;border-bottom:1px solid var(--line);vertical-align:top;text-align:left}td:last-child,th:last-child{text-align:right;padding-left:10px;font-variant-numeric:tabular-nums}
+th{color:var(--muted);font-weight:500;font-size:13px}
+.list{border:1px solid var(--line);border-radius:var(--r)}
+.row{padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer}.row:hover{background:var(--card)}.row.sel{background:#0c2a44}
+.row .t{display:flex;justify-content:space-between;gap:8px;font-weight:600}.row .m{color:var(--muted);font-size:13px;margin-top:2px}
+.badge{font-size:12px;font-weight:600;border-radius:999px;padding:2px 9px;white-space:nowrap}
+.b-bad{background:rgba(244,63,94,.18);color:#fda4af}.b-ok{background:rgba(34,197,94,.18);color:#86efac}.b-mut{background:#1e293b;color:var(--muted)}
+.filters{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}.filters button{min-height:34px;padding:4px 10px;font-size:13px}
+#card{order:3;flex:none;max-height:42%;overflow:auto;background:var(--card);border:1px solid var(--blue);border-radius:12px;padding:12px 14px;margin-top:10px}
+#card .h{display:flex;justify-content:space-between;align-items:center;gap:8px}#card .h b{font-size:17px}
+#card .h button{min-height:30px;padding:0 10px}
+#card .act{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}#card .act button{flex:1}
+.fix{margin-top:10px;padding:10px 12px;border-radius:var(--r);background:#0e2a1f;border:1px solid #14532d;font-size:14px}
+.prob{margin-top:10px;padding:10px 12px;border-radius:var(--r);background:#2a0e17;border:1px solid #7f1d1d;font-size:14px}
+.steps{margin:0;padding-left:20px;color:var(--muted)}.steps li{margin:4px 0}
+#prof{grid-column:1;border-top:1px solid var(--line);height:290px;position:relative;display:none;background:var(--bg)}
+#prof .top{position:absolute;left:0;right:0;top:0;display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:center;padding:8px 14px;pointer-events:none}#prof .top .lg{grid-column:1}#prof .top button{grid-row:1;grid-column:2}
+#prof .top b{font-size:15px}#prof .top .lg{font-size:13px;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap}
+#prof .top button{pointer-events:auto;margin-left:auto;min-height:32px}
+#prof canvas{position:absolute;left:0;right:0;bottom:0;top:66px;width:100%;height:calc(100% - 66px);display:block}
+#load{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:17px}
+#help{position:fixed;inset:0;background:rgba(2,6,23,.7);display:none;align-items:center;justify-content:center;z-index:30}
+#help .box{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px 26px;max-width:640px;width:calc(100% - 32px)}
+#help h2{margin-top:0;font-size:15px}
+#help .g{display:grid;grid-template-columns:auto 1fr;gap:10px 16px;align-items:center;font-size:15px}
+#help .k{background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:4px 10px;font-size:13px;text-align:center;white-space:nowrap}
+</style></head><body>
+<header>
+  <div class="brand">Теплосеть 3D</div>
+  <label class="fld"><span>Город / набор</span><select id="scene"></select></label>
+  <div class="fld"><span>Вариант решения</span><div id="variants" class="seg"></div></div>
+  <div class="search"><input id="q" placeholder="Найти здание, трубу или камеру по номеру"><button id="qbtn" class="primary">Найти</button></div>
+  <button id="helpBtn">? Как пользоваться</button>
+</header>
+<div id="map"><div id="load">Загружаю карту…</div>
+  <div id="nav" class="panel">
+    <button id="vAll" title="Показать весь набор"><b>⌂</b>Весь город</button>
+    <hr>
+    <button id="vTop" title="Смотреть сверху, как на карте"><b>▣</b>Сверху</button>
+    <button id="v3d" title="Наклонить камеру"><b>◢</b>Наклон 3D</button>
+    <button id="vUnder" title="Заглянуть под землю снизу"><b>⤒</b>Снизу</button>
+    <hr>
+    <button id="rotL" title="Повернуть влево"><b>⟲</b>Повернуть</button>
+    <button id="rotR" title="Повернуть вправо"><b>⟳</b>Повернуть</button>
+    <hr>
+    <button id="zIn" title="Приблизить"><b>+</b>Ближе</button>
+    <button id="zOut" title="Отдалить"><b>−</b>Дальше</button>
+  </div>
+  <div id="look" class="panel">
+    <button id="lookH">⚙ Настройки вида <span>▸</span></button>
+    <div id="lookB" hidden>
+      <div class="f"><label>Растянуть глубину <b id="zexv">×10</b></label><input id="zex" type="range" min="1" max="30" value="10">
+        <small>Трубы лежат на 3 м — без растяжения их не отличить от земли</small></div>
+      <div class="f"><label>Прозрачность земли <b id="gopv">65%</b></label><input id="gop" type="range" min="0" max="100" value="35">
+        <small>Чем прозрачнее, тем лучше видно трубы под дорогами</small></div>
+      <div class="f"><label>Цвет новых труб</label>
+        <div class="seg" id="colorBy"><button data-v="dn" class="on">По диаметру</button><button data-v="status">Проблемы</button></div></div>
+      <label class="tog"><input id="ext" type="checkbox"> Здания объёмом</label>
+    </div>
+  </div>
+  <div id="info" class="panel" hidden></div>
+  <div id="ctl" class="panel"><button id="ctlH">⌨️ Управление ▾</button><div id="ctlB">
+    <div><b>Мышь</b> левая — двигать · правая или Shift + левая — крутить вокруг точки под курсором (жёлтое кольцо); Shift можно нажимать и отпускать прямо во время перетаскивания</div>
+    <div><b>Тачпад</b> два пальца — двигать · щипок — масштаб · <b>⌥</b> + два пальца — повернуть/наклонить</div>
+    <div><b>Клавиши</b> <span class="kk">W</span><span class="kk">A</span><span class="kk">S</span><span class="kk">D</span> лететь куда смотришь · <span class="kk">Пробел</span><span class="kk">C</span> вверх/вниз ·
+      <span class="kk">Q</span><span class="kk">E</span> повернуть · <span class="kk">R</span><span class="kk">F</span> наклон ·
+      <span class="kk">+</span><span class="kk">−</span> масштаб · <span class="kk">Shift</span> быстрее</div></div></div>
+  <div id="legend" class="panel"><button id="legH">🎨 Что означают цвета ▸</button><div class="items" id="legI" hidden></div></div>
+</div>
+<div id="prof"><div class="top"><b id="pttl"></b>
+  <span class="lg"><span><i class="sw" style="background:#38bdf8"></i>новая труба</span><span><i class="sw" style="background:#f43f5e"></i>участок с проблемой</span>
+  <span><i class="sw" style="background:transparent;border:1px dashed #f43f5e;height:10px"></i>нужный зазор</span><span><i class="sw" style="background:rgba(251,146,60,.4)"></i>спецпереход</span></span>
+  <button id="pclose">Закрыть профиль ×</button></div><canvas id="pc"></canvas></div>
+<aside>
+  <div class="tabs">
+    <button data-tab="sum" class="on">Обзор<span>итоги</span></button>
+    <button data-tab="oks">Здания<span id="cntOks"></span></button>
+    <button data-tab="cx">Проблемы<span id="cntCx"></span></button>
+    <button data-tab="lay">Слои<span>что видно</span></button>
+  </div>
+  <div id="card" hidden></div>
+  <section id="t-sum"></section>
+  <section id="t-oks" hidden></section>
+  <section id="t-cx" hidden></section>
+  <section id="t-lay" hidden></section>
+</aside>
+<div id="tip"></div>
+<div id="help"><div class="box">
+  <h2>Как пользоваться</h2>
+  <div class="g">
+    <span class="k">Тачпад: два пальца</span><span>двигать карту</span>
+    <span class="k">Тачпад: щипок</span><span>приблизить или отдалить (к точке под пальцами)</span>
+    <span class="k">⌥ Option + два пальца</span><span>влево-вправо — повернуть, вверх-вниз — наклонить (вокруг точки под курсором)</span>
+    <span class="k">W A S D</span><span>лететь как в игре: W — вперёд туда, куда смотришь (вниз под углом — вниз под углом), S — назад, A/D — вбок; Shift — быстрее</span>
+    <span class="k">Пробел / C</span><span>подняться / опуститься</span>
+    <span class="k">Стрелки</span><span>сдвинуть карту, не меняя высоту</span>
+    <span class="k">Q / E · R / F</span><span>повернуть · наклонить</span>
+    <span class="k">+ / −</span><span>ближе / дальше</span>
+    <span class="k">Мышь</span><span>левая кнопка — двигать, правая или Shift + левая — крутить и наклонять вокруг точки, где нажали, колёсико — масштаб</span>
+    <span class="k">Кнопки слева</span><span>то же одним нажатием: сверху, 3D, снизу, поворот</span>
+    <span class="k">Щелчок по трубе</span><span>карточка справа и профиль трассы под землёй внизу</span>
+  </div>
+  <h2>С чего начать</h2>
+  <ol class="steps"><li>Выберите вариант решения вверху — у лучшего самая низкая оценка S.</li>
+    <li>Вкладка <b>Здания</b>: найдите здание и посмотрите, как к нему идёт труба.</li>
+    <li>Вкладка <b>Проблемы</b>: места, где новая труба слишком близко по высоте к газу, кабелю или теплосети, и как их обойти.</li></ol>
+  <div style="text-align:right;margin-top:16px"><button class="primary" id="helpOk">Понятно</button></div>
+</div></div>
+<script>
+const $ = s => document.querySelector(s);
+const fmt = (n, d = 0) => n == null ? '—' : Number(n).toLocaleString('ru-RU', {maximumFractionDigits: d, minimumFractionDigits: d});
+const rub = n => n == null ? '—' : Math.abs(n) >= 1e6 ? fmt(n / 1e6, 1) + ' млн ₽' : fmt(n / 1e3) + ' тыс. ₽';
+const hex = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+const SCENES = {moscow: 'Москва', spb: 'Санкт-Петербург', nnovgorod: 'Нижний Новгород', dataset: 'Датасет организаторов'};
+const LABEL = {
+  'u:gas_pipeline': ['Газопровод', '#facc15'], 'u:power_cable': ['Электрокабель', '#a78bfa'],
+  'u:heat_network': ['Существующая теплосеть', '#ef4444'], 'u:water_supply': ['Водопровод', '#3b82f6'], 'u:sewer': ['Канализация', '#a16207'],
+  'p:oks_existing': ['Здания', '#475569'], 'p:oks_future': ['Новые здания (подключаем)', '#0891b2'], 'p:road': ['Дороги', '#334155'],
+  'p:tram_tracks': ['Трамвайные пути', '#64748b'], 'p:railway': ['Железная дорога', '#78716c'], 'p:metro': ['Метро', '#be185d'], 'p:park': ['Парки', '#166534'],
+  'p:social_area': ['Школы, больницы', '#9a3412'], 'p:water': ['Водоёмы', '#1e3a8a'], 'p:prohibited_site': ['Запретные зоны', '#7f1d1d'],
+  'n:heat_chamber': ['Существующие камеры', '#94a3b8'], 'n:oks_connection_point': ['Точки подключения зданий', '#f8fafc'],
+  'n:source': ['Источник тепла (ТЭЦ)', '#f43f5e'], 'n:power_line_support': ['Опоры ЛЭП', '#e879f9'],
+};
+const SHORT = {gas_pipeline: 'газ', power_cable: 'кабель', heat_network: 'теплосеть', water_supply: 'вода', sewer: 'канализ.'};
+const NEW = {heat_network: ['Новая труба', '#38bdf8'], heat_chamber: ['Новая камера', '#38bdf8'], tie_in: ['Врезка в существующую сеть', '#22c55e'],
+  technical_node: ['Поворот трассы', '#64748b'], heat_chamber_reconstruction: ['Камера под реконструкцию', '#f43f5e'],
+  heat_network_reconstruction: ['Труба под реконструкцию', '#f43f5e']};
+const PN = {id: 'Номер', diameter: 'Диаметр (Ду), мм', length: 'Длина, м', cost: 'Стоимость', flow_tph: 'Расход тепла, т/ч',
+  laying_method: 'Прокладка', start_node_id: 'Откуда', end_node_id: 'Куда', existing_object_id: 'Существующий объект',
+  existing_diameter: 'Был диаметр, мм', required_diameter: 'Нужен диаметр, мм', depth_start: 'Глубина в начале, м', depth_end: 'Глубина в конце, м',
+  added_flow_tph: 'Добавка расхода, т/ч'};
+const OFF = new Set(['n:heat_chamber', 'u:water_supply', 'u:sewer']);
+const S = {zex: 10, gop: .35, ext: false, colorBy: 'dn', variant: '1', on: {}, route: null, hover: null, cxType: '', cxOnlyBad: true, oksF: 'all'};
+let scene, bin, deckgl, view, L = {}, segs = [], points = [], byId = {}, oksPts = [];
+
+async function main() {
+  const names = await fetch('data/index.json').then(r => r.json()).catch(() => []);
+  const want = new URLSearchParams(location.search).get('scene') || names[0];
+  $('#scene').innerHTML = names.map(n => `<option value="${n}" ${n === want ? 'selected' : ''}>${SCENES[n] || n}</option>`).join('');
+  $('#scene').onchange = e => location.search = '?scene=' + e.target.value;
+  if (!want) { $('#load').textContent = 'Нет подготовленных наборов: python3 scripts/ui3d/prep.py ВХОД ВЫХОД --name город'; return; }
+  const t0 = performance.now();
+  [scene, bin] = await Promise.all([fetch(`data/${want}/scene.json`).then(r => r.json()), fetch(`data/${want}/scene.bin`).then(r => r.arrayBuffer())]);
+  build(); initDeck(); initInput(); ui();
+  $('#load').remove();
+  console.log('[ui3d] loaded', want, Math.round(performance.now() - t0), 'ms', 'участков', segs.length);
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (h) find(h);
+  let seen = false; try { seen = localStorage.getItem('ui3d.help') === '1'; } catch (e) {}
+  if (!seen && !h) showHelp(true);
+}
+
+function build() {
+  for (const l of scene.layers) {
+    l.pos = new Float32Array(bin, l.pos[0], l.pos[1]);
+    l.st = new Uint32Array(bin, l.starts[0], l.starts[1]);
+    L[l.key] = l;
+    S.on[l.key] = !OFF.has(l.key);
+  }
+  scene.props.forEach((p, i) => { byId[p.id] = i; });
+  const dn = {}; scene.diameters.forEach(d => dn[d.dn] = d);
+  const nl = L['o:heat_network'];
+  if (nl) for (let k = 0; k < nl.count; k++) {
+    const a = nl.st[k], b = k + 1 < nl.count ? nl.st[k + 1] : nl.pos.length / 3, path = [];
+    for (let j = a; j < b; j++) path.push([nl.pos[3 * j], nl.pos[3 * j + 1], nl.pos[3 * j + 2]]);
+    const p = scene.props[nl.ids[k]];
+    segs.push({i: nl.ids[k], p, path, row: dn[p.diameter] || scene.diameters[0], cx: []});
+  }
+  const si = {}; segs.forEach(s => si[s.i] = s);
+  for (const c of scene.crossings) if (si[c.seg]) si[c.seg].cx.push(c);
+  for (const s of segs) s.bad = s.cx.some(c => c.ok === false);
+  for (const [key, l] of Object.entries(L)) {
+    if (!key.startsWith('o:') || l.kind !== 'point') continue;
+    for (let k = 0; k < l.count; k++) points.push({i: l.ids[k], p: scene.props[l.ids[k]], xy: [l.pos[2 * k], l.pos[2 * k + 1]]});
+  }
+  const ip = L['n:oks_connection_point'];
+  if (ip) for (let k = 0; k < ip.count; k++) oksPts.push({id: ip.ids[k], xy: [ip.pos[2 * k], ip.pos[2 * k + 1]], flow: ip.attr && ip.attr[k]});
+  if (!scene.has_depth) {
+    $('#info').hidden = false;
+    $('#info').innerHTML = `<span>ℹ️</span><span>Глубина труб в этом расчёте не задана — все новые трубы показаны на обычной глубине <b>3 м</b>.
+      Красные точки — места, где труба по высоте упирается в другую коммуникацию.</span><button onclick="this.parentNode.hidden=true;try{localStorage.setItem('ui3d.info','0')}catch(e){}">Скрыть</button>`;
+    try { if (localStorage.getItem('ui3d.info') === '0') $('#info').hidden = true; } catch (e) {}
+  }
+}
+
+// z_мира = ex·z + dz: метры глубины растянуты для читаемости
+const zm = (dz = 0, ex = S.zex) => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, ex, 0, 0, 0, dz, 1];
+const vSegs = () => segs.filter(s => String(s.p.variant_id) === S.variant);
+const vPts = () => points.filter(s => String(s.p.variant_id) === S.variant);
+const vCxAll = () => scene.crossings.filter(c => c.v === S.variant);
+const vCx = () => vCxAll().filter(c => (!S.cxType || c.type === S.cxType) && (!S.cxOnlyBad || c.ok === false));
+const dnColor = d => { const t = Math.min(1, Math.log2((d || 50) / 50) / Math.log2(28)); return [56 + 150 * t, 189 - 120 * t, 248 - 40 * t]; };
+
+function binLayer(l) {
+  const col = (LABEL[l.key] || [l.key, '#94a3b8'])[1];
+  const common = {id: l.key, pickable: true, coordinateSystem: deck.COORDINATE_SYSTEM.CARTESIAN};
+  if (l.kind === 'path') {
+    const u = scene.utilities[l.key.slice(2)];
+    const top = u ? u.top + (u.h || 0.5) / 2 : 0;
+    return new deck.PathLayer({...common, data: {length: l.count, startIndices: l.st, attributes: {getPath: {value: l.pos, size: 2}}},
+      _pathType: 'open', getColor: hex(col), getWidth: u && u.h ? Math.max(u.h, .3) : 1, widthUnits: 'meters', widthMinPixels: 1.2,
+      modelMatrix: zm(-top * S.zex, 1)});
+  }
+  if (l.kind === 'polygon') {
+    const bld = l.key === 'p:oks_existing' || l.key === 'p:oks_future';
+    return new deck.SolidPolygonLayer({...common, data: {length: l.count, startIndices: l.st, attributes: {getPolygon: {value: l.pos, size: 2}}},
+      _normalize: false, getFillColor: [...hex(col), 255 * (bld ? Math.max(S.gop, .25) : S.gop)], extruded: bld && S.ext, getElevation: 12,
+      parameters: {depthWriteEnabled: false}, material: false});
+  }
+  const sz = {'n:source': 14, 'n:oks_connection_point': 5, 'n:power_line_support': 3}[l.key] || 2.5;
+  return new deck.ScatterplotLayer({...common, data: {length: l.count, attributes: {getPosition: {value: l.pos, size: 2}}},
+    getFillColor: hex(col), getRadius: sz, radiusMinPixels: l.key === 'n:oks_connection_point' ? 4 : 2, radiusMaxPixels: l.key === 'n:source' ? 30 : 9, modelMatrix: l.key === 'n:heat_chamber' ? zm(-3 * S.zex, 1) : null});
+}
+
+function layers() {
+  const out = [];
+  const order = Object.keys(L).filter(k => !k.startsWith('o:')).sort((a, b) => 'pnu'.indexOf(a[0]) - 'pnu'.indexOf(b[0]));
+  for (const k of order) if (S.on[k]) out.push(binLayer(L[k]));
+  const cs = deck.COORDINATE_SYSTEM.CARTESIAN, ss = vSegs(), ps = vPts();
+  const recon = L['o:heat_network_reconstruction'];
+  if (recon) out.push(new deck.PathLayer({id: 'recon', coordinateSystem: cs, pickable: true,
+    data: {length: recon.count, startIndices: recon.st, attributes: {getPath: {value: recon.pos, size: 2}}}, _pathType: 'open',
+    getColor: [244, 63, 94, 150], getWidth: 3, widthUnits: 'meters', widthMinPixels: 3, modelMatrix: zm(-3.2 * S.zex, 1)}));
+  out.push(new deck.PathLayer({id: 'new', coordinateSystem: cs, pickable: true, data: ss, getPath: s => s.path, modelMatrix: zm(0),
+    getColor: s => S.colorBy === 'status' ? (s.bad ? [244, 63, 94] : [34, 197, 94]) : s.p.laying_method === 'special' ? [251, 146, 60] : dnColor(s.p.diameter),
+    getWidth: s => s.row.width_m, widthUnits: 'meters', widthMinPixels: 3, updateTriggers: {getColor: [S.colorBy]}}));
+  if (S.route) out.push(new deck.PathLayer({id: 'route', coordinateSystem: cs, data: S.route.segs, getPath: s => s.path, modelMatrix: zm(0),
+    getColor: [250, 204, 21], getWidth: 3, widthUnits: 'meters', widthMinPixels: 6}));
+  out.push(new deck.LineLayer({id: 'wells', coordinateSystem: cs, data: ps.filter(p => p.p.object_type !== 'technical_node'),
+    getSourcePosition: p => [p.xy[0], p.xy[1], 0], getTargetPosition: p => [p.xy[0], p.xy[1], -3 * S.zex],
+    getColor: p => [...hex((NEW[p.p.object_type] || ['', '#94a3b8'])[1]), 160], getWidth: 1.5}));
+  out.push(new deck.ScatterplotLayer({id: 'npts', coordinateSystem: cs, pickable: true, data: ps,
+    getPosition: p => [p.xy[0], p.xy[1], -3 * S.zex], getFillColor: p => hex((NEW[p.p.object_type] || ['', '#94a3b8'])[1]),
+    getRadius: p => p.p.object_type === 'technical_node' ? 1 : 3, radiusMinPixels: 3}));
+  out.push(new deck.ScatterplotLayer({id: 'cx', coordinateSystem: cs, pickable: true, data: vCxAll().filter(c => !S.cxType || c.type === S.cxType),
+    getPosition: c => [c.x, c.y, -(c.hn ?? 3) * S.zex], getFillColor: c => c.ok === false ? [244, 63, 94] : c.ok ? [34, 197, 94] : [148, 163, 184],
+    getRadius: 2, radiusMinPixels: 6, stroked: true, getLineColor: [255, 255, 255], lineWidthMinPixels: 1.5, parameters: {depthCompare: 'always'}}));
+  if (S.pivot) out.push(new deck.ScatterplotLayer({id: 'pivot', coordinateSystem: cs, data: [S.pivot], getPosition: d => d,
+    filled: true, getFillColor: [250, 204, 21, 60], stroked: true, getLineColor: [250, 204, 21], lineWidthMinPixels: 2,
+    getRadius: 1, radiusMinPixels: 14, radiusMaxPixels: 14, parameters: {depthCompare: 'always'}}));
+  if (S.hover) out.push(new deck.ScatterplotLayer({id: 'hover', coordinateSystem: cs, data: [S.hover], getPosition: d => d,
+    getFillColor: [250, 204, 21], getRadius: 4, radiusMinPixels: 9, parameters: {depthCompare: 'always'}}));
+  return out;
+}
+
+function bbox() {
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for (const l of scene.layers) for (let j = 0; j < l.pos.length; j += l.dim) {
+    const x = l.pos[j], y = l.pos[j + 1]; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  return [x0, y0, x1, y1];
+}
+
+function initDeck() {
+  const [x0, y0, x1, y1] = bbox(), w = $('#map').clientWidth - 160;
+  view = {target: [(x0 + x1) / 2, (y0 + y1) / 2, 0], zoom: Math.log2(w / Math.max(x1 - x0, y1 - y0, 50)),
+    rotationX: +(new URLSearchParams(location.search).get('rx') || 90), rotationOrbit: 0, minZoom: -12, maxZoom: 11, minRotationX: -90, maxRotationX: 90};
+  S.home = {...view, rotationX: 90};
+  deckgl = new deck.Deck({parent: $('#map'), views: new deck.OrbitView({orbitAxis: 'Z', fovy: FOVY, near: .01, far: 1e5}),
+    initialViewState: view, controller: {inertia: true, dragMode: 'pan', dragPan: false, dragRotate: false, scrollZoom: false, keyboard: false}, onViewStateChange: ({viewState}) => { view = viewState; return viewState; },
+    layers: layers(), onClick: pick, onHover: hover, getCursor: ({isHovering, isDragging}) => isDragging ? 'grabbing' : isHovering ? 'pointer' : 'grab'});
+  deckgl.getCanvas && deckgl.getCanvas() && (deckgl.getCanvas().style.zIndex = 0);
+}
+const redraw = () => deckgl.setProps({layers: layers()});
+
+// ---------- тачпад, колёсико, клавиши ----------
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const vp = () => deckgl.getViewports()[0];
+// точка мира под пикселем на плоскости z = Z: луч через две глубины пикселя и пересечение с плоскостью
+// (unproject с targetZ в OrbitView возвращает точку не на плоскости)
+function toWorld(x, y, Z = view.target[2] || 0) {
+  const v = vp(); if (!v) return null;
+  const p = v.unproject([x, y, 0.5]), q = v.unproject([x, y, 1]), dz = q[2] - p[2];
+  if (!p.every(Number.isFinite) || !q.every(Number.isFinite) || Math.abs(dz) < 1e-9) return null;
+  const k = (Z - p[2]) / dz;
+  return [p[0] + (q[0] - p[0]) * k, p[1] + (q[1] - p[1]) * k, Z];
+}
+function jump(patch) { view = {...view, ...patch, transitionDuration: 0}; deckgl.setProps({initialViewState: view}); }
+// сдвиг на dx,dy пикселей экрана: точка экрана (центр + d) становится центром — работает при любом повороте и наклоне
+function panPx(dx, dy) {
+  const v = vp(); if (!v) return;
+  const a = toWorld(v.width / 2, v.height / 2), b = toWorld(v.width / 2 + dx, v.height / 2 + dy);
+  if (!a || !b) return;
+  let mx = b[0] - a[0], my = b[1] - a[1];
+  const lim = 4 * Math.hypot(dx, dy) / Math.pow(2, view.zoom), m = Math.hypot(mx, my);  // у горизонта не улетаем
+  if (m > lim) { mx *= lim / m; my *= lim / m; }
+  jump({target: [view.target[0] + mx, view.target[1] + my, view.target[2] || 0]});
+}
+// Масштаб к реальной точке под курсором P (объект с глубиной или земля): t' = P + (t − P)·2^(zoom − zoom').
+// P остаётся под курсором при любой высоте центра камеры. Точку держим на время жеста, чтобы щипок не «плавал».
+let zoomP = null;
+function zoomAt(dz, x, y) {
+  const now = performance.now();
+  if (!zoomP || now - zoomP.t > 250 || Math.hypot(x - zoomP.x, y - zoomP.y) > 6) zoomP = {x, y, P: pivotAt(x, y)};
+  zoomP.t = now;
+  const P = zoomP.P, z = clamp(view.zoom + dz, view.minZoom, view.maxZoom), k = Math.pow(2, view.zoom - z), t = view.target;
+  jump({zoom: z, target: [P[0] + (t[0] - P[0]) * k, P[1] + (t[1] - P[1]) * k, P[2] + ((t[2] || 0) - P[2]) * k]});
+}
+const turn = (dOrbit, dTilt) => jump({rotationOrbit: view.rotationOrbit + dOrbit, rotationX: clamp(view.rotationX + dTilt, -90, 90)});
+// Вращение вокруг точки P, а не центра экрана. OrbitView: камера = L·Rx(наклон)·Rz(поворот)·масштаб·(w − target).
+// P остаётся на том же месте экрана, если (P − target) поворачивается вместе с камерой: t' = P − M'ᵀ·M·(P − t).
+const rotM = (ph, th) => { const cp = Math.cos(ph), sp = Math.sin(ph), ct = Math.cos(th), st = Math.sin(th);
+  return [[ct, -st, 0], [cp * st, cp * ct, -sp], [sp * st, sp * ct, cp]]; };
+const mul = (M, v) => M.map(r => r[0] * v[0] + r[1] * v[1] + r[2] * v[2]);
+const mulT = (M, v) => [0, 1, 2].map(j => M[0][j] * v[0] + M[1][j] * v[1] + M[2][j] * v[2]);
+function rotateAround(P, dOrbit, dTilt) {
+  const D = Math.PI / 180, t = view.target, th = view.rotationOrbit, ph = view.rotationX;
+  const th2 = th + dOrbit, ph2 = clamp(ph + dTilt, view.minRotationX, view.maxRotationX);
+  const u = mul(rotM(ph * D, th * D), [P[0] - t[0], P[1] - t[1], P[2] - (t[2] || 0)]), v = mulT(rotM(ph2 * D, th2 * D), u);
+  jump({rotationOrbit: th2, rotationX: ph2, target: [P[0] - v[0], P[1] - v[1], P[2] - v[2]]});
+}
+// Точка вращения: объект под курсором (труба, здание, дорога — с глубиной), иначе земля, иначе центр экрана
+function pivotAt(x, y) {
+  try { const i = deckgl.pickObject({x, y, radius: 4, unproject3D: true});
+    if (i && i.coordinate && i.coordinate.length >= 2 && i.coordinate.every(Number.isFinite)) return [i.coordinate[0], i.coordinate[1], i.coordinate[2] || 0]; } catch (e) {}
+  const v = vp(), p = toWorld(x, y, 0), far = 3 * Math.max(v.width, v.height) / Math.pow(2, view.zoom);
+  if (p && p.every(Number.isFinite) && Math.hypot(p[0] - view.target[0], p[1] - view.target[1]) < far) return [p[0], p[1], 0];
+  return [view.target[0], view.target[1], view.target[2] || 0];
+}
+const showPivot = P => { S.pivot = P; redraw(); };
+let altPivot = null, altTimer = 0;
+let gesture = null;
+// Оси камеры в мире: строки M = Rx(наклон)·Rz(поворот); камера смотрит вдоль +y своей системы (lookAt из [0,−f,0])
+function camAxes() {
+  const D = Math.PI / 180, M = rotM(view.rotationX * D, view.rotationOrbit * D);
+  return {right: M[0], fwd: M[1], up: M[2]};
+}
+// Полёт двигает саму камеру. В OrbitView камера стоит на взгляде позади target на dist = altitude·height / 2^zoom
+// (altitude = 1 / (2·tan(fovy/2))). После сдвига target ставим туда, где взгляд упирается в землю (z = 0),
+// а zoom пересчитываем под новое расстояние — картинка та же, а вращение и масштаб дальше идут вокруг земли.
+const FOVY = 40;
+const camDist = (zoom = view.zoom) => vp().height / (2 * Math.tan(FOVY / 2 * Math.PI / 180)) / Math.pow(2, zoom);
+function camPos() { const {fwd} = camAxes(), t = view.target, d = camDist(); return [0, 1, 2].map(i => (t[i] || 0) - fwd[i] * d); }
+function lookFrom(C) {
+  const {fwd} = camAxes(), d0 = camDist(), minD = camDist(view.maxZoom);
+  let d = d0;
+  if (fwd[2] < -0.05 && C[2] > 0) d = clamp(C[2] / -fwd[2], minD, 1e6);   // до земли по взгляду
+  else if (fwd[2] < -0.05 && C[2] <= 0) d = clamp(d0, minD, 50 * S.zex);    // под землёй: держим близкое расстояние
+  jump({target: [0, 1, 2].map(i => C[i] + fwd[i] * d), zoom: clamp(Math.log2(camDist(0) / d), view.minZoom, view.maxZoom)});
+}
+function fly3d(fw, sd, up, dt) {
+  const {right, fwd} = camAxes(), C = camPos();
+  const ref = clamp(Math.abs(C[2]), 15, 1e5);          // скорость по высоте камеры: у земли медленно, сверху быстро
+  const k = ref * dt;
+  lookFrom([0, 1, 2].map(i => C[i] + (fw * fwd[i] + sd * right[i]) * k + (i === 2 ? up * k : 0)));
+}
+
+function initInput() {
+  const map = $('#map');
+  // Перетаскивание: режим выбирается на каждом движении, а не при нажатии — Shift/Ctrl можно нажать и отпустить посреди жеста.
+  // левая — сдвиг (точка под курсором едет за мышью); правая, Shift + левая, Ctrl + левая — вращение вокруг точки под курсором
+  map.addEventListener('contextmenu', e => e.preventDefault());
+  let g = null;   // {x, y: последняя позиция в координатах карты, on: жест начался, mode, P: опорная точка вращения}
+  const local = e => { const r = map.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  const wantMode = (buttons, e) => (buttons & 2) || e.shiftKey || e.ctrlKey ? 'rot' : 'pan';
+  const setMode = (m, x, y) => {
+    if (g.mode === m) return;
+    if (g.mode === 'rot') showPivot(null);
+    g.mode = m; g.P = null;
+    if (m === 'rot' && g.on) showPivot(g.P = pivotAt(x, y));   // точка — там, где курсор в момент переключения
+  };
+  map.addEventListener('pointerdown', e => {
+    if (e.target.tagName !== 'CANVAS' || (e.button !== 0 && e.button !== 2)) return;
+    const [x, y] = local(e);
+    g = {x, y, on: false, mode: null, buttons: e.button === 2 ? 2 : 1};
+    setMode(wantMode(g.buttons, e), x, y);
+  }, true);
+  addEventListener('pointermove', e => {
+    if (!g) return;
+    if (!(e.buttons & 3)) { endDrag(); return; }
+    const [x, y] = local(e);
+    if (!g.on) { if (Math.hypot(x - g.x, y - g.y) < 3) return; g.on = true; if (g.mode === 'rot') showPivot(g.P = pivotAt(g.x, g.y)); }
+    setMode(wantMode(e.buttons, e), x, y);
+    if (g.mode === 'rot') {
+      const v = vp(); rotateAround(g.P, (x - g.x) / v.width * 180, (y - g.y) / v.height * 180);
+    } else {
+      const a = toWorld(g.x, g.y), b = toWorld(x, y);
+      if (a && b && a.every(Number.isFinite) && b.every(Number.isFinite)) {
+        let mx = a[0] - b[0], my = a[1] - b[1];
+        const lim = 40 * Math.hypot(x - g.x, y - g.y) / Math.pow(2, view.zoom), m = Math.hypot(mx, my);  // у горизонта не улетаем
+        if (m > lim) { mx *= lim / m; my *= lim / m; }
+        jump({target: [view.target[0] + mx, view.target[1] + my, view.target[2] || 0]});
+      }
+    }
+    g.x = x; g.y = y;
+  });
+  // Shift без движения мыши тоже переключает сразу: кольцо появляется под курсором
+  const onMod = e => { if (g && g.on && (e.key === 'Shift' || e.key === 'Control')) setMode(wantMode(g.buttons, e), g.x, g.y); };
+  addEventListener('keydown', onMod); addEventListener('keyup', onMod);
+  const endDrag = () => { if (g && g.mode === 'rot') showPivot(null); g = null; };
+  addEventListener('pointerup', endDrag); addEventListener('pointercancel', endDrag);
+  map.addEventListener('wheel', e => {
+    e.preventDefault();
+    const r = map.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1, dx = e.deltaX * k, dy = e.deltaY * k;
+    // мышь: строки или шаг 120; тачпад: мелкие дробные дельты
+    const mouse = e.deltaMode === 1 || (e.deltaX === 0 && e.wheelDeltaY && Math.abs(e.wheelDeltaY) % 120 === 0);
+    if (e.ctrlKey || e.metaKey) { if (!gesture) zoomAt(-dy * 0.012, x, y); }   // щипок (Chrome шлёт ctrl+wheel) или ⌘+колесо
+    else if (e.altKey) {                                                        // ⌥ + два пальца: вокруг точки под курсором
+      if (!altPivot) showPivot(altPivot = pivotAt(x, y));
+      rotateAround(altPivot, dx * 0.3, -dy * 0.2);
+      clearTimeout(altTimer); altTimer = setTimeout(() => { altPivot = null; showPivot(null); }, 350);
+    }
+    else if (mouse && !e.shiftKey) zoomAt(-dy * 0.0025, x, y);
+    else panPx(dx, dy);
+  }, {passive: false, capture: true});
+  // Safari: щипок и вращение двумя пальцами
+  map.addEventListener('gesturestart', e => { e.preventDefault(); gesture = {z: view.zoom, o: view.rotationOrbit}; });
+  map.addEventListener('gesturechange', e => { e.preventDefault(); if (gesture) jump({zoom: clamp(gesture.z + Math.log2(e.scale), view.minZoom, view.maxZoom), rotationOrbit: gesture.o - e.rotation}); });
+  map.addEventListener('gestureend', e => { e.preventDefault(); gesture = null; });
+  const MOVE = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'KeyR', 'KeyF', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract', 'Space', 'KeyC']);
+  const held = new Set(); let fast = false, running = false;
+  const typing = e => /INPUT|SELECT|TEXTAREA/.test(e.target.tagName);
+  addEventListener('keydown', e => {
+    if (typing(e) || e.metaKey || e.ctrlKey || !MOVE.has(e.code)) return;
+    e.preventDefault(); held.add(e.code); fast = e.shiftKey;
+    if (running) return;
+    running = true; let prev = performance.now();
+    const step = now => {
+      if (!held.size) { running = false; return; }
+      const dt = Math.min(50, now - prev) / 1000, f = fast ? 3 : 1, h = c => held.has(c); prev = now;
+      const v = 700 * dt * f;
+      // стрелки — сдвиг по карте
+      const dx = (h('ArrowRight') ? v : 0) - (h('ArrowLeft') ? v : 0), dy = (h('ArrowDown') ? v : 0) - (h('ArrowUp') ? v : 0);
+      if (dx || dy) panPx(dx, dy);
+      // WASD — полёт как в игре: вперёд туда, куда смотрит камера (с наклоном), A/D вбок, пробел/C вверх-вниз
+      const fw = (h('KeyW') ? 1 : 0) - (h('KeyS') ? 1 : 0), sd = (h('KeyD') ? 1 : 0) - (h('KeyA') ? 1 : 0), up = (h('Space') ? 1 : 0) - (h('KeyC') ? 1 : 0);
+      if (fw || sd || up) fly3d(fw, sd, up, 2 * dt * f);
+      const o = (h('KeyE') ? 1 : 0) - (h('KeyQ') ? 1 : 0), t = (h('KeyR') ? 1 : 0) - (h('KeyF') ? 1 : 0);
+      if (o || t) turn(o * 90 * dt * f, t * 60 * dt * f);
+      const z = (h('Equal') || h('NumpadAdd') ? 1 : 0) - (h('Minus') || h('NumpadSubtract') ? 1 : 0);
+      if (z) { const p = vp(); zoomAt(z * 1.5 * dt * f, p.width / 2, p.height / 2); }
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+  addEventListener('keyup', e => { held.delete(e.code); fast = e.shiftKey; });
+  addEventListener('blur', () => held.clear());
+  $('#ctlH').onclick = () => { const b = $('#ctlB'); b.hidden = !b.hidden; $('#ctlH').textContent = '⌨️ Управление ' + (b.hidden ? '▸' : '▾');
+    try { localStorage.setItem('ui3d.ctl', b.hidden ? '0' : '1'); } catch (x) {} };
+  try { if (localStorage.getItem('ui3d.ctl') !== '1') $('#ctlH').click(); } catch (x) { $('#ctlH').click(); }  // по умолчанию свёрнуто
+}
+function setView(patch) {
+  view = {...view, ...patch, transitionDuration: 600, transitionInterpolator: new deck.LinearInterpolator(['target', 'zoom', 'rotationX', 'rotationOrbit'])};
+  deckgl.setProps({initialViewState: view});
+}
+const fly = (t, zoom = 2, rx) => setView({target: [t[0], t[1], t[2] || 0], zoom, ...(rx != null ? {rotationX: rx} : {})});
+
+// ---------- описание объектов человеческим языком ----------
+function propRows(p) {
+  return Object.entries(p).filter(([k, v]) => PN[k] && v != null && typeof v !== 'object').map(([k, v]) => [PN[k],
+    k === 'cost' ? rub(v) : k === 'laying_method' ? (v === 'special' ? 'спецпереход (под дорогой или коммуникацией)' : 'обычная') : typeof v === 'number' ? fmt(v, k === 'length' ? 1 : 2) : v]);
+}
+function cxText(c) {
+  if (c.type === 'segment') return {title: 'Нарушение на участке ' + c.eid, problem: c.issues.join('; '), rows: []};
+  const u = scene.utilities[c.type], name = (LABEL['u:' + c.type] || [u.label])[0];
+  const rows = [['Пересекает', `${name} № ${c.eid}`], ['Существующая лежит', `${fmt(c.top, 2)}–${fmt(c.top + c.eh, 2)} м`],
+    ['Новая труба лежит', `${fmt(c.hn, 2)}–${fmt(c.hn + c.H, 2)} м`], ['Зазор по высоте сейчас', `${fmt(c.gap, 2)} м`],
+    ['Нужно не меньше', c.need == null ? 'правила нет' : fmt(c.need, 2) + ' м']];
+  let problem = null, fix = null;
+  if (c.ok === false) {
+    problem = `Новая труба проходит слишком близко к коммуникации «${name.toLowerCase()}»: зазор ${fmt(c.gap, 2)} м, а нужно ${fmt(c.need, 2)} м.`;
+    fix = [c.above != null ? `<b>Поднять</b> трубу: верх не глубже ${fmt(c.above, 2)} м — без доплаты.` : 'Поднять нельзя: выйдет мельче 0,7 м.',
+      `<b>Опустить</b> трубу: верх не мельче ${fmt(c.below, 2)} м — ${c.k_below > 1 ? `дороже на ${fmt((c.k_below - 1) * 100, 1)} %` : 'без доплаты'}.`].join('<br>');
+  }
+  return {title: 'Пересечение: ' + name.toLowerCase(), rows, problem, fix, ok: c.ok};
+}
+function describe(info) {
+  const {layer, object, index} = info;
+  if (!layer) return null;
+  const id = layer.id;
+  if (L[id]) {
+    const l = L[id], [label] = LABEL[id] || [id], u = scene.utilities[id.slice(2)], j = l.st[index] * l.dim;
+    const rows = [['Номер', l.ids[index]]];
+    if (l.attr && l.attr[index] != null) rows.push([id === 'n:oks_connection_point' ? 'Расход тепла, т/ч' : 'Диаметр (Ду), мм', fmt(l.attr[index], 2)]);
+    if (u) rows.push(['Глубина верха', fmt(u.top, 1) + ' м' + (u.clear == null ? ' (условно)' : '')], ['Нужный зазор с новой трубой', u.clear == null ? 'правила нет' : fmt(u.clear, 1) + ' м']);
+    return {title: label, rows, id: l.ids[index], at: [l.pos[j], l.pos[j + 1]]};
+  }
+  if (id === 'recon') { const p = scene.props[L['o:heat_network_reconstruction'].ids[index]]; return {title: NEW.heat_network_reconstruction[0], rows: propRows(p), p}; }
+  if (id === 'new' || id === 'route') return {title: NEW.heat_network[0], rows: [...propRows(object.p), ['Пересечений с коммуникациями', object.cx.length]],
+    p: object.p, seg: object, at: object.path[0], problem: object.bad ? `На участке ${object.cx.filter(c => c.ok === false).length} проблем по высоте — см. вкладку «Проблемы».` : null};
+  if (id === 'npts') return {title: (NEW[object.p.object_type] || [object.p.object_type])[0], rows: propRows(object.p), p: object.p, at: object.xy};
+  if (id === 'cx') return {...cxText(object), cx: object, at: [object.x, object.y, -(object.hn ?? 3) * S.zex]};
+  return null;
+}
+function hover(info) {
+  const tip = $('#tip'), d = info.picked && describe(info);
+  if (!d) { tip.style.display = 'none'; return; }
+  const r = $('#map').getBoundingClientRect();
+  tip.style.display = 'block'; tip.style.left = r.left + info.x + 16 + 'px'; tip.style.top = r.top + info.y + 16 + 'px';
+  tip.innerHTML = `<b>${esc(d.title)}</b>` + d.rows.slice(0, 5).map(x => `${esc(x[0])}: ${esc(x[1])}`).join('\n') + (d.problem ? `\n<span style="color:#fda4af">${esc(d.problem)}</span>` : '') + '\n<span style="color:#9fb0c8">щёлкните, чтобы открыть</span>';
+}
+function pick(info) {
+  const d = info.picked && describe(info);
+  if (!d) return;
+  showCard(d);
+  if (d.seg) routeTo(d.seg.p.end_node_id, d.seg);
+  else if (d.cx) { const s = segs.find(s => s.i === d.cx.seg); if (s) routeTo(s.p.end_node_id, s); }
+  else if (d.p) routeTo(d.p.id);
+  else if (d.id) routeTo(d.id);
+}
+function showCard(d) {
+  const c = $('#card'); c.hidden = false;
+  c.innerHTML = `<div class="h"><b>${esc(d.title)}</b><button id="cardX" title="Закрыть">×</button></div>
+    <table>${d.rows.map(r => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`).join('')}</table>
+    ${d.problem ? `<div class="prob">⚠️ ${esc(d.problem)}</div>` : ''}${d.fix ? `<div class="fix">Как исправить:<br>${d.fix}</div>` : ''}
+    ${d.ok === true ? '<div class="fix">✓ Зазор достаточный</div>' : ''}
+    <div class="act">${d.at ? '<button id="cardGo" class="primary">Показать на карте</button>' : ''}<button id="cardLink">Скопировать ссылку</button></div>`;
+  $('#cardX').onclick = () => { c.hidden = true; };
+  if (d.at) $('#cardGo').onclick = () => fly(d.at, 2.2, d.cx ? 45 : undefined);
+  const key = (d.p && d.p.id) || d.id || (d.seg && d.seg.p.id);
+  if (key) history.replaceState(null, '', '#' + encodeURIComponent(key));
+  $('#cardLink').onclick = e => { try { navigator.clipboard.writeText(location.href); e.target.textContent = 'Скопировано ✓'; } catch (x) { e.target.textContent = location.href; } };
+}
+
+// ---------- трасса и профиль ----------
+function routeTo(node, via) {
+  const ss = vSegs(), byEnd = {}, byStart = {};
+  for (const s of ss) { byEnd[s.p.end_node_id] = s; (byStart[s.p.start_node_id] ||= []).push(s); }
+  let end = node;
+  if (via) { let s = via; while (byStart[s.p.end_node_id] && byStart[s.p.end_node_id].length === 1) s = byStart[s.p.end_node_id][0]; end = s.p.end_node_id; }
+  if (!byEnd[end]) { closeProfile(); return false; }
+  const path = [];
+  for (let s = byEnd[end], guard = 0; s && guard < 1e5; s = byEnd[s.p.start_node_id], guard++) path.unshift(s);
+  let acc = 0;
+  for (const s of path) {
+    s.s0 = acc; s.len = 0;
+    for (let j = 1; j < s.path.length; j++) s.len += Math.hypot(s.path[j][0] - s.path[j - 1][0], s.path[j][1] - s.path[j - 1][1]);
+    acc += s.len;
+  }
+  S.route = {segs: path, end, len: acc, cost: path.reduce((a, s) => a + (s.p.cost || 0), 0)};
+  const bad = path.reduce((a, s) => a + s.cx.filter(c => c.ok === false).length, 0);
+  $('#prof').style.display = 'block';
+  $('#pttl').innerHTML = `Профиль трассы под землёй до «${esc(end)}»: ${fmt(acc)} м, ${rub(S.route.cost)}, ` +
+    (bad ? `<span style="color:#fda4af">проблем ${bad}</span>` : '<span style="color:#86efac">проблем нет</span>');
+  redraw();
+  requestAnimationFrame(() => { deckgl.redraw(); profile(); });
+  return true;
+}
+function closeProfile() { S.route = null; S.hover = null; $('#prof').style.display = 'none'; redraw(); }
+
+function profile() {
+  const cv = $('#pc'), r = cv.getBoundingClientRect(), dpr = devicePixelRatio || 1;
+  cv.width = r.width * dpr; cv.height = r.height * dpr;
+  const g = cv.getContext('2d'); g.scale(dpr, dpr);
+  const R = S.route; if (!R) return;
+  let maxD = 5;
+  for (const s of R.segs) { maxD = Math.max(maxD, (s.p.depth_start ?? 3) + s.row.height_m + 1, (s.p.depth_end ?? 3) + s.row.height_m + 1);
+    for (const c of s.cx) if (c.top != null) maxD = Math.max(maxD, c.top + c.eh + 1); }
+  const pl = 70, pr = 20, pt = 26, pb = 28, W = r.width - pl - pr, H = r.height - pt - pb;
+  const X = s => pl + s / Math.max(R.len, 1) * W, Y = d => pt + d / maxD * H;
+  g.fillStyle = '#0b1220'; g.fillRect(0, 0, r.width, r.height);
+  g.fillStyle = 'rgba(161,98,7,.10)'; g.fillRect(pl, Y(0), W, H);
+  g.font = '13px -apple-system,sans-serif'; g.fillStyle = '#9fb0c8'; g.strokeStyle = '#22314d';
+  for (let d = 0; d <= maxD; d += 1) { g.beginPath(); g.moveTo(pl, Y(d)); g.lineTo(pl + W, Y(d)); g.stroke(); g.fillText(d + ' м', 12, Y(d) + 4); }
+  g.save(); g.translate(12, pt - 10); g.fillText('глубина ↓', 0, 0); g.restore();
+  const raw = R.len / Math.max(1, W / 80), mag = Math.pow(10, Math.floor(Math.log10(raw || 1)));
+  const step = [1, 2, 5, 10].map(k => k * mag).find(v => v >= raw) || mag * 10;
+  for (let s = 0; s <= R.len; s += step) g.fillText(fmt(s) + ' м', X(s) - 12, r.height - 8);
+  const dash = (d, c, t) => { g.setLineDash([6, 5]); g.strokeStyle = c; g.beginPath(); g.moveTo(pl, Y(d)); g.lineTo(pl + W, Y(d)); g.stroke(); g.setLineDash([]);
+    g.fillStyle = c; g.fillText(t, pl + W - g.measureText(t).width - 4, Y(d) - 5); };
+  dash(scene.rules.normal, '#38bdf8', 'обычная глубина 3 м'); dash(scene.rules.min, '#9fb0c8', 'мельче 0,7 м нельзя');
+  g.fillStyle = '#a16207'; g.fillRect(pl, Y(0) - 4, W, 4); g.fillStyle = '#d6a64a'; g.fillText('земля', pl + 4, Y(0) - 8);
+  for (const s of R.segs) {
+    const d0 = s.p.depth_start ?? 3, d1 = s.p.depth_end ?? 3, h = s.row.height_m, a = X(s.s0), b = X(s.s0 + s.len);
+    if (s.p.laying_method === 'special') { g.fillStyle = 'rgba(251,146,60,.16)'; g.fillRect(a, Y(0), b - a, H); }
+    g.fillStyle = s.bad ? '#f43f5e' : '#38bdf8';
+    g.beginPath(); g.moveTo(a, Y(d0)); g.lineTo(b, Y(d1)); g.lineTo(b, Y(d1 + h) + 2); g.lineTo(a, Y(d0 + h) + 2); g.closePath(); g.fill();
+  }
+  const cs = R.segs.flatMap(s => s.cx.filter(c => c.top != null).map(c => ({...c, S: s.s0 + c.s})));
+  cs.forEach((c, k) => {
+    const x = X(c.S), col = (LABEL['u:' + c.type] || ['', '#94a3b8'])[1];
+    if (c.need != null) { g.strokeStyle = c.ok ? '#22c55e' : '#f43f5e'; g.setLineDash([3, 3]);
+      g.strokeRect(x - 8, Y(c.top - c.need), 16, Y(c.top + c.eh + c.need) - Y(c.top - c.need)); g.setLineDash([]); }
+    g.fillStyle = col; g.fillRect(x - 5, Y(c.top), 10, Math.max(4, Y(c.top + c.eh) - Y(c.top)));
+    g.fillStyle = c.ok === false ? '#fda4af' : '#9fb0c8';
+    const t = `${SHORT[c.type] || c.type}${c.ok === false ? ' ⚠' : ''}`;
+    g.fillText(t, Math.min(x - 14, pl + W - g.measureText(t).width), Y(c.top) - 8 - (k % 3) * 14);
+  });
+  const near = e => cs.find(c => Math.abs(X(c.S) - e.offsetX) < 10);
+  cv.onmousemove = e => {
+    const s = (e.offsetX - pl) / W * R.len; if (s < 0 || s > R.len) return;
+    const seg = R.segs.find(q => s >= q.s0 && s <= q.s0 + q.len); if (!seg) return;
+    let t = s - seg.s0, p = seg.path[0];
+    for (let j = 1; j < seg.path.length; j++) { const a = seg.path[j - 1], b = seg.path[j], l = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (t <= l) { p = [a[0] + (b[0] - a[0]) * t / l, a[1] + (b[1] - a[1]) * t / l, a[2] + (b[2] - a[2]) * t / l]; break; } t -= l; p = b; }
+    S.hover = [p[0], p[1], p[2] * S.zex]; redraw();
+    const n = near(e), tip = $('#tip');
+    tip.style.display = 'block'; tip.style.left = e.clientX + 14 + 'px'; tip.style.top = Math.max(8, e.clientY - 150) + 'px';
+    tip.innerHTML = `<b>${fmt(s)} м от начала трассы</b>Глубина верха трубы: ${fmt(-p[2] - seg.row.height_m / 2, 2)} м\nДиаметр: ${seg.p.diameter} мм` +
+      (seg.p.laying_method === 'special' ? '\nСпецпереход' : '') + (n ? `\n\n<b>${esc(cxText(n).title)}</b>` + (cxText(n).problem ? esc(cxText(n).problem) : 'зазор достаточный') + '\nщёлкните для подробностей' : '') +
+      '\n<span style="color:#9fb0c8">жёлтая точка на карте — это место</span>';
+  };
+  cv.onmouseleave = () => { S.hover = null; $('#tip').style.display = 'none'; redraw(); };
+  cv.onclick = e => { const n = near(e); if (n) { showCard({...cxText(n), cx: n, at: [n.x, n.y, -n.hn * S.zex]}); fly([n.x, n.y, -n.hn * S.zex], 2.2, 45); } };
+  cv.style.cursor = 'crosshair';
+}
+
+// ---------- поиск ----------
+function find(q) {
+  q = String(q).trim(); if (!q) return;
+  if (q in byId) {
+    const p = scene.props[byId[q]];
+    if (p.variant_id && String(p.variant_id) !== S.variant) setVariant(String(p.variant_id));
+    const s = segs.find(s => s.p.id === q), pt = points.find(t => t.p.id === q);
+    if (s) { routeTo(s.p.end_node_id, s); showCard(describe({layer: {id: 'new'}, object: s})); fly(s.path[0], 2.2); return; }
+    if (pt) { routeTo(q); showCard(describe({layer: {id: 'npts'}, object: pt})); fly(pt.xy, 2.2); return; }
+  }
+  for (const l of scene.layers) {
+    if (l.key.startsWith('o:')) continue;
+    const k = l.ids.indexOf(q); if (k < 0) continue;
+    const d = describe({layer: {id: l.key}, index: k});
+    showCard(d);
+    if (!routeTo(q)) closeProfile();
+    fly(d.at, 2.2); return;
+  }
+  const c = $('#card'); c.hidden = false;
+  c.innerHTML = `<div class="h"><b>Ничего не нашлось</b><button onclick="this.closest('#card').hidden=true">×</button></div>
+    <div class="mut" style="color:var(--muted)">По запросу «${esc(q)}» нет объекта. Проверьте номер — он есть в карточке объекта и во вкладке «Здания».</div>`;
+}
+
+// ---------- интерфейс ----------
+function setVariant(v) {
+  S.variant = v; closeProfile();
+  document.querySelectorAll('#variants button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+  renderTabs(); redraw();
+}
+function showHelp(on) { $('#help').style.display = on ? 'flex' : 'none'; if (!on) try { localStorage.setItem('ui3d.help', '1'); } catch (e) {} }
+
+function ui() {
+  const best = Math.min(...scene.summaries.map(s => s.score));
+  $('#variants').innerHTML = scene.summaries.map(s => `<button data-v="${s.variant_id}">Вариант ${s.variant_id}${s.score === best && scene.summaries.length > 1 ? ' ★' : ''}
+    <small>S ${fmt(s.score, 2)} · ${rub(s.calculated_cost)}</small></button>`).join('');
+  $('#variants').onclick = e => { const b = e.target.closest('button'); if (b) setVariant(b.dataset.v); };
+  S.variant = String((scene.summaries[0] || {}).variant_id || '1');
+  $('#variants button') && $('#variants button').classList.add('on');
+  $('#q').onkeydown = e => { if (e.key === 'Enter') find(e.target.value); };
+  $('#qbtn').onclick = () => find($('#q').value);
+  $('#zex').oninput = e => { S.zex = +e.target.value; $('#zexv').textContent = '×' + S.zex; redraw(); };
+  $('#gop').oninput = e => { S.gop = e.target.value / 100; $('#gopv').textContent = (100 - e.target.value) + '%'; redraw(); };
+  $('#ext').onchange = e => { S.ext = e.target.checked; redraw(); };
+  $('#colorBy').onclick = e => { const b = e.target.closest('button'); if (!b) return; S.colorBy = b.dataset.v;
+    $('#colorBy').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); redraw(); renderLegend(); };
+  $('#lookH').onclick = () => { const b = $('#lookB'); b.hidden = !b.hidden; $('#lookH span').textContent = b.hidden ? '▸' : '▾'; };
+  $('#pclose').onclick = closeProfile;
+  $('#legH').onclick = () => { const b = $('#legI'); b.hidden = !b.hidden; $('#legH').textContent = '🎨 Что означают цвета ' + (b.hidden ? '▸' : '▾'); };
+  $('#vAll').onclick = () => setView({...S.home});
+  $('#vTop').onclick = () => setView({rotationX: 90, target: [view.target[0], view.target[1], 0]});
+  $('#v3d').onclick = () => setView({rotationX: 35, target: [view.target[0], view.target[1], 0]});
+  $('#vUnder').onclick = () => setView({rotationX: -25, target: [view.target[0], view.target[1], -3 * S.zex]});
+  $('#rotL').onclick = () => setView({rotationOrbit: view.rotationOrbit - 45, rotationX: view.rotationX === 90 ? 45 : view.rotationX});
+  $('#rotR').onclick = () => setView({rotationOrbit: view.rotationOrbit + 45, rotationX: view.rotationX === 90 ? 45 : view.rotationX});
+  $('#zIn').onclick = () => setView({zoom: view.zoom + 1});
+  $('#zOut').onclick = () => setView({zoom: view.zoom - 1});
+  $('#helpBtn').onclick = () => showHelp(true);
+  $('#helpOk').onclick = () => showHelp(false);
+  $('#help').onclick = e => { if (e.target.id === 'help') showHelp(false); };
+  document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => openTab(b.dataset.tab));
+  addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT') return;
+    if (e.key === 'Escape') { showHelp(false); closeProfile(); $('#card').hidden = true; }
+  });
+  addEventListener('resize', () => S.route && profile());
+  renderTabs(); renderLegend();
+}
+function openTab(t) {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x.dataset.tab === t));
+  document.querySelectorAll('aside section').forEach(s => s.hidden = s.id !== 't-' + t);
+}
+function renderLegend() {
+  const it = [['sw', S.colorBy === 'status' ? '#22c55e' : '#38bdf8', S.colorBy === 'status' ? 'новая труба без проблем' : 'новая труба (тоньше — меньше диаметр)'],
+    ['sw', S.colorBy === 'status' ? '#f43f5e' : '#fb923c', S.colorBy === 'status' ? 'новая труба с проблемой' : 'спецпереход под дорогой'],
+    ['sw', '#ef4444', 'существующая теплосеть'], ['sw', '#facc15', 'газ'], ['sw', '#a78bfa', 'кабель'],
+    ['dot', '#f43f5e', 'проблема по высоте'], ['dot', '#f8fafc', 'здание (точка подключения)'], ['dot', '#38bdf8', 'новая камера']];
+  $('#legI').innerHTML = it.map(([k, c, t]) => `<span><i class="${k}" style="background:${c}"></i>${t}</span>`).join('');
+}
+
+function renderTabs() {
+  const sm = scene.summaries.find(s => String(s.variant_id) === S.variant) || {};
+  const ss = vSegs(), cx = vCxAll(), bad = cx.filter(c => c.ok === false);
+  const byEnd = new Set(ss.map(s => s.p.end_node_id));
+  const rows = oksPts.map(o => ({...o, conn: byEnd.has(o.id)}));
+  $('#cntOks').textContent = `${rows.filter(r => r.conn).length} из ${rows.length}`;
+  $('#cntCx').textContent = bad.length ? `${fmt(bad.length)} шт.` : 'нет';
+  const ties = vPts().filter(p => p.p.object_type === 'tie_in').length + (sm.existing_chamber_tie_in_count || 0);
+  $('#t-sum').innerHTML = `<h2>Вариант ${S.variant} — итоги</h2>
+    <div class="kpi">
+      <div><b>${fmt(sm.score, 2)}</b><span>оценка S (меньше — лучше)</span></div>
+      <div><b>${rub(sm.calculated_cost)}</b><span>полная стоимость</span></div>
+      <div><b>${fmt((sm.new_network_length || sm.length || 0) / 1000, 2)} км</b><span>новых труб</span></div>
+      <div><b class="${(sm.unconnected_oks_ids || []).length ? 'bad' : 'ok'}" style="color:${(sm.unconnected_oks_ids || []).length ? '#fda4af' : '#86efac'}">${(sm.unconnected_oks_ids || []).length}</b><span>зданий не подключено</span></div>
+      <div><b>${ss.filter(s => s.p.laying_method === 'special').length}</b><span>спецпереходов</span></div>
+      <div><b style="color:${bad.length ? '#fda4af' : '#86efac'}">${fmt(bad.length)}</b><span>проблем по высоте</span></div>
+    </div>
+    <h2>Из чего стоимость</h2><table>
+      <tr><td>Строительство</td><td>${rub(sm.construction_cost)}</td></tr>
+      <tr><td>Штраф за неподключённые здания</td><td>${rub(sm.unconnected_penalty)}</td></tr>
+      <tr><td>Новых камер / врезок</td><td>${vPts().filter(p => p.p.object_type === 'heat_chamber').length} / ${ties}</td></tr></table>
+    ${scene.summaries.length > 1 ? `<h2>Сравнение вариантов</h2><table><tr><th>Вариант</th><th>S</th><th>Стоимость</th><th>Не подкл.</th></tr>
+      ${scene.summaries.map(s => `<tr style="cursor:pointer" onclick="setVariant('${s.variant_id}')"><td>${s.variant_id === S.variant ? '▶ ' : ''}${s.variant_id}</td><td>${fmt(s.score, 2)}</td>
+      <td>${rub(s.calculated_cost)}</td><td>${(s.unconnected_oks_ids || []).length}</td></tr>`).join('')}</table>` : ''}
+    <h2>Что можно сделать</h2>
+    <div style="display:grid;gap:8px">
+      <button onclick="openTab('oks')">🏢 Найти здание и его трубу</button>
+      <button onclick="openTab('cx')">⚠️ Посмотреть проблемы по высоте</button>
+      <button onclick="showHelp(true)">? Как управлять картой</button></div>`;
+  const drawOks = () => {
+    const f = ($('#oksq') || {}).value || '';
+    const list = rows.filter(r => (S.oksF === 'all' || (S.oksF === 'conn') === r.conn) && (!f || String(r.id).includes(f)));
+    list.sort((a, b) => (a.conn - b.conn) || String(a.id).localeCompare(String(b.id), 'ru', {numeric: true}));
+    $('#oksl').innerHTML = list.slice(0, 2000).map(r => `<div class="row" data-id="${esc(r.id)}"><div class="t"><span>Здание ${esc(r.id)}</span>
+      <span class="badge ${r.conn ? 'b-ok' : 'b-bad'}">${r.conn ? 'подключено' : 'не подключено'}</span></div>
+      <div class="m">нужно тепла ${fmt(r.flow, 1)} т/ч · ${r.conn ? 'щёлкните — покажу трубу и профиль' : 'маршрут не найден'}</div></div>`).join('') || '<div class="row m">ничего не найдено</div>';
+  };
+  $('#t-oks').innerHTML = `<h2>Здания к подключению</h2>
+    <div class="filters" id="oksF"><button data-f="all">Все (${rows.length})</button><button data-f="conn">Подключены (${rows.filter(r => r.conn).length})</button>
+    <button data-f="no">Не подключены (${rows.filter(r => !r.conn).length})</button></div>
+    <input id="oksq" placeholder="Номер здания" style="width:100%;margin-bottom:8px"><div class="list" id="oksl"></div>`;
+  const markF = () => $('#oksF').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.f === S.oksF));
+  markF(); drawOks();
+  $('#oksF').onclick = e => { const b = e.target.closest('button'); if (!b) return; S.oksF = b.dataset.f; markF(); drawOks(); };
+  $('#oksq').oninput = drawOks;
+  $('#oksl').onclick = e => { const r = e.target.closest('.row'); if (!r || !r.dataset.id) return; selRow(r); find(r.dataset.id); };
+  const types = [...new Set(cx.map(c => c.type))];
+  const tname = t => (LABEL['u:' + t] || ['Нарушения участка'])[0];
+  $('#t-cx').innerHTML = `<h2>Проблемы по высоте</h2>
+    <div style="color:var(--muted);font-size:13px;margin-bottom:8px">Труба проходит слишком близко по высоте к другой коммуникации. Щёлкните — покажу место и как обойти.</div>
+    <div class="filters" id="cxF"><button data-t="">Все</button>${types.filter(t => cx.some(c => c.type === t && (!S.cxOnlyBad || c.ok === false))).map(t => `<button data-t="${t}">${tname(t)} (${cx.filter(c => c.type === t && (!S.cxOnlyBad || c.ok === false)).length})</button>`).join('')}</div>
+    <label class="tog"><input type="checkbox" id="onlyBad" ${S.cxOnlyBad ? 'checked' : ''}> Показывать только проблемные</label>
+    <div class="list" id="cxl" style="margin-top:8px"></div>`;
+  const drawCx = () => {
+    $('#cxF').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.t === S.cxType));
+    const list = vCx();
+    $('#cxl').innerHTML = list.slice(0, 3000).map(c => {
+      const t = cxText(c);
+      return `<div class="row" data-k="${scene.crossings.indexOf(c)}"><div class="t"><span>${esc(t.title)}</span>
+        <span class="badge ${c.ok === false ? 'b-bad' : c.ok ? 'b-ok' : 'b-mut'}">${c.ok === false ? 'проблема' : c.ok ? 'норма' : 'не проверяется'}</span></div>
+        <div class="m">${c.type === 'segment' ? esc(c.issues.join('; ')) : `зазор ${fmt(c.gap, 2)} м из ${c.need ?? '—'} · труба ${esc(scene.props[c.seg].id)}`}</div></div>`;
+    }).join('') + (list.length > 3000 ? `<div class="row m">и ещё ${list.length - 3000}…</div>` : '') || '<div class="row m">Проблем нет 🎉</div>';
+  };
+  drawCx();
+  $('#cxF').onclick = e => { const b = e.target.closest('button'); if (!b) return; S.cxType = b.dataset.t; drawCx(); redraw(); };
+  $('#onlyBad').onchange = e => { S.cxOnlyBad = e.target.checked; renderTabs(); };
+  $('#cxl').onclick = e => { const r = e.target.closest('.row'); if (!r || !r.dataset.k) return; selRow(r);
+    const c = scene.crossings[+r.dataset.k], s = segs.find(s => s.i === c.seg);
+    showCard({...cxText(c), cx: c, at: [c.x, c.y, -(c.hn ?? 3) * S.zex]}); if (s) routeTo(s.p.end_node_id, s); fly([c.x, c.y, -(c.hn ?? 3) * S.zex], 2.2, 45); };
+  const keys = Object.keys(L).filter(k => !k.startsWith('o:'));
+  const grp = {u: 'Подземные коммуникации', p: 'На поверхности', n: 'Точки'};
+  $('#t-lay').innerHTML = Object.entries(grp).map(([g, title]) => `<h2>${title}</h2>` + keys.filter(k => k[0] === g).map(k =>
+    `<label class="tog"><input type="checkbox" data-k="${k}" ${S.on[k] ? 'checked' : ''}><i class="sw" style="background:${(LABEL[k] || ['', '#94a3b8'])[1]}"></i>${(LABEL[k] || [k])[0]}
+     <span style="color:var(--muted);margin-left:auto">${fmt(L[k].count)}</span></label>`).join('')).join('') +
+    `<h2>На какой глубине лежат коммуникации</h2><table>${Object.entries(scene.utilities).map(([k, u]) => `<tr><td>${(LABEL['u:' + k] || [u.label])[0]}</td>
+     <td>${fmt(u.top, 1)} м${u.clear == null ? ' (условно)' : `, зазор ≥ ${fmt(u.clear, 1)} м`}</td></tr>`).join('')}</table>`;
+  $('#t-lay').onchange = e => { if (e.target.dataset.k) { S.on[e.target.dataset.k] = e.target.checked; redraw(); } };
+}
+function selRow(r) { r.parentNode.querySelectorAll('.sel').forEach(x => x.classList.remove('sel')); r.classList.add('sel'); }
+main();
+</script></body></html>

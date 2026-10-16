@@ -73,6 +73,11 @@ final class Tree {
     boolean linked;
     /** Точка осталась без сети, потому что маршрут от её выхода уходит круче 90°, а звено после выхода не пробовалось. */
     boolean turnStuck;
+    /**
+     * То же дерево до ортогональной формы (VariantEnumerator#squared) или null: в городе дерево района, которое по осям
+     * задевает соседа, берётся в прежнем виде, а не теряет точки (п. 2.5).
+     */
+    Tree unsquared;
 
     Tree(TieCandidate tie) {
         this.tie = tie;

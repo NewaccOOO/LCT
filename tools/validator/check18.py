@@ -61,7 +61,12 @@ SHORT_LINK_M = 10.0
 # CUT_PIECE_M): отступ до зон с запасом сверх нормы, зазор до других участков новой сети, поворот и звено
 CUT_MARGIN_M = 0.15
 CUT_APART_M = 0.5
-MAX_TURN_DEG = 89.9
+MAX_TURN_DEG = 90 + 1e-6
+# поворот ровно 90° после округления координат выхода до 9 знаков градуса меряется с ошибкой в тысячные доли градуса
+ROUND_TURN_DEG = 0.01
+# прямой угол трассы по осям застройки не лишняя вершина (B16, B21): эксперты 16.10.2026 — трасса прямыми вдоль стен
+# и дорог, один поворот 90° вместо двух по 45°, хотя диагональ короче
+RIGHT_TOL_DEG = 2.0
 CUT_PIECE_M = 1.05
 # место камеры ветвления в B21 как у сервиса (TreeBuilder.spotAllowed, SpecialObjects.near): не ближе 3 м по участку
 # к точке подключения, отступ от объектов специального прохода и сети с запасом 0,1 м
@@ -1518,6 +1523,10 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
 
     def path_counts(cid, x, new, inc):
         """Прямые (поворот меньше TURN_DEG) и мелкие (меньше SMALL_BEND_DEG) повороты на пути точки в камере cid на месте
+            if abs(turn_deg(c[i - 1], c[i], c[i + 1]) - 90) <= RIGHT_TOL_DEG:
+                rep.add("i  прямой угол оставлен: трасса по осям застройки (B16)",
+                        f"{sid} вершина {i}")
+                continue
         x и в камерах ветвления на дальних концах её участков; new — координаты участков от камеры. Третье число —
         изломы меньше TURN_DEG (micro) там же и в технических узлах на дальних концах участков перед спецучастком."""
         turns = [(new[id(cs)][1], x, new[id(ps)][1]) for cs, ps in path_pairs.get(cid, [])]
@@ -1592,7 +1601,7 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
             out[id(s)] = c if Point(c[0]).distance(g) <= NODE_TOL else c[::-1]
         up = parent[cid][1] if cid in parent else None
         width = DN[max(s["properties"]["diameter"] for s in inc)]["width_m"] / 2
-        vertices = sum(len(c) - 2 for c in out.values())
+        vertices = sum(bent(c) for c in out.values())
         straight0, small0, micro0 = path_counts(cid, at, out, inc)
         if not vertices and not small0 and not micro0:
             continue
@@ -1609,7 +1618,7 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
                         lines_r[tuple(map(tuple, line))] = line
                 options.append(list(lines_r.values()))
             for combo in itertools.product(*options):
-                left = sum(len(line) - 2 for line in combo)
+                left = sum(bent(line) for line in combo)
                 if left > vertices:
                     continue
                 new = {id(r): line for r, line in zip(inc, combo)}
@@ -1632,7 +1641,7 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
         first = None
         for ds, x, new, evens in found:
             why = move_blocked(cid, x, new, inc, out, up, width, evens)
-            left = sum(len(line) - 2 for line in new.values())
+            left = sum(bent(line) for line in new.values())
             counts = path_counts(cid, x, new, inc)
             text = f"{cid}: перенос {math.dist(x, at):.2f} м, вершин у камеры {vertices} → {left}, " \
                    f"мелких изломов пути {small0} → {counts[1]}, изломов меньше {TURN_DEG}° {micro0} → {counts[2]}, " \
@@ -1775,6 +1784,10 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
         old_cost, old_len = chain_cost(list(zip(pts, pts[1:])), dn)
         building = kinds.get(b_node) == "cp" and str(last["properties"]["id"]) in final_piece
         text = f"{n}: " + ", ".join(f"{cs['properties']['id']} → {ps['properties']['id']} "
+    def bent(c):
+        """Вершины ломаной, кроме прямых углов по осям застройки (RIGHT_TOL_DEG)."""
+        return sum(1 for i in range(1, len(c) - 1) if abs(turn_deg(c[i - 1], c[i], c[i + 1]) - 90) > RIGHT_TOL_DEG)
+
                                      f"{turn_deg(next_to(geo, cs, n), (g.x, g.y), next_to(geo, ps, n)):.2f}°"
                                      for cs, ps in path_pairs[n])
         first_why = None
@@ -1845,7 +1858,7 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
     for n, pairs in sorted(path_pairs.items()):
         g = geo[n]
         sharp = [(cs, s, turn_deg(next_to(geo, cs, n), (g.x, g.y), next_to(geo, s, n))) for cs, s in pairs]
-        sharp = [(cs, s, a) for cs, s, a in sharp if a > 90.0]
+        sharp = [(cs, s, a) for cs, s, a in sharp if a > 90.0 + ROUND_TURN_DEG]
         if sharp:
             where = "камере" if kinds.get(n) == "heat_chamber" else "узле"
             rep.add(f"B20 поворот на пути точки в {where} круче 90°",
