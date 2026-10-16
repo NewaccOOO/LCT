@@ -833,7 +833,7 @@ function hoverText(h) {
   if (h.kind === 'source') return {title: 'Источник тепла', lines: [esc(r.p.name || r.id)], status: `<b>Источник</b> ${esc(r.p.name || r.id)}`};
   if (h.kind === 'surface') {
     const n = (SURFACES[h.type] || {name: h.type}).name;
-    if (BUILDING_KEYS.has(h.type)) return {title: esc(r.p.address || (r.isFuture ? 'Новое здание' : 'Здание')), lines: [`${r.p.levels ? r.p.levels + ' эт. · ' : ''}${esc(r.id)}`], status: `<b>Здание</b> ${esc(r.id)}`};
+    if (BUILDING_KEYS.has(h.type)) return {title: esc(r.p.address || (r.isFuture ? 'Новое здание' : 'Здание')), lines: [r.p.levels ? `${r.p.levels} эт.` : 'этажность не задана'], status: `<b>${esc(r.p.address || 'Здание')}</b>${r.p.levels ? ` · ${r.p.levels} эт.` : ''}`};
     return {title: n, lines: [h.type === 'road' ? 'трубу под дорогой — не мельче 1,0 м' : h.type === 'tram_tracks' ? 'под трамваем — не мельче 1,2 м' : esc(r.id)], status: n};
   }
   return null;
