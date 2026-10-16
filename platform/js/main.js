@@ -1093,4 +1093,6 @@ async function start() {
 }
 booted = true;
 start();
-window.__app = {S, viewer, rig, select, selectCrossing, setVariant, home, startFly, stopFly, setEx, setMode};
+// для автотестов и записи видео: точка сцены → пиксель окна
+const toScreen = (x, y, z = 0) => { const v = new THREE.Vector3(x, y, z).project(viewer.camera), r = $('#view').getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; };
+window.__app = {S, viewer, rig, select, selectCrossing, setVariant, home, startFly, stopFly, setEx, setMode, toScreen};
