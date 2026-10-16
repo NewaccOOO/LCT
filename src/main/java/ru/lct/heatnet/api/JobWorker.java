@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.HashMap;
@@ -46,6 +47,8 @@ public class JobWorker {
             .setNodeFactory(JsonNodeFactory.withExactBigDecimals(true));
 
     private static final Logger log = LoggerFactory.getLogger(JobWorker.class);
+    /** Пустой файл в каталоге задачи: считать в режиме с учётом глубины (POST /api/v1/jobs?depth=true). */
+    static final String DEPTH_FLAG = "depth.flag";
 
     private final JobRepository jobs;
     private final Pipeline pipeline;
@@ -105,7 +108,7 @@ public class JobWorker {
                 log.info("jobs: job {} failed input validation with {} diagnostics", id, diagnostics.size());
                 return;
             }
-            Result result = pipeline.run(data);
+            Result result = pipeline.run(data, Files.exists(input.resolveSibling(DEPTH_FLAG)));
             Path output = input.resolveSibling("result.geojson");
             GeoJsonStreamWriter.write(result, output);
             job.setSummary(summaries(output, criteria(result, data)));

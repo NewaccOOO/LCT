@@ -65,7 +65,7 @@ async function load({input, output, outText = null, ds}) {
     const model = await buildScene(input, output, {onProgress: (k, t) => progress(0.05 + k * 0.75, t)});
     progress(0.85, 'Рисую 3D…');
     await new Promise(r => setTimeout(r, 0));
-    S.model = model; S.raw = outText; S.ds = ds; S.sel = null; S.route = null;
+    S.model = model; S.raw = outText; S.ds = ds; S.sel = null; S.route = null; S.ghost = null;
     stopFly(); setClip(null); setMeasure(false);
     viewer.variant = null;
     viewer.setModel(model);
@@ -75,7 +75,10 @@ async function load({input, output, outText = null, ds}) {
     renderVariants();
     setVariant(model.variants[0]?.id, {quiet: true});
     renderLayers();
-    if (!applyHash()) home(0);
+    // адрес с видом и выбором применяем только при первом открытии; новый набор — с исходного вида
+    const fromLink = !S.opened && applyHash();
+    S.opened = true;
+    if (!fromLink) { history.replaceState(null, '', location.pathname + location.search); home(0); }
     $('#loading').hidden = true;
     const v = S.v;
     toast(`Открыт набор «${esc(ds.title)}»: ${fmt(model.stats.input)} объектов${v ? `, ${model.variants.length} ${plural(model.variants.length, 'вариант', 'варианта', 'вариантов')}` : ''}`, 'ok');
@@ -115,7 +118,7 @@ async function loadFiles(files) {
 function renderVariants() {
   const vs = S.model.variants, best = Math.min(...vs.map(v => v.score ?? Infinity));
   $('#variants').innerHTML = vs.map(v => `<button role="tab" data-v="${esc(v.id)}" title="Вариант ${esc(v.id)}: S ${fmt(v.score, 2)}, ${rub(v.summary.calculated_cost)}">
-    <span>Вариант ${esc(v.id)}${vs.length > 1 && v.score === best ? ' ★' : ''}</span><small>S ${fmt(v.score, 2)} · ${rub(v.summary.calculated_cost)}</small></button>`).join('');
+    <span><span class="vl">Вариант </span>${esc(v.id)}${vs.length > 1 && v.score === best ? ' ★' : ''}</span><small>S ${fmt(v.score, 2)} · ${rub(v.summary.calculated_cost)}</small></button>`).join('');
   $('#variants').hidden = !vs.length;
 }
 $('#variants').onclick = e => { const b = e.target.closest('button'); if (b) setVariant(b.dataset.v); };
@@ -126,6 +129,7 @@ function setVariant(id, {quiet = false} = {}) {
   const keep = S.sel;
   clearSel();
   viewer.setVariant(v);
+  if (S.ghost === id) { S.ghost = null; viewer.setGhost(null); }
   renderSummary(); renderOks(); renderCx();
   if (keep && keep.kind === 'oks') select(keep, {fly: false});
   if (!quiet && v) toast(`Вариант ${esc(v.id)}: S ${fmt(v.score, 2)}`, 'info', 1800);
@@ -160,8 +164,9 @@ function renderSummary() {
       <tr><th>Итого</th><th>${rub(sm.calculated_cost)}</th></tr>
     </table>
     ${M.variants.length > 1 ? `<h2>Сравнение вариантов</h2><table><tr><th>Вариант</th><th>S</th><th>Стоимость</th><th>Длина</th><th>Не подкл.</th></tr>
-      ${M.variants.map(x => `<tr class="click ${x === v ? 'cur' : ''}" data-v="${esc(x.id)}"><td>${x === v ? '▶ ' : ''}${esc(x.id)}${x.rank === 1 ? ' ★' : ''}</td><td>${fmt(x.score, 2)}</td><td>${rub(x.summary.calculated_cost)}</td>
-      <td>${meters(x.summary.new_network_length)}</td><td>${M.oks.length - x.connected.size}</td></tr>`).join('')}</table>` : ''}
+      ${M.variants.map(x => `<tr class="click ${x === v ? 'cur' : ''}" data-v="${esc(x.id)}" title="Щёлкните — открыть вариант ${esc(x.id)}"><td>${x === v ? '▶ ' : ''}${esc(x.id)}${x.rank === 1 ? ' ★' : ''}</td><td>${fmt(x.score, 2)}</td><td>${rub(x.summary.calculated_cost)}</td>
+      <td>${meters(x.summary.new_network_length)}</td><td>${M.oks.length - x.connected.size}</td></tr>`).join('')}</table>
+      <div class="filters" style="margin-top:8px">${M.variants.filter(x => x !== v).map(x => `<button data-ghost="${esc(x.id)}" class="${S.ghost === x.id ? 'on' : ''}" title="Показать трассы варианта ${esc(x.id)} поверх текущего">${S.ghost === x.id ? '✓ ' : ''}Вариант ${esc(x.id)} поверх <i class="sw" style="background:#f472b6"></i></button>`).join('')}</div>` : ''}
     <h2>С чего начать</h2>
     <div class="actions">
       <button data-go="oks">🏢 Найти здание и его трассу</button>
@@ -173,6 +178,9 @@ function renderSummary() {
   el.onclick = e => {
     const tr = e.target.closest('tr[data-v]');
     if (tr) return setVariant(tr.dataset.v);
+    const gb = e.target.closest('button[data-ghost]');
+    if (gb) { S.ghost = S.ghost === gb.dataset.ghost ? null : gb.dataset.ghost; viewer.setGhost(S.model.variants.find(x => x.id === S.ghost) || null);
+      if (S.ghost) toast(`Вариант ${esc(S.ghost)} показан розовым пунктиром поверх текущего`, 'info', 2500); renderSummary(); return; }
     const b = e.target.closest('button[data-go]');
     if (!b) return;
     if (b.dataset.go === 'help') $('#helpDlg').showModal();
@@ -358,6 +366,8 @@ function highlightOther(sel) {
   if (sel.kind === 'oks') { const o = sel.ref; viewer.marker('selpt', new THREE.Vector3(o.xy[0], o.xy[1], (o.building ? buildingHeight(o.building) : 12) + 10.2), {r: 3.2}); }
 }
 function selectCrossing(c) {
+  const r0 = routeFor({kind: 'crossing', ref: c});
+  S.focusAt = r0 && c.type !== 'segment' ? (r0.segs.find(q => q === c.seg)?.s0 ?? 0) + c.s : null;
   select({kind: 'crossing', ref: c});
   viewer.marker('selpt', new THREE.Vector3(c.x, c.y, viewer.z(c.type === 'segment' ? c.seg.d0 : c.hn + c.H / 2)), {r: 0.9, color: c.ok === false ? PALETTE.problem : PALETTE.ok});
   // смотрим сбоку, поперёк новой трубы, чуть сверху — видно, кто над кем
@@ -367,7 +377,6 @@ function selectCrossing(c) {
   const yaw = Math.atan2(dir[0], dir[1]) + Math.PI / 2;
   const depth = c.type === 'segment' ? s.d0 : c.hn + c.H / 2;
   rig.lookAtFrom(new THREE.Vector3(c.x, c.y, viewer.z(depth)), yaw, -14 * D, 16 + 2 * viewer.ex);
-  if (c.type !== 'segment') profile.setCursor((S.route?.segs.find(q => q === s)?.s0 ?? 0) + c.s);
 }
 function lookAtPipe(p, dist = 20) {
   const yaw = Math.atan2(p.dir[0], p.dir[1]) + Math.PI / 2;
@@ -482,7 +491,9 @@ function openProfile() {
   const o = S.model.oks.find(x => x.id === R.end);
   $('#pTitle').innerHTML = `Профиль: врезка ${esc(R.start)} → ${esc(o ? (o.name || 'здание ' + (o.oksId || o.id)) : R.end)} · ${meters(R.len)} · ${rub(R.cost)} · ` +
     (R.bad ? `<span style="color:#fda4af">${R.bad} ${plural(R.bad, 'проблема', 'проблемы', 'проблем')}</span>` : '<span style="color:#86efac">без проблем</span>');
-  requestAnimationFrame(() => profile.show(R, S.model));
+  const at = S.focusAt;
+  S.focusAt = null;
+  requestAnimationFrame(() => { profile.show(R, S.model); if (at != null) { profile.zoomTo(at, Math.min(60, R.len)); profile.setCursor(at); } });
 }
 function closeProfile() { $('#profile').hidden = true; profile.show(null); viewer.marker('pcur', null); }
 $('#pClose').onclick = () => closeProfile();
@@ -891,7 +902,8 @@ $('#jGo').onclick = async () => {
   const st = $('#jobState');
   try {
     st.textContent = 'Отправляю файл…';
-    const r = await fetch('/api/v1/jobs', {method: 'POST', headers: {'Content-Type': 'application/geo+json'}, body: f});
+    const depth = $('#jDepth').checked;
+    const r = await fetch('/api/v1/jobs' + (depth ? '?depth=true' : ''), {method: 'POST', headers: {'Content-Type': 'application/geo+json'}, body: f});
     const j = await r.json();
     if (!r.ok) throw new Error(j.message || r.statusText);
     const t0 = Date.now();
@@ -1013,6 +1025,12 @@ async function start() {
   Object.assign(o.layers, store.get('layers', {}));
   viewer.ex = store.get('ex', 3);
   updateModeUi();
+  if (matchMedia('(max-width: 900px)').matches) $('#q').placeholder = 'Поиск здания, трубы';
+  if (matchMedia('(pointer: coarse)').matches) {
+    // на телефоне и планшете — жесты, а не кнопки мыши
+    $('#coach .cg').innerHTML = '<span class="k">Один палец</span><span>двигать</span><span class="k">Щипок</span><span>приблизить</span>' +
+      '<span class="k">Повернуть двумя</span><span>вращать</span><span class="k">Два пальца вверх-вниз</span><span>наклонить</span><span class="k">Двойное касание</span><span>приблизить сюда</span>';
+  }
   if (!store.get('coach', 0)) $('#coach').hidden = false;
   await detectServer();
   try { demos = await (await fetch('demo/index.json')).json(); } catch (e) { demos = []; }

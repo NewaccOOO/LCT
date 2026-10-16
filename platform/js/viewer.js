@@ -178,7 +178,7 @@ export class Viewer {
     this.scene.add(low);
 
     this.g = {};
-    for (const k of ['surface', 'buildings', 'utilities', 'utilLines', 'existing', 'oks', 'network', 'netLines', 'overlay', 'tools']) {
+    for (const k of ['surface', 'buildings', 'utilities', 'utilLines', 'existing', 'oks', 'network', 'netLines', 'overlay', 'tools', 'ghost']) {
       this.g[k] = new THREE.Group();
       this.g[k].name = k;
       this.scene.add(this.g[k]);
@@ -214,7 +214,24 @@ export class Viewer {
     if (this.groundMat) this.groundMat.uniforms.uCam.value.copy(this.camera.position);
     this.renderer.render(this.scene, this.camera);
     this.labels.render(this.scene, this.camera);
+    this.declutter();
     this.onRender?.();
+  }
+  // Подписи не должны налезать друг на друга: важные (конец трассы, проблемы) остаются, остальные прячутся
+  declutter() {
+    const els = [];
+    this.g.overlay.traverse(o => { if (o.isCSS2DObject && o.element.style.display !== 'none') els.push(o.element); });
+    if (els.length < 2) return;
+    const rank = el => el.classList.contains('end') ? 0 : el.classList.contains('bad') ? 1 : el.classList.contains('depth') ? 3 : el.classList.contains('node') ? 4 : 2;
+    els.sort((a, b) => rank(a) - rank(b));
+    const placed = [];
+    for (const el of els) {
+      el.style.visibility = '';
+      const r = el.getBoundingClientRect();
+      if (!r.width) continue;
+      if (placed.some(p => r.left < p.right + 2 && r.right > p.left - 2 && r.top < p.bottom + 1 && r.bottom > p.top - 1)) el.style.visibility = 'hidden';
+      else placed.push(r);
+    }
   }
   redraw() { this.dirty = true; }
   trackLines(obj) {
@@ -241,6 +258,7 @@ export class Viewer {
   // ---------- исходные данные ----------
   setModel(model) {
     this.model = model;
+    this.ghost = null;
     for (const k of Object.keys(this.g)) this.clear(this.g[k]);
     if (this.ground) { this.scene.remove(this.ground); this.ground.geometry.dispose(); }
     const [x0, y0, x1, y1] = model.bbox, W = Math.max(x1 - x0, y1 - y0, 300);
@@ -337,6 +355,7 @@ export class Viewer {
     this.buildOks();
     if (this.variant) this.buildNetwork();
     else this.rebuildPickGrid();
+    if (this.ghost) this.setGhost(this.ghost);
   }
 
   addWells(group, wells) {
@@ -434,6 +453,22 @@ export class Viewer {
     this.applyOpts();
   }
 
+  // Другой вариант поверх текущего — розовым пунктиром, чтобы сравнить трассы на месте
+  setGhost(v) {
+    this.clear(this.g.ghost);
+    this.ghost = v;
+    if (!v) { this.redraw(); return; }
+    const seg = [];
+    for (const s of v.segs) {
+      const P = s.pts.map((p, i) => [p[0], p[1], -(s.depth[i] + s.row.h / 2) * this.ex]);
+      for (let i = 0; i + 1 < P.length; i++) seg.push(...P[i], ...P[i + 1]);
+    }
+    const ln = fatLines(seg, {width: 3, color: '#f472b6', opacity: 0.9, dashed: true});
+    ln.renderOrder = 17;
+    this.g.ghost.add(this.trackLines(ln));
+    this.redraw();
+  }
+
   setExaggeration(ex) {
     this.ex = ex;
     this.buildUnderground();
@@ -479,6 +514,14 @@ export class Viewer {
         'lbl cx ' + (c.ok === false ? 'bad' : c.ok ? 'ok' : 'mut'));
       lb.position.set(c.x, c.y, -(c.hn + c.H / 2) * ex);
       lb.userData.cx = c;
+      this.g.overlay.add(lb);
+    }
+    // камеры на трассе — подписи с номерами, как на схеме сети
+    for (const s of route.segs) {
+      const nd = this.variant?.nodes.find(n => n.id === s.from && n.type !== 'technical_node');
+      if (!nd) continue;
+      const lb = this.label(`${nd.type === 'existing_chamber' ? 'врезка' : 'камера'} ${nd.id}`, 'lbl node');
+      lb.position.set(nd.xy[0], nd.xy[1], 1.5);
       this.g.overlay.add(lb);
     }
     const end = route.segs[route.segs.length - 1], last = end.pts[end.pts.length - 1];

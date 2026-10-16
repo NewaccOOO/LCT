@@ -11,9 +11,33 @@ export class Profile {
     this.route = null;
     this.cursor = null;
     this.mouse = null;
-    canvas.addEventListener('mousemove', e => { this.mouse = [e.offsetX, e.offsetY]; this.draw(); this.emitHover(); });
+    // масштаб по длине, как в окне профиля Civil 3D: колесо — к курсору, тащить — сдвиг, двойной щелчок — вся трасса
+    this.win = null;
+    let drag = null;
+    canvas.addEventListener('mousemove', e => {
+      this.mouse = [e.offsetX, e.offsetY];
+      if (drag && this.win) {
+        const L = this.layout(), k = (this.win[1] - this.win[0]) / L.W, d = (drag.x - e.offsetX) * k;
+        if (Math.abs(e.offsetX - drag.x0) > 3) drag.moved = true;
+        this.setWin(this.win[0] + d, this.win[1] + d);
+        drag.x = e.offsetX;
+      }
+      this.draw(); this.emitHover();
+    });
+    canvas.addEventListener('mousedown', e => { drag = {x: e.offsetX, x0: e.offsetX, moved: false}; });
+    addEventListener('mouseup', () => { setTimeout(() => { drag = null; }, 0); });
     canvas.addEventListener('mouseleave', () => { this.mouse = null; this.draw(); this.hooks.hover(null); });
+    canvas.addEventListener('wheel', e => {
+      if (!this.route) return;
+      e.preventDefault();
+      const at = this.atX(e.offsetX) ?? this.route.len / 2, [a, b] = this.win || [0, this.route.len];
+      const k = Math.exp((e.deltaY || e.deltaX) * 0.002);
+      this.setWin(at - (at - a) * k, at + (b - at) * k);
+      this.draw();
+    }, {passive: false});
+    canvas.addEventListener('dblclick', () => { this.win = null; this.draw(); });
     canvas.addEventListener('click', e => {
+      if (drag?.moved) return;
       const n = this.nearCx(e.offsetX);
       if (n) this.hooks.click({crossing: n});
       else { const at = this.atX(e.offsetX); if (at != null) this.hooks.click({at}); }
@@ -37,10 +61,23 @@ export class Profile {
     }
     if (cur && cur.type) zones.push(cur);
     this.zones = zones;
+    this.win = null;
     this.cxs = route.segs.flatMap(s => s.cx.map(c => ({...c, S: s.s0 + c.s})));
     this.draw();
   }
-  setCursor(at) { this.cursor = at; this.draw(); }
+  setCursor(at) {
+    this.cursor = at;
+    // при пролёте окно профиля едет за камерой
+    if (at != null && this.win && (at < this.win[0] || at > this.win[1])) { const w = this.win[1] - this.win[0]; this.setWin(at - w * 0.2, at + w * 0.8); }
+    this.draw();
+  }
+  setWin(a, b) {
+    const L = this.route.len, w = Math.min(L, Math.max(4, b - a));
+    if (w >= L - 1e-6) { this.win = null; return; }
+    a = Math.max(0, Math.min(L - w, a));
+    this.win = [a, a + w];
+  }
+  zoomTo(at, w = 40) { if (!this.route) return; this.setWin(at - w / 2, at + w / 2); this.draw(); }
 
   layout() {
     const r = this.cv.getBoundingClientRect();
@@ -50,9 +87,10 @@ export class Profile {
     for (const c of this.cxs) maxD = Math.max(maxD, c.top + c.eh + (c.need || 0) + 0.8);
     const pl = 64, pr = 18, pt = 22, pb = 26;
     const W = Math.max(10, r.width - pl - pr), H = Math.max(10, r.height - pt - pb);
-    return {r, pl, pr, pt, pb, W, H, maxD, X: s => pl + s / Math.max(R.len, 1) * W, Y: d => pt + (d + 0.6) / (maxD + 0.6) * H};
+    const [a, b] = this.win || [0, Math.max(R.len, 1)];
+    return {r, pl, pr, pt, pb, W, H, maxD, a, b, X: s => pl + (s - a) / (b - a) * W, Y: d => pt + (d + 0.6) / (maxD + 0.6) * H};
   }
-  atX(x) { if (!this.route) return null; const L = this.layout(); const s = (x - L.pl) / L.W * this.route.len; return s < 0 || s > this.route.len ? null : s; }
+  atX(x) { if (!this.route) return null; const L = this.layout(); const s = L.a + (x - L.pl) / L.W * (L.b - L.a); return s < L.a - 1e-6 || s > L.b + 1e-6 ? null : s; }
   nearCx(x) { if (!this.route) return null; const L = this.layout(); return this.cxs.find(c => Math.abs(L.X(c.S) - x) < 9) || null; }
   emitHover() {
     if (!this.mouse || !this.route) return;
@@ -69,10 +107,12 @@ export class Profile {
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, r.width, r.height);
     if (!R) return;
-    const L = this.layout(), {X, Y, pl, W, H, pt, maxD} = L;
+    const L = this.layout(), {X, Y, pl, W, H, pt, maxD, a: wa, b: wb} = L;
     const css = getComputedStyle(document.documentElement);
     const muted = css.getPropertyValue('--muted').trim() || '#94a3b8', line = css.getPropertyValue('--line').trim() || '#253349';
     g.font = '12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+    const clip = () => { g.save(); g.beginPath(); g.rect(pl, 0, W, r.height); g.clip(); };
+    clip();
     // грунт
     g.fillStyle = 'rgba(146, 102, 41, 0.10)';
     g.fillRect(pl, Y(0), W, Y(maxD) - Y(0));
@@ -82,8 +122,9 @@ export class Profile {
       g.fillRect(X(z.a), Y(-0.6), Math.max(2, X(z.b) - X(z.a)), Y(maxD) - Y(-0.6));
       g.strokeStyle = 'rgba(203,213,225,.5)'; g.setLineDash([4, 4]);
       g.beginPath(); g.moveTo(X(z.a), Y(UNDER[z.type])); g.lineTo(X(z.b), Y(UNDER[z.type])); g.stroke(); g.setLineDash([]);
-      if (X(z.b) - X(z.a) > 40) { g.fillStyle = muted; g.fillText(SURFACES[z.type].name.replace(/и.*$/, '').trim().toLowerCase(), X(z.a) + 4, Y(-0.6) + 12); }
+      if (X(z.b) - X(z.a) > 40) { g.fillStyle = muted; g.fillText(SURFACES[z.type].name.replace(/и.*$/, '').trim().toLowerCase(), Math.max(pl, X(z.a)) + 4, Y(-0.6) + 12); }
     }
+    g.restore();
     // сетка глубин
     g.strokeStyle = line; g.fillStyle = muted; g.lineWidth = 1;
     const dstep = maxD > 12 ? 2 : 1;
@@ -92,9 +133,11 @@ export class Profile {
       g.fillText(`${d} м`, 10, Y(d) + 4);
     }
     // шаг подписей по длине
-    const raw = R.len / Math.max(1, W / 90), mag = Math.pow(10, Math.floor(Math.log10(raw || 1)));
+    const raw = (wb - wa) / Math.max(1, W / 90), mag = Math.pow(10, Math.floor(Math.log10(raw || 1)));
     const step = [1, 2, 5, 10].map(k => k * mag).find(v => v >= raw) || mag * 10;
-    for (let s = 0; s <= R.len + 1e-6; s += step) { g.fillText(`${fmt(s)} м`, X(s) - 10, r.height - 7); g.beginPath(); g.moveTo(X(s), Y(maxD)); g.lineTo(X(s), Y(maxD) + 4); g.stroke(); }
+    for (let s = Math.ceil(wa / step) * step; s <= wb + 1e-6; s += step) { g.fillText(`${fmt(s)} м`, X(s) - 10, r.height - 7); g.beginPath(); g.moveTo(X(s), Y(maxD)); g.lineTo(X(s), Y(maxD) + 4); g.stroke(); }
+    if (this.win) { g.fillStyle = '#fde047'; g.fillText(`участок ${fmt(wa)}–${fmt(wb)} м · двойной щелчок — вся трасса`, pl + 4, r.height - 7 - 14); }
+    clip();
     // нормы
     const dash = (d, c, t) => { g.setLineDash([6, 5]); g.strokeStyle = c; g.beginPath(); g.moveTo(pl, Y(d)); g.lineTo(pl + W, Y(d)); g.stroke(); g.setLineDash([]); g.fillStyle = c; g.fillText(t, pl + W - g.measureText(t).width - 4, Y(d) - 4); };
     dash(NORMAL_DEPTH, 'rgba(56,189,248,.7)', 'обычная глубина 3 м');
@@ -128,11 +171,13 @@ export class Profile {
       g.fillStyle = c.ok === false ? '#fda4af' : muted;
       g.fillText(t, Math.min(x - 12, pl + W - g.measureText(t).width), Math.max(pt + 10, Y(c.top - (c.need || 0)) - 6 - (k % 3) * 13));
     });
+    g.restore();
     // курсор: пролёт или мышь
     const cur = this.mouse ? this.atX(this.mouse[0]) : this.cursor;
     if (cur != null) {
       const p = pointAt(R, cur), x = X(cur);
       g.strokeStyle = '#fde047'; g.lineWidth = 1.5;
+      if (x < pl - 1 || x > pl + W + 1) return;
       g.beginPath(); g.moveTo(x, Y(-0.6)); g.lineTo(x, Y(maxD)); g.stroke(); g.lineWidth = 1;
       g.fillStyle = '#fde047'; g.beginPath(); g.arc(x, Y(p.d), 4, 0, Math.PI * 2); g.fill();
       const n = this.mouse && this.nearCx(this.mouse[0]);
