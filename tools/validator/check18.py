@@ -630,6 +630,9 @@ def check_variant(inp, trees, vid, feats, rep):
     for n, k in kinds.items():
         if k == "existing_chamber":
             existing_tie_ins += len(adj[n])
+            if trees["chamber_links"](n) + len(adj[n]) > 4:
+                rep.add("D5 у существующей камеры больше 4 примыканий",
+                        f"{n}: сеть {trees['chamber_links'](n)} + новых {len(adj[n])}")
 
     # B. препятствия: ОКС (все полигоны), запретные, специальные
     # финальный прямой участок к точке: последнее звено участка у точки и коллинеарные с ним участки через

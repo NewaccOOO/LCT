@@ -107,6 +107,22 @@ class VariantEnumeratorTest {
     }
 
     @Test
+    void uncutPipeThroughChamberLeavesRoomForTwoNewSegments() {
+        PlanFixture fixture = new PlanFixture().pipe("hn-1", 190, 0, 210, 0, 200, 60, "src")
+                .chamber("hc-1", 200, 0, 200, "hn-1")
+                .oks("o-1", 200, 200, 5).oks("o-2", -150, 150, 5).oks("o-3", 550, 150, 5);
+
+        List<Variant> variants = new VariantEnumerator(fixture.input(), rules).run().getVariants();
+
+        assertFalse(variants.isEmpty());
+        for (Variant variant : variants) {
+            long atChamber = variant.getSegments().stream()
+                    .filter(s -> s.getStartNodeId().equals("hc-1") || s.getEndNodeId().equals("hc-1")).count();
+            assertTrue(atChamber <= 2, "новых участков у hc-1 в варианте " + variant.getId() + ": " + atChamber);
+        }
+    }
+
+    @Test
     void oksWithoutRouteIsUnconnectedWithPenaltyAndOtherOksKept() {
         // o-2 внутри кольца водоёма: выхода к сети нет ни при каком диаметре
         Polygon water = GEOMETRY.createPolygon(ring(420, 170, 580, 330), new LinearRing[] {ring(470, 220, 530, 280)});

@@ -149,7 +149,10 @@ public final class VariantEnumerator {
      * меняется, а районы считаются на 10 % дольше, поэтому здесь прежние 50.
      */
     private static final int CITY_STALL = Integer.getInteger("heatnet.city.stall", 50);
-    /** Деревья подмножества строятся не на всех кандидатах врезки, а на лучших по грубой оценке стоимости. */
+    /**
+     * Деревья подмножества строятся не на всех кандидатах врезки, а на лучших по грубой оценке стоимости; место врезки
+     * на трубе у занятой камеры, от которого дерево не строится, заменяется следующим кандидатом.
+     */
     private static final int CANDIDATE_LIMIT = 6;
     /** Запас к прямой до ближайшей врезки при выборе диаметра графа по предельной длине: трасса длиннее прямой. */
     private static final double LENGTH_DN_MARGIN = 1.2;
@@ -1967,11 +1970,10 @@ public final class VariantEnumerator {
         // метр ветки стоит в S и как стоимость трубы, и как длина: разовый расход переводится в метры по обоим
         double metreRub = rules.diameter(dn).getNewRubM() + rules.lengthWorthRub();
         Router router = region.router(dn, area);
-        List<TieCandidate> cheapest = cheapestCandidates(subset, candidates);
+        List<TieCandidate> ranked = cheapestCandidates(subset, candidates);
+        List<TieCandidate> cheapest = new ArrayList<>(ranked.subList(0, Math.min(CANDIDATE_LIMIT, ranked.size())));
+        Set<TieCandidate> treeless = ConcurrentHashMap.newKeySet();
         TreeBuilder.Graphs graphs = graphs(region, area);
-        // деревья кандидатов независимы, граф и кэш общие и потокобезопасны; порядок результатов — порядок
-        // кандидатов, поэтому итог не зависит от расписания нитей. В районе города нити заняты районами.
-        java.util.stream.Stream<TieCandidate> stream = district || !PARALLEL ? cheapest.stream() : cheapest.parallelStream();
         java.util.function.BiFunction<TieCandidate, Boolean, Option> shaped = (candidate, link) -> {
             // ветки к точкам, у которых по графу дерева закрыта ближняя сторона здания, идут по графу Ду своего
             // участка. Если сборка такое дерево отвергла, заново по графу дерева оно не строится: там выход ушёл бы
@@ -1980,6 +1982,7 @@ public final class VariantEnumerator {
                     rules.tieInCost() / metreRub, fromPortalDirection, graphs, link);
             if (tree.edges.isEmpty()) {
                 log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
+                treeless.add(candidate);
                 return null;
             }
             // углы трассы срезаются по точному отступу, врезка переносится к стволу или ствол прокладывается к
@@ -2036,13 +2039,20 @@ public final class VariantEnumerator {
         // звено после выхода сразу — только у одиночной точки: в дереве нескольких точек оно присоединяло точки, которые
         // дешевле подключить отдельно, и поиск по разбиениям уходил от лучших черновиков («густо-200» хуже на 1,2)
         boolean link = subset.size() == 1;
-        List<Option> options = stream.map(candidate -> {
-            Option best = shaped.apply(candidate, link);
-            if (best != null && best.turnStuck) {
-                best.withLinks = () -> shaped.apply(candidate, true);
-            }
-            return best;
-        }).filter(Objects::nonNull).collect(Collectors.toList());
+        List<Option> options = new ArrayList<>();
+        for (int next = cheapest.size(); !cheapest.isEmpty(); ) {
+            java.util.stream.Stream<TieCandidate> stream = district || !PARALLEL ? cheapest.stream() : cheapest.parallelStream();
+            options.addAll(stream.map(candidate -> {
+                Option best = shaped.apply(candidate, link);
+                if (best != null && best.turnStuck) {
+                    best.withLinks = () -> shaped.apply(candidate, true);
+                }
+                return best;
+            }).filter(Objects::nonNull).collect(Collectors.toList()));
+            int crowded = (int) cheapest.stream().filter(candidate -> treeless.contains(candidate) && finder.crowded(candidate)).count();
+            cheapest = new ArrayList<>(ranked.subList(next, Math.min(next + crowded, ranked.size())));
+            next += cheapest.size();
+        }
         options.sort(Comparator.comparingDouble(option -> option.score));
         return options;
     }
@@ -2684,8 +2694,8 @@ public final class VariantEnumerator {
     }
 
     /**
-     * До CANDIDATE_LIMIT кандидатов с наименьшей грубой оценкой: прямые от точек подключения по цене трубы диаметра
-     * блока, камера, если врезка в трубу, врезка — если в существующую камеру.
+     * Кандидаты по возрастанию грубой оценки: прямые от точек подключения по цене трубы диаметра блока, камера, если
+     * врезка в трубу, врезка — если в существующую камеру.
      */
     private List<TieCandidate> cheapestCandidates(List<ConnectionPoint> subset, List<TieCandidate> candidates) {
         double flow = flow(subset);
@@ -2701,7 +2711,7 @@ public final class VariantEnumerator {
         }
         List<TieCandidate> sorted = new ArrayList<>(candidates);
         sorted.sort(Comparator.comparingDouble(estimate::get));
-        return new ArrayList<>(sorted.subList(0, Math.min(CANDIDATE_LIMIT, sorted.size())));
+        return sorted;
     }
 
     /**
