@@ -43,6 +43,8 @@ export const SURFACES = {
   oks_future: {name: 'Новые здания (подключаем)', color: '#22d3ee'},
 };
 export const BUILDING_KEYS = new Set(['oks_existing', 'oks_future', 'oks']);
+// типы объектов входа (раздел 12 CONSTRAINTS.md и редакция 18.09)
+const KNOWN = new Set([...Object.keys(UTILITIES), ...Object.keys(SURFACES), ...BUILDING_KEYS, 'heat_chamber', 'oks_connection_point', 'source']);
 
 export const NODE_TYPES = {
   heat_chamber: {name: 'Новая камера', color: '#38bdf8'},
@@ -50,6 +52,22 @@ export const NODE_TYPES = {
   technical_node: {name: 'Поворот трассы', color: '#94a3b8'},
   heat_chamber_reconstruction: {name: 'Камера под реконструкцию', color: '#f43f5e'},
 };
+
+const KIND = {residential: 'Жилой дом', apartments: 'Жилой дом', school: 'Школа', kindergarten: 'Детский сад', hospital: 'Больница',
+  clinic: 'Поликлиника', office: 'Офисное здание', commercial: 'Торговое здание', retail: 'Торговое здание', public: 'Общественное здание'};
+
+// Человеческие имена вместо служебных номеров: «Участок 6», «Камера 19», «Поворот 3»
+export function segName(s) { const m = /_seg_(\d+)$/.exec(s.id); return m ? `Участок ${m[1]}` : `Участок ${s.id}`; }
+export function nodeName(nd, sc) {
+  if (!nd) return '—';
+  const id = String(nd.id);
+  let m;
+  if (nd.type === 'oks_entry') { const o = sc?.oks.find(x => x.id === id); return o ? `ввод: ${o.label}` : `ввод ${id}`; }
+  if (nd.type === 'existing_chamber') return `сущ. камера ${id.replace(/^hc-/, '')}`;
+  if ((m = /_ch_(\d+)$/.exec(id))) return `камера ${m[1]}`;
+  if ((m = /_node_(\d+)$/.exec(id))) return `поворот ${m[1]}`;
+  return id;
+}
 
 export function dnRow(dn) {
   if (dn == null) return DIAMETERS[0];
@@ -124,12 +142,16 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   const grow = p => { if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0]; if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; };
   const byInputId = new Map();
+  const skipped = new Map();   // почему объект не попал в сцену → сколько таких
+  const skip = why => skipped.set(why, (skipped.get(why) || 0) + 1);
 
   for (let fi = 0; fi < fin.length; fi++) {
     if (fi % yieldEvery === yieldEvery - 1) { onProgress(0.05 + 0.45 * fi / fin.length, `Исходные данные: ${fi} из ${fin.length}`); await wait(); }
     const f = fin[fi], p = f.properties || {}, g = f.geometry;
-    if (!g) continue;
-    const ot = p.object_type, rt = p.restriction_type || ot, id = sid(p.id);
+    if (!g) { skip('без геометрии'); continue; }
+    const ot = p.object_type, rt = p.restriction_type || ot, id = sid(p.id ?? `#${fi + 1}`);
+    if (!rt) { skip('нет свойства object_type'); continue; }
+    if (!KNOWN.has(rt)) { skip(`неизвестный тип «${rt}»`); continue; }
     if (UTILITIES[rt] && (g.type === 'LineString' || g.type === 'MultiLineString')) {
       const u = UTILITIES[rt], dn = p.diameter ?? null;
       const h = rt === 'heat_network' ? dnRow(dn).h : u.h;
@@ -184,8 +206,15 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
     if (!bld) bld = zonesAt(cp.xy[0], cp.xy[1]).find(z => BUILDING_KEYS.has(z.type))?.item || null;
     if (bld) bld.isFuture = true;
     const flow = cp.p.flow_tph ?? bld?.p.flow_tph ?? null;
+    const load = cp.p.heat_load ?? bld?.p.heat_load ?? null;
     const name = bld?.p.address || bld?.p.name || cp.p.address || cp.p.name || null;
-    return {id: cp.id, oksId: oid || bld?.id || null, xy: cp.xy, flow, name, building: bld, p: cp.p};
+    return {id: cp.id, oksId: oid || bld?.id || null, xy: cp.xy, flow, load, name, building: bld, p: cp.p};
+  });
+  // понятные имена: адрес, если есть, иначе «Жилой дом №14, 15 эт.» — номер по порядку во входе
+  oks.forEach((o, i) => {
+    o.no = i + 1;
+    const lv = o.building?.p.levels;
+    o.label = o.name || `${KIND[o.building?.p._kind] || 'Здание'} №${o.no}${lv ? `, ${lv} эт.` : ''}`;
   });
 
   // ---------- выход ----------
@@ -308,6 +337,7 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
     proj, bbox: Number.isFinite(x0) ? [x0, y0, x1, y1] : [-100, -100, 100, 100],
     utilities, surfaces, points, oks, variants, segs, nodes, crossings, recon, byInputId, zonesAt,
     hasOutput: fout.length > 0,
+    skipped: [...skipped.entries()].sort((a, b) => b[1] - a[1]),
     hasDepth: segs.some(s => s.p.depth_start != null),
     stats: {input: fin.length, output: fout.length, utilities: count(utilities), surfaces: count(surfaces), points: count(points)},
   };

@@ -25,6 +25,7 @@ export class CameraRig {
     this.held = new Set();
     this.enabled = true;
     this.bounds = null;           // [x0, y0, x1, y1] — чтобы не улететь в бесконечность
+    this.minZ = -60;              // глубже сетей камере делать нечего: упор, как у поверхности в Google Earth
     this.apply();
     this.bind();
   }
@@ -40,6 +41,7 @@ export class CameraRig {
       this.pos.x = clamp(this.pos.x, x0 - m, x1 + m); this.pos.y = clamp(this.pos.y, y0 - m, y1 + m);
       this.pos.z = clamp(this.pos.z, -m / 2, m * 2);
     }
+    if (this.pos.z < this.minZ) this.pos.z = this.minZ;
     this.camera.position.copy(this.pos);
     this.camera.quaternion.copy(q);
     this.camera.updateMatrixWorld();
@@ -97,7 +99,7 @@ export class CameraRig {
   }
   translate(v) { this.pos.add(v); this.apply(); }
   // Скорость полёта зависит от высоты над землёй: у труб медленно, над районом быстро
-  flySpeed() { return (Math.abs(this.pos.z) * 1.1 + 6) * this.speedK; }
+  flySpeed() { return (Math.abs(this.pos.z) * 1.1 + 9) * this.speedK; }
 
   animateTo(target, ms = 700) {
     const from = {pos: this.pos.clone(), yaw: this.yaw, pitch: this.pitch};
@@ -181,6 +183,11 @@ export class CameraRig {
       if (ptrs.size > 2) return;
       const buttons = e.pointerType === 'mouse' ? e.buttons : 1;
       g = {x, y, x0: x, y0: y, on: false, buttons, touch: e.pointerType !== 'mouse', btn: e.button, shift: e.shiftKey};
+      if (g.touch) {
+        const gg = g;
+        clearTimeout(this._lp);
+        this._lp = setTimeout(() => { if (g === gg && !gg.on) { gg.long = true; this.hooks.onContext?.(gg.x0, gg.y0, e); } }, 550);
+      }
     });
 
     el.addEventListener('pointermove', e => {
@@ -224,12 +231,17 @@ export class CameraRig {
       const ang0 = Math.atan2(t2.b.y - t2.a.y, t2.b.x - t2.a.x), ang1 = Math.atan2(b.y - a.y, b.x - a.x);
       const my0 = (t2.a.y + t2.b.y) / 2, my1 = (a.y + b.y) / 2;
       let dAng = ang1 - ang0; dAng = Math.atan2(Math.sin(dAng), Math.cos(dAng));
-      const zoom = d0 / Math.max(d1, 1);
-      const sameDir = (a.y - t2.a.y) * (b.y - t2.b.y) > 0;   // оба пальца вверх или вниз — наклон
-      if (Math.abs(zoom - 1) > 0.002) this.zoomTo(t2.P, zoom);
-      if (Math.abs(dAng) > 0.002) this.rotateAround(t2.P, -dAng, 0);
-      if (sameDir && Math.abs(zoom - 1) < 0.02) this.rotateAround(t2.P, 0, -(my1 - my0) / r.height * Math.PI * 0.8);
-      t2.a = {...a}; t2.b = {...b};
+      const zoom = d0 / Math.max(d1, 1), dy = my1 - my0;
+      const sameDir = (a.y - t2.a.y) * (b.y - t2.b.y) > 0 && Math.abs(dy) > Math.abs(d1 - d0) * 1.2;
+      t2.mode ||= null;
+      // первые пиксели решают, что это: наклон (оба пальца вверх-вниз) или щипок с поворотом
+      if (!t2.mode && (Math.abs(dy) > 4 || Math.abs(d1 - d0) > 4 || Math.abs(dAng) > 0.04)) t2.mode = sameDir ? 'tilt' : 'pinch';
+      if (t2.mode === 'tilt') this.rotateAround(t2.P, 0, -dy / r.height * Math.PI * 0.8);
+      else if (t2.mode === 'pinch') {
+        if (Math.abs(zoom - 1) > 0.002) this.zoomTo(t2.P, zoom);
+        if (Math.abs(dAng) > 0.002) this.rotateAround(t2.P, -dAng, 0);
+      }
+      if (t2.mode || Math.abs(dy) > 4 || Math.abs(d1 - d0) > 4) { t2.a = {...a}; t2.b = {...b}; }
     };
 
     const end = e => {
@@ -238,21 +250,26 @@ export class CameraRig {
       ptrs.delete(e.pointerId);
       if (ptrs.size < 2 && t2) { t2 = null; this.hooks.onPivot?.(null); g = null; return; }
       g = null;
+      clearTimeout(this._lp);
       if (!wasG) return;
       if (wasG.mode === 'orbit') this.hooks.onPivot?.(null);
-      if (!wasG.on && e.type === 'pointerup') {
-        // щелчок без перетаскивания
+      if (!wasG.on && !wasG.long && e.type === 'pointerup') {
+        // щелчок без перетаскивания; одиночный ждёт 250 мс — вдруг это двойной (тогда только приблизить, как в Картах)
+        const now = performance.now();
         if (wasG.btn === 2) this.hooks.onContext?.(x, y, e);
-        else if (wasG.btn === 0) {
-          const now = performance.now();
-          if (wasG.touch && now - lastTap < 320) { this.hooks.onDblClick?.(x, y, e); lastTap = 0; }
-          else { lastTap = now; this.hooks.onClick?.(x, y, e); }
+        else if (wasG.btn === 1) {
+          // двойной щелчок средней — показать всё, как в AutoCAD
+          if (now - (this._mid || 0) < 400) { this.hooks.onFit?.(); this._mid = 0; } else this._mid = now;
+        } else if (wasG.btn === 0) {
+          clearTimeout(this._click);
+          if (now - lastTap < 320 && Math.hypot(x - this._tapXY[0], y - this._tapXY[1]) < 30) { lastTap = 0; this.hooks.onDblClick?.(x, y, e); }
+          else { lastTap = now; this._tapXY = [x, y]; this._click = setTimeout(() => this.hooks.onClick?.(x, y, e), 250); }
         }
       }
     };
     el.addEventListener('pointerup', end);
     el.addEventListener('pointercancel', end);
-    el.addEventListener('dblclick', e => { const [x, y] = local(e); this.hooks.onDblClick?.(x, y, e); });
+    this._tapXY = [0, 0];
 
     // Колесо: мышь — масштаб к курсору; тачпад — два пальца двигают, щипок — масштаб, ⌥ + два пальца — вращать
     let wheelP = null, wheelT = 0;
@@ -285,7 +302,7 @@ export class CameraRig {
     el.addEventListener('gestureend', e => { e.preventDefault(); gs = null; });
 
     // Клавиши полёта
-    const MOVE = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract', 'PageUp', 'PageDown']);
+    const MOVE = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown']);
     const typing = e => /INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.target.isContentEditable;
     let running = false;
     addEventListener('keydown', e => {
@@ -296,22 +313,20 @@ export class CameraRig {
       this.fast = e.shiftKey;
       if (running) return;
       running = true;
-      let prev = performance.now();
+      let prev = performance.now() - 33;   // короткое нажатие тоже сдвигает камеру хотя бы на кадр
       const step = now => {
         if (!this.held.size) { running = false; this.hooks.onFlyEnd?.(); return; }
-        const dt = Math.min(0.05, (now - prev) / 1000), h = c => this.held.has(c);
+        const dt = Math.max(0, Math.min(0.05, (now - prev) / 1000)), h = c => this.held.has(c);
         prev = now;
         const v = this.flySpeed() * (this.fast ? 4 : 1) * dt;
         const fw = (h('KeyW') || h('ArrowUp') ? 1 : 0) - (h('KeyS') || h('ArrowDown') ? 1 : 0);
         const sd = (h('KeyD') || h('ArrowRight') ? 1 : 0) - (h('KeyA') || h('ArrowLeft') ? 1 : 0);
         const up = (h('KeyE') || h('PageUp') ? 1 : 0) - (h('KeyQ') || h('PageDown') ? 1 : 0);
-        const zm = (h('Equal') || h('NumpadAdd') ? 1 : 0) - (h('Minus') || h('NumpadSubtract') ? 1 : 0);
         const f = this.forward(), rgt = this.right();
         // в режиме «Обзор» стрелки и WASD ведут по горизонтали (как по карте), в «Полёте» — туда, куда смотрим
         if (this.mode === 'orbit') { f.z = 0; if (f.lengthSq() < 1e-6) f.set(Math.sin(this.yaw), Math.cos(this.yaw), 0); f.normalize(); }
         const mv = new THREE.Vector3().addScaledVector(f, fw * v).addScaledVector(rgt, sd * v).addScaledVector(Z, up * v);
         if (mv.lengthSq()) this.translate(mv);
-        if (zm) { const r = el.getBoundingClientRect(); this.zoomTo(this.pivotAt(r.width / 2, r.height / 2), Math.exp(-zm * 1.6 * dt)); }
         this.hooks.onFly?.();
         requestAnimationFrame(step);
       };

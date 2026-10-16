@@ -4,7 +4,7 @@ import {Viewer, PALETTE, buildingHeight, dnColor} from './viewer.js';
 import {CameraRig} from './controls.js';
 import {ViewCube} from './viewcube.js';
 import {Profile} from './profile.js';
-import {buildScene, routeTo, branchEnd, pointAt, UTILITIES, SURFACES, NODE_TYPES, BUILDING_KEYS, DIAMETERS} from './model.js';
+import {buildScene, routeTo, branchEnd, pointAt, segName, nodeName, UTILITIES, SURFACES, NODE_TYPES, BUILDING_KEYS} from './model.js';
 import {$, $$, fmt, rub, meters, esc, clamp, store, toast, plural} from './util.js';
 
 const D = Math.PI / 180;
@@ -25,7 +25,8 @@ const rig = new CameraRig(viewer.camera, viewer.renderer.domElement, {
   onContext: (x, y, e) => showCtx(x, y, e),
   onHover: (x, y, e, dragging) => hoverAt(x, y, dragging),
   onSpeed: k => status(`Скорость полёта ×${fmt(k, 2)}`),
-  onFly: () => { if (S.fly) stopFly(); },
+  onFly: () => { if (S.fly) stopFly(false); },   // взялся за W A S D — управляет сам, назад не возвращаем
+  onFit: () => (S.sel ? frameSel() : home()),
 });
 viewer.onRender = () => { if (booted) cube.update(); };
 cube = new ViewCube($('#cube'), viewer.camera, {
@@ -36,9 +37,10 @@ cube = new ViewCube($('#cube'), viewer.camera, {
 const profile = new Profile($('#pc'), {
   hover: p => { viewer.marker('pcur', p ? new THREE.Vector3(p.x, p.y, viewer.z(p.d + p.seg.row.h / 2)) : null, {color: PALETTE.selection, r: 0.8}); },
   click: ({crossing, at}) => {
-    if (crossing) { const c = S.v.crossings.find(q => q.seg.id === crossing.seg.id && Math.abs(q.s - crossing.s) < 1e-6 && q.type === crossing.type) || crossing; selectCrossing(c); }
+    if (crossing) selectCrossing(crossing);
     else if (at != null) { const p = pointAt(S.route, at); lookAtPipe(p, 18); }
   },
+  nodeName: id => nodeLabel(id),
 });
 
 // «Предыдущий вид», как Zoom Previous в AutoCAD и «Назад» в браузере: каждый перелёт запоминает, откуда летели
@@ -81,11 +83,14 @@ async function load({input, output, outText = null, ds}) {
     progress(0.85, 'Рисую 3D…');
     await new Promise(r => setTimeout(r, 0));
     S.model = model; S.raw = outText; S.ds = ds; S.sel = null; S.route = null; S.ghost = null;
+    searchIdx = null;
     stopFly(); setClip(null); setMeasure(false);
     viewer.variant = null;
     viewer.setModel(model);
     rig.bounds = model.bbox;
+    setMinZ();
     $('#dsName').textContent = ds.title;
+    $('#dsBtnM').textContent = 'Набор: ' + ds.title.slice(0, 18) + (ds.title.length > 18 ? '…' : '');
     document.title = `${ds.title} — Теплосеть 3D`;
     renderVariants();
     setVariant(model.variants[0]?.id, {quiet: true});
@@ -99,7 +104,15 @@ async function load({input, output, outText = null, ds}) {
     const v = S.v;
     toast(`Открыт набор «${esc(ds.title)}»: ${fmt(model.stats.input)} объектов${v ? `, ${model.variants.length} ${plural(model.variants.length, 'вариант', 'варианта', 'вариантов')}` : ''}`, 'ok');
     if (!model.hasOutput) toast('Результата расчёта нет — показаны только исходные данные. Откройте результат или отправьте расчёт на сервер.', 'info', 6000);
-    store.set('ds', ds.name || null);
+    if (!ds.local) store.set('ds', ds.name || null);
+    // отчёт импорта: что из исходных данных не попало в сцену и почему
+    if (model.skipped.length) {
+      const n = model.skipped.reduce((a, [, k]) => a + k, 0);
+      toast(`Пропущено ${fmt(n)} ${plural(n, 'объект', 'объекта', 'объектов')}: ${model.skipped.slice(0, 3).map(([w, k]) => `${esc(w)} — ${fmt(k)}`).join('; ')}. Подробно — Обзор → Данные.`, 'info', 9000);
+    }
+    if (!model.stats.utilities && !model.stats.surfaces && !model.stats.points && !model.hasOutput) {
+      toast('Ни один объект не распознан: у объектов нет object_type из формата сервиса. Описание формата — Файл → Открыть данные → Свои файлы.', 'error', 12000);
+    }
   } catch (e) {
     console.error(e);
     $('#loading').hidden = true;
@@ -114,21 +127,41 @@ async function loadDemo(d) {
   } catch (e) { $('#loading').hidden = true; toast(`Не удалось загрузить демо-набор: ${esc(e.message)}`, 'error', 8000); }
 }
 function isOutput(fc) { return (fc.features || []).some(f => f.properties && (f.properties.object_type === 'variant_summary' || f.properties.variant_id != null)); }
-async function loadFiles(files) {
-  try {
-    const parsed = await Promise.all([...files].map(async f => ({f, text: await f.text()})));
-    let input = null, output = null, outText = null, name = [];
-    for (const {f, text} of parsed) {
-      const j = JSON.parse(text);
-      if (!j || !Array.isArray(j.features)) throw new Error(`${f.name}: это не GeoJSON FeatureCollection`);
-      if (isOutput(j)) { output = j; outText = text; } else input = j;
-      name.push(f.name.replace(/\.(geo)?json$/i, ''));
-    }
-    if (!input && output) { input = {type: 'FeatureCollection', features: []}; toast('Открыт только результат — без входа не видно зданий и коммуникаций', 'info', 6000); }
-    if (!input) throw new Error('нет входного файла');
-    await load({input, output, outText, ds: {name: null, title: name.join(' + ')}});
-  } catch (e) { $('#loading').hidden = true; toast(`Не удалось открыть файлы: ${esc(e.message)}`, 'error', 8000); }
+// JSON с понятной ошибкой: имя файла, строка и столбец
+function parseJson(text, fname) {
+  try { return JSON.parse(text); } catch (e) {
+    const m = /position (\d+)/.exec(e.message), pos = m ? +m[1] : null;
+    let where = '';
+    if (pos != null) { const before = text.slice(0, pos), line = before.split('\n').length, col = pos - before.lastIndexOf('\n'); where = ` (строка ${line}, столбец ${col})`; }
+    throw new Error(`«${fname}» — не JSON, ошибка разбора${where}. Проверьте, что это GeoJSON, а не, например, Shape или KML.`);
+  }
 }
+async function loadFiles(files, {fromCache = false} = {}) {
+  try {
+    const parsed = await Promise.all([...files].map(async f => ({name: f.name, text: f.text ? await f.text() : f.text_})));
+    let input = null, output = null, outText = null, inText = null;
+    const name = [];
+    for (const {name: fname, text} of parsed) {
+      const j = parseJson(text, fname);
+      if (!j || !Array.isArray(j.features)) throw new Error(`«${fname}» — это не GeoJSON FeatureCollection: нет списка features`);
+      if (isOutput(j)) { output = j; outText = text; } else { input = j; inText = text; }
+      name.push(fname.replace(/\.(geo)?json$/i, ''));
+    }
+    if (!input && output) { input = {type: 'FeatureCollection', features: []}; toast('Открыт только результат — без исходных данных не видно зданий и коммуникаций', 'info', 6000); }
+    if (!input) throw new Error('не выбран файл исходных данных');
+    await load({input, output, outText, ds: {name: 'local', title: name.join(' + '), local: true}});
+    // свои файлы живут только в этом браузере: адрес ?ds=local откроет их после F5, но не у коллеги
+    history.replaceState(null, '', location.pathname + '?ds=local');
+    if (!fromCache) {
+      cacheFiles(parsed.map(p => ({name: p.name, text: p.text})));
+      toast('Свои файлы открыты и запомнены в этом браузере: F5 их не потеряет. Ссылка на вид у коллеги без этих файлов не откроется.', 'info', 7000);
+    }
+  } catch (e) { $('#loading').hidden = true; toast(`Не удалось открыть: ${esc(e.message)}`, 'error', 9000); }
+}
+// последние свои файлы — в IndexedDB этого браузера
+function idb() { return new Promise((res, rej) => { const r = indexedDB.open('hn3d', 1); r.onupgradeneeded = () => r.result.createObjectStore('files'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+async function cacheFiles(list) { try { const db = await idb(); db.transaction('files', 'readwrite').objectStore('files').put(list, 'last'); } catch (e) { /* хранилище недоступно — просто не запомним */ } }
+async function cachedFiles() { try { const db = await idb(); return await new Promise(res => { const r = db.transaction('files').objectStore('files').get('last'); r.onsuccess = () => res(r.result || null); r.onerror = () => res(null); }); } catch (e) { return null; } }
 
 // ---------- варианты ----------
 function renderVariants() {
@@ -154,6 +187,8 @@ function setVariant(id, {quiet = false} = {}) {
 }
 
 // ---------- обзор ----------
+const DEPTH_GRAD = [1, 2, 3, 4, 5].map(d => { const t = Math.min(1, Math.max(0, (d - 1) / 4)); return new THREE.Color().setHSL(0.5 - 0.08 * t, 0.9, 0.78 - 0.4 * t).getStyle(); }).join(',');
+const S_FORMULA = 'S = 0,7 × стоимость / 25 млн ₽ + 0,3 × длина / 100 м — чем меньше, тем лучше';
 function renderSummary() {
   const M = S.model, v = S.v, el = $('#t-sum');
   if (!v) {
@@ -165,7 +200,7 @@ function renderSummary() {
   const len = sm.new_network_length ?? v.segs.reduce((a, s) => a + s.len, 0);
   el.innerHTML = `<h2>Вариант ${esc(v.id)}${v.rank ? ` · место ${v.rank}` : ''}</h2>
     <div class="kpi">
-      <div><b>${fmt(sm.score, 2)}</b><span>оценка S, меньше — лучше</span></div>
+      <div title="${S_FORMULA}"><b>${fmt(sm.score, 2)}</b><span>оценка S, меньше — лучше <span class="q">?</span></span></div>
       <div><b>${rub(sm.calculated_cost)}</b><span>полная стоимость</span></div>
       <div><b>${meters(len)}</b><span>новых труб</span></div>
       <div class="${unc ? 'bad' : 'ok'}"><b>${unc} из ${M.oks.length}</b><span>зданий не подключено</span></div>
@@ -180,9 +215,11 @@ function renderSummary() {
       <tr><td>Штраф за неподключённые</td><td>${rub(sm.unconnected_penalty)}</td></tr>
       <tr><th>Итого</th><th>${rub(sm.calculated_cost)}</th></tr>
     </table>
-    ${M.variants.length > 1 ? `<h2>Сравнение вариантов</h2><table><tr><th>Вариант</th><th>S</th><th>Стоимость</th><th>Длина</th><th>Не подкл.</th></tr>
-      ${M.variants.map(x => `<tr class="click ${x === v ? 'cur' : ''}" data-v="${esc(x.id)}" title="Щёлкните — открыть вариант ${esc(x.id)}"><td>${x === v ? '▶ ' : ''}${esc(x.id)}${x.rank === 1 ? ' ★' : ''}</td><td>${fmt(x.score, 2)}</td><td>${rub(x.summary.calculated_cost)}</td>
-      <td>${meters(x.summary.new_network_length)}</td><td>${M.oks.length - x.connected.size}</td></tr>`).join('')}</table>
+    ${M.variants.length > 1 ? `<h2>Сравнение вариантов</h2><div class="tblwrap"><table class="cmp"><tr><th>Вар.</th><th title="${S_FORMULA}">S</th><th>ΔS</th><th>Стоимость</th><th>Длина</th><th title="зданий не подключено">Не подкл.</th><th title="проблем по высоте">Пробл.</th><th title="спецпереходов">Спецпер.</th></tr>
+      ${M.variants.map(x => { const best = Math.min(...M.variants.map(q => q.score ?? Infinity)); return `<tr class="click ${x === v ? 'cur' : ''}" data-v="${esc(x.id)}" title="Щёлкните — открыть вариант ${esc(x.id)} (клавиша ${M.variants.indexOf(x) + 1})"><td>${x === v ? '▶ ' : ''}${esc(x.id)}${x.score === best ? ' ★' : ''}</td><td>${fmt(x.score, 2)}</td>
+      <td>${x.score === best ? '—' : '+' + fmt(x.score - best, 2)}</td><td>${rub(x.summary.calculated_cost)}</td><td>${meters(x.summary.new_network_length)}</td><td>${M.oks.length - x.connected.size}</td>
+      <td>${x.crossings.filter(c => c.ok === false).length}</td><td>${x.segs.filter(s => s.special).length}</td></tr>`; }).join('')}</table></div>
+      <div class="mut" style="font-size:12.5px;margin-top:6px">${S_FORMULA}. Клавиши 1–${M.variants.length} — переключить вариант.</div>
       <div class="filters" style="margin-top:8px">${M.variants.filter(x => x !== v).map(x => `<button data-ghost="${esc(x.id)}" class="${S.ghost === x.id ? 'on' : ''}" title="Показать трассы варианта ${esc(x.id)} поверх текущего">${S.ghost === x.id ? '✓ ' : ''}Вариант ${esc(x.id)} поверх <i class="sw" style="background:#f472b6"></i></button>`).join('')}</div>` : ''}
     <h2>С чего начать</h2>
     <div class="actions">
@@ -210,7 +247,8 @@ function dataInfo() {
   return `<table><tr><td>Объектов во входе</td><td>${fmt(M.stats.input)}</td></tr>
     <tr><td>Зданий к подключению</td><td>${fmt(M.oks.length)}</td></tr>
     <tr><td>Коммуникации</td><td style="white-space:normal">${u || '—'}</td></tr>
-    <tr><td>Глубина в результате</td><td>${M.hasDepth ? 'есть (режим с учётом глубины)' : M.hasOutput ? 'нет — трубы на обычных 3,0 м' : '—'}</td></tr></table>`;
+    <tr><td>Глубина в результате</td><td>${M.hasDepth ? 'есть (режим с учётом глубины)' : M.hasOutput ? 'нет — трубы на обычных 3,0 м' : '—'}</td></tr>
+    ${M.skipped.map(([w, k]) => `<tr><td>Пропущено: ${esc(w)}</td><td>${fmt(k)}</td></tr>`).join('')}</table>`;
 }
 function longestTour() {
   if (!S.v) return;
@@ -229,19 +267,20 @@ function renderOks() {
   $('#cntOks').textContent = M.oks.length ? (v ? `${nc}/${rows.length}` : rows.length) : '';
   el.innerHTML = `<h2>Здания к подключению</h2>
     ${v ? `<div class="filters" id="oksF"><button data-f="all">Все ${rows.length}</button><button data-f="conn">Подключены ${nc}</button><button data-f="no">Не подключены ${rows.length - nc}</button></div>` : ''}
-    <input type="search" id="oksQ" placeholder="Номер или адрес здания" aria-label="Фильтр зданий">
+    <input type="search" id="oksQ" placeholder="Адрес, номер или «жилой 14»" aria-label="Фильтр зданий">
     <div class="list" id="oksL"></div>`;
   const draw = () => {
     const q = ($('#oksQ').value || '').toLowerCase();
     $$('#oksF button').forEach(b => b.classList.toggle('on', b.dataset.f === S.oksF));
     const list = rows.filter(r => (S.oksF === 'all' || !v || (S.oksF === 'conn') === r.conn) &&
-      (!q || String(r.o.id).toLowerCase().includes(q) || String(r.o.oksId || '').toLowerCase().includes(q) || String(r.o.name || '').toLowerCase().includes(q)));
-    list.sort((a, b) => (a.conn === b.conn ? 0 : a.conn ? 1 : -1) || String(a.o.id).localeCompare(String(b.o.id), 'ru', {numeric: true}));
+      (!q || matchWords(q, [r.o.id, r.o.oksId, r.o.label].join(' '))));
+    list.sort((a, b) => (a.conn === b.conn ? 0 : a.conn ? 1 : -1) || a.o.no - b.o.no);
     $('#oksL').innerHTML = list.slice(0, 1500).map(({o, conn}) => {
       const r = conn ? routeTo(v, o.id) : null;
-      return `<button class="item ${S.sel?.ref === o ? 'sel' : ''}" data-id="${esc(o.id)}"><div class="t"><span>${esc(o.name || 'Здание ' + (o.oksId || o.id))}</span>
+      return `<button class="item ${S.sel?.ref === o ? 'sel' : ''}" data-id="${esc(o.id)}"><div class="t"><span>${esc(o.label)}</span>
         ${v ? `<span class="badge ${conn ? 'b-ok' : 'b-bad'}">${conn ? 'подключено' : 'не подключено'}</span>` : ''}</div>
-        <div class="m">${o.name ? esc(o.oksId || o.id) + ' · ' : ''}${o.flow != null ? `нагрузка ${fmt(o.flow, 1)} т/ч` : ''}${r ? ` · трасса ${meters(r.len)}${r.bad ? ` · <span style="color:#fda4af">⚠ ${r.bad}</span>` : ''}` : v ? ' · маршрут не найден' : ''}</div></button>`;
+        <div class="m">${o.flow != null ? `расход ${fmt(o.flow, 1)} т/ч` : ''}${r ? ` · трасса ${meters(r.len)}${r.bad ? ` · <span style="color:#fda4af">⚠ ${r.bad} ${plural(r.bad, 'проблема', 'проблемы', 'проблем')}</span>` : ''}` : v ? ' · маршрут не найден' : ''}
+        <span class="id">${esc(o.oksId || o.id)}</span></div></button>`;
     }).join('') || '<div class="item m">Ничего не найдено</div>';
   };
   draw();
@@ -251,14 +290,21 @@ function renderOks() {
 }
 
 // ---------- проблемы ----------
-function cxTitle(c) { return c.type === 'segment' ? `Участок ${c.eid}: нарушение` : `${UTILITIES[c.type].name}: пересечение`; }
+function cxTitle(c) {
+  if (c.type === 'segment') return `${segName(c.seg)}: уклон или глубина`;
+  return c.gap < 0 ? `${UTILITIES[c.type].name}: трубы пересекаются` : `${UTILITIES[c.type].name}: зазор ${fmt(c.gap, 2)} из ${fmt(c.need, 2)} м`;
+}
+function endLabel(seg) { const v = S.v, end = branchEnd(v, seg), o = S.model.oks.find(x => x.id === end); return o ? o.label : nodeLabel(end); }
+function nodeLabel(id) { const v = S.v; return nodeName(v?.nodes.find(n => n.id === id) || {id}, S.model); }
 function renderCx() {
   const v = S.v, el = $('#t-cx');
   if (!v) { el.innerHTML = '<div class="note info">Нет результата расчёта.</div>'; $('#cntCx').textContent = ''; return; }
   const all = v.crossings, bad = all.filter(c => c.ok === false);
   $('#cntCx').textContent = bad.length || '';
   $('#cntCx').className = 'cnt' + (bad.length ? ' bad' : '');
-  const base = S.cxAll ? all : bad;
+  // самые тяжёлые — первыми: по нехватке зазора до нормы
+  const deficit = c => c.type === 'segment' ? 99 : (c.need ?? 0) - c.gap;
+  const base = (S.cxAll ? all : bad).slice().sort((a, b) => deficit(b) - deficit(a));
   const types = [...new Set(base.map(c => c.type))];
   el.innerHTML = `<h2>${S.cxAll ? 'Все пересечения' : 'Проблемы по высоте'}</h2>
     <div class="mut" style="font-size:13px">${S.cxAll ? 'Каждое место, где новая труба проходит над или под другой коммуникацией.' : 'Новая труба проходит слишком близко по высоте к другой коммуникации или нарушает уклон и глубину. Щёлкните — покажу место сбоку и как обойти.'}</div>
@@ -270,7 +316,7 @@ function renderCx() {
     const list = base.filter(c => !S.cxType || c.type === S.cxType);
     $('#cxL').innerHTML = list.slice(0, 2000).map(c => `<button class="item ${S.sel?.ref === c ? 'sel' : ''}" data-k="${all.indexOf(c)}"><div class="t"><span>${esc(cxTitle(c))}</span>
       <span class="badge ${c.ok === false ? 'b-bad' : c.ok ? 'b-ok' : 'b-mut'}">${c.ok === false ? 'проблема' : c.ok ? 'норма' : 'не проверяется'}</span></div>
-      <div class="m">${c.type === 'segment' ? esc(c.issues.join('; ')) : `зазор ${fmt(c.gap, 2)} м${c.need != null ? ` из ${fmt(c.need, 2)}` : ''} · труба ${esc(c.seg.id)} · ${fmt(c.s)} м от начала участка`}</div></button>`).join('')
+      <div class="m">${c.type === 'segment' ? esc(c.issues.join('; ')) : `${segName(c.seg)}, ${fmt(c.s)} м от его начала · трасса к: ${esc(endLabel(c.seg))}`}</div></button>`).join('')
       || `<div class="item m">${S.cxAll ? 'Пересечений нет' : 'Проблем нет 🎉'}</div>`;
   };
   draw();
@@ -308,9 +354,9 @@ function renderLayers() {
     <h2>Глубины коммуникаций</h2>
     <table>${Object.entries(UTILITIES).filter(([k]) => M.utilities[k]).map(([k, u]) => `<tr><td><i class="sw" style="background:${u.color}"></i> ${u.name}</td><td>верх ${fmt(u.top, 1)} м${u.clear != null ? `, зазор ≥ ${fmt(u.clear, 1)}` : ' (условно)'}</td></tr>`).join('')}</table>`;
   const legend = () => {
-    $('#cbyLeg').innerHTML = o.colorBy === 'dn' ? `<div style="height:8px;border-radius:4px;background:linear-gradient(90deg,${grad.join(',')})"></div><div style="display:flex;justify-content:space-between"><span>Ду 50</span><span>Ду 400</span><span>Ду 1400</span></div><div><i class="sw" style="background:${PALETTE.special}"></i> спецпереход</div>`
-      : o.colorBy === 'status' ? `<i class="sw" style="background:${PALETTE.ok}"></i> без проблем <i class="sw" style="background:${PALETTE.problem};margin-left:10px"></i> есть проблема`
-        : '<div style="height:8px;border-radius:4px;background:linear-gradient(90deg,#22d3ee,#a3e635,#facc15,#f97316)"></div><div style="display:flex;justify-content:space-between"><span>1 м</span><span>3 м</span><span>5 м и глубже</span></div>';
+    $('#cbyLeg').innerHTML = o.colorBy === 'dn' ? `<div style="height:8px;border-radius:4px;background:linear-gradient(90deg,${grad.join(',')})"></div><div style="display:flex;justify-content:space-between"><span>Ду 50</span><span>Ду 400</span><span>Ду 1400</span></div><div>У новой сети свой бирюзовый цвет — его нет у существующих сетей.</div>`
+      : o.colorBy === 'status' ? '<i class="sw" style="background:#5eead4"></i> с проблемой — ярко <i class="sw" style="background:#335c5a;margin-left:10px"></i> без проблем — приглушены'
+        : `<div style="height:8px;border-radius:4px;background:linear-gradient(90deg,${DEPTH_GRAD})"></div><div style="display:flex;justify-content:space-between"><span>1 м</span><span>3 м</span><span>5 м и глубже</span></div>`;
   };
   const mark = () => { $$('#bld button').forEach(b => b.classList.toggle('on', b.dataset.b === o.buildings)); $$('#cby button').forEach(b => b.classList.toggle('on', b.dataset.c === o.colorBy)); legend(); };
   mark();
@@ -321,6 +367,14 @@ function renderLayers() {
   $('#cby').onclick = e => { const b = e.target.closest('button'); if (!b) return; o.colorBy = b.dataset.c; mark(); viewer.buildNetwork(); refreshHighlight(); renderLegend(); };
   el.onchange = e => { const k = e.target.dataset?.k; if (!k) return; L[k] = e.target.checked; viewer.applyOpts(); store.set('layers', L); };
 }
+// Камере незачем уходить глубже самых глубоких сетей: упор на глубине сетей + 6 м
+function setMinZ() {
+  const M = S.model;
+  let d = 4;
+  if (M) { for (const s of M.segs) d = Math.max(d, s.d0 + s.row.h, s.d1 + s.row.h); for (const k of Object.keys(M.utilities)) d = Math.max(d, UTILITIES[k].top + (UTILITIES[k].h || 0.5)); }
+  rig.minZ = -(d + 6) * viewer.ex;
+}
+
 // Условные обозначения на сцене — как на чертеже и в ГИС; состав зависит от набора и режима цвета
 function renderLegend() {
   const M = S.model, o = viewer.opts;
@@ -329,9 +383,11 @@ function renderLegend() {
   const dot = c => `<i class="dot" style="background:${c};margin-left:5px"></i>`;
   const grad = [50, 150, 400, 1400].map(d => '#' + dnColor(d).getHexString()).join(',');
   const rows = ['<div class="h">Новая сеть</div>'];
-  if (o.colorBy === 'status') rows.push(sw(PALETTE.ok) + '<span>труба без проблем</span>', sw(PALETTE.problem) + '<span>труба с проблемой по высоте</span>');
-  else if (o.colorBy === 'depth') rows.push('<i class="sw" style="background:linear-gradient(90deg,#22d3ee,#facc15,#f97316)"></i><span>глубина верха: мельче → глубже</span>');
-  else rows.push(`<i class="sw" style="background:linear-gradient(90deg,${grad})"></i><span>труба, цвет по Ду (50 → 1400)</span>`, sw(PALETTE.special) + '<span>спецпереход (футляр)</span>');
+  if (o.colorBy === 'status') rows.push(sw('#5eead4') + '<span>участок с проблемой — ярко</span>', sw('#335c5a') + '<span>участок без проблем — приглушён</span>');
+  else if (o.colorBy === 'depth') rows.push(`<i class="sw" style="background:linear-gradient(90deg,${DEPTH_GRAD})"></i><span>глубина верха: мельче → глубже</span>`);
+  else rows.push(`<i class="sw" style="background:linear-gradient(90deg,${grad})"></i><span>новая труба: светлее — тоньше, Ду 50 → 1400</span>`);
+  rows.push('<i class="sw" style="background:rgba(248,250,252,.35);height:10px;border:1px solid rgba(248,250,252,.6)"></i><span>футляр спецперехода</span>',
+    dot(PALETTE.problem) + '<span>проблема по высоте (метка с иглой)</span>');
   rows.push(sw(PALETTE.selection) + '<span>выбранная трасса</span>', sw('#67e8f9', true) + '<span>трасса на поверхности (где копать)</span>');
   if (S.ghost) rows.push(sw('#f472b6', true) + `<span>вариант ${esc(S.ghost)} для сравнения</span>`);
   rows.push(dot(PALETTE.chamberNew) + '<span>новая камера (колодец)</span>');
@@ -346,6 +402,7 @@ $('#legBtn').onclick = () => { const b = $('#legBody'); b.hidden = !b.hidden; $(
 function setEx(ex) {
   const P = rig.center(), oldEx = viewer.ex;
   viewer.setExaggeration(ex);
+  setMinZ();
   // камера остаётся у той же точки сцены: пересчитываем её высоту под новый масштаб, если она под землёй
   if (rig.pos.z < 0) { rig.pos.z *= ex / oldEx; rig.apply(); }
   else if (P.z < 0) { const d = rig.pos.clone().sub(P); P.z *= ex / oldEx; rig.pos.copy(P).add(d); rig.apply(); }
@@ -360,6 +417,7 @@ function clearSel() {
   viewer.highlight(null);
   viewer.marker('selpt', null);
   $('#props').hidden = true;
+  document.body.classList.remove('propsOpen');
   closeProfile();
   $$('.item.sel').forEach(x => x.classList.remove('sel'));
   scheduleHash();
@@ -384,7 +442,7 @@ function select(sel, {fly = false} = {}) {
   S.route = routeFor(sel);
   if (S.route) {
     const o = S.model.oks.find(x => x.id === S.route.end);
-    S.route.endName = o ? (o.name || 'Здание ' + (o.oksId || o.id)) : null;
+    S.route.endName = o ? o.label : null;
   }
   viewer.highlight(S.route, sel.kind === 'seg' ? sel.ref : null);
   if (!S.route) highlightOther(sel);
@@ -404,18 +462,60 @@ function highlightOther(sel) {
   if (sel.kind === 'node' || sel.kind === 'chamber') { const p = sel.ref.xy; viewer.marker('selpt', new THREE.Vector3(p[0], p[1], viewer.z(sel.ref.depth ?? 3.2)), {r: 1.5}); }
   if (sel.kind === 'oks') { const o = sel.ref; viewer.marker('selpt', new THREE.Vector3(o.xy[0], o.xy[1], (o.building ? buildingHeight(o.building) : 12) + 10.2), {r: 3.2}); }
 }
-function selectCrossing(c) {
+function selectCrossing(c, {move = true} = {}) {
   const r0 = routeFor({kind: 'crossing', ref: c});
   S.focusAt = r0 && c.type !== 'segment' ? (r0.segs.find(q => q === c.seg)?.s0 ?? 0) + c.s : null;
   select({kind: 'crossing', ref: c});
+  // участник конфликта подсвечен белым поверх своего цвета — пара «новая — существующая», как в Clash Detective
+  if (c.type !== 'segment') {
+    const ln = (S.model.utilities[c.type] || []).find(l => String(l.id) === String(c.eid));
+    if (ln) { const z = -(ln.top + (ln.h || 0.3) / 2) * viewer.ex, seg = []; for (let i = 0; i + 1 < ln.pts.length; i++) seg.push(ln.pts[i][0], ln.pts[i][1], z, ln.pts[i + 1][0], ln.pts[i + 1][1], z); viewer.overlayLines(seg, {color: '#ffffff', width: 3}); }
+  }
   viewer.marker('selpt', new THREE.Vector3(c.x, c.y, viewer.z(c.type === 'segment' ? c.seg.d0 : c.hn + c.H / 2)), {r: 0.9, color: c.ok === false ? PALETTE.problem : PALETTE.ok});
-  // смотрим сбоку, поперёк новой трубы, чуть сверху — видно, кто над кем
+  if (move) crossingView(c);
+}
+// Вид на пересечение сбоку, поперёк новой трубы, чуть сверху — видно, кто над кем
+function crossingPose(c) {
   const s = c.seg;
   let dir = [1, 0];
   for (let i = 1; i < s.pts.length; i++) if (s.lens[i] >= c.s - 1e-6) { const a = s.pts[i - 1], b = s.pts[i], l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1; dir = [(b[0] - a[0]) / l, (b[1] - a[1]) / l]; break; }
-  const yaw = Math.atan2(dir[0], dir[1]) + Math.PI / 2;
-  const depth = c.type === 'segment' ? s.d0 : c.hn + c.H / 2;
-  rig.lookAtFrom(new THREE.Vector3(c.x, c.y, viewer.z(depth)), yaw, -14 * D, 16 + 2 * viewer.ex);
+  // направление существующей трубы в точке пересечения
+  let other = null;
+  const ln = c.type !== 'segment' && (S.model.utilities[c.type] || []).find(l => String(l.id) === String(c.eid));
+  if (ln) {
+    let best = Infinity;
+    for (let i = 1; i < ln.pts.length; i++) {
+      const a = ln.pts[i - 1], b = ln.pts[i], ux = b[0] - a[0], uy = b[1] - a[1], L = Math.hypot(ux, uy) || 1;
+      const t = Math.max(0, Math.min(1, ((c.x - a[0]) * ux + (c.y - a[1]) * uy) / (L * L))), d = Math.hypot(a[0] + ux * t - c.x, a[1] + uy * t - c.y);
+      if (d < best) { best = d; other = [ux / L, uy / L]; }
+    }
+  }
+  // взгляд под углом к обеим трубам (биссектриса), а не вдоль существующей — иначе она закрывает место торцом
+  let view = [-dir[1], dir[0]];
+  if (other) {
+    const cands = [[dir[0] + other[0], dir[1] + other[1]], [dir[0] - other[0], dir[1] - other[1]]].map(v => { const l = Math.hypot(v[0], v[1]) || 1; return [v[0] / l, v[1] / l]; });
+    const side = v => Math.min(Math.abs(v[0] * dir[1] - v[1] * dir[0]), Math.abs(v[0] * other[1] - v[1] * other[0]));
+    view = side(cands[0]) >= side(cands[1]) ? cands[0] : cands[1];
+  }
+  const yaw = Math.atan2(view[0], view[1]), pitch = -18 * D;
+  const P = new THREE.Vector3(c.x, c.y, viewer.z(c.type === 'segment' ? s.d0 : c.hn + c.H / 2));
+  const dist = 16 + 2 * viewer.ex, cp = Math.cos(pitch);
+  const pos = P.clone().addScaledVector(new THREE.Vector3(Math.sin(yaw) * cp, Math.cos(yaw) * cp, Math.sin(pitch)), -dist);
+  return {P, pos, yaw, pitch};
+}
+function crossingView(c) {
+  const {pos, yaw, pitch} = crossingPose(c);
+  rig.animateTo({pos, yaw, pitch, done: () => ensureOutside()}, 700);
+}
+// Камера не должна оказаться внутри трубы или колодца: отходим назад по взгляду, пока не выйдем
+function ensureOutside() {
+  const f = rig.forward();
+  for (let k = 0; k < 12; k++) {
+    const hit = viewer.insideAt(rig.pos);
+    if (!hit) return;
+    rig.pos.addScaledVector(f, -(hit + 1.5));
+    rig.apply();
+  }
 }
 function lookAtPipe(p, dist = 20) {
   const yaw = Math.atan2(p.dir[0], p.dir[1]) + Math.PI / 2;
@@ -445,59 +545,66 @@ function frameSel() {
 const ND = n => n == null ? '—' : fmt(n, 2) + ' м';
 function describe(sel) {
   const M = S.model, v = S.v, r = sel.ref;
+  const nn = id => nodeName(v?.nodes.find(n => n.id === id) || {id, type: M.oks.some(o => o.id === id) ? 'oks_entry' : ''}, M);
+  const gapText = c => c.gap < 0 ? `трубы пересекаются по высоте, наложение ${fmt(-c.gap, 2)} м` : `зазор ${fmt(c.gap, 2)} м`;
+  const slopeNote = s => Math.abs(s.d1 - s.d0) / s.len < 1e-6 ? (M.hasDepth ? ' (горизонтально; минимальный уклон правилами кейса не задан)' : ' (в 2D-расчёте уклон не задаётся)') : '';
   switch (sel.kind) {
     case 'seg': {
       const s = r, bad = s.cx.filter(c => c.ok === false);
-      return {kind: 'Новая труба', title: `Участок ${s.id}`, rows: [['Диаметр', `Ду ${s.p.diameter}`], ['Длина', meters(s.p.length ?? s.len)], ['Прокладка', s.special ? 'спецпереход (футляр)' : 'обычная, в канале'],
-        ['Глубина верха', s.d0 === s.d1 ? ND(s.d0) : `${ND(s.d0)} → ${ND(s.d1)}`], ['Уклон', fmt(Math.abs(s.d1 - s.d0) / s.len, 3)], ['Расход', s.p.flow_tph != null ? fmt(s.p.flow_tph, 2) + ' т/ч' : '—'],
-        ['Стоимость', rub(s.p.cost)], ['Откуда → куда', `${s.from} → ${s.to}`], ['Пересечений', s.cx.length]],
-        problem: s.issues.length || bad.length ? [...s.issues, ...bad.map(c => `${UTILITIES[c.type].name.toLowerCase()}: зазор ${fmt(c.gap, 2)} м, нужно ${fmt(c.need, 2)} м`)].join('<br>') : null};
+      return {kind: 'Новая труба', title: `${segName(s)}: ${nn(s.from)} → ${nn(s.to)}`, sub: s.id, rows: [['Диаметр', `Ду ${s.p.diameter}`], ['Длина', meters(s.p.length ?? s.len)], ['Прокладка', s.special ? 'спецпереход в футляре' : 'обычная, в канале'],
+        ['Глубина верха', s.d0 === s.d1 ? ND(s.d0) : `${ND(s.d0)} → ${ND(s.d1)}`], ['Уклон', fmt(Math.abs(s.d1 - s.d0) / s.len, 3) + slopeNote(s)], ['Расход теплоносителя', s.p.flow_tph != null ? fmt(s.p.flow_tph, 2) + ' т/ч' : '—'],
+        ['Стоимость', rub(s.p.cost)], ['Пересечений с сетями', s.cx.length]],
+        problem: s.issues.length || bad.length ? [...s.issues, ...bad.map(c => `${UTILITIES[c.type].name.toLowerCase()}: ${gapText(c)}, нужно ${fmt(c.need, 2)} м`)].join('<br>') : null};
     }
     case 'oks': {
       const conn = v ? v.connected.has(r.id) : null, R = S.route;
-      const rows = [['Номер', r.oksId || r.id], ['Точка подключения', r.id], ['Нагрузка', r.flow != null ? fmt(r.flow, 2) + ' т/ч' : '—']];
+      const rows = [['Расход теплоносителя', r.flow != null ? fmt(r.flow, 2) + ' т/ч' : '—']];
+      if (r.load != null) rows.push(['Тепловая нагрузка', fmt(r.load, 3) + ' Гкал/ч']);
       if (r.building) rows.push(['Этажей', r.building.p.levels ?? '—']);
       if (v) rows.push(['Подключено', conn ? 'да' : 'нет']);
-      if (R) rows.push(['Трасса от врезки', meters(R.len)], ['Участков', R.segs.length], ['Стоимость трассы', rub(R.cost)], ['Ду на вводе', `Ду ${R.segs[R.segs.length - 1].p.diameter}`], ['Врезка', R.start]);
-      return {kind: 'Здание к подключению', title: r.name || `Здание ${r.oksId || r.id}`, rows,
-        problem: v && !conn ? 'Здание не подключено в этом варианте — за него начисляется штраф. Посмотрите другие варианты.' : R?.bad ? `На трассе ${R.bad} ${plural(R.bad, 'проблема', 'проблемы', 'проблем')} по высоте — см. профиль внизу.` : null,
+      if (R) rows.push(['Трасса от врезки', meters(R.len)], ['Участков', R.segs.length], ['Стоимость трассы', rub(R.cost)], ['Ду на вводе', `Ду ${R.segs[R.segs.length - 1].p.diameter}`], ['Врезка', nn(R.start)]);
+      rows.push(['Номер во входе', r.oksId || r.id], ['Точка подключения', r.id]);
+      return {kind: 'Здание к подключению', title: r.label, rows,
+        problem: v && !conn ? 'Здание не подключено в этом варианте — за него начисляется штраф. Посмотрите другие варианты.' : R?.bad ? `На трассе ${R.bad} ${plural(R.bad, 'проблема', 'проблемы', 'проблем')} по высоте — красные метки в 3D и на профиле внизу.` : null,
         ok: R && !R.bad ? 'Трасса без проблем по высоте' : null};
     }
     case 'crossing': {
       const c = r;
-      if (c.type === 'segment') return {kind: 'Нарушение на участке', title: `Участок ${c.eid}`, rows: [['Глубина', `${ND(c.seg.d0)} → ${ND(c.seg.d1)}`], ['Длина', meters(c.seg.len)]], problem: c.issues.join('<br>')};
+      if (c.type === 'segment') return {kind: 'Нарушение на участке', title: segName(c.seg), sub: c.seg.id, rows: [['Глубина', `${ND(c.seg.d0)} → ${ND(c.seg.d1)}`], ['Длина', meters(c.seg.len)]], problem: c.issues.join('<br>')};
       const u = UTILITIES[c.type];
-      const rows = [['Пересекает', `${u.name} № ${c.eid}`], ['Существующая лежит', `${fmt(c.top, 2)}–${fmt(c.top + c.eh, 2)} м`], ['Новая труба лежит', `${fmt(c.hn, 2)}–${fmt(c.hn + c.H, 2)} м`],
-        ['Новая проходит', c.side], ['Зазор сейчас', fmt(c.gap, 2) + ' м'], ['Нужно не меньше', c.need == null ? 'правила нет' : fmt(c.need, 2) + ' м'], ['Участок', c.seg.id]];
+      const rows = [['Пересекает', `${u.name.toLowerCase()} № ${c.eid}`], ['Существующая: верх–низ', `${fmt(c.top, 2)}–${fmt(c.top + c.eh, 2)} м`], ['Новая: верх–низ', `${fmt(c.hn, 2)}–${fmt(c.hn + c.H, 2)} м`],
+        ['Новая проходит', c.gap < 0 ? 'насквозь — трубы пересекаются' : c.side], ['Зазор по высоте', c.gap < 0 ? `наложение ${fmt(-c.gap, 2)} м` : fmt(c.gap, 2) + ' м'], ['Нужно не меньше', c.need == null ? 'правилами не задано' : fmt(c.need, 2) + ' м'], ['Участок', segName(c.seg)]];
       let problem = null, fix = null;
       if (c.ok === false) {
-        problem = `Новая труба проходит слишком близко к коммуникации «${u.name.toLowerCase()}»: зазор ${fmt(c.gap, 2)} м, а нужно ${fmt(c.need, 2)} м.`;
+        problem = `Новая труба проходит слишком близко к коммуникации «${u.name.toLowerCase()}»: ${gapText(c)}, а нужно не меньше ${fmt(c.need, 2)} м.`;
         fix = [c.above != null ? `<b>Поднять</b> трубу: верх не глубже ${fmt(c.above, 2)} м — без доплаты.` : 'Поднять нельзя: выйдет мельче 0,7 м.',
-          `<b>Опустить</b> трубу: верх не мельче ${fmt(c.below, 2)} м — ${c.kBelow > 1 ? `дороже на ${fmt((c.kBelow - 1) * 100, 1)} % (Kгл ${fmt(c.kBelow, 3)})` : 'без доплаты'}.`].join('<br>');
+          `<b>Опустить</b> трубу: верх не мельче ${fmt(c.below, 2)} м — ${c.kBelow > 1 ? `дороже на ${fmt((c.kBelow - 1) * 100, 1)} %` : 'без доплаты'}.`,
+          c.kBelow > 1 ? `<small class="mut">Kгл ${fmt(c.kBelow, 3)} — коэффициент стоимости за глубину: +10 % за каждый метр глубже 3 м.</small>` : ''].filter(Boolean).join('<br>');
       }
-      return {kind: 'Пересечение', title: u.name, rows, problem, fix, ok: c.ok === true ? 'Зазор достаточный' : c.ok == null ? 'Для этой коммуникации зазор правилами не задан, глубина показана условно' : null};
+      return {kind: 'Пересечение по высоте', title: `${u.name} × новая труба`, rows, problem, fix, ok: c.ok === true ? 'Зазор достаточный' : c.ok == null ? 'Для этой коммуникации зазор правилами не задан, глубина показана условно' : null};
     }
     case 'node': {
-      const n = r, t = n.type === 'existing_chamber' ? 'Существующая камера (врезка)' : n.type === 'oks_entry' ? 'Ввод в здание' : (NODE_TYPES[n.type] || {name: n.type}).name;
+      const n = r, t = n.type === 'existing_chamber' ? 'Врезка в существующую камеру' : n.type === 'oks_entry' ? 'Ввод в здание' : (NODE_TYPES[n.type] || {name: n.type}).name;
       const segs = v ? v.segs.filter(s => s.from === n.id || s.to === n.id) : [];
-      return {kind: t, title: String(n.id), rows: [['Глубина низа трубы', ND(n.depth)], ['Ду', n.dn || n.p.diameter || '—'], ['Участков в узле', segs.length], ...(n.p.cost ? [['Стоимость', rub(n.p.cost)]] : []),
+      const nm = nodeName(n, M);
+      return {kind: t, title: nm[0].toUpperCase() + nm.slice(1), sub: n.id, rows: [['Глубина низа трубы', ND(n.depth)], ['Ду', n.dn || n.p.diameter || '—'], ['Участков в узле', segs.length], ...(n.p.cost ? [['Стоимость', rub(n.p.cost)]] : []),
         ...(n.p.existing_object_id ? [['На существующем объекте', n.p.existing_object_id]] : [])]};
     }
     case 'utility': {
       const u = UTILITIES[sel.type], ln = r;
-      return {kind: 'Существующая коммуникация', title: `${u.name} № ${ln.id}`, rows: [['Глубина верха', fmt(ln.top, 1) + ' м' + (u.assumed ? ' (условно)' : '')], ['Высота габарита', ND(ln.h)], ...(ln.dn ? [['Ду', ln.dn]] : []),
+      return {kind: 'Существующая сеть', title: u.name, sub: `№ ${ln.id}`, rows: [['Глубина верха', fmt(ln.top, 1) + ' м' + (u.assumed ? ' (условно)' : '')], ['Высота габарита', ND(ln.h)], ...(ln.dn ? [['Ду', ln.dn]] : []),
         ['Нужный зазор с новой трубой', u.clear == null ? 'правилами не задан' : fmt(u.clear, 1) + ' м'], ['Длина', meters(ln.pts.reduce((a, p, i) => i ? a + Math.hypot(p[0] - ln.pts[i - 1][0], p[1] - ln.pts[i - 1][1]) : 0, 0))]]};
     }
-    case 'chamber': return {kind: 'Существующая камера', title: `Камера ${r.id}`, rows: [['Номер', r.id], ...Object.entries(r.p).filter(([k, x]) => !k.startsWith('_') && !['id', 'object_type'].includes(k) && typeof x !== 'object').map(([k, x]) => [k, String(x)])]};
-    case 'source': return {kind: 'Источник тепла', title: r.p.name || `Источник ${r.id}`, rows: [['Номер', r.id]]};
+    case 'chamber': return {kind: 'Существующая камера', title: `Камера ${String(r.id).replace(/^hc-/, '')}`, sub: r.id, rows: [...(r.p.diameter ? [['Ду', r.p.diameter]] : []), ['Глубина', `около ${fmt(UTILITIES.heat_network.top, 1)} м`]]};
+    case 'source': return {kind: 'Источник тепла', title: r.p.name || `Источник ${r.id}`, sub: r.id, rows: [...(r.p.operator ? [['Владелец', r.p.operator]] : [])]};
     case 'surface': {
       const it = r, name = (SURFACES[sel.type] || {name: sel.type}).name, b = BUILDING_KEYS.has(sel.type);
-      const rows = [['Номер', it.id]];
+      const rows = [];
       if (it.p.address) rows.push(['Адрес', it.p.address]);
       if (b) rows.push(['Этажей', it.p.levels ?? '—'], ['Высота в 3D', meters(buildingHeight(it))]);
       if (it.p.name) rows.push(['Название', it.p.name]);
-      if (sel.type === 'road' || sel.type === 'tram_tracks') rows.push(['Под ним верх трубы', `не мельче ${sel.type === 'road' ? '1,0' : '1,2'} м, переход спецпрокладкой`]);
-      return {kind: b ? (it.isFuture ? 'Новое здание' : 'Здание') : 'Поверхность', title: b ? (it.p.address || `${name}: ${it.id}`) : name, rows};
+      if (sel.type === 'road' || sel.type === 'tram_tracks') rows.push(['Труба под ним', `верх не мельче ${sel.type === 'road' ? '1,0' : '1,2'} м, переход в футляре`]);
+      return {kind: b ? (it.isFuture ? 'Новое здание' : 'Здание') : 'Поверхность', title: b ? (it.p.address || (it.isFuture ? 'Новое здание' : 'Здание')) : name, sub: it.id, rows};
     }
   }
   return {kind: '', title: '', rows: []};
@@ -505,9 +612,13 @@ function describe(sel) {
 function showProps(sel) {
   const d = describe(sel), el = $('#props');
   el.hidden = false;
+  document.body.classList.add('propsOpen');
+  // на телефоне выбранное должно быть видно: панель слева прячем, лист со свойствами свёрнут, если есть профиль
+  if (isMobile()) { document.body.classList.remove('leftOpen'); el.classList.toggle('min', !!S.route); }
   const hasRoute = !!S.route;
-  el.innerHTML = `<div class="kind">${esc(d.kind)}</div>
+  el.innerHTML = `<div class="grab" id="pxGrab" title="Свернуть или развернуть"></div><div class="kind">${esc(d.kind)}</div>
     <div class="h"><b>${esc(d.title)}</b><button class="icon" id="pxX" title="Закрыть (Esc)" aria-label="Закрыть">×</button></div>
+    ${d.sub ? `<div class="sub">${esc(d.sub)}</div>` : ''}
     <div class="acts">
       <button id="pxGo" class="primary" title="Навести камеру (F)">🎯 Показать</button>
       <button id="pxClip" title="Срез вокруг (B)">✂️ Срез вокруг</button>
@@ -517,6 +628,14 @@ function showProps(sel) {
     <table>${d.rows.map(r => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`).join('')}</table>
     ${d.problem ? `<div class="note prob">⚠️ ${d.problem}</div>` : ''}${d.fix ? `<div class="note fix"><b>Как исправить</b><br>${d.fix}</div>` : ''}${d.ok ? `<div class="note fix">✓ ${esc(d.ok)}</div>` : ''}`;
   $('#pxX').onclick = () => clearSel();
+  // лист на телефоне: касание или смахивание заголовка — свернуть/развернуть
+  const head = [$('#pxGrab'), el.querySelector('.kind'), el.querySelector('.h b')];
+  let y0 = null;
+  for (const h of head) {
+    h.onclick = () => { if (isMobile()) el.classList.toggle('min'); };
+    h.onpointerdown = e => { y0 = e.clientY; };
+    h.onpointerup = e => { if (y0 == null || !isMobile()) return; const dy = e.clientY - y0; if (dy > 25) el.classList.add('min'); if (dy < -25) el.classList.remove('min'); y0 = null; };
+  }
   $('#pxGo').onclick = () => frameSel();
   $('#pxClip').onclick = () => toggleClip(true);
   if (hasRoute) $('#pxFly').onclick = () => startFly();
@@ -528,7 +647,7 @@ function openProfile() {
   const R = S.route;
   $('#profile').hidden = false;
   const o = S.model.oks.find(x => x.id === R.end);
-  $('#pTitle').innerHTML = `Профиль: врезка ${esc(R.start)} → ${esc(o ? (o.name || 'здание ' + (o.oksId || o.id)) : R.end)} · ${meters(R.len)} · ${rub(R.cost)} · ` +
+  $('#pTitle').innerHTML = `Профиль: ${esc(nodeLabel(R.start))} → ${esc(o ? o.label : R.end)} · ${meters(R.len)} · ${rub(R.cost)} · ` +
     (R.bad ? `<span style="color:#fda4af">${R.bad} ${plural(R.bad, 'проблема', 'проблемы', 'проблем')}</span>` : '<span style="color:#86efac">без проблем</span>');
   const at = S.focusAt;
   S.focusAt = null;
@@ -582,7 +701,7 @@ function hoverAt(x, y, dragging) {
     if (!hoverXY || !S.model) return;
     const [hx, hy] = hoverXY, h = pickAt(hx, hy);
     const P = h?.point || rig.onPlane(hx, hy, 0, 1e6);
-    if (P) { const [lon, lat] = S.model.proj.ll(P.x, P.y); $('#stXY').textContent = `${lat.toFixed(6)}, ${lon.toFixed(6)}`; }
+    if (P) { const [lon, lat] = S.model.proj.ll(P.x, P.y); $('#stXY').textContent = `${lat.toFixed(6)}, ${lon.toFixed(6)} · X ${fmt(P.x)} Y ${fmt(P.y)} м от центра набора`; }
     const t = h ? hoverText(h) : null;
     $('#stHover').innerHTML = t ? t.status : '';
     const tip = $('#tip'), r = $('#view').getBoundingClientRect();
@@ -604,7 +723,7 @@ function hoverText(h) {
       status: `<b>Новая труба</b> ${esc(r.id)} · Ду ${r.p.diameter} · верх ${fmt(Math.max(0, d), 2)} м`};
   }
   if (h.kind === 'utility') { const u = UTILITIES[h.type]; return {title: u.name, lines: [`№ ${esc(r.id)} · верх ${fmt(r.top, 1)} м${u.assumed ? ' (условно)' : ''}`], status: `<b>${u.name}</b> ${esc(r.id)} · верх ${fmt(r.top, 1)} м`}; }
-  if (h.kind === 'oks') { const c = S.v ? S.v.connected.has(r.id) : null; return {title: esc(r.name || 'Здание ' + (r.oksId || r.id)), lines: [`нагрузка ${fmt(r.flow, 1)} т/ч`, c == null ? '' : c ? '<span style="color:#86efac">подключено</span>' : '<span style="color:#fda4af">не подключено</span>'].filter(Boolean), status: `<b>Здание</b> ${esc(r.oksId || r.id)}`}; }
+  if (h.kind === 'oks') { const c = S.v ? S.v.connected.has(r.id) : null; return {title: esc(r.label), lines: [`расход ${fmt(r.flow, 1)} т/ч`, c == null ? '' : c ? '<span style="color:#86efac">подключено</span>' : '<span style="color:#fda4af">не подключено</span>'].filter(Boolean), status: `<b>${esc(r.label)}</b>`}; }
   if (h.kind === 'node') { const t = r.type === 'existing_chamber' ? 'Врезка в существующую камеру' : r.type === 'oks_entry' ? 'Ввод в здание' : (NODE_TYPES[r.type] || {name: r.type}).name; return {title: t, lines: [`${esc(r.id)} · низ ${ND(r.depth)}`], status: `<b>${t}</b> ${esc(r.id)}`}; }
   if (h.kind === 'chamber') return {title: 'Существующая камера', lines: [esc(r.id)], status: `<b>Камера</b> ${esc(r.id)}`};
   if (h.kind === 'source') return {title: 'Источник тепла', lines: [esc(r.p.name || r.id)], status: `<b>Источник</b> ${esc(r.p.name || r.id)}`};
@@ -667,6 +786,7 @@ function homeBox() {
 }
 // Исходный вид: вся новая сеть с зданиями, на север, наклон 52° — как «Домой» у ViewCube
 function home(ms = 800) {
+  if (rig.mode === 'fly') setMode('orbit', true);   // «Домой» возвращает и обычный режим мыши, как в Navisworks
   if (S.model) rig.frame(homeBox(), {yaw: 0, pitch: -52 * D, ms, pad: 1.05});
 }
 function orient(dir, name) {
@@ -688,7 +808,7 @@ function updateModeUi() {
   $('#modeIco').innerHTML = fly ? '<path d="M2 12 22 3l-6 19-4-8z"/><path d="m12 14 4-4"/>' : '<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/>';
   status();
 }
-function setMode(m) { rig.mode = m; updateModeUi(); toast(m === 'fly' ? 'Режим «Полёт»: мышь — осмотреться, W A S D — лететь, Q/E — вниз/вверх' : 'Режим «Обзор»: левая — двигать, правая — вращать', 'info', 2600); }
+function setMode(m, quiet = false) { rig.mode = m; updateModeUi(); if (!quiet) toast(m === 'fly' ? 'Режим «Полёт»: мышь — осмотреться, W A S D — лететь, Q/E — вниз/вверх' : 'Режим «Обзор»: левая — двигать, правая — вращать', 'info', 2600); }
 function status(extra) {
   const fly = rig.mode === 'fly';
   $('#stHint').innerHTML = extra ? `<b>${esc(extra)}</b>` : S.measure ? '<b>Линейка:</b> щёлкните две точки · Esc — выйти'
@@ -707,7 +827,9 @@ function updateScale() {
   $('#scale .bar').style.width = Math.round(nice / mpp) + 'px';
   $('#scale span').textContent = meters(nice);
   $('#stCam').textContent = cam.z >= 0 ? `камера ${meters(cam.z)} над землёй` : `камера под землёй, ${fmt(-cam.z / viewer.ex, 1)} м`;
-  $('#v2dT').textContent = rig.pitch < -80 * D ? '3D' : '2D';
+  const top = rig.pitch < -80 * D;
+  $('#v2d').classList.toggle('is2d', top);
+  $('#v2d').title = top ? 'Сейчас вид сверху (2D). Щёлкните — 3D-наклон (T)' : 'Сейчас 3D. Щёлкните — вид сверху (T)';
 }
 
 // ---------- рентген, срез, линейка ----------
@@ -721,6 +843,14 @@ function setClip(box) {
 }
 function toggleClip(force) {
   if (S.clip && !force) return setClip(null);
+  if (S.sel?.kind === 'crossing') {
+    // вокруг места конфликта: рамка ±10 м, камера снаружи рамки — разрез, а не вид изнутри трубы
+    const c = S.sel.ref, {P, pos, yaw, pitch} = crossingPose(c), deep = (c.top ?? 3) + (c.eh ?? 0.5) + 2.5;
+    setClip([P.x - 10, P.y - 10, -deep * viewer.ex, P.x + 10, P.y + 10, 3]);
+    const out = pos.clone().sub(P).setLength(Math.max(30, 16 * 1.8));
+    rig.animateTo({pos: P.clone().add(out), yaw, pitch, done: () => ensureOutside()}, 600);
+    return;
+  }
   let b = selBox();
   if (b) { const m = 15; b = [b[0] - m, b[1] - m, Math.min(b[2], 0) - 6 * viewer.ex, b[3] + m, b[4] + m, Math.max(b[5], 0) + 40]; }
   else b = boxAround(rig.center(), 60);
@@ -760,7 +890,9 @@ function startFly() {
   const R = S.route;
   if (!R) return toast('Сначала выберите здание или трубу — пролёт идёт по её трассе', 'info');
   setClip(null);
-  S.fly = {at: 0, playing: true, speed: +$('#plSpeed').value, last: performance.now()};
+  // после пролёта вернёмся туда, откуда начали; первый кадр — сразу у врезки, без перелёта через полрайона
+  S.fly = {at: 0, playing: true, speed: +$('#plSpeed').value, last: performance.now(), prev: rig.state, jump: true};
+  document.body.classList.add('flying');
   $('#player').hidden = false;
   $('#plPlay').textContent = '❚❚';
   setXray(true);
@@ -789,16 +921,19 @@ function flyPose(at) {
   const yaw = Math.atan2(f.x, f.y), pitch = Math.asin(clamp(f.z, -1, 1));
   // сглаживание курса — без рывков на изломах
   let dy = yaw - rig.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
-  rig.yaw += dy * 0.12; rig.pitch += (pitch - rig.pitch) * 0.12;
-  rig.pos.lerp(pos, 0.25);
+  if (S.fly?.jump) { S.fly.jump = false; rig.yaw = yaw; rig.pitch = pitch; rig.pos.copy(pos); }
+  else { rig.yaw += dy * 0.12; rig.pitch += (pitch - rig.pitch) * 0.12; rig.pos.lerp(pos, 0.25); }
   rig.apply();
   profile.setCursor(at);
   $('#plPos').value = Math.round(at / R.len * 1000);
   $('#plTxt').textContent = `${fmt(at)} из ${fmt(R.len)} м · верх ${fmt(p.d, 2)} м · Ду ${p.seg.p.diameter}`;
 }
-function stopFly() {
+function stopFly(restore = true) {
   if (!S.fly) return;
+  const prev = restore ? S.fly.prev : null;
   S.fly = null;
+  document.body.classList.remove('flying');
+  if (prev) rig.animateTo({pos: new THREE.Vector3(...prev.pos), yaw: prev.yaw * D, pitch: prev.pitch * D, back: true}, 700);
   $('#player').hidden = true;
   setXray(false);
   viewer.marker('pcur', null);
@@ -814,44 +949,76 @@ viewer.renderer.domElement.addEventListener('pointerdown', () => { if (S.fly?.pl
 
 // ---------- поиск ----------
 let searchIdx = null;
-function buildIndex() {
-  const M = S.model, idx = [];
-  for (const o of M.oks) idx.push({k: [o.id, o.oksId, o.name].filter(Boolean).join(' ').toLowerCase(), label: o.name || 'Здание ' + (o.oksId || o.id), sub: 'здание к подключению', sel: {kind: 'oks', ref: o}});
-  for (const v of M.variants) {
-    for (const s of v.segs) idx.push({k: s.id.toLowerCase(), label: `Участок ${s.id}`, sub: `труба Ду ${s.p.diameter}, вариант ${v.id}`, sel: {kind: 'seg', ref: s}, v: v.id});
-    for (const n of v.nodes) if (!n.virtual) idx.push({k: String(n.id).toLowerCase(), label: String(n.id), sub: `${(NODE_TYPES[n.type] || {name: n.type}).name.toLowerCase()}, вариант ${v.id}`, sel: {kind: 'node', ref: n}, v: v.id});
+// Поиск по словам в любом порядке, как в Картах: «щусева 3», «Шусева» (опечатка), «тэц», «камера 19», «участок 6»
+const STOP = new Set(['ул', 'улица', 'д', 'дом', 'корп', 'корпус', 'к', 'стр', 'строение', 'пр', 'просп', 'проспект', 'пер', 'переулок', 'наб', 'набережная', 'ш', 'шоссе', 'г', 'город']);
+const words = s => String(s ?? '').toLowerCase().replace(/ё/g, 'е').replace(/[.,;:№#"«»()\-_/]+/g, ' ').split(/\s+/).filter(w => w && !STOP.has(w));
+// одна правка (замена, вставка или удаление буквы)
+function near1(a, b) {
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0, j = 0, e = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i++; j++; continue; }
+    if (++e > 1) return false;
+    if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; }
   }
-  for (const c of M.points.heat_chamber || []) idx.push({k: String(c.id).toLowerCase(), label: `Камера ${c.id}`, sub: 'существующая камера', sel: {kind: 'chamber', ref: c}});
-  for (const [t, l] of Object.entries(M.utilities)) for (const ln of l) idx.push({k: String(ln.id).toLowerCase(), label: `${UTILITIES[t].name} ${ln.id}`, sub: 'существующая коммуникация', sel: {kind: 'utility', type: t, ref: ln}});
-  for (const k of BUILDING_KEYS) for (const it of M.surfaces[k] || []) if (it.p.address) idx.push({k: (it.p.address + ' ' + it.id).toLowerCase(), label: it.p.address, sub: 'здание', sel: {kind: 'surface', type: k, ref: it}});
+  return e + (a.length - i) + (b.length - j) <= 1;
+}
+// 3 — слово целиком, 2 — начало слова, 1 — опечатка; 0 — не подходит
+function wordScore(w, toks) {
+  let best = 0;
+  for (const t of toks) {
+    if (t === w) return 3;
+    if (t.startsWith(w)) best = Math.max(best, 2);
+    else if (w.length >= 4 && (near1(w, t) || near1(w, t.slice(0, w.length)))) best = Math.max(best, 1);
+  }
+  return best;
+}
+function matchWords(q, text) { const qs = words(q), ts = words(text); return qs.length > 0 && qs.every(w => wordScore(w, ts) > 0); }
+function buildIndex() {
+  const M = S.model, idx = [], add = (text, label, sub, extra) => idx.push({toks: words(text), label, sub, ...extra});
+  for (const o of M.oks) add([o.label, o.id, o.oksId, 'здание'].join(' '), o.label, 'здание к подключению', {sel: {kind: 'oks', ref: o}});
+  for (const s of M.points.source || []) add([s.p.name, s.id, 'источник тэц котельная'].join(' '), s.p.name || 'Источник ' + s.id, 'источник тепла', {sel: {kind: 'source', ref: s}});
+  for (const v of M.variants) {
+    for (const s of v.segs) add([segName(s), s.id, 'участок труба'].join(' '), `${segName(s)} · Ду ${s.p.diameter}`, `новая труба, вариант ${v.id}`, {sel: {kind: 'seg', ref: s}, v: v.id});
+    for (const n of v.nodes) if (!n.virtual && n.type !== 'technical_node') { const nm = nodeName(n, M); add([nm, n.id, 'камера'].join(' '), nm[0].toUpperCase() + nm.slice(1), `новая камера, вариант ${v.id}`, {sel: {kind: 'node', ref: n}, v: v.id}); }
+  }
+  for (const c of M.points.heat_chamber || []) add(['камера', c.id].join(' '), `Камера ${String(c.id).replace(/^hc-/, '')}`, 'существующая камера', {sel: {kind: 'chamber', ref: c}});
+  for (const [t, l] of Object.entries(M.utilities)) for (const ln of l) add([UTILITIES[t].name, ln.id].join(' '), `${UTILITIES[t].name} ${ln.id}`, 'существующая сеть', {sel: {kind: 'utility', type: t, ref: ln}, weak: true});
+  const seen = new Set(M.oks.map(o => o.name).filter(Boolean));
+  for (const k of BUILDING_KEYS) for (const it of M.surfaces[k] || []) if (it.p.address && !seen.has(it.p.address)) { seen.add(it.p.address); add([it.p.address, it.id].join(' '), it.p.address, 'здание', {sel: {kind: 'surface', type: k, ref: it}}); }
   return idx;
 }
 function searchFor(q) {
-  q = q.trim().toLowerCase();
+  q = q.trim();
   if (!q || !S.model) return [];
   const m = q.match(/^(-?\d{1,3}[.,]\d+)\s*[,; ]\s*(-?\d{1,3}[.,]\d+)$/);
   if (m) {
     let a = +m[1].replace(',', '.'), b = +m[2].replace(',', '.');
-    if (Math.abs(a) <= 90 && Math.abs(b) > 90 || (a > 40 && a < 80)) [a, b] = [a, b]; else [a, b] = [b, a];
+    if (!(a > 40 && a < 80) && b > 40 && b < 80) [a, b] = [b, a];   // широта, долгота — как в Яндекс Картах
     return [{label: `Координаты ${a}, ${b}`, sub: 'перелететь сюда', coords: [b, a]}];
   }
   searchIdx ||= buildIndex();
-  const out = [], starts = [];
+  const qs = words(q);
+  if (!qs.length) return [];
+  const hits = [];
   for (const e of searchIdx) {
-    const i = e.k.indexOf(q);
-    if (i < 0) continue;
     if (e.v && S.v && e.v !== S.v.id) continue;
-    (i === 0 || e.k.includes(' ' + q) ? starts : out).push(e);
-    if (starts.length >= 12) break;
+    let sc = 0;
+    for (const w of qs) { const k = wordScore(w, e.toks); if (!k) { sc = 0; break; } sc += k; }
+    if (sc) hits.push([sc - (e.weak ? 0.5 : 0), e]);
   }
-  return starts.concat(out).slice(0, 12);
+  hits.sort((a, b) => b[0] - a[0]);
+  const out = [], labels = new Set();
+  for (const [, e] of hits) { if (labels.has(e.label + e.sub)) continue; labels.add(e.label + e.sub); out.push(e); if (out.length >= 12) break; }
+  return out;
 }
 let suggs = [], sIdx = 0;
 function renderSugg() {
   const box = $('#sugg');
   box.hidden = !suggs.length && !$('#q').value.trim();
   box.innerHTML = suggs.map((s, i) => `<button role="option" class="${i === sIdx ? 'act' : ''}" data-i="${i}"><span>${esc(s.label)}</span><small>${esc(s.sub)}</small></button>`).join('')
-    || '<div class="mut" style="padding:8px 12px">Ничего не нашлось. Ищите по номеру здания, участка (v1_seg_…), камеры или по координатам «55.75, 37.62».</div>';
+    || '<div class="mut" style="padding:8px 12px">Ничего не нашлось. Ищите по адресу или имени здания («жилой дом 14»), «участок 6», «камера 19», «ТЭЦ» или по координатам «59.83, 30.41».</div>';
 }
 function goSugg(s) {
   if (!s) return;
@@ -876,8 +1043,15 @@ $('#sugg').addEventListener('click', e => { const b = e.target.closest('button[d
 function openTab(t) {
   $$('#left .tabs button').forEach(b => { b.classList.toggle('on', b.dataset.tab === t); b.setAttribute('aria-selected', b.dataset.tab === t); });
   $$('#left .pane').forEach(p => { p.hidden = p.id !== 't-' + t; });
-  document.body.classList.add('leftOpen');
 }
+const isMobile = () => matchMedia('(max-width: 900px)').matches;
+$('#left .mact').onclick = e => {
+  const b = e.target.closest('button[data-act]');
+  if (!b) return;
+  document.body.classList.remove('leftOpen');
+  const a = b.dataset.act;
+  if (a === 'open') openDlg('files'); else if (a === 'ds') openDlg('demo'); else if (a === 'help') $('#helpDlg').showModal(); else menuAct(a);
+};
 $$('#left .tabs button').forEach(b => b.onclick = () => openTab(b.dataset.tab));
 $('#leftBtn').onclick = () => document.body.classList.toggle('leftOpen');
 function closeMenu() { $('#fileDd .menu').hidden = true; $('#fileBtn').setAttribute('aria-expanded', 'false'); }
@@ -909,7 +1083,13 @@ function openDlg(tab) {
 function setOpenTab(t) { $$('#openTabs button').forEach(b => b.classList.toggle('on', b.dataset.ot === t)); $$('#openDlg [data-op]').forEach(p => { p.hidden = p.dataset.op !== t; }); }
 $('#openTabs').onclick = e => { const b = e.target.closest('button'); if (b) { setOpenTab(b.dataset.ot); if (b.dataset.ot === 'srv') refreshJobs(); } };
 $('#demoList').onclick = e => { const b = e.target.closest('[data-n]'); if (!b) return; $('#openDlg').close(); history.replaceState(null, '', location.pathname + '?ds=' + encodeURIComponent(b.dataset.n)); loadDemo(demos.find(d => d.name === b.dataset.n)); };
-$('#fGo').onclick = () => { const f = [$('#fIn').files[0], $('#fOut').files[0]].filter(Boolean); if (!f.length) return toast('Выберите хотя бы входной файл', 'info'); $('#openDlg').close(); loadFiles(f); };
+$('#fGo').onclick = () => { const f = [$('#fIn').files[0], $('#fOut').files[0]].filter(Boolean); if (!f.length) return; $('#openDlg').close(); loadFiles(f); };
+for (const id of ['fIn', 'fOut', 'jIn']) $('#' + id).addEventListener('change', e => {
+  const f = e.target.files[0], n = $('#' + id + 'N');
+  n.textContent = f ? `${f.name} · ${fmt(f.size / 1e6, 1)} МБ` : 'не выбран';
+  n.classList.toggle('set', !!f);
+  $('#fGo').disabled = !($('#fIn').files[0] || $('#fOut').files[0]);
+});
 
 // ---------- сервер ----------
 async function detectServer() {
@@ -984,7 +1164,7 @@ function writeHash() {
   if (k) p.set('sel', k);
   const s = rig.state;
   p.set('cam', [...s.pos, s.yaw, s.pitch].map(x => +x.toFixed(1)).join(','));
-  if (viewer.ex !== 3) p.set('ex', viewer.ex);
+  p.set('ex', viewer.ex);   // камера в ссылке посчитана под этот масштаб глубины
   history.replaceState(null, '', location.pathname + location.search + '#' + p.toString());
 }
 function applyHash() {
@@ -994,12 +1174,12 @@ function applyHash() {
   const k = p.get('sel');
   if (k) {
     const sel = findSel(k);
-    if (sel) { if (sel.kind === 'crossing') selectCrossing(sel.ref); else select(sel, {fly: !p.get('cam')}); }
+    if (sel) { if (sel.kind === 'crossing') selectCrossing(sel.ref, {move: !p.get('cam')}); else select(sel, {fly: !p.get('cam')}); }
   }
   const cam = p.get('cam');
   if (cam) {
     const a = cam.split(',').map(Number);
-    if (a.length === 5 && a.every(Number.isFinite)) { rig.state = {pos: a.slice(0, 3), yaw: a[3], pitch: a[4]}; return true; }
+    if (a.length === 5 && a.every(Number.isFinite)) { rig.stop(); rig.state = {pos: a.slice(0, 3), yaw: a[3], pitch: a[4]}; ensureOutside(); return true; }
   }
   return !!k;
 }
@@ -1021,6 +1201,7 @@ addEventListener('keydown', e => {
   const typing = /INPUT|SELECT|TEXTAREA/.test(e.target.tagName);
   if ((e.key === '/' && !typing) || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) { e.preventDefault(); $('#q').focus(); $('#q').select(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') { e.preventDefault(); openDlg('demo'); return; }
+  if (!typing && ((e.altKey && e.code === 'ArrowLeft') || ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ'))) { e.preventDefault(); backView(); return; }
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   if (document.querySelector('dialog[open]')) return;
   if (e.key === '?') { $('#helpDlg').showModal(); return; }
@@ -1049,20 +1230,28 @@ addEventListener('keydown', e => {
     setClip([cx - hx, cy - hy, b[2], cx + hx, cy + hy, b[5]]);
   }
   else if (k === 'KeyM') setMeasure(!S.measure);
+  else if (k === 'Equal' || k === 'NumpadAdd') zoomStep(0.6);
+  else if (k === 'Minus' || k === 'NumpadSubtract') zoomStep(1.6);
+  else if (/^Digit[1-9]$/.test(k) && S.model) { const v = S.model.variants[+k.slice(5) - 1]; if (v) setVariant(v.id); }
   else if (k === 'KeyP') S.fly ? stopFly() : startFly();
 });
 
 // ---------- кнопки на сцене ----------
 $('#homeBtn').onclick = () => home();
-$('#zIn').onclick = () => { const P = rig.center(); rig.animateTo({pos: P.clone().add(rig.pos.clone().sub(P).multiplyScalar(0.5)), yaw: rig.yaw, pitch: rig.pitch}, 350); };
-$('#zOut').onclick = () => { const P = rig.center(); rig.animateTo({pos: P.clone().add(rig.pos.clone().sub(P).multiplyScalar(2)), yaw: rig.yaw, pitch: rig.pitch}, 350); };
+function zoomStep(k) { const P = rig.center(); rig.animateTo({pos: P.clone().add(rig.pos.clone().sub(P).multiplyScalar(k)), yaw: rig.yaw, pitch: rig.pitch, back: true}, 300); }
+$('#zIn').onclick = () => zoomStep(0.5);
+$('#zOut').onclick = () => zoomStep(2);
+$('#backBtn').onclick = () => backView();
 $('#v2d').onclick = () => toggle2d();
 $('#modeBtn').onclick = () => setMode(rig.mode === 'fly' ? 'orbit' : 'fly');
 $('#xrayBtn').onclick = () => setXray(!S.xray);
 $('#clipBtn').onclick = () => toggleClip();
 $('#measureBtn').onclick = () => setMeasure(!S.measure);
 $('#helpBtn').onclick = () => $('#helpDlg').showModal();
-$('#coachOk').onclick = () => { $('#coach').hidden = true; store.set('coach', 1); };
+$('#coachOk').onclick = () => { $('#coach').hidden = true; store.set('coach', 1); if (store.get('legend', true) && !isMobile() && $('#legBody').hidden) $('#legBtn').click(); };
+// ползунки и флажки не держат фокус после щелчка — иначе W A S D и стрелки двигают ползунок, а не камеру
+document.addEventListener('change', e => { if (e.target.matches?.('#left input[type=range], #left input[type=checkbox], #left select')) setTimeout(() => e.target.blur(), 0); });
+document.addEventListener('pointerup', e => { if (e.target.matches?.('#left input[type=range]')) setTimeout(() => e.target.blur(), 0); });
 $('#coachAll').onclick = () => { $('#coach').hidden = true; store.set('coach', 1); $('#helpDlg').showModal(); };
 
 // ---------- старт ----------
@@ -1080,12 +1269,18 @@ async function start() {
       '<span class="k">Повернуть двумя</span><span>вращать</span><span class="k">Два пальца вверх-вниз</span><span>наклонить</span><span class="k">Двойное касание</span><span>приблизить сюда</span>';
   }
   if (!store.get('coach', 0)) $('#coach').hidden = false;
-  if (store.get('legend', false)) $('#legBtn').click();
+  // легенда раскрыта при первом знакомстве (после подсказки управления), дальше — как оставил пользователь
+  if (store.get('legend', true) && !isMobile() && $('#coach').hidden) $('#legBtn').click();
   await detectServer();
   try { demos = await (await fetch('demo/index.json')).json(); } catch (e) { demos = []; }
   const q = new URLSearchParams(location.search);
   if (q.get('job') && S.server) return openJob(q.get('job'));
-  const want = q.get('ds') || store.get('ds', null);
+  if (q.get('ds') === 'local') {
+    const files = await cachedFiles();
+    if (files) return loadFiles(files.map(f => ({name: f.name, text_: f.text})), {fromCache: true});
+    toast('Свои файлы из прошлого раза в этом браузере не сохранились — открываю демо-набор', 'info', 6000);
+  }
+  const want = q.get('ds') !== 'local' && q.get('ds') || store.get('ds', null);
   const d = demos.find(x => x.name === want) || demos[0];
   if (d) return loadDemo(d);
   $('#loading').hidden = true;

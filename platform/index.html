@@ -38,6 +38,10 @@
 
 <main>
   <aside id="left" aria-label="Обзор и списки">
+    <div class="mact only-m">
+      <button data-act="open">📂 Открыть данные</button><button data-act="ds" id="dsBtnM">Набор ▾</button>
+      <button data-act="link">🔗 Ссылка на вид</button><button data-act="help">? Справка</button>
+    </div>
     <nav class="tabs" role="tablist">
       <button role="tab" data-tab="sum" class="on">Обзор</button>
       <button role="tab" data-tab="oks">Здания <span class="cnt" id="cntOks"></span></button>
@@ -55,12 +59,13 @@
       <div id="navR">
       <div class="cubewrap">
         <button class="home" id="homeBtn" title="Исходный вид (Home)" aria-label="Исходный вид"><svg viewBox="0 0 24 24"><path d="M3 11 12 3l9 8"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg></button>
+        <button class="home back" id="backBtn" title="Предыдущий вид (Backspace, Alt+←)" aria-label="Предыдущий вид"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
         <div id="cube"></div>
       </div>
       <div class="toolbar" role="toolbar" aria-label="Навигация">
         <button id="zIn" title="Приблизить (+)" aria-label="Приблизить"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
         <button id="zOut" title="Отдалить (−)" aria-label="Отдалить"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
-        <button id="v2d" title="Вид сверху / 3D-наклон (T)" aria-label="2D или 3D"><b id="v2dT">2D</b></button>
+        <button id="v2d" title="Вид сверху или 3D-наклон (T)" aria-label="2D или 3D"><span class="v2">2D</span><span class="v3">3D</span></button>
         <hr>
         <button id="modeBtn" title="Мышь: обзор или полёт (V)" aria-label="Режим мыши"><svg id="modeIco" viewBox="0 0 24 24"></svg><small id="modeT">Обзор</small></button>
         <button id="xrayBtn" title="Рентген: земля и здания прозрачные (X)" aria-label="Рентген"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><small>Рентген</small></button>
@@ -151,14 +156,21 @@
     <nav class="tabs small" id="openTabs"><button type="button" data-ot="demo" class="on">Демо-наборы</button><button type="button" data-ot="files">Свои файлы</button><button type="button" data-ot="srv" class="srv">Сервер</button></nav>
     <div data-op="demo"><div id="demoList" class="list"></div></div>
     <div data-op="files" hidden>
-      <p class="mut">Выберите вход сервиса (GeoJSON) и, если есть, результат расчёта. Можно просто перетащить оба файла в окно.</p>
-      <label class="file"><span>Вход (обязательно)</span><input type="file" id="fIn" accept=".geojson,.json,application/geo+json,application/json"></label>
-      <label class="file"><span>Результат расчёта</span><input type="file" id="fOut" accept=".geojson,.json,application/geo+json,application/json"></label>
-      <div class="row end"><button type="button" class="primary" id="fGo">Открыть</button></div>
+      <p class="mut">Исходные данные и, если есть, результат трассировки — файлы GeoJSON в WGS84 (EPSG:4326). Можно просто перетащить оба файла в окно.</p>
+      <div class="pick"><span class="lbl">Исходные данные <b>обязательно</b></span><label class="btn" for="fIn">Выбрать файл…</label><span class="fname" id="fInN">не выбран</span><input type="file" id="fIn" accept=".geojson,.json,application/geo+json,application/json"></div>
+      <div class="pick"><span class="lbl">Результат трассировки</span><label class="btn" for="fOut">Выбрать файл…</label><span class="fname" id="fOutN">не выбран</span><input type="file" id="fOut" accept=".geojson,.json,application/geo+json,application/json"></div>
+      <details class="fmt"><summary>Какой GeoJSON подходит</summary>
+        <p>У каждого объекта в <code>properties</code> есть <code>id</code> и <code>object_type</code> (раздел 12 CONSTRAINTS.md):</p>
+        <ul><li><code>heat_network</code> (линия, <code>diameter</code>), <code>heat_chamber</code> и <code>source</code> (точки) — существующая теплосеть;</li>
+          <li><code>oks_connection_point</code> (точка, <code>flow_tph</code>, <code>oks_id</code>) и <code>oks_future</code> / <code>oks_existing</code> (полигоны, <code>levels</code>) — здания;</li>
+          <li><code>restriction</code> с <code>restriction_type</code>: <code>gas_pipeline</code>, <code>power_cable</code>, <code>water_supply</code>, <code>sewer</code> (линии), <code>road</code>, <code>tram_tracks</code>, <code>railway</code>, <code>park</code>, <code>water</code>, <code>prohibited_site</code>, <code>oks</code> (полигоны).</li></ul>
+        <p>Результат — файл, который вернул сервис (<code>variant_summary</code>, участки <code>heat_network</code> с <code>variant_id</code>). Объекты без <code>object_type</code> пропускаются, их число будет в отчёте.
+        Пример входа: <a href="demo/small-1.in.geojson" download="пример-входа.geojson">скачать small-1</a>.</p></details>
+      <div class="row end"><button type="button" class="primary" id="fGo" disabled>Открыть</button></div>
     </div>
     <div data-op="srv" hidden>
       <div class="newjob">
-        <label class="file"><span>Новый расчёт: вход GeoJSON</span><input type="file" id="jIn" accept=".geojson,.json"></label>
+        <div class="pick"><span class="lbl">Новый расчёт: исходные данные GeoJSON</span><label class="btn" for="jIn">Выбрать файл…</label><span class="fname" id="jInN">не выбран</span><input type="file" id="jIn" accept=".geojson,.json"></div>
         <button type="button" class="primary" id="jGo">Отправить на расчёт</button>
       </div>
       <label class="tog"><input type="checkbox" id="jDepth" checked> С учётом глубины — сервис подберёт глубину каждого участка и обойдёт коммуникации по высоте (дольше)</label>

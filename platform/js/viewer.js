@@ -6,20 +6,21 @@ import {LineSegments2} from 'three/addons/lines/LineSegments2.js';
 import {LineSegmentsGeometry} from 'three/addons/lines/LineSegmentsGeometry.js';
 import {LineMaterial} from 'three/addons/lines/LineMaterial.js';
 import {CSS2DRenderer, CSS2DObject} from 'three/addons/renderers/CSS2DRenderer.js';
-import {UTILITIES, SURFACES, BUILDING_KEYS, NODE_TYPES, dnRow} from './model.js';
+import {UTILITIES, SURFACES, BUILDING_KEYS, NODE_TYPES, nodeName} from './model.js';
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
 const YAX = new THREE.Vector3(0, 1, 0);
 const col = h => new THREE.Color(h);
 export const PALETTE = {
-  selection: '#fde047', problem: '#f43f5e', ok: '#22c55e', special: '#fb923c',
+  selection: '#fde047', problem: '#ff1f4b', ok: '#22c55e', special: '#fb923c',
   connected: '#22c55e', unconnected: '#f43f5e', future: '#e8dcc0', chamberOld: '#64748b', chamberNew: '#38bdf8',
 };
-// Новая сеть по Ду: от бирюзового (тонкие) к синему и фиолетовому (магистрали)
+// Новая сеть — свой бирюзовый цвет, которого нет ни у одной существующей сети (вода синяя, кабель фиолетовый,
+// теплосеть красная). Ду меняет только светлоту: тонкие — светлее, магистрали — насыщеннее; толщина — настоящая
 export function dnColor(dn) {
   const t = Math.min(1, Math.max(0, Math.log2((dn || 50) / 50) / Math.log2(28)));
-  return new THREE.Color().setHSL(0.52 + 0.22 * t, 0.85, 0.62 - 0.12 * t);
+  return new THREE.Color().setHSL(0.49, 0.95, 0.72 - 0.26 * t);
 }
 
 // ---------- геометрия ----------
@@ -231,6 +232,7 @@ export class Viewer {
   }
   render() {
     this.lod();
+    for (const m of this.g.tools.children) if (m.userData.marker) this.scaleMarker(m);
     if (this.groundMat) this.groundMat.uniforms.uCam.value.copy(this.camera.position);
     this.renderer.render(this.scene, this.camera);
     this.labels.render(this.scene, this.camera);
@@ -437,9 +439,9 @@ export class Viewer {
   setVariant(v) { this.variant = v; this.buildOks(); this.buildNetwork(); }
 
   segColor(s) {
-    if (this.opts.colorBy === 'status') return s.bad ? PALETTE.problem : PALETTE.ok;
-    if (this.opts.colorBy === 'depth') { const t = Math.min(1, Math.max(0, (Math.max(s.d0, s.d1) - 1) / 4)); return new THREE.Color().setHSL(0.15 - 0.15 * t + 0.5 * (1 - t), 0.8, 0.55).getStyle(); }
-    if (s.special) return PALETTE.special;
+    // «Проблемы»: участки с проблемой — ярким цветом сети, остальные приглушены (как Clash Detective в Navisworks)
+    if (this.opts.colorBy === 'status') return s.bad ? '#5eead4' : '#335c5a';
+    if (this.opts.colorBy === 'depth') { const t = Math.min(1, Math.max(0, (Math.max(s.d0, s.d1) - 1) / 4)); return new THREE.Color().setHSL(0.5 - 0.08 * t, 0.9, 0.78 - 0.4 * t).getStyle(); }
     return '#' + dnColor(s.p.diameter).getHexString();
   }
   buildNetwork() {
@@ -488,6 +490,38 @@ export class Viewer {
       wells.push({xy: nd.xy, depth: nd.depth ?? 3.3, color, ref: nd, kind: 'node'});
     }
     if (wells.length) this.addWells(this.g.network, wells);
+    // футляры спецпереходов — прозрачная труба побольше вокруг рабочей
+    const casings = [];
+    for (const s of v.segs) if (s.special) {
+      const P = s.pts.map((p, i) => [p[0], p[1], -(s.depth[i] + s.row.h / 2) * ex]);
+      for (let i = 0; i + 1 < P.length; i++) casings.push({a: P[i], b: P[i + 1], r: s.row.h * 0.95 + 0.12, color: '#f8fafc'});
+    }
+    if (casings.length) {
+      const cm = tubeMesh(casings, {radial: 14, material: this.material('standard', {color: 0xffffff, transparent: true, opacity: 0.22, depthWrite: false, roughness: 0.2}), overlap: true});
+      cm.renderOrder = 18; cm.name = 'casing';
+      this.g.network.add(cm);
+    }
+    // проблемы — красные метки в точке конфликта: шар, игла до земли и кольцо на земле, видны с любого масштаба
+    const bad = v.crossings.filter(c => c.ok === false);
+    if (bad.length) {
+      const pts = bad.map(c => c.type === 'segment' ? [c.x, c.y, -(c.seg.d0 + c.seg.row.h / 2) * ex] : [c.x, c.y, -(c.hn + c.H / 2) * ex]);
+      const sm = sphereMesh(pts.map(p => ({p, r: 0.9, color: PALETTE.problem})), this.material('basic', {color: 0xffffff, transparent: true, opacity: 0.9, depthTest: false}), 14);
+      sm.renderOrder = 40; sm.name = 'problems';
+      this.g.network.add(sm);
+      const needles = [];
+      for (const p of pts) needles.push(p[0], p[1], p[2], p[0], p[1], 6);
+      const nl = fatLines(needles, {width: 2.5, color: PALETTE.problem, opacity: 0.95});
+      nl.renderOrder = 40; nl.name = 'problemNeedles';
+      this.g.netLines.add(this.trackLines(nl));
+      const rings = [];
+      for (const p of pts) for (let k = 0; k < 24; k++) {
+        const a0 = k / 24 * Math.PI * 2, a1 = (k + 1) / 24 * Math.PI * 2, R = 4;
+        rings.push(p[0] + Math.cos(a0) * R, p[1] + Math.sin(a0) * R, 0.25, p[0] + Math.cos(a1) * R, p[1] + Math.sin(a1) * R, 0.25);
+      }
+      const rl = fatLines(rings, {width: 2, color: PALETTE.problem, opacity: 0.9});
+      rl.name = 'problemRings';
+      this.g.netLines.add(this.trackLines(rl));
+    }
     this.rebuildPickGrid();
     this.applyOpts();
   }
@@ -559,7 +593,7 @@ export class Viewer {
     for (const s of route.segs) {
       const nd = this.variant?.nodes.find(n => n.id === s.from && n.type !== 'technical_node');
       if (!nd) continue;
-      const lb = this.label(`${nd.type === 'existing_chamber' ? 'врезка' : 'камера'} ${nd.id}`, 'lbl node');
+      const lb = this.label(nodeName(nd, this.model), 'lbl node');
       lb.position.set(nd.xy[0], nd.xy[1], 1.5);
       this.g.overlay.add(lb);
     }
@@ -594,12 +628,16 @@ export class Viewer {
       this.g.tools.add(m);
     }
     m.position.copy(pos);
-    const dist = this.camera.position.distanceTo(pos);
-    const s = ring ? dist * 0.03 : Math.max(r, dist * 0.008);
-    m.scale.setScalar(s);
-    if (ring) m.quaternion.copy(this.camera.quaternion);
+    m.userData.marker = {r, ring};
+    this.scaleMarker(m);
     this.redraw();
     return m;
+  }
+  // размер метки — по текущему расстоянию до камеры, пересчёт каждый кадр (иначе метка из ссылки остаётся огромной)
+  scaleMarker(m) {
+    const {r, ring} = m.userData.marker, dist = this.camera.position.distanceTo(m.position);
+    m.scale.setScalar(ring ? dist * 0.03 : Math.min(Math.max(r * 0.35, dist * 0.008), r * 1.2));
+    if (ring) m.quaternion.copy(this.camera.quaternion);
   }
 
   // ---------- отображение ----------
@@ -679,11 +717,13 @@ export class Viewer {
     const o = ray.origin, d = ray.direction;
     const seen = new Set();
     let best = null;
+    // над районом существующие сети не ловим: щелчок на обзоре должен попадать в новую сеть и здания, а не в случайную трубу
+    const far = Math.abs(this.camera.position.z) > 700;
     const test = i => {
       if (seen.has(i)) return;
       seen.add(i);
       const it = this.pickItems[i];
-      if (!this.visibleKind(it)) return;
+      if (!this.visibleKind(it) || (far && it.kind === 'utility')) return;
       const r = closestRaySeg(o, d, it.a, it.b);
       if (!r || r.t <= 0) return;
       const tol = Math.max(it.r, px * pxWorld * r.t);
@@ -735,6 +775,21 @@ export class Viewer {
       }
     }
     return null;
+  }
+
+  // Насколько точка p заходит внутрь трубы или колодца (0 — снаружи): чтобы камера из ссылки не встала внутри
+  insideAt(p) {
+    const C = this.pickCell, gx = Math.floor(p.x / C), gy = Math.floor(p.y / C);
+    let worst = 0;
+    for (let ix = -1; ix <= 1; ix++) for (let iy = -1; iy <= 1; iy++) for (const i of this.pickGrid.get((gx + ix) * 1000003 + gy + iy) || []) {
+      const it = this.pickItems[i];
+      if (it.kind === 'oks' || it.kind === 'source') continue;
+      const ux = it.b[0] - it.a[0], uy = it.b[1] - it.a[1], uz = it.b[2] - it.a[2], L2 = ux * ux + uy * uy + uz * uz;
+      const t = L2 > 0 ? Math.max(0, Math.min(1, ((p.x - it.a[0]) * ux + (p.y - it.a[1]) * uy + (p.z - it.a[2]) * uz) / L2)) : 0;
+      const d = Math.hypot(p.x - it.a[0] - ux * t, p.y - it.a[1] - uy * t, p.z - it.a[2] - uz * t);
+      worst = Math.max(worst, it.r + 0.4 - d);
+    }
+    return worst > 0 ? worst : 0;
   }
 
   async screenshot() {
