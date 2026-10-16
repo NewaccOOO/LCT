@@ -21,7 +21,7 @@ SETS = {
     "organizers": [("real", "data/real/dataset.geojson", []), ("corrected", "data/real/dataset-corrected.geojson", [])],
     "dense": [(f"dense-{n}", f"data/synth/dense-{n}.geojson", []) for n in (50, 100, 200)],
     "medium": [(f"medium-{n}", f"data/synth/medium-{n}.geojson", []) for n in (1, 2, 3)],
-    "expert": [(f"e4-{n}", f"data/synth/e4-{n}.geojson", []) for n in ("tram-polygon", "tram-line", "metro", "unreachable", "combined")],
+    "expert": [(f"e4-{n}", f"data/samples/expert/e4-{n}.geojson", []) for n in ("tram-polygon", "tram-line", "metro", "unreachable", "combined")],
     "moscow": [("moscow-1809", "data/cities/moscow/input_1809.geojson", ["-Xmx8g"])],
     "city": [("city-1", "data/synth/city-1.geojson", ["-Xmx12g", "-XX:MaxNewSize=512m"])],
 }
