@@ -72,6 +72,7 @@ function fatLines(segments, {width = 2, color = '#ffffff', opacity = 1, colors =
   if (colors) geo.setColors(colors);
   const mat = new LineMaterial({color: colors ? 0xffffff : color, linewidth: width, vertexColors: !!colors, transparent: opacity < 1, opacity,
     dashed, dashSize: 6, gapSize: 4, depthTest, worldUnits: false});
+  mat.fog = true;
   const ln = new LineSegments2(geo, mat);
   if (dashed) ln.computeLineDistances();
   ln.frustumCulled = false;
@@ -168,6 +169,7 @@ export class Viewer {
     host.appendChild(this.labels.domElement);
 
     this.scene = new THREE.Scene();
+    this.scene.fog = new THREE.Fog(0x0d1526, 1e5, 2e5);
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.05, 2e5);
     this.scene.add(new THREE.HemisphereLight(0xdbeafe, 0x334155, 1.6));
     const sun = new THREE.DirectionalLight(0xffffff, 1.4);
@@ -213,6 +215,14 @@ export class Viewer {
   // Уровень детализации по высоте камеры: над районом существующие сети гаснут, новая становится толще
   lod() {
     const h = Math.abs(this.camera.position.z), k = Math.min(1, Math.max(0, (h - 300) / 2500));
+    // дальность видимости по высоте: у земли и под ней — 2,5–3 км с туманом у горизонта, сверху — без ограничений.
+    // Так тайлы за горизонтом не рисуются, а обрыв сцены прячется в дымке
+    const far = Math.min(2e5, Math.max(2500, h * 40 + 1500));
+    if (Math.abs(far - this.camera.far) / this.camera.far > 0.05) {
+      this.camera.far = far;
+      this.camera.updateProjectionMatrix();
+      this.scene.fog.near = far * 0.5; this.scene.fog.far = far * 0.97;
+    }
     if (this._lodK != null && Math.abs(this._lodK - k) < 0.02) return;
     this._lodK = k;
     for (const l of this.g.utilLines.children) l.material.opacity = 0.55 - 0.35 * k;
@@ -265,6 +275,13 @@ export class Viewer {
   }
   z(depth) { return -depth * this.ex; }
 
+  // Разбивка по квадратам плана: до 12×12 тайлов на набор, не мельче 250 м
+  tiles(items, xyOf) {
+    const [x0, y0, x1, y1] = this.model.bbox, T = Math.max(250, Math.max(x1 - x0, y1 - y0) / 12), m = new Map();
+    for (const it of items) { const [x, y] = xyOf(it), k = Math.floor(x / T) * 100003 + Math.floor(y / T); let l = m.get(k); if (!l) m.set(k, l = []); l.push(it); }
+    return [...m.values()];
+  }
+
   // ---------- исходные данные ----------
   setModel(model) {
     this.model = model;
@@ -310,12 +327,16 @@ export class Viewer {
     const items = [];
     for (const k of BUILDING_KEYS) for (const it of this.model.surfaces[k] || []) items.push(it);
     if (!items.length) return;
-    const geo = buildingGeometry(items, buildingHeight, it => it.isFuture || it.p.object_type === 'oks_future' ? PALETTE.future : '#6b7a90');
     this.bldMat = this.material('lambert', {vertexColors: true, transparent: true, opacity: 1, side: THREE.DoubleSide});
-    const mesh = new THREE.Mesh(geo, this.bldMat);
-    mesh.name = 'buildings';
-    mesh.renderOrder = 10;
-    this.g.buildings.add(mesh);
+    const solid = new THREE.Group();
+    solid.name = 'buildings';
+    for (const part of this.tiles(items, it => it.rings[0][0])) {
+      const mesh = new THREE.Mesh(buildingGeometry(part, buildingHeight, it => it.isFuture || it.p.object_type === 'oks_future' ? PALETTE.future : '#6b7a90'), this.bldMat);
+      mesh.geometry.computeBoundingSphere();
+      mesh.renderOrder = 10;
+      solid.add(mesh);
+    }
+    this.g.buildings.add(solid);
     // контуры зданий на земле — для режима «контуром»
     const flat = flatGeometry(items, 0.02);
     const fm = new THREE.Mesh(flat, this.material('basic', {color: '#64748b', transparent: true, opacity: 0.7, depthWrite: false, side: THREE.DoubleSide}));
@@ -341,9 +362,14 @@ export class Viewer {
           this.pickItems.push({kind: 'utility', type, a, b, r, ref: ln});
         }
       }
-      const mesh = tubeMesh(pieces, {radial: 8, material: this.material('standard', {color: 0xffffff, roughness: 0.55, metalness: 0.15})});
-      mesh.name = 'util:' + type; mesh.userData.key = 'u:' + type;
-      this.g.utilities.add(mesh);
+      // трубы по тайлам: вблизи рисуется только то, что попало в кадр (важно для города и слабых видеокарт)
+      const mat = this.material('standard', {color: 0xffffff, roughness: 0.55, metalness: 0.15});
+      for (const part of this.tiles(pieces, pc => [(pc.a[0] + pc.b[0]) / 2, (pc.a[1] + pc.b[1]) / 2])) {
+        const mesh = tubeMesh(part, {radial: 8, material: mat});
+        mesh.frustumCulled = true;
+        mesh.name = 'util:' + type; mesh.userData.key = 'u:' + type;
+        this.g.utilities.add(mesh);
+      }
       // существующие сети — фон: тоньше и тусклее новой, чтобы обзор района не превращался в паутину
       const ln = fatLines(seg, {width: 1.1, color: u.color, opacity: 0.5});
       ln.name = 'utilLine:' + type; ln.userData.key = 'u:' + type;
@@ -586,6 +612,7 @@ export class Viewer {
     const solid = this.g.buildings.getObjectByName('buildings'), flat = this.g.buildings.getObjectByName('buildingsFlat');
     if (solid) {
       solid.visible = on('buildings') && o.buildings === 'solid';
+      solid.traverse(x => { x.renderOrder = o.xray ? 11 : 10; });
       this.bldMat.opacity = o.xray ? 0.18 : 1;
       this.bldMat.transparent = o.xray;
       this.bldMat.depthWrite = !o.xray;
