@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static ru.lct.heatnet.plan.PlanFixture.GEOMETRY;
 import static ru.lct.heatnet.plan.PlanFixture.point;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -18,6 +19,7 @@ import org.locationtech.jts.geom.Polygon;
 import ru.lct.heatnet.calc.CostCalculator;
 import ru.lct.heatnet.model.ConnectionPoint;
 import ru.lct.heatnet.model.ExistingOks;
+import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.NewSegment;
 import ru.lct.heatnet.model.Result;
 import ru.lct.heatnet.model.Variant;
@@ -88,6 +90,18 @@ class VariantEnumeratorTest {
         assertEquals(1, variants.size(), "вариантов " + variants.size());
         assertEquals("1", variants.get(0).getId());
         assertTrue(variants.get(0).getSummary().getUnconnectedOksIds().isEmpty());
+    }
+
+    @Test
+    void variantWithMoreUnconnectedThanBestIsNotIssued() {
+        InputData input = VariantEnumerator.read(Path.of("data/samples/expert/e4-combined.geojson"), rules);
+
+        List<Variant> variants = new VariantEnumerator(input, rules).run().getVariants();
+
+        int best = variants.get(0).getSummary().getUnconnectedOksIds().size();
+        for (Variant variant : variants) {
+            assertEquals(best, variant.getSummary().getUnconnectedOksIds().size(), "вариант " + variant.getId());
+        }
     }
 
     @Test

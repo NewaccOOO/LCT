@@ -722,16 +722,24 @@ public final class VariantEnumerator {
     }
 
     /**
-     * Варианты без совпавших с лучшими по устройству ({@link #layout}) или трассе (полоса SAME_ROUTE_M), с номерами
-     * подряд. Перенос и сдвиг камер и прокладка заново двигают трассу после отбора черновиков, поэтому трасса берётся
-     * по участкам варианта, а устройство — по деревьям варианта из trees.
+     * Варианты без совпавших с лучшими по устройству ({@link #layout}) или трассе (полоса SAME_ROUTE_M) и без тех, где
+     * точек без сети больше наименьшего среди вариантов (п. 2.5), с номерами подряд. Перенос и сдвиг камер и прокладка
+     * заново двигают трассу после отбора черновиков, поэтому трасса берётся по участкам варианта, а устройство — по
+     * деревьям варианта из trees.
      */
     private List<Variant> distinct(List<Variant> variants, List<List<Tree>> trees) {
         List<Variant> kept = new ArrayList<>();
         List<RouteBand> bands = new ArrayList<>();
         List<Set<String>> layouts = new ArrayList<>();
+        int fewest = variants.stream().mapToInt(v -> v.getSummary().getUnconnectedOksIds().size()).min().orElse(0);
         for (int i = 0; i < variants.size(); i++) {
             Variant variant = variants.get(i);
+            int unconnected = variant.getSummary().getUnconnectedOksIds().size();
+            if (unconnected > fewest) {
+                log.info("variants: вариант {} оставляет без сети {} точек при наименьших {} и не выдаётся", variant.getId(),
+                        unconnected, fewest);
+                continue;
+            }
             List<LineString> lines = variant.getSegments().stream().map(NewSegment::getGeometry).collect(Collectors.toList());
             RouteBand band = new RouteBand(lines, lines.size(), SAME_ROUTE_M, factory);
             Set<String> layout = layout(trees.get(i));
