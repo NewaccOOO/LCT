@@ -152,7 +152,7 @@ def combined():
 
 def main():
     parser = argparse.ArgumentParser(description="Наборы по замечаниям экспертов 16.10: трамвай, метро, недостижимые ОКС, датасет с дорогами")
-    parser.add_argument("--out", type=Path, default=Path("data/synth"), help="куда писать e4-*.geojson")
+    parser.add_argument("--out", type=Path, default=Path("data/samples/expert"), help="куда писать e4-*.geojson")
     args = parser.parse_args()
     tram = LineString(TRAM_AXIS_M)
     rings = [item for center, slit, _ in RINGS for item in ring(center, slit)]
