@@ -351,6 +351,7 @@ public final class VariantEnumerator {
 
     /** Как построено каждое дерево из {@link #options}: по нему сдвигаются камеры в деревьях вариантов. */
     private final Map<Tree, Shaping> shapings = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, Integer> rejectedDn = new ConcurrentHashMap<>();
 
     /** Работа проходов после поиска для лога: сборки одного дерева в {@link #option}, доводки формы, сборки черновика. */
     private final AtomicInteger optionCount = new AtomicInteger();
@@ -1851,6 +1852,11 @@ public final class VariantEnumerator {
                 Envelope wide = district ? region.area : region.wideArea;
                 options.addAll(options(region, blockDn, wide, subset, false, candidates(points, flow, blockDn), true, slide));
             }
+            String label = subset.get(0).getId();
+            for (int tried = blockDn; !district && incomplete(plain(options)) && rejectedDn.getOrDefault(label, 0) > tried; ) {
+                tried = rejectedDn.get(label);
+                options.addAll(options(region, tried, region.wideArea, subset, false, candidates(points, flow, tried), false, slide));
+            }
             if (SCAN && incomplete(plain(options))) {
                 // сеть в коридоре коммуникаций: проекции точки на три ближайшие трубы лежат в отступах идущих вдоль них
                 // линий, в зоне здания или в полосе дороги, и из них не выйти. Врезка ищется по всем трубам вокруг,
@@ -2584,6 +2590,9 @@ public final class VariantEnumerator {
             int maxDn = alone.getSegments().stream().mapToInt(NewSegment::getDiameter).max().orElse(graphDn);
             boolean check = verify || maxDn > graphDn;
             boolean holds = narrow ? forbidClear(tree, alone, area, region) : !check || clearanceHolds(tree, alone, area, region);
+            if (!holds && maxDn > graphDn && !district) {
+                rejectedDn.merge(label, maxDn, Math::max);
+            }
             return holds && raysClear(tree, alone) ? new Option(tree, searchScore(alone), exact(alone)) : null;
         } catch (IllegalStateException | IllegalArgumentException e) {
             // дерево нарушает правила при сборке (предельная длина, отступ участка, число поворотов): кандидат отбрасывается

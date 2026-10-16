@@ -862,7 +862,8 @@ final class TreeBuilder {
 
         /**
          * Выход на луче от точки подключения через ближайшую точку границы полигона, сразу за зоной отступа zones,
-         * дальше, пока выход лежит в чужой зоне запрета. Если участок до такого выхода недопустим или снова входит в
+         * за концом спецучастка, если участок до выхода пересёк объект специального прохода (спецпроход — один прямой
+         * участок, разъяснение 6), и дальше, пока выход лежит в чужой зоне запрета. Если участок до такого выхода недопустим или снова входит в
          * своё здание или его зону отступа, пробуются ближайшие точки других сторон полигона. NO_EXIT — выхода нет.
          */
         Exit exit(ConnectionPoint connection, ExistingOks building, ObstacleSet zones, Router branchRouter) {
@@ -895,7 +896,7 @@ final class TreeBuilder {
                 }
                 dx /= length;
                 dy /= length;
-                double along = cp.distance(anchor) + zones.oksClearance() + PORTAL_EXTRA_M;
+                double along = beyondSpecial(zones, cp, dx, dy, cp.distance(anchor) + zones.oksClearance() + PORTAL_EXTRA_M, own);
                 Coordinate exit = new Coordinate(cp.x + dx * along, cp.y + dy * along);
                 for (double extra = 0; zones.insideForbid(exit) && extra < PORTAL_MAX_M; extra += PORTAL_STEP_M) {
                     exit = new Coordinate(cp.x + dx * (along + extra), cp.y + dy * (along + extra));
@@ -925,14 +926,36 @@ final class TreeBuilder {
                     continue;
                 }
                 double r = cp.distance(entries.get(i));
-                Coordinate exit = new Coordinate(cp.x + (entries.get(i).x - cp.x) / r * window[0],
-                        cp.y + (entries.get(i).y - cp.y) / r * window[0]);
-                if (area.contains(exit) && !Double.isNaN(zones.edgeWeight(cp, exit, own))) {
+                double ux = (entries.get(i).x - cp.x) / r;
+                double uy = (entries.get(i).y - cp.y) / r;
+                Coordinate exit = new Coordinate(cp.x + ux * window[0], cp.y + uy * window[0]);
+                if (!area.contains(exit) || Double.isNaN(zones.edgeWeight(cp, exit, own))) {
+                    continue;
+                }
+                double along = beyondSpecial(zones, cp, ux, uy, window[0], own);
+                exit = new Coordinate(cp.x + ux * along, cp.y + uy * along);
+                if (along <= window[1] && area.contains(exit) && !Double.isNaN(zones.edgeWeight(cp, exit, own))) {
                     log.debug("portal: {} entry {} at {} m", connection.getId(), i + 1, r);
                     return new Exit(exit, branchRouter, PORTAL_TRIES + 1 + i);
                 }
             }
             return NO_EXIT;
+        }
+
+        double beyondSpecial(ObstacleSet zones, Coordinate cp, double ux, double uy, double along, Set<String> own) {
+            Coordinate exit = new Coordinate(cp.x + ux * along, cp.y + uy * along);
+            List<SpecialSpan> before = zones.spans(factory.createLineString(new Coordinate[] {cp, exit}), own);
+            if (before.isEmpty() || before.get(before.size() - 1).getToM() < cp.distance(exit) - TOUCH_M) {
+                return along;
+            }
+            double reach = along + PORTAL_MAX_M;
+            Coordinate far = new Coordinate(cp.x + ux * reach, cp.y + uy * reach);
+            for (SpecialSpan span : zones.spans(factory.createLineString(new Coordinate[] {cp, far}), own)) {
+                if (span.getFromM() <= along && along <= span.getToM()) {
+                    along = span.getToM() + PORTAL_EXTRA_M;
+                }
+            }
+            return along;
         }
 
         /** Ближайшие к cp точки сторон полигона по возрастанию расстояния: внешние контуры, затем дырки. */
@@ -1272,7 +1295,8 @@ final class TreeBuilder {
          * идёт через своё здание. Так не строилась ветка к врезке у перпендикуляра на трубе вдоль стены, и точка
          * оставалась без сети или уходила к дальней врезке (п. 2.5, разъяснения 11 и 15). Выход на прямой от точки к
          * следующей вершине просто убирается: участок тот же. Иначе прямой участок от точки берётся, если входит в
-         * здание у ближайшей точки контура и держит запасы строгой формы, см. {@link #straightened}; если нет — выход
+         * здание у ближайшей точки контура и держит запасы строгой формы, см. {@link #straightened}, а если участок до
+         * выхода пересёк объект специального прохода, прямая пересекает его по правилам, как у {@link #evened}; если нет — выход
          * отодвигается по тому же лучу, пока поворот в нём не дойдёт до MIN_TURN_DEG, см. {@link #relinked}.
          */
         Coordinate[] throughExit(ConnectionPoint connection, Coordinate[] branch, ObstacleSet zones, Spot spot) {
@@ -1291,6 +1315,11 @@ final class TreeBuilder {
             Coordinate[] edge = reversed(branch);
             boolean fromRoot = spot.node == tree.root;
             Coordinate[] line = straightened(building, edge, zones, ignored, null, List.of(), fromRoot);
+            Coordinate entry = line != null || zones.spans(factory.createLineString(new Coordinate[] {branch[0], branch[1]}), ignored).isEmpty()
+                    ? null : straightEntry(building.getGeometry(), edge);
+            if (entry != null) {
+                line = relinked(building, edge, zones, ignored, null, List.of(), fromRoot, List.of(entry), true, true);
+            }
             if (line == null) {
                 Coordinate cp = branch[0];
                 double length = cp.distance(branch[1]);
