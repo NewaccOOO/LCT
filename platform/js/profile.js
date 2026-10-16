@@ -5,7 +5,8 @@
 import {UTILITIES, UNDER, NORMAL_DEPTH, MIN_DEPTH, pointAt} from './model.js';
 import {fmt} from './util.js';
 
-const BAND = 3 * 17 + 4;   // подвал: три строки
+const ROWS = ['Ду', 'Уклон, ‰', 'Глубина верха, м', 'Длина, м'];
+const BAND = ROWS.length * 17 + 4;   // подвал, как в Civil 3D: строки по участкам
 // пикетаж, как на чертежах: ПК — сотня метров, плюс — метры внутри неё
 export function pk(s) {
   s = Math.round(s * 10) / 10;
@@ -44,6 +45,25 @@ export class Profile {
       this.draw();
     }, {passive: false});
     canvas.addEventListener('dblclick', () => { this.win = null; this.draw(); });
+    // телефон: палец — сдвиг по длине, два пальца — масштаб, двойное касание — вся трасса
+    const tp = new Map();
+    let tz = null;
+    canvas.addEventListener('pointerdown', e => { if (e.pointerType !== 'touch' || !this.route) return; canvas.setPointerCapture(e.pointerId); tp.set(e.pointerId, e.offsetX); tz = null; });
+    canvas.addEventListener('pointermove', e => {
+      if (e.pointerType !== 'touch' || !tp.has(e.pointerId) || !this.route) return;
+      const prev = tp.get(e.pointerId); tp.set(e.pointerId, e.offsetX);
+      const L = this.layout(), [a, b] = this.win || [0, this.route.len];
+      if (tp.size === 1) { const d = (prev - e.offsetX) * (b - a) / L.W; if (this.win) this.setWin(a + d, b + d); }
+      else if (tp.size === 2) {
+        const xs = [...tp.values()], span = Math.abs(xs[0] - xs[1]);
+        if (tz) { const at = this.atX((xs[0] + xs[1]) / 2) ?? (a + b) / 2, k = tz / Math.max(span, 8); this.setWin(at - (at - a) * k, at + (b - at) * k); }
+        tz = span;
+      }
+      this.draw();
+    });
+    const tend = e => { tp.delete(e.pointerId); tz = null; };
+    canvas.addEventListener('pointerup', tend);
+    canvas.addEventListener('pointercancel', tend);
     canvas.addEventListener('click', e => {
       if (drag?.moved) return;
       const n = this.nearCx(e.offsetX);
@@ -95,7 +115,7 @@ export class Profile {
     let maxD = 5;
     for (const s of R.segs) for (let i = 0; i < s.depth.length; i++) maxD = Math.max(maxD, s.depth[i] + s.row.h + 1);
     for (const c of this.cxs) maxD = Math.max(maxD, c.top + c.eh + (c.need || 0) + 0.8);
-    const pl = 64, pr = 18, pt = 40, pb = 34 + BAND;
+    const pl = 96, pr = 18, pt = 40, pb = 34 + BAND;
     const W = Math.max(10, r.width - pl - pr), H = Math.max(10, r.height - pt - pb);
     const [a, b] = this.win || [0, Math.max(R.len, 1)];
     return {r, pl, pr, pt, pb, W, H, maxD, a, b, X: s => pl + (s - a) / (b - a) * W, Y: d => pt + (d + 0.6) / (maxD + 0.6) * H};
@@ -176,6 +196,9 @@ export class Profile {
       g.beginPath(); D.pts.forEach((p, i) => i ? g.lineTo(X(p.S), Y(p.d)) : g.moveTo(X(p.S), Y(p.d))); g.stroke();
       g.beginPath(); D.pts.forEach((p, i) => i ? g.lineTo(X(p.S), Y(p.d + D.h)) : g.moveTo(X(p.S), Y(p.d + D.h))); g.stroke();
       g.setLineDash([]); g.lineWidth = 1;
+      // участок обхода залит, чтобы его было видно даже на длинной трассе
+      g.fillStyle = 'rgba(74,222,128,.12)';
+      g.fillRect(X(D.pts[0].S), Y(0), Math.max(6, X(D.pts[D.pts.length - 1].S) - X(D.pts[0].S)), Y(maxD) - Y(0));
       const mid = D.pts[Math.floor(D.pts.length / 2)];
       g.fillStyle = '#86efac'; g.fillText(D.label, Math.min(X(mid.S) + 8, pl + W - g.measureText(D.label).width - 4), Y(mid.d + D.h) + 14);
     }
@@ -219,17 +242,19 @@ export class Profile {
     for (let s = Math.ceil(wa / step) * step; s <= wb + 1e-6; s += step) { const t = pk(s); g.fillText(t, Math.max(pl, X(s) - g.measureText(t).width / 2), Y(maxD) + 14); g.beginPath(); g.moveTo(X(s), Y(maxD)); g.lineTo(X(s), Y(maxD) + 4); g.stroke(); }
     // подвал: Ду, уклон, длина по участкам — как в Civil 3D
     const by = Y(maxD) + 20;
-    ['Ду', 'Уклон', 'Длина, м'].forEach((t, i) => { g.fillStyle = muted; g.fillText(t, 6, by + i * 17 + 12); g.strokeStyle = line; g.beginPath(); g.moveTo(pl, by + i * 17); g.lineTo(pl + W, by + i * 17); g.stroke(); });
-    g.beginPath(); g.moveTo(pl, by + 3 * 17); g.lineTo(pl + W, by + 3 * 17); g.stroke();
+    g.save(); g.font = '11px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+    ROWS.forEach((t, i) => { g.fillStyle = muted; g.fillText(t, 4, by + i * 17 + 12); g.strokeStyle = line; g.beginPath(); g.moveTo(pl, by + i * 17); g.lineTo(pl + W, by + i * 17); g.stroke(); });
+    g.restore();
+    g.beginPath(); g.moveTo(pl, by + ROWS.length * 17); g.lineTo(pl + W, by + ROWS.length * 17); g.stroke();
     clip();
     for (const s of R.segs) {
       const x0 = X(s.s0), x1 = X(s.s0 + s.len);
-      g.strokeStyle = line; g.beginPath(); g.moveTo(x0, by); g.lineTo(x0, by + 3 * 17); g.stroke();
+      g.strokeStyle = line; g.beginPath(); g.moveTo(x0, by); g.lineTo(x0, by + ROWS.length * 17); g.stroke();
       // подписи — по видимой части участка: при приближении строки не пустеют
       const v0 = Math.max(x0, pl), v1 = Math.min(x1, pl + W), w = v1 - v0;
       if (w <= 0) continue;
       const slope = Math.abs(s.d1 - s.d0) / s.len;
-      const vals = [String(s.p.diameter), fmt(slope, 3), fmt(s.len, s.len < 10 ? 1 : 0)];
+      const vals = [String(s.p.diameter), fmt(slope * 1000, 1), s.d0 === s.d1 ? fmt(s.d0, 2) : `${fmt(s.d0, 2)}→${fmt(s.d1, 2)}`, fmt(s.p.length ?? s.len, (s.p.length ?? s.len) < 10 ? 1 : 0)];
       vals.forEach((t, i) => {
         g.fillStyle = s.issues.length ? '#f9a8d4' : i === 1 && slope < 0.002 ? '#fcd34d' : '#cbd5e1';
         const tw = g.measureText(t).width; if (tw + 4 < w) g.fillText(t, v0 + (w - tw) / 2, by + i * 17 + 12);
@@ -237,7 +262,7 @@ export class Profile {
     }
     g.restore();
     g.fillStyle = this.win ? '#fde047' : muted;
-    g.fillText(this.win ? `показан участок ${pk(wa)} – ${pk(wb)} · двойной щелчок — вся трасса` : 'колесо — масштаб по длине · тащить — сдвиг · жёлтым — уклон меньше 0,002 (СП 124.13330, правилами кейса не проверяется)', pl + 4, r.height - 5);
+    g.fillText(this.win ? `показан участок ${pk(wa)} – ${pk(wb)} · двойной щелчок — вся трасса` : (matchMedia('(pointer: coarse)').matches ? 'два пальца — масштаб · палец — сдвиг · двойное касание — вся трасса' : 'колесо — масштаб по длине · тащить — сдвиг') + ' · жёлтым — уклон меньше 0,002 (СП 124.13330)', pl + 4, r.height - 5);
 
     // курсор: пролёт или мышь
     const cur = this.mouse ? this.atX(this.mouse[0]) : this.cursor;

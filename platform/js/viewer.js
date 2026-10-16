@@ -228,6 +228,13 @@ export class Viewer {
     if (this._lodK != null && Math.abs(this._lodK - k) < 0.02) return;
     this._lodK = k;
     for (const l of this.g.utilLines.children) l.material.opacity = 0.55 - 0.35 * k;
+    const under = this.camera.position.z < 0;
+    if (under !== this._under) {
+      this._under = under;
+      this.renderer.setClearColor(under ? 0x1a140e : 0x0d1526, 1);
+      this.scene.fog.color.set(under ? 0x1a140e : 0x0d1526);
+      if (this.depthGrid) this.depthGrid.visible = under;
+    }
     const net = this.g.netLines.getObjectByName('netLine');
     if (net) net.material.linewidth = 3.4 + 1.8 * k;
   }
@@ -235,6 +242,7 @@ export class Viewer {
     this.lod();
     for (const m of this.g.tools.children) if (m.userData.marker) this.scaleMarker(m);
     if (this.groundMat) this.groundMat.uniforms.uCam.value.copy(this.camera.position);
+    if (this.depthGridMat) { this.depthGridMat.uniforms.uCam.value.copy(this.camera.position); this.depthGrid.position.z = -3 * this.ex; }
     this.renderer.render(this.scene, this.camera);
     this.labels.render(this.scene, this.camera);
     this.declutter();
@@ -298,6 +306,16 @@ export class Viewer {
     this.ground.position.set((x0 + x1) / 2, (y0 + y1) / 2, 0);
     this.ground.renderOrder = 1;
     this.scene.add(this.ground);
+    // под землёй — сетка на обычной глубине 3 м, чтобы было за что зацепиться глазом
+    if (this.depthGrid) { this.scene.remove(this.depthGrid); this.depthGrid.geometry.dispose(); }
+    const dg = groundMaterial();
+    dg.uniforms.uColor.value.set('#3b2a18'); dg.uniforms.uLine.value.set('#a07850'); dg.uniforms.uOpacity.value = 0.08;
+    this.depthGrid = new THREE.Mesh(new THREE.PlaneGeometry(W * 3, W * 3), dg);
+    this.depthGrid.position.set((x0 + x1) / 2, (y0 + y1) / 2, -3 * this.ex);
+    this.depthGrid.visible = false; this.depthGrid.renderOrder = 1;
+    this.depthGridMat = dg;
+    this.scene.add(this.depthGrid);
+    this._under = null;
     this.buildSurface();
     this.buildBuildings();
     this.buildUnderground();
@@ -506,7 +524,7 @@ export class Viewer {
     const bad = v.crossings.filter(c => c.ok === false);
     if (bad.length) {
       const pts = bad.map(c => c.type === 'segment' ? [c.x, c.y, -(c.seg.d0 + c.seg.row.h / 2) * ex] : [c.x, c.y, -(c.hn + c.H / 2) * ex]);
-      const sm = sphereMesh(pts.map(p => ({p, r: 0.9, color: PALETTE.problem})), this.material('basic', {color: 0xffffff, transparent: true, opacity: 0.9, depthTest: false}), 14);
+      const sm = sphereMesh(pts.map(p => ({p: [p[0], p[1], p[2] + 1.2], r: 0.32, color: PALETTE.problem})), this.material('basic', {color: 0xffffff, transparent: true, opacity: 0.9, depthTest: false}), 14);
       sm.renderOrder = 40; sm.name = 'problems';
       this.g.network.add(sm);
       const needles = [];
@@ -612,7 +630,7 @@ export class Viewer {
       this.g.overlay.add(lb);
     }
     const end = route.segs[route.segs.length - 1], last = end.pts[end.pts.length - 1];
-    const lb = this.label(`<b>${route.endName || 'Здание ' + route.end}</b><small>${route.len.toFixed(0)} м от врезки</small>`, 'lbl end');
+    const lb = this.label(`<b>${route.endName || nodeName(this.variant?.nodes.find(n => n.id === route.end) || {id: route.end}, this.model)}</b><small>${route.len.toFixed(0)} м от врезки</small>`, 'lbl end');
     lb.position.set(last[0], last[1], 4);
     this.g.overlay.add(lb);
     this.redraw();
@@ -752,7 +770,7 @@ export class Viewer {
       if (this.clipPlanes.length && !this.inClip(pt)) return;
       // новая сеть важнее соседних коммуникаций на том же расстоянии
       const score = r.t * (it.kind === 'seg' ? 0.85 : it.kind === 'node' ? 0.8 : 1) + r.dist / Math.max(tol, 1e-6) * 0.5;
-      if (!best || score < best.score) best = {kind: it.kind, ref: it.ref, type: it.type, point: pt, t: r.t, score};
+      if (!best || score < best.score) best = {kind: it.kind, ref: it.ref, type: it.type, point: pt, on: new THREE.Vector3(...r.on), t: r.t, score};
     };
     // идём по клеткам вдоль проекции луча на план
     const tMax = Math.min(60000, this.camera.far);
@@ -834,5 +852,5 @@ function closestRaySeg(o, d, a, b) {
   const px = a[0] + ux * s, py = a[1] + uy * s, pz = a[2] + uz * s;
   t = ((px - o.x) * d.x + (py - o.y) * d.y + (pz - o.z) * d.z) / A;
   const qx = o.x + d.x * t - px, qy = o.y + d.y * t - py, qz = o.z + d.z * t - pz;
-  return {t, dist: Math.sqrt(qx * qx + qy * qy + qz * qz)};
+  return {t, dist: Math.sqrt(qx * qx + qy * qy + qz * qz), on: [px, py, pz]};
 }

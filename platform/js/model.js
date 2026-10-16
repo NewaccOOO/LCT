@@ -276,9 +276,11 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
         const hn = d0 + (d1 - d0) * at / len, u = UTILITIES[e.type];
         const over = e.top - (hn + row.h), under = hn - (e.top + e.h);
         const gap = Math.max(over, under);
-        const ok = u.clear == null ? null : gap >= u.clear - 1e-9;
-        const aboveMax = u.clear == null ? null : e.top - u.clear - row.h;
-        const belowMin = u.clear == null ? null : e.top + e.h + u.clear;
+        // без нормы зазора (вода, канализация) проверяем хотя бы физику: трубы не должны проходить друг через друга
+        const ok = u.clear == null ? (gap < -1e-9 ? false : null) : gap >= u.clear - 1e-9;
+        const cl = u.clear ?? 0;   // без нормы — хотя бы не насквозь
+        const aboveMax = e.top - cl - row.h;
+        const belowMin = e.top + e.h + cl;
         const c = {seg: s, v: s.v, x: hit[1], y: hit[2], s: at, type: e.type, eid: e.id, top: e.top, eh: e.h, hn, H: row.h,
           side: over >= under ? 'над' : 'под', gap, need: u.clear, ok,
           above: aboveMax != null && aboveMax >= MIN_DEPTH ? aboveMax : null, below: belowMin, kBelow: belowMin == null ? null : kDepth(belowMin)};

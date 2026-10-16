@@ -77,7 +77,9 @@ export class CameraRig {
   // ---------- операции ----------
   stop() { this.anim = null; }
   rotateAround(P, dYaw, dPitch) {
-    const p2 = clamp(this.pitch + dPitch, -90 * D, 90 * D);
+    // вокруг точки на поверхности — не ниже горизонта (как в Google Earth); под землю — только вокруг трубы или в рентгене
+    const maxP = P.z > -0.3 && !this.allowUnder ? -3 * D : 85 * D;
+    const p2 = clamp(this.pitch + dPitch, -90 * D, Math.max(maxP, Math.min(this.pitch, 85 * D)));
     dPitch = p2 - this.pitch;
     const v = this.pos.clone().sub(P);
     v.applyAxisAngle(Z, -dYaw);
@@ -99,7 +101,7 @@ export class CameraRig {
   }
   translate(v) { this.pos.add(v); this.apply(); }
   // Скорость полёта зависит от высоты над землёй: у труб медленно, над районом быстро
-  flySpeed() { return (Math.abs(this.pos.z) * 1.1 + 9) * this.speedK; }
+  flySpeed() { return (Math.abs(this.pos.z) * 1.1 + 14) * this.speedK; }
 
   animateTo(target, ms = 700) {
     const from = {pos: this.pos.clone(), yaw: this.yaw, pitch: this.pitch};
@@ -245,7 +247,7 @@ export class CameraRig {
         t2.a = {...t2.a0}; t2.b = {...t2.b0};
         return twoFinger();
       }
-      if (t2.mode === 'tilt') this.rotateAround(t2.P, 0, -dy / r.height * Math.PI * 0.8);
+      if (t2.mode === 'tilt') this.rotateAround(t2.P, 0, -dy / r.height * Math.PI * 0.45);
       else {
         if (Math.abs(zoom - 1) > 0.002) this.zoomTo(t2.P, zoom);
         if (Math.abs(dAng) > 0.002) this.rotateAround(t2.P, -dAng, 0);

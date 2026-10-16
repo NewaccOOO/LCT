@@ -59,8 +59,9 @@ function noteRest() {
   restT = setTimeout(() => {
     const s = rig.state;
     if (restView && Math.hypot(s.pos[0] - restView.pos[0], s.pos[1] - restView.pos[1], s.pos[2] - restView.pos[2]) > 2 + Math.abs(s.pos[2]) * 0.05) {
-      const top = viewStack[viewStack.length - 1];
-      if (!top || top.pos.join() !== restView.pos.join()) viewStack.push(restView);
+      const top = viewStack[viewStack.length - 1], now = performance.now();
+      // колесо и наклон шагами — одна запись, если с прошлой остановки прошло меньше 4 с
+      if (!top || (top.pos.join() !== restView.pos.join() && now - (noteRest.last || 0) > 4000)) { viewStack.push(restView); noteRest.last = now; }
       if (viewStack.length > 30) viewStack.shift();
     }
     restView = s;
@@ -97,6 +98,7 @@ async function load({input, output, outText = null, ds}) {
     const model = await buildScene(input, output, {onProgress: (k, t) => progress(0.05 + k * 0.75, t)});
     if (!model.stats.utilities && !model.stats.surfaces && !model.stats.points && !model.hasOutput) {
       $('#loading').hidden = true;
+      $('#errH').textContent = 'Файл не распознан';
       const n = model.skipped.reduce((a, [, k]) => a + k, 0);
       $('#errBody').innerHTML = `<p>В «${esc(ds.title)}» нет ни одного объекта в формате сервиса: ${fmt(n)} ${plural(n, 'объект', 'объекта', 'объектов')} пропущено.</p>
         <ul>${model.skipped.slice(0, 5).map(([w, k]) => `<li>${esc(w)} — ${fmt(k)}</li>`).join('')}</ul>
@@ -127,7 +129,7 @@ async function load({input, output, outText = null, ds}) {
     $('#loading').hidden = true;
     const v = S.v;
     toast(`Открыт набор «${esc(ds.title)}»: ${fmt(model.stats.input)} объектов${v ? `, ${model.variants.length} ${plural(model.variants.length, 'вариант', 'варианта', 'вариантов')}` : ''}`, 'ok');
-    if (!model.hasOutput) toast('Результата расчёта нет — показаны только исходные данные. Откройте результат или отправьте расчёт на сервер.', 'info', 6000);
+    if (!model.hasOutput) toast(`Результата трассировки нет — показаны только исходные данные. Откройте файл результата${S.server ? ' или запустите расчёт (Файл → Новый расчёт)' : ''}.`, 'info', 6000);
     if (!ds.local) store.set('ds', ds.name || null);
     // отчёт импорта: что из исходных данных не попало в сцену и почему
     if (model.skipped.length) {
@@ -178,7 +180,7 @@ async function loadFiles(files, {fromCache = false} = {}) {
       cacheFiles(parsed.map(p => ({name: p.name, text: p.text})));
       toast('Свои файлы открыты и запомнены в этом браузере: F5 их не потеряет. Ссылка на вид у коллеги без этих файлов не откроется.', 'info', 7000);
     }
-  } catch (e) { $('#loading').hidden = true; toast(`Не удалось открыть: ${esc(e.message)}`, 'error', 9000); }
+  } catch (e) { $('#loading').hidden = true; $('#errH').textContent = 'Файл не открылся'; $('#errBody').innerHTML = `<p>${esc(e.message)}</p>`; $('#errDlg').showModal(); }
 }
 // последние свои файлы — в IndexedDB этого браузера
 function idb() { return new Promise((res, rej) => { const r = indexedDB.open('hn3d', 1); r.onupgradeneeded = () => r.result.createObjectStore('files'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
@@ -189,14 +191,18 @@ async function cachedFiles() { try { const db = await idb(); return await new Pr
 function renderVariants() {
   const vs = S.model.variants, best = Math.min(...vs.map(v => v.score ?? Infinity));
   $('#variants').innerHTML = vs.map(v => `<button role="tab" data-v="${esc(v.id)}" title="Вариант ${esc(v.id)}: S ${fmt(v.score, 2)}, ${rub(v.summary.calculated_cost)}">
-    <span><span class="vl">Вариант </span><span class="vs">Вар. </span>${esc(v.id)}${vs.length > 1 && v.score === best ? ' ★' : ''}</span><small>S ${fmt(v.score, 2)} · ${rub(v.summary.calculated_cost)}</small></button>`).join('');
+    <span><span class="vl">Вариант </span><span class="vs">Вар. </span>${esc(v.id)}${vs.length > 1 && v.score === best ? ' ★' : ''}</span><small>S ${fmt(v.score, 2)} · ${rub(v.summary.calculated_cost)}</small></button>`).join('') +
+    // на телефоне — один выпадающий список, чтобы поиску хватало места
+    `<select id="varSel" aria-label="Вариант решения">${vs.map(v => `<option value="${esc(v.id)}">Вар. ${esc(v.id)}${vs.length > 1 && v.score === best ? ' ★' : ''}</option>`).join('')}</select>`;
   $('#variants').hidden = !vs.length;
+  $('#varSel').onchange = e => setVariant(e.target.value);
 }
 $('#variants').onclick = e => { const b = e.target.closest('button'); if (b) setVariant(b.dataset.v); };
 function setVariant(id, {quiet = false} = {}) {
   const v = S.model.variants.find(x => x.id === id) || null;
   S.v = v;
   $$('#variants button').forEach(b => { b.classList.toggle('on', b.dataset.v === id); b.setAttribute('aria-selected', b.dataset.v === id); });
+  if ($('#varSel')) $('#varSel').value = id;
   const keep = S.sel;
   clearSel();
   viewer.setVariant(v);
@@ -210,7 +216,7 @@ function setVariant(id, {quiet = false} = {}) {
 
 // ---------- обзор ----------
 const DEPTH_GRAD = [1, 2, 3, 4, 5].map(d => { const t = Math.min(1, Math.max(0, (d - 1) / 4)); return new THREE.Color().setHSL(0.5 - 0.08 * t, 0.9, 0.78 - 0.4 * t).getStyle(); }).join(',');
-const SLOPE_NOTE = 'СП 124.13330 требует уклон не меньше 0,002 для опорожнения. Правила кейса задают только максимум 0,10 — минимальный уклон сервис не подбирает и платформа не считает его проблемой.';
+const SLOPE_NOTE = 'СП 124.13330 требует уклон не меньше 0,002 для опорожнения. Правила расчёта задают только максимум 0,10, поэтому минимальный уклон при трассировке не подбирается и проблемой здесь не считается — проверьте при рабочем проектировании.';
 // значения для сравнения; лучшее в столбце — зелёным
 const CMP = [
   ['cost', x => x.summary.calculated_cost, v => rub(v)], ['len', x => x.summary.new_network_length, v => meters(v)],
@@ -239,9 +245,9 @@ function renderSummary() {
   const sm = v.summary, bad = v.crossings.filter(c => c.ok === false).length, unc = M.oks.length - v.connected.size;
   const chambers = v.nodes.filter(n => n.type === 'heat_chamber').length, special = v.segs.filter(s => s.special).length;
   const len = sm.new_network_length ?? v.segs.reduce((a, s) => a + s.len, 0);
-  el.innerHTML = `<h2>Вариант ${esc(v.id)}${v.rank ? ` · место ${v.rank}` : ''}</h2>
+  el.innerHTML = `<h2>Вариант ${esc(v.id)}${v.rank === 1 && M.variants.length > 1 ? ' · лучший ★' : v.rank ? ` · ${v.rank}-й по показателю S` : ''}</h2>
     <div class="kpi">
-      <div title="${S_FORMULA}"><b>${fmt(sm.score, 2)}</b><span>оценка S, меньше — лучше <span class="q">?</span></span></div>
+      <div title="${S_FORMULA}"><b>${fmt(sm.score, 2)}</b><span>показатель S: 0,7·стоимость + 0,3·длина, меньше — лучше <span class="q">?</span></span></div>
       <div><b>${rub(sm.calculated_cost)}</b><span>полная стоимость</span></div>
       <div><b>${meters(len)}</b><span>новых труб</span></div>
       <div class="${unc ? 'bad' : 'ok'}"><b>${unc} из ${M.oks.length}</b><span>зданий не подключено</span></div>
@@ -284,10 +290,10 @@ function renderSummary() {
 }
 function dataInfo() {
   const M = S.model, u = Object.entries(M.utilities).map(([k, l]) => `${UTILITIES[k].name.toLowerCase()} ${fmt(l.length)}`).join(', ');
-  return `<table><tr><td>Объектов во входе</td><td>${fmt(M.stats.input)}</td></tr>
+  return `<table><tr><td>Объектов в исходных данных</td><td>${fmt(M.stats.input)}</td></tr>
     <tr><td>Зданий к подключению</td><td>${fmt(M.oks.length)}</td></tr>
     <tr><td>Коммуникации</td><td style="white-space:normal">${u || '—'}</td></tr>
-    <tr><td>Глубина в результате</td><td>${M.hasDepth ? 'есть (режим с учётом глубины)' : M.hasOutput ? 'нет — трубы на обычных 3,0 м' : '—'}</td></tr>
+    <tr><td>Глубины новых труб</td><td>${M.hasDepth ? 'подобраны при трассировке' : M.hasOutput ? 'не заданы — показаны на 3,0 м' : '—'}</td></tr>
     ${M.skipped.map(([w, k]) => `<tr><td>Пропущено: ${esc(w)}</td><td>${fmt(k)}</td></tr>`).join('')}</table>`;
 }
 function longestTour() {
@@ -314,7 +320,8 @@ function renderOks() {
     $$('#oksF button').forEach(b => b.classList.toggle('on', b.dataset.f === S.oksF));
     const list = rows.filter(r => (S.oksF === 'all' || !v || (S.oksF === 'conn') === r.conn) &&
       (!q || matchWords(q, [r.o.id, r.o.oksId, r.o.label].join(' '))));
-    list.sort((a, b) => (a.conn === b.conn ? 0 : a.conn ? 1 : -1) || a.o.no - b.o.no);
+    const num = +((q.match(/\d+/) || [])[0] || NaN);
+    list.sort((a, b) => (b.o.no === num) - (a.o.no === num) || (a.conn === b.conn ? 0 : a.conn ? 1 : -1) || a.o.no - b.o.no);
     $('#oksL').innerHTML = list.slice(0, 1500).map(({o, conn}) => {
       const r = conn ? routeTo(v, o.id) : null;
       return `<button class="item ${S.sel?.ref === o ? 'sel' : ''}" data-id="${esc(o.id)}"><div class="t"><span>${esc(o.label)}</span>
@@ -527,7 +534,17 @@ function selectCrossing(c, {move = true} = {}) {
     const ln = (S.model.utilities[c.type] || []).find(l => String(l.id) === String(c.eid));
     if (ln) { const z = -(ln.top + (ln.h || 0.3) / 2) * viewer.ex, seg = []; for (let i = 0; i + 1 < ln.pts.length; i++) seg.push(ln.pts[i][0], ln.pts[i][1], z, ln.pts[i + 1][0], ln.pts[i + 1][1], z); viewer.overlayLines(seg, {color: '#ffffff', width: 3}); }
   }
-  viewer.marker('selpt', new THREE.Vector3(c.x, c.y, viewer.z(c.type === 'segment' ? c.seg.d0 : c.hn + c.H / 2)), {r: 0.9, color: c.ok === false ? PALETTE.problem : PALETTE.ok});
+  if (c.type !== 'segment') {
+    // вертикальная размерная линия между трубами с подписью зазора
+    const z = d => viewer.z(d), newAbove = c.side === 'над';
+    const a = newAbove ? c.hn + c.H : c.top + c.eh, b = newAbove ? c.top : c.hn;
+    const t = 0.35;
+    viewer.overlayLines([c.x, c.y, z(a), c.x, c.y, z(b), c.x - t, c.y, z(a), c.x + t, c.y, z(a), c.x - t, c.y, z(b), c.x + t, c.y, z(b)], {color: c.ok === false ? PALETTE.problem : '#86efac', width: 2.5});
+    const lb = viewer.label(c.gap < 0 ? `наложение ${fmt(-c.gap, 2)} м` : `зазор ${fmt(c.gap, 2)} м${c.need != null ? ` · нужно ${fmt(c.need, 2)}` : ''}`, 'lbl dim ' + (c.ok === false ? 'bad' : 'ok'));
+    lb.position.set(c.x, c.y, (z(a) + z(b)) / 2);
+    lb.center.set(-0.08, 0.5);
+    viewer.g.overlay.add(lb);
+  } else viewer.marker('selpt', new THREE.Vector3(c.x, c.y, viewer.z(c.seg.d0)), {r: 0.9, color: PALETTE.problem, ring: true});
   if (move) crossingView(c);
 }
 // «Показать обход»: участок трассы поднимается (или опускается) до рекомендуемой глубины у пересечения
@@ -651,17 +668,19 @@ function describe(sel) {
       const c = r;
       if (c.type === 'segment') return {kind: 'Нарушение на участке', title: segName(c.seg), sub: c.seg.id, rows: [['Глубина', `${ND(c.seg.d0)} → ${ND(c.seg.d1)}`], ['Длина', meters(c.seg.len)]], problem: c.issues.join('<br>')};
       const u = UTILITIES[c.type];
-      const rows = [['Пересекает', `${u.name.toLowerCase()} № ${c.eid}`], ['Существующая: верх–низ', `${fmt(c.top, 2)}–${fmt(c.top + c.eh, 2)} м`], ['Новая: верх–низ', `${fmt(c.hn, 2)}–${fmt(c.hn + c.H, 2)} м`],
+      const rows = [['Пересекает', u.name.toLowerCase()], ['Существующая: верх–низ', `${fmt(c.top, 2)}–${fmt(c.top + c.eh, 2)} м`], ['Новая: верх–низ', `${fmt(c.hn, 2)}–${fmt(c.hn + c.H, 2)} м`],
         ['Новая проходит', c.gap < 0 ? 'насквозь — трубы пересекаются' : c.side], ['Зазор по высоте', c.gap < 0 ? `наложение ${fmt(-c.gap, 2)} м` : fmt(c.gap, 2) + ' м'], ['Нужно не меньше', c.need == null ? 'правилами не задано' : fmt(c.need, 2) + ' м'], ['Участок', segName(c.seg)]];
       let problem = null, fix = null;
       if (c.ok === false) {
-        problem = `Новая труба проходит слишком близко к коммуникации «${u.name.toLowerCase()}»: ${gapText(c)}, а нужно не меньше ${fmt(c.need, 2)} м.`;
+        problem = c.need == null
+          ? `Новая труба проходит сквозь коммуникацию «${u.name.toLowerCase()}»: наложение ${fmt(-c.gap, 2)} м. Норма зазора для этой сети не задана, её глубина условная (${fmt(c.top, 1)} м) — уточнить по изысканиям.`
+          : `Новая труба проходит слишком близко к коммуникации «${u.name.toLowerCase()}»: ${gapText(c)}, а нужно не меньше ${fmt(c.need, 2)} м.`;
         fix = [c.above != null ? `<b>Поднять</b> трубу: верх не глубже ${fmt(c.above, 2)} м — без доплаты.` : 'Поднять нельзя: выйдет мельче 0,7 м.',
           `<b>Опустить</b> трубу: верх не мельче ${fmt(c.below, 2)} м — ${c.kBelow > 1 ? `дороже на ${fmt((c.kBelow - 1) * 100, 1)} %` : 'без доплаты'}.`,
           c.kBelow > 1 ? `<small class="mut">Kгл ${fmt(c.kBelow, 3)} — коэффициент стоимости за глубину: +10 % за каждый метр глубже 3 м.</small>` : ''].filter(Boolean).join('<br>') +
           `<div class="row" style="margin-top:8px;flex-wrap:wrap">${c.above != null ? '<button type="button" data-detour="up">👁 Показать: поднять</button>' : ''}<button type="button" data-detour="down">👁 Показать: опустить</button></div>`;
       }
-      return {kind: 'Пересечение по высоте', title: `${u.name} × новая труба`, rows, problem, fix, ok: c.ok === true ? 'Зазор достаточный' : c.ok == null ? 'Для этой коммуникации зазор правилами не задан, глубина показана условно' : null};
+      return {kind: 'Пересечение по высоте', title: `${u.name} × новая труба`, sub: `${u.name.toLowerCase()} № ${c.eid} · ${c.seg.id}`, rows, problem, fix, ok: c.ok === true ? 'Зазор достаточный' : c.ok == null ? 'Трубы не пересекаются. Норма зазора для этой сети не задана, её глубина условная — уточнить по изысканиям' : null};
     }
     case 'node': {
       const n = r, t = n.type === 'existing_chamber' ? 'Врезка в существующую камеру' : n.type === 'oks_entry' ? 'Ввод в здание' : (NODE_TYPES[n.type] || {name: n.type}).name;
@@ -803,8 +822,8 @@ $('#view').addEventListener('pointerleave', () => { hoverXY = null; $('#tip').hi
 function hoverText(h) {
   const r = h.ref;
   if (h.kind === 'seg') {
-    const d = (h.point.z / -viewer.ex) - r.row.h / 2;
-    return {title: `Новая труба Ду ${r.p.diameter}`, lines: [`${segName(r)} · ${meters(r.len)}`, `верх на глубине ${fmt(Math.max(0, d), 2)} м${r.special ? ' · спецпереход' : ''}`, r.bad ? '<span style="color:#f9a8d4">⚠ есть проблема</span>' : ''].filter(Boolean),
+    const d = ((h.on || h.point).z / -viewer.ex) - r.row.h / 2;
+    return {title: `Новая труба Ду ${r.p.diameter}`, lines: [`${segName(r)} · ${meters(r.p.length ?? r.len)}`, `верх на глубине ${fmt(Math.max(0, d), 2)} м${r.special ? ' · спецпереход' : ''}`, r.bad ? '<span style="color:#f9a8d4">⚠ есть проблема</span>' : ''].filter(Boolean),
       status: `<b>Новая труба</b> ${segName(r)} · Ду ${r.p.diameter} · верх ${fmt(Math.max(0, d), 2)} м`};
   }
   if (h.kind === 'utility') { const u = UTILITIES[h.type]; return {title: u.name, lines: [`верх ${fmt(r.top, 1)} м${u.assumed ? ' (условно)' : ''}${r.dn ? ` · Ду ${r.dn}` : ''}`], status: `<b>${u.name}</b> · верх ${fmt(r.top, 1)} м`}; }
@@ -876,11 +895,12 @@ function home(ms = 800) {
   if (S.model) rig.frame(homeBox(), {yaw: 0, pitch: -52 * D, ms, pad: 1.05});
 }
 function orient(dir, name) {
-  const P = rig.center(), dist = Math.max(20, rig.pos.distanceTo(P));
   const f = dir.clone().negate();
-  const pitch = Math.asin(clamp(f.z, -1, 1));
+  let pitch = Math.asin(clamp(f.z, -1, 1));
   const yaw = Math.abs(f.z) > 0.999 ? rig.yaw : Math.atan2(f.x, f.y);
-  rig.lookAtFrom(P, yaw, pitch, dist);
+  if (Math.abs(f.z) < 0.2) pitch = -6 * D;   // вид сбоку — чуть сверху, чтобы видеть и землю, и трубы под ней
+  // как Zoom Extents: вписываем выбранное, иначе новую сеть
+  rig.frame(selBox() || homeBox(), {yaw, pitch, pad: 1.1});
   status(name);
 }
 function toggle2d() {
@@ -912,7 +932,9 @@ function updateScale() {
   const nice = [1, 2, 5, 10].map(k => k * mag).filter(v => v <= target).pop() || mag;
   $('#scale .bar').style.width = Math.round(nice / mpp) + 'px';
   $('#scale span').textContent = meters(nice);
-  $('#stCam').textContent = cam.z >= 0 ? `вид с высоты ${meters(cam.z)}` : `взгляд под землёй, ${fmt(-cam.z / viewer.ex, 1)} м`;
+  $('#stCam').textContent = cam.z >= 0 ? `вид с высоты ${meters(cam.z)}` : `взгляд под землёй, ${fmt(-cam.z / viewer.ex, 1)} м · E — вверх, H — общий вид`;
+  $('#camChip').hidden = cam.z >= 0;
+  $('#camChip').textContent = `взгляд под землёй, ${fmt(-cam.z / viewer.ex, 1)} м · домик — общий вид`;
   if ($('#exChip')) $('#exChip').innerHTML = viewer.ex === 1 ? 'Глубина <b>×1</b> как есть' : `Глубина растянута <b>×${viewer.ex}</b>`;
   const top = rig.pitch < -80 * D;
   $('#v2d').classList.toggle('is2d', top);
@@ -920,7 +942,7 @@ function updateScale() {
 }
 
 // ---------- рентген, срез, линейка ----------
-function setXray(on) { S.xray = on; viewer.opts.xray = on; viewer.applyOpts(); $('#xrayBtn').classList.toggle('on', on); }
+function setXray(on) { S.xray = on; rig.allowUnder = on; viewer.opts.xray = on; viewer.applyOpts(); $('#xrayBtn').classList.toggle('on', on); }
 function boxAround(P, r) { return [P.x - r, P.y - r, Math.min(P.z, 0) - 12 * viewer.ex - 2, P.x + r, P.y + r, Math.max(P.z, 0) + 60]; }
 function setClip(box) {
   S.clip = box;
@@ -1043,7 +1065,7 @@ viewer.renderer.domElement.addEventListener('pointerdown', () => { if (S.fly?.pl
 let searchIdx = null;
 // Поиск по словам в любом порядке, как в Картах: «щусева 3», «Шусева» (опечатка), «тэц», «камера 19», «участок 6»
 const STOP = new Set(['ул', 'улица', 'д', 'дом', 'корп', 'корпус', 'к', 'стр', 'строение', 'пр', 'просп', 'проспект', 'пер', 'переулок', 'наб', 'набережная', 'ш', 'шоссе', 'г', 'город']);
-const words = s => String(s ?? '').toLowerCase().replace(/ё/g, 'е').replace(/[.,;:№#"«»()\-_/]+/g, ' ').split(/\s+/).filter(w => w && !STOP.has(w));
+const words = s => String(s ?? '').toLowerCase().replace(/ё/g, 'е').replace(/(\d+)\s*(?:к|корп|корпус|стр|строение)\.?\s*(\d+)/g, '$1 $2').replace(/[.,;:№#"«»()\-_/]+/g, ' ').split(/\s+/).filter(w => w && !STOP.has(w));
 // одна правка (замена, вставка или удаление буквы)
 function near1(a, b) {
   if (a === b) return true;
@@ -1150,7 +1172,7 @@ $('#left .mact').onclick = e => {
 $$('#left .tabs button').forEach(b => b.onclick = () => openTab(b.dataset.tab));
 
 function closeMenu() { $('#fileDd .menu').hidden = true; $('#fileBtn').setAttribute('aria-expanded', 'false'); }
-$('#fileBtn').onclick = () => { const m = $('#fileDd .menu'); m.hidden = !m.hidden; $('#fileBtn').setAttribute('aria-expanded', String(!m.hidden)); };
+$('#fileBtn').onclick = () => { const m = $('#fileDd .menu'); m.querySelector('[data-act=geojson]').disabled = !S.raw; m.hidden = !m.hidden; $('#fileBtn').setAttribute('aria-expanded', String(!m.hidden)); };
 $('#fileDd .menu').onclick = e => { const b = e.target.closest('button[data-act]'); if (!b) return; closeMenu(); menuAct(b.dataset.act); };
 $('#dsBtn').onclick = () => openDlg('demo');
 async function menuAct(a) {
