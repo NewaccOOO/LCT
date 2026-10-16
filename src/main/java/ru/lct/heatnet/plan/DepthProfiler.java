@@ -164,6 +164,7 @@ final class DepthProfiler {
                 free(List.of(chain.from(), chain.to()), chain, byNode, nodeDepth);
             }
         }
+        cheaperNodes(chains, byNode, nodeDepth, ends);
         List<NewSegment> segments = new ArrayList<>();
         List<TechnicalNode> nodes = new ArrayList<>(variant.getNodes());
         for (Chain chain : chains) {
@@ -173,6 +174,23 @@ final class DepthProfiler {
                 chain.chosen = closest(chain.pins(nodeDepth));
             }
             List<Pin> pins = chain.pins(nodeDepth);
+            if (Boolean.getBoolean("heatnet.depth.debug")) {
+                for (int k = 1; k + 1 < pins.size(); k++) {
+                    if (chain.chosen[k] > depth.getNormalM() + EPS) {
+                        boolean over = pins.get(k).range.parts.stream().anyMatch(p -> p[0] <= depth.getNormalM());
+                        int seg = 0;
+                        while (chain.start[seg + 1] <= pins.get(k).from + EPS) {
+                            seg++;
+                        }
+                        System.err.printf("DEPTHDBG %s under h=%.3f over=%s pinLen=%.1f toA=%.1f toB=%.1f chainLen=%.1f pins=%d nodeA=%.2f nodeB=%.2f dn=%d parts=%s%n",
+                                variant.getId(), chain.chosen[k], over, pins.get(k).to - pins.get(k).from,
+                                pins.get(k).from, chain.start[chain.segments.size()] - pins.get(k).to,
+                                chain.start[chain.segments.size()], pins.size() - 2, chain.chosen[0],
+                                chain.chosen[pins.size() - 1], chain.segments.get(seg).getDiameter(),
+                                pins.get(k).range.parts.stream().map(p -> String.format("[%.2f,%.2f]", p[0], Math.min(p[1], 99))).collect(java.util.stream.Collectors.joining()));
+                    }
+                }
+            }
             List<double[]> profile = new ArrayList<>();
             for (int k = 0; k < pins.size(); k++) {
                 Pin pin = pins.get(k);
@@ -204,6 +222,94 @@ final class DepthProfiler {
                 s.getChamberConstructionCost(), s.getExistingChamberTieInCount(), s.getExistingChamberTieInCost(),
                 s.getUnconnectedPenalty(), calculated, length, score, s.getUnconnectedOksIds());
         return new Variant(variant.getId(), segments, variant.getChambers(), nodes, summary);
+    }
+
+    /**
+     * Глубины узлов по стоимости. Узел на 3,0 м заставляет спецучасток у самого узла уходить «под» (спуск на 0,4 м
+     * короче подъёма на 1 м и больше), хотя «над» Kгл = 1: выше обычной глубины прокладка не дороже. Узел (камера,
+     * точка подключения) получает глубину, при которой его цепочки в сумме дешевле всего; кандидаты — глубины
+     * ближайших спецучастков и глубины, с которых до них ровно хватает уклона. Камера врезки — только при
+     * heatnet.depth.tieFree (существующая сеть на 3,0 м). Покоординатный спуск по узлам, пока стоимость падает.
+     */
+    private void cheaperNodes(List<Chain> chains, Map<String, List<Chain>> byNode, Map<String, Double> nodeDepth,
+            Set<String> ends) {
+        if (!Boolean.parseBoolean(System.getProperty("heatnet.depth.cheaperNodes", "true"))) {
+            return;
+        }
+        boolean tieFree = Boolean.getBoolean("heatnet.depth.tieFree");
+        double slope = depth.getMaxSlope() * SLOPE_SLACK;
+        for (int pass = 0; pass < 10; pass++) {
+            boolean changed = false;
+            Set<String> seen = new HashSet<>();
+            for (Chain chain : chains) {
+                for (String node : List.of(chain.from(), chain.to())) {
+                    if (!seen.add(node) || !tieFree && !ends.contains(node)) {
+                        continue;
+                    }
+                    List<Chain> incident = new ArrayList<>(new java.util.LinkedHashSet<>(byNode.get(node)));
+                    if (incident.stream().noneMatch(this::deep)) {
+                        continue;
+                    }
+                    double current = 0;
+                    for (Chain other : incident) {
+                        current += other.cost;
+                    }
+                    TreeSet<Double> candidates = new TreeSet<>();
+                    candidates.add(depth.getNormalM());
+                    for (Chain other : incident) {
+                        Pin pin = other.nearest(node);
+                        if (pin == null) {
+                            continue;
+                        }
+                        double d = other.distance(node, pin);
+                        for (double h : values(pin, other.inner)) {
+                            candidates.add(h);
+                            candidates.add(h + slope * d);
+                            candidates.add(Math.max(depth.getMinM(), h - slope * d));
+                        }
+                    }
+                    Double before = nodeDepth.get(node);
+                    double best = current - 1;
+                    Double bestH = null;
+                    for (double h : candidates) {
+                        nodeDepth.put(node, h);
+                        double sum = 0;
+                        for (Chain other : incident) {
+                            sum += other.solve(nodeDepth) == null ? Double.POSITIVE_INFINITY : other.cost;
+                        }
+                        if (sum < best) {
+                            best = sum;
+                            bestH = h;
+                        }
+                    }
+                    if (bestH != null) {
+                        nodeDepth.put(node, bestH);
+                        changed = true;
+                    } else if (before != null) {
+                        nodeDepth.put(node, before);
+                    } else {
+                        nodeDepth.remove(node);
+                    }
+                    incident.forEach(other -> other.solve(nodeDepth));
+                }
+            }
+            if (!changed) {
+                return;
+            }
+        }
+    }
+
+    /** Цепочка с участком глубже обычной (Kгл > 1) или без профиля. */
+    private boolean deep(Chain chain) {
+        if (chain.chosen == null) {
+            return true;
+        }
+        for (double h : chain.chosen) {
+            if (h > depth.getNormalM() + EPS) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -239,6 +345,8 @@ final class DepthProfiler {
         /** Специальные участки с вертикальными требованиями. */
         final List<Pin> inner = new ArrayList<>();
         double[] chosen;
+        /** Стоимость профиля chosen по цепочке (с Kгл); бесконечность — профиля нет. */
+        double cost;
 
         Chain(List<NewSegment> segments) {
             this.segments = segments;
@@ -274,10 +382,25 @@ final class DepthProfiler {
         }
 
         double[] solve(Map<String, Double> nodeDepth) {
-            chosen = inner.isEmpty() && !nodeDepth.containsKey(from()) && !nodeDepth.containsKey(to())
-                    ? new double[] {depth.getNormalM(), depth.getNormalM()}
-                    : DepthProfiler.this.solve(segments, start, pins(nodeDepth));
+            double[] total = {Double.POSITIVE_INFINITY};
+            if (inner.isEmpty() && !nodeDepth.containsKey(from()) && !nodeDepth.containsKey(to())) {
+                chosen = new double[] {depth.getNormalM(), depth.getNormalM()};
+                total[0] = DepthProfiler.this.cost(segments, start, List.of(new double[] {0, depth.getNormalM()},
+                        new double[] {start[segments.size()], depth.getNormalM()}));
+            } else {
+                chosen = DepthProfiler.this.solve(segments, start, pins(nodeDepth), total);
+            }
+            cost = total[0];
             return chosen;
+        }
+
+        /** Ближайший к узлу node специальный участок и расстояние до него по цепочке; null — спецучастков нет. */
+        Pin nearest(String node) {
+            return inner.isEmpty() ? null : node.equals(from()) ? inner.get(0) : inner.get(inner.size() - 1);
+        }
+
+        double distance(String node, Pin pin) {
+            return node.equals(from()) ? pin.from : start[segments.size()] - pin.to;
         }
     }
 
@@ -335,7 +458,7 @@ final class DepthProfiler {
     }
 
     /** Самая дешёвая выполнимая глубина каждого отрезка pins; null — профиля с уклоном нет. */
-    private double[] solve(List<NewSegment> chain, double[] start, List<Pin> pins) {
+    private double[] solve(List<NewSegment> chain, double[] start, List<Pin> pins, double[] total) {
         int m = pins.size();
         List<double[]> values = new ArrayList<>();
         for (Pin pin : pins) {
@@ -368,9 +491,9 @@ final class DepthProfiler {
                     piece.add(new double[] {pins.get(k - 1).to, prev[p]});
                     piece.addAll(gap);
                     piece.add(new double[] {pins.get(k).from, vs[c]});
-                    double total = cost[k - 1][p] + cost(chain, start, piece) + own;
-                    if (total < cost[k][c] - 1e-6) {
-                        cost[k][c] = total;
+                    double sum = cost[k - 1][p] + cost(chain, start, piece) + own;
+                    if (sum < cost[k][c] - 1e-6) {
+                        cost[k][c] = sum;
                         back[k][c] = p;
                     }
                 }
@@ -385,6 +508,7 @@ final class DepthProfiler {
         if (best < 0) {
             return null;
         }
+        total[0] = cost[m - 1][best];
         double[] chosen = new double[m];
         for (int k = m - 1; k >= 0; k--) {
             chosen[k] = values.get(k)[best];
