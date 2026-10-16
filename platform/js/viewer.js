@@ -228,6 +228,9 @@ export class Viewer {
     if (this._lodK != null && Math.abs(this._lodK - k) < 0.02) return;
     this._lodK = k;
     for (const l of this.g.utilLines.children) l.material.opacity = 0.55 - 0.35 * k;
+    // выше 600 м трубы существующих сетей тоньше пикселя — рисуем только линии (в разы меньше треугольников)
+    this.g.utilities.visible = h < 600;
+    this.g.existing.visible = h < 1500 && this.opts.layers['n:heat_chamber'] !== false;
     const under = this.camera.position.z < 0;
     if (under !== this._under) {
       this._under = under;
