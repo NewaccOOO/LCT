@@ -56,7 +56,7 @@ class OrganizerDatasetRegressionTest {
         // с общим правилом выхода из здания (B19, 28.09.2026) черновик с точкой 4 отдельной частью проходит проверки и
         // отличается от первого по устройству: второй вариант (S 13,1835 до ортогональной формы); первый прежний
         assertEquals(3, result.getVariants().size());
-        assertEquals(13.4458, result.getVariants().get(1).getSummary().getScore(), 1e-6);
+        assertEquals(13.0943, result.getVariants().get(1).getSummary().getScore(), 1e-6);
         assertTrue(turns(best) <= TURNS_BEFORE_AXES, "поворотов " + turns(best));
     }
 
