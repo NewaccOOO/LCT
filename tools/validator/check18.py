@@ -967,9 +967,9 @@ def check_depth(inp, feats, rep):
             meet = line.intersection(g)
             pts = [Point(c) for c in shapely.get_coordinates(meet)] if not meet.is_empty else []
             for pt in pts:
-                if min(pt.distance(e) for e in ends) <= NODE_TOL and kinds.get(
+                if name.startswith("heat_network") and min(pt.distance(e) for e in ends) <= NODE_TOL and kinds.get(
                         str(p["start_node_id"] if pt.distance(ends[0]) <= NODE_TOL else p["end_node_id"])) != "technical_node":
-                    continue  # врезка или подключение в узле, а не пересечение
+                    continue  # врезка в существующую сеть в узле, а не пересечение (газ и кабель врезкой не бывают)
                 h = depth_at(pt)
                 gap = max(top - (h + h_new), h - (top + h_obj))
                 if gap < clear - DEPTH_TOL:

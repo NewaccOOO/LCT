@@ -27,6 +27,11 @@ import ru.lct.heatnet.model.VariantSummary;
  */
 public class GeoJsonStreamWriter {
     private static final int COORDINATE_SCALE = 9;
+    /**
+     * Режим с глубиной: координаты до ~0,01 мкм. Профиль режет участки на куски от 1 см, и при 9 знаках (~0,1 мм) длина
+     * куска по геометрии расходится с length на доли процента — уклон по геометрии выходил круче 0,10.
+     */
+    private static final int DEPTH_COORDINATE_SCALE = 13;
     private static final int MONEY_SCALE = 2;
     private static final int LENGTH_SCALE = 2;
     private static final int FLOW_SCALE = 3;
@@ -62,19 +67,22 @@ public class GeoJsonStreamWriter {
     }
 
     private static void variant(JsonGenerator json, Variant variant, Set<String> numericIds) throws IOException {
+        int scale = variant.getSegments().stream().anyMatch(s -> s.getDepthStart() != null)
+                ? DEPTH_COORDINATE_SCALE : COORDINATE_SCALE;
         for (NewChamber chamber : variant.getChambers()) {
-            start(json, chamber.getGeometry(), chamber.getId(), "heat_chamber", chamber.getVariantId());
+            start(json, chamber.getGeometry(), chamber.getId(), "heat_chamber", chamber.getVariantId(), scale);
             json.writeNumberField("diameter", chamber.getDiameter());
             decimal(json, "cost", chamber.getCost(), MONEY_SCALE);
             end(json);
         }
         for (NewSegment segment : variant.getSegments()) {
-            start(json, segment.getGeometry(), segment.getId(), "heat_network", segment.getVariantId());
+            start(json, segment.getGeometry(), segment.getId(), "heat_network", segment.getVariantId(), scale);
             id(json, "start_node_id", segment.getStartNodeId(), numericIds);
             id(json, "end_node_id", segment.getEndNodeId(), numericIds);
             decimal(json, "flow_tph", segment.getFlowTph(), FLOW_SCALE);
             json.writeNumberField("diameter", segment.getDiameter());
-            decimal(json, "length", segment.getLength(), LENGTH_SCALE);
+            // в режиме с глубиной длина до микрона: уклон по атрибутам length и depth_* не круче 0,10 и на коротком куске
+            decimal(json, "length", segment.getLength(), segment.getDepthStart() != null ? DEPTH_SCALE : LENGTH_SCALE);
             json.writeStringField("laying_method", segment.getLayingMethod());
             // Глубина относится к дополнительному режиму, в 2D-выходе всегда явный null.
             depth(json, "depth_start", segment.getDepthStart());
@@ -97,7 +105,7 @@ public class GeoJsonStreamWriter {
             end(json);
         }
         for (TechnicalNode node : variant.getNodes()) {
-            start(json, node.getGeometry(), node.getId(), "technical_node", node.getVariantId());
+            start(json, node.getGeometry(), node.getId(), "technical_node", node.getVariantId(), scale);
             if (node.getReason() != null) {
                 json.writeStringField("reason", node.getReason());
             }
@@ -146,12 +154,17 @@ public class GeoJsonStreamWriter {
 
     private static void start(JsonGenerator json, Geometry geometry, String id, String objectType, String variantId)
             throws IOException {
+        start(json, geometry, id, objectType, variantId, COORDINATE_SCALE);
+    }
+
+    private static void start(JsonGenerator json, Geometry geometry, String id, String objectType, String variantId,
+            int scale) throws IOException {
         json.writeStartObject();
         json.writeStringField("type", "Feature");
         if (geometry == null) {
             json.writeNullField("geometry");
         } else {
-            geometry(json, Projector.toWgs(geometry));
+            geometry(json, Projector.toWgs(geometry), scale);
         }
         json.writeObjectFieldStart("properties");
         json.writeStringField("id", id);
@@ -167,26 +180,26 @@ public class GeoJsonStreamWriter {
     }
 
     // В выходной модели только Point и LineString.
-    private static void geometry(JsonGenerator json, Geometry wgs) throws IOException {
+    private static void geometry(JsonGenerator json, Geometry wgs, int scale) throws IOException {
         json.writeObjectFieldStart("geometry");
         json.writeStringField("type", wgs.getGeometryType());
         json.writeFieldName("coordinates");
         if (wgs instanceof Point) {
-            position(json, wgs.getCoordinate());
+            position(json, wgs.getCoordinate(), scale);
         } else {
             json.writeStartArray();
             for (Coordinate coordinate : wgs.getCoordinates()) {
-                position(json, coordinate);
+                position(json, coordinate, scale);
             }
             json.writeEndArray();
         }
         json.writeEndObject();
     }
 
-    private static void position(JsonGenerator json, Coordinate coordinate) throws IOException {
+    private static void position(JsonGenerator json, Coordinate coordinate, int scale) throws IOException {
         json.writeStartArray();
-        json.writeNumber(round(coordinate.x, COORDINATE_SCALE));
-        json.writeNumber(round(coordinate.y, COORDINATE_SCALE));
+        json.writeNumber(round(coordinate.x, scale));
+        json.writeNumber(round(coordinate.y, scale));
         json.writeEndArray();
     }
 

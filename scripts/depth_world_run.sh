@@ -11,10 +11,11 @@ for s in $(seq $FROM $TO); do
   st=$(uv run --project tools python tools/validator/depth_strict.py $D/w$s.out.geojson | tail -1)
   c=$(uv run --project tools python tools/validator/check18.py --depth $D/w$s.geojson $D/w$s.out.geojson 2>&1)
   zones=$(echo "$b" | grep -o 'вынужденных зон [0-9]*' | awk '{s+=$3} END{print s}')
-  gap=$(echo "$b" | grep -o 'разрыв=[0-9.]*' | awk -F= '{s+=$2} END{printf "%.0f", s}')
-  gapi=$(echo "$bi" | grep -o 'разрыв=[0-9.]*' | awk -F= '{s+=$2} END{printf "%.0f", s}')
+  gap=$(echo "$b" | grep -o 'разрыв=-\?[0-9.]*' | awk -F= '{s+=$2} END{printf "%.0f", s}')
+  gapi=$(echo "$bi" | grep -o 'разрыв=-\?[0-9.]*' | awk -F= '{s+=$2} END{printf "%.0f", s}')
   cost=$(echo "$b" | grep -o 'C=[0-9.]*' | awk -F= '{s+=$2} END{printf "%.0f", s}')
   g=$(echo "$c" | grep -cE '^  G[0-9]')
   other=$(echo "$c" | grep -E '^  [A-F][0-9]' | sed 's/:.*//' | awk '{print $1}' | sort -u | tr '\n' ',')
-  echo "w$s зон=$zones ручн=$(grep -c ручная $D/w$s.err) C=$cost разрыв=$gap разрыв_impl=$gapi $st G=$g прочие=[$other] $(echo "$c" | tail -1)"
+  bf=$(printf '%s\n%s\n' "$b" "$bi" | grep -c "BOUND FAIL")
+  echo "w$s граница_выше=$bf зон=$zones ручн=$(grep -c ручная $D/w$s.err) C=$cost разрыв=$gap разрыв_impl=$gapi $st G=$g прочие=[$other] $(echo "$c" | tail -1)"
 done

@@ -39,11 +39,11 @@ HEAT_TOP, HEAT_CLEAR = 3.0, 0.5
 UNDER_TOP = {"road": 1.0, "tram_tracks": 1.2}
 NORMAL, MIN_H, SLOPE, K_PER_M = 3.0, 0.7, 0.10, 0.10
 ZONE = 2.0
-STEP = 0.01
+STEP = 0.0005
 TOUCH = 0.05
-SNAP = 0.1
-# --impl: граница в допущениях сервиса — уклон с запасом 0,998 и край зоны у конца участка (ближе SNAP) до конца.
-# Разрыв с ней показывает, точен ли алгоритм в своей модели; разница двух границ — цена этих допущений.
+# --impl: граница в допущении сервиса — уклон с запасом 0,998 (на округление глубин до микрона). Разрыв с ней
+# показывает, точен ли алгоритм в своей модели; разница двух границ — цена запаса. Край зоны глубже 3,0 м сервис
+# держит точно (±2 м), край мелкой зоны дотягивает до конца участка ближе 0,1 м — там Kгл = 1 и цены нет.
 IMPL = "--impl" in sys.argv
 if IMPL:
     SLOPE = 0.10 * 0.998
@@ -60,7 +60,7 @@ def lines_of(g):
 
 def load_input(path):
     data = json.load(open(path, encoding="utf-8"))
-    crossers, under = [], []  # (геометрия, верх, высота объекта, просвет), (полигон, мин. верх)
+    crossers, under = [], []  # (геометрия, верх, высота объекта, просвет, существующая сеть), (полигон, мин. верх)
     for f in data["features"]:
         p, g = f["properties"], f["geometry"]
         if g is None:
@@ -69,13 +69,13 @@ def load_input(path):
         if t == "heat_network":
             dn = int(p.get("diameter") or 0)
             h = HEIGHT.get(dn, HEIGHT[max(d for d in HEIGHT if d <= dn)] if dn >= 50 else HEIGHT[50])
-            crossers.append((transform(TO_M, shape(g)), HEAT_TOP, h, HEAT_CLEAR))
+            crossers.append((transform(TO_M, shape(g)), HEAT_TOP, h, HEAT_CLEAR, True))
         elif t == "restriction":
             rt = p.get("restriction_type")
             geom = transform(TO_M, shape(g))
             if rt in CROSS and geom.geom_type in ("LineString", "MultiLineString"):
                 for line in lines_of(geom):
-                    crossers.append((line, *CROSS[rt]))
+                    crossers.append((line, *CROSS[rt], False))
             elif rt in UNDER_TOP and geom.geom_type in ("Polygon", "MultiPolygon"):
                 under.append((geom, UNDER_TOP[rt]))
     return crossers, under
@@ -112,15 +112,15 @@ def crossing_zones(segs, tech, crossers, under):
         hits = []  # (t, [(lo, hi), ...] допустимые глубины по этому объекту)
         h_new = HEIGHT[p["diameter"]]
         for j in (tree_c.query(line) if tree_c is not None else []):
-            g, top, h_obj, clear = crossers[j]
+            g, top, h_obj, clear, is_net = crossers[j]
             meet = line.intersection(g)
             if meet.is_empty:
                 continue
             pts = [meet] if meet.geom_type == "Point" else [q for q in getattr(meet, "geoms", []) if q.geom_type == "Point"]
             for pt in pts:
                 near = [e for e in (0, 1) if pt.distance(ends[e]) <= TOUCH]
-                if near and node_ids[near[0]] not in tech:
-                    continue  # врезка или подключение в узле, а не пересечение (как G6)
+                if is_net and near and node_ids[near[0]] not in tech:
+                    continue  # врезка в существующую сеть в узле, а не пересечение (как G6)
                 hits.append((line.project(pt), [(MIN_H, top - clear - h_new), (top + h_obj + clear, 1e9)]))
         if not hits:
             continue
@@ -144,10 +144,7 @@ def crossing_zones(segs, tech, crossers, under):
                     poly, top = under[j]
                     if zone_line.intersects(poly):
                         parts = allowed(parts, top, 1e9)
-            # --impl: край зоны ближе SNAP к концу участка — до конца, как у сервиса (узел не ставится в 10 см)
-            rl = c0 if IMPL and c0 - ZONE < SNAP else ZONE
-            rr = line.length - c1 if IMPL and line.length - c1 - ZONE < SNAP else ZONE
-            zones.append((i, c0, c1, parts, max(rl, ZONE), max(rr, ZONE)))
+            zones.append((i, c0, c1, parts, ZONE, ZONE))
     return zones
 
 
@@ -264,19 +261,23 @@ def bound(segs, per_seg):
         kk = (k(p["depth_start"]) + k(p["depth_end"])) / 2
         w = p["cost"] / kk / L if L > 0 else 0.0  # c(Ду)·Kспец, руб./м
         n = max(1, int(L / STEP))
-        area = sum(max(0.0, envelope(items, L, (m + 0.5) * L / n) - NORMAL) for m in range(n)) * L / n
+        h = L / n
+        # |E'| <= 0,1, значит на шаге h E(t) >= E(середина) − 0,05·h: оценка снизу и для невыпуклой огибающей
+        area = sum(max(0.0, envelope(items, L, (m + 0.5) * h) - 0.5 * SLOPE * h - NORMAL) for m in range(n)) * h
         extra += w * K_PER_M * area
     return extra
 
 
 def main(inp, out):
     crossers, under = load_input(inp)
-    worst = 0.0
+    worst, low = 0.0, 0.0
     for vid, v in sorted(load_output(out).items(), key=lambda kv: kv[0]):
         segs, s = v["segs"], v["summary"]
         if s is None or not segs:
             continue
-        flat = sum(p["cost"] / ((k(p["depth_start"]) + k(p["depth_end"])) / 2) for p, _ in segs)
+        # C_2D той же трассы в точной длине из геометрии: c(Ду)·Kспец = стоимость / (length · Kгл) участка выхода
+        flat = sum(p["cost"] / ((k(p["depth_start"]) + k(p["depth_end"])) / 2) / p["length"] * line.length
+                   if p["length"] else 0.0 for p, line in segs)
         cost = sum(p["cost"] for p, _ in segs)
         rest = s["calculated_cost"] - cost  # камеры, врезки, штраф: от глубины не зависят
         zones = crossing_zones(segs, v["tech"], crossers, under)
@@ -284,11 +285,18 @@ def main(inp, out):
         extra = bound(segs, per_seg)
         lb = flat + rest + extra
         gap = s["calculated_cost"] - lb
-        tol = 0.005 * len(segs) + 0.01  # стоимости участков и сумма округлены до копеек
+        # округление: стоимость участка до копейки, длина в выходе и глубины до микрона (c·Kспец·0,1 на 1 мкм)
+        tol = 0.005 * len(segs) + 0.01 + sum(p["cost"] / p["length"] * 3e-6 * line.length + p["cost"] * 2e-6
+                                              for p, line in segs if p["length"])
         worst = max(worst, gap - tol)
+        if gap < -tol:
+            low = min(low, gap)
         print(f"вариант {vid}: C={s['calculated_cost']:.2f} нижняя граница={lb:.2f} (C_2D той же трассы {flat + rest:.2f}"
               f" + вынужденная глубина {extra:.2f}, вынужденных зон {len(forced)} из {len(zones)}) разрыв={gap:.2f} руб. "
               f"(ΔS={0.7 * gap / 25e6:.6f}, {100 * gap / lb:.5f} %)")
+    if low < 0:
+        # граница выше стоимости решения: граница не нижняя или выход нарушает правила — это провал проверки
+        print(f"BOUND FAIL {low:.2f} руб.: граница выше стоимости")
     print("DEPTH OPTIMAL" if worst <= 0 else f"DEPTH GAP {worst:.2f} руб. сверх округления")
 
 
