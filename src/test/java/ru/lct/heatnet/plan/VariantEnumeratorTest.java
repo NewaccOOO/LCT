@@ -276,6 +276,24 @@ class VariantEnumeratorTest {
         assertEquals(Set.of(Set.of("a", "b"), Set.of("c", "d", "e")), ids);
     }
 
+    @Test
+    void pointLeavesByNextSideWhenNearSideLeadsNowhere() {
+        Geometry building = PlanFixture.rect(140, 40, 180, 80);
+        PlanFixture fixture = PlanFixture.trunk();
+        fixture.oks.add(new FutureOks("o-1", building, 5, 1.0));
+        fixture.connections.add(new ConnectionPoint("cp-o-1", point(160, 78), "o-1"));
+        fixture.existing.add(new ExistingOks("b-1", building));
+        fixture.restriction("rw-1", GEOMETRY.createMultiPolygon(new Polygon[] {(Polygon) PlanFixture.rect(130, 50, 142, 110),
+                (Polygon) PlanFixture.rect(130, 100, 190, 110), (Polygon) PlanFixture.rect(178, 50, 190, 110)}), "railway");
+
+        Variant best = new VariantEnumerator(fixture.input(), rules).run().getVariants().get(0);
+
+        assertTrue(best.getSummary().getUnconnectedOksIds().isEmpty(), "без сети: " + best.getSummary().getUnconnectedOksIds());
+        NewSegment last = best.getSegments().stream().filter(s -> s.getEndNodeId().equals("cp-o-1")).findFirst().orElseThrow();
+        Coordinate[] c = last.getGeometry().getCoordinates();
+        assertTrue(c[c.length - 2].y < 40, "финальный участок через южную сторону: " + last.getGeometry());
+    }
+
     /** Как у сервиса и check18 (разд. 6): у одного из двух не больше 90 % длины меньшего в полосе 10 м от другого. */
     private static boolean differ(Variant a, Variant b) {
         Geometry lineA = lines(a);

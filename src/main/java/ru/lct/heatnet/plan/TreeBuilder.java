@@ -84,6 +84,7 @@ final class TreeBuilder {
     private static final double PORTAL_MAX_M = 30;
     /** Сколько точек границы пробуется как начало финального участка: ближайшая, затем ближайшие точки сторон. */
     private static final int PORTAL_TRIES = 8;
+    private static final double SIDE_APART_M = 2.0;
     /**
      * Шаг точек входа вдоль сторон контура ({@link #entries}), точек выхода на луче ({@link #entered}) и проверки
      * подхода финального участка к своему зданию ({@link #recedes}). В зоне отступа участок не подходит к зданию
@@ -235,7 +236,7 @@ final class TreeBuilder {
      */
     Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
             double chamberPenaltyM, double tieInPenaltyM, boolean fromPortalDirection, Graphs graphs) {
-        return build(router, dn, area, tie, connections, chamberPenaltyM, tieInPenaltyM, fromPortalDirection, graphs, false);
+        return build(router, dn, area, tie, connections, chamberPenaltyM, tieInPenaltyM, fromPortalDirection, graphs, false, false);
     }
 
     /**
@@ -244,9 +245,11 @@ final class TreeBuilder {
      * помечается {@link Tree#turnStuck}.
      */
     Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
-            double chamberPenaltyM, double tieInPenaltyM, boolean fromPortalDirection, Graphs graphs, boolean link) {
+            double chamberPenaltyM, double tieInPenaltyM, boolean fromPortalDirection, Graphs graphs, boolean link,
+            boolean anySide) {
         Run run = new Run(router, dn, area, tie, chamberPenaltyM, tieInPenaltyM);
         run.link = link;
+        run.anySide = anySide;
         run.fromPortalDirection = fromPortalDirection;
         run.graphs = graphs;
         return run.build(connections);
@@ -790,6 +793,7 @@ final class TreeBuilder {
 
         /** Звено после выхода разрешено, см. {@link #build}; turned — на шаге его не хватило какой-то точке. */
         boolean link;
+        boolean anySide;
         boolean turned;
 
         Tree build(List<ConnectionPoint> connections) {
@@ -819,7 +823,7 @@ final class TreeBuilder {
                 if (best == null) {
                     // выход через другую сторону здания допустим только при закрытой ближней (п. 2.2), поэтому точку,
                     // от выхода которой нет ветки к этому дереву, не переводят на дальнюю сторону: она уходит из дерева
-                    // и подключается отдельно
+                    // и подключается отдельно; дальнюю сторону пробует только последняя попытка для одиночной точки
                     tree.unconnected.addAll(remaining);
                     break;
                 }
@@ -867,6 +871,10 @@ final class TreeBuilder {
          * своё здание или его зону отступа, пробуются ближайшие точки других сторон полигона. NO_EXIT — выхода нет.
          */
         Exit exit(ConnectionPoint connection, ExistingOks building, ObstacleSet zones, Router branchRouter) {
+            return exit(connection, building, zones, branchRouter, 0);
+        }
+
+        Exit exit(ConnectionPoint connection, ExistingOks building, ObstacleSet zones, Router branchRouter, int after) {
             Coordinate cp = connection.getGeometry().getCoordinate();
             // сначала внешние контуры: ближайшая граница двора (дырки) ведёт внутрь зоны отступа, выхода там нет
             List<Coordinate> anchors = anchors(building.getGeometry(), cp);
@@ -882,6 +890,9 @@ final class TreeBuilder {
                 last = anchor;
                 if (tries++ >= PORTAL_TRIES) {
                     break;
+                }
+                if (tries <= after) {
+                    continue;
                 }
                 double dx = anchor.x - cp.x;
                 double dy = anchor.y - cp.y;
@@ -921,6 +932,9 @@ final class TreeBuilder {
                     id -> entries(building.getGeometry(), cp, Double.POSITIVE_INFINITY));
             List<Coordinate[]> rings = rings(building.getGeometry());
             for (int i = 0; i < entries.size(); i++) {
+                if (PORTAL_TRIES + 1 + i <= after) {
+                    continue;
+                }
                 double[] window = window(zones, building, rings, cp, entries.get(i));
                 if (window.length == 0) {
                     continue;
@@ -1005,6 +1019,27 @@ final class TreeBuilder {
             if (portal == NO_EXIT) {
                 return null;
             }
+            Attach attach = attach(connection, targets, fromPortalDirection, portal);
+            if (attach != null || !anySide || portal == null) {
+                return attach;
+            }
+            ExistingOks building = buildingByConnection.get(connection.getId());
+            List<Coordinate> tried = new ArrayList<>(List.of(portal.point));
+            for (Exit next = exit(connection, building, obstacles, router, portal.anchor);
+                    next != NO_EXIT && attach == null && tried.size() <= PORTAL_TRIES;
+                    next = exit(connection, building, obstacles, router, next.anchor)) {
+                Coordinate at = next.point;
+                if (tried.stream().anyMatch(c -> c.distance(at) < SIDE_APART_M)) {
+                    continue;
+                }
+                tried.add(at);
+                log.debug("portal: {} next side, anchor {}", connection.getId(), next.anchor);
+                attach = attach(connection, targets, fromPortalDirection, next);
+            }
+            return attach;
+        }
+
+        Attach attach(ConnectionPoint connection, List<Point> targets, boolean fromPortalDirection, Exit portal) {
             Router branchRouter = portal == null ? router : portal.router;
             Point start = portal == null ? connection.getGeometry() : factory.createPoint(portal.point);
             // маршруты со срезанными углами у вершин зон, см. Router#cutPass

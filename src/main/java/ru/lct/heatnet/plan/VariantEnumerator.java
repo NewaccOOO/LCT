@@ -2074,6 +2074,11 @@ public final class VariantEnumerator {
                     options.addAll(options(region, blockDn, wide, subset, false, scanned, false, slide));
                 }
             }
+            if (incomplete(options)) {
+                Envelope wide = district ? region.area : region.wideArea;
+                options.addAll(options(region, blockDn, wide, subset, false, candidates(points, flow, blockDn), false,
+                        slide, true));
+            }
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
         List<Option> plain = plain(options);
@@ -2187,6 +2192,11 @@ public final class VariantEnumerator {
     /** {@code slide} — переносить врезку к стволу, см. {@link #slid} и {@link #rerooted}. */
     private List<Option> options(Region region, int dn, Envelope area, List<ConnectionPoint> subset, boolean verify,
             List<TieCandidate> candidates, boolean fromPortalDirection, boolean slide) {
+        return options(region, dn, area, subset, verify, candidates, fromPortalDirection, slide, false);
+    }
+
+    private List<Option> options(Region region, int dn, Envelope area, List<ConnectionPoint> subset, boolean verify,
+            List<TieCandidate> candidates, boolean fromPortalDirection, boolean slide, boolean anySide) {
         String label = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(","));
         // метр ветки стоит в S и как стоимость трубы, и как длина: разовый расход переводится в метры по обоим
         double metreRub = rules.diameter(dn).getNewRubM() + rules.lengthWorthRub();
@@ -2200,7 +2210,7 @@ public final class VariantEnumerator {
             // участка. Если сборка такое дерево отвергла, заново по графу дерева оно не строится: там выход ушёл бы
             // на дальнюю сторону при открытой ближней (п. 2.2)
             Tree tree = builder.build(router, dn, area, candidate, subset, rules.chamberCost(dn) / metreRub,
-                    rules.tieInCost() / metreRub, fromPortalDirection, graphs, link);
+                    rules.tieInCost() / metreRub, fromPortalDirection, graphs, link, anySide);
             if (tree.edges.isEmpty()) {
                 log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
                 treeless.add(candidate);
