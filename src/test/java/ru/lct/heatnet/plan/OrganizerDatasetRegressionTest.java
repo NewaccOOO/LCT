@@ -40,7 +40,7 @@ import ru.lct.heatnet.rules.Rules;
  * Менять константу только при намеренной смене качества.
  */
 class OrganizerDatasetRegressionTest {
-    private static final double ORGANIZER_RANK1_SCORE = 13.1522;
+    private static final double ORGANIZER_RANK1_SCORE = 13.1574;
     private static final int TURNS_BEFORE_AXES = 26;
 
     @Test
@@ -55,7 +55,7 @@ class OrganizerDatasetRegressionTest {
         // с общим правилом выхода из здания (B19, 28.09.2026) черновик с точкой 4 отдельной частью проходит проверки и
         // отличается от первого по устройству: второй вариант (S 13,1835 до ортогональной формы); первый прежний
         assertEquals(3, result.getVariants().size());
-        assertEquals(13.4401, result.getVariants().get(1).getSummary().getScore(), 1e-6);
+        assertEquals(13.4462, result.getVariants().get(1).getSummary().getScore(), 1e-6);
         assertTrue(turns(best) <= TURNS_BEFORE_AXES, "поворотов " + turns(best));
     }
 

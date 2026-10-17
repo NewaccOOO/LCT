@@ -161,6 +161,33 @@ class RouterTest {
     }
 
     @Test
+    void sharpenBendsReplacePairOfSixtyToHundredTwentyWithLongerVertexUpToFiveMeters() {
+        double clearance = rules.restriction("park").clearanceM(DN) + halfWidth;
+        Router router = router(List.of(new Restriction("park-1", rect(-4, -20, 4, 20 - clearance - 0.3), "park")), List.of());
+        List<Coordinate> path = new ArrayList<>(List.of(new Coordinate(-30, 0), new Coordinate(-6, 20),
+                new Coordinate(6, 20), new Coordinate(30, 0)));
+        double before = factory.createLineString(path.toArray(new Coordinate[0])).getLength();
+
+        assertTrue(router.sharpen(router.obstacles(), path, Set.of(), null, null, null, List.of(), true));
+
+        double after = factory.createLineString(path.toArray(new Coordinate[0])).getLength();
+        assertEquals(3, path.size(), path.toString());
+        assertTrue(after > before && after <= before + 5, before + " → " + after);
+    }
+
+    @Test
+    void sharpenBendsKeepShallowPairWhenOneVertexIsLonger() {
+        double clearance = rules.restriction("park").clearanceM(DN) + halfWidth;
+        Router router = router(List.of(new Restriction("park-1", rect(-4, -20, 4, 20 - clearance - 0.3), "park")), List.of());
+        List<Coordinate> path = new ArrayList<>(List.of(new Coordinate(-60, 0), new Coordinate(-6, 20),
+                new Coordinate(6, 20), new Coordinate(60, 0)));
+
+        router.sharpen(router.obstacles(), path, Set.of(), null, null, null, List.of(), true);
+
+        assertEquals(4, path.size(), path.toString());
+    }
+
+    @Test
     void sharpenBendsReplaceTwoTurnsOnLongLinkWithOneVertex() {
         // (Г): два поворота по −18,4° над узким парком на звене 20 м; ни одну вершину не убрать, а одна вершина над
         // парком с запасом короче прежнего пути

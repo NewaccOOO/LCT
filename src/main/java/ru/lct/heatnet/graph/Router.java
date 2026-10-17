@@ -62,6 +62,10 @@ public final class Router {
     private static final double BEND_DESCENT_M = 0.002;
     private static final int BEND_DIRECTIONS = 16;
     private static final int BEND_SCAN_LIMIT = 400;
+    private static final double BEND_EXTRA_M = 5;
+    private static final double PAIR_MIN_DEG = 60;
+    private static final double PAIR_MAX_DEG = 120;
+    private static final double PAIR_LINK_M = 30;
     /** Вершина ближе этого к границе специальной части стоит на ней, см. {@link #drop}. */
     private static final double SPAN_EPS_M = 1e-3;
     private static final double CROSS_END_M = 0.01;
@@ -843,7 +847,9 @@ public final class Router {
      * соединить прямой, см. {@link #drop}; (В) так же убираются две вершины со звеном короче SHORT_LINK_M между ними;
      * (Б) повороты подряд в одну сторону со звеньями короче SHORT_LINK_M заменяются наименьшим числом поворотов в
      * пересечениях продолженных отрезков, см. {@link #sharpenWindow}; (Г) у готовых вариантов два соседних поворота в
-     * одну сторону при звене любой длины заменяет одна вершина, если путь не длиннее, см. {@link #bend}. Замена
+     * одну сторону при звене любой длины заменяет одна вершина, если путь не длиннее, а у пары с суммой поворотов
+     * от PAIR_MIN_DEG до PAIR_MAX_DEG и звеном короче PAIR_LINK_M — длиннее не больше чем на BEND_EXTRA_M, см.
+     * {@link #bend}. Замена
      * проверяется по зонам zones (Ду графа или ребра дерева) как хорда {@link #cutPass}: область, где взяты
      * препятствия, отступы с запасом CUT_MARGIN_M, без спецпрохода, не ближе CUT_APART_M к apart (отрезкам других
      * рёбер дерева) и к своей ломаной, повороты до MAX_TURN_DEG, звенья от CUT_PIECE_M. Вершины убираются раньше
@@ -880,7 +886,8 @@ public final class Router {
             if (!drop(zones, coords, 1, keep, spans, ignored, others, before, after)
                     && !drop(zones, coords, 2, keep, spans, ignored, others, before, after)
                     && !merge(zones, coords, held(coords, keep, spans), spans, ignored, others)
-                    && !(bends && bend(zones, coords, held(coords, keep, spans), spans, ignored, others, before, after))) {
+                    && !(bends && bend(zones, coords, held(coords, keep, spans), spans, ignored, others, before, after,
+                            BEND_EXTRA_M))) {
                 break;
             }
             changed = true;
@@ -1232,17 +1239,18 @@ public final class Router {
     }
 
     /**
-     * (Г) Два соседних поворота в одну сторону при звене любой длины заменяет одна вершина в лучшей точке, если путь
-     * с ней не длиннее прежнего (толкование п. 5): такой двойной поворот ничем не обоснован. Вершина — пересечение
-     * лучей из соседей пары, которые поворачиваются от прежних отрезков к хорде между соседями: путь от этого только
-     * короче, а звено луча, который стоит на месте, лишь укорачивается от своего конца, и его проверки
+     * (Г) Два соседних поворота в одну сторону при звене любой длины заменяет одна вершина в лучшей точке, если путь с
+     * ней не длиннее прежнего, а у пары с суммой поворотов от PAIR_MIN_DEG до PAIR_MAX_DEG и звеном короче PAIR_LINK_M
+     * — длиннее не больше чем на extraM (толкование п. 5): такой двойной поворот ничем не обоснован. Вершина —
+     * пересечение лучей из соседей пары, которые поворачиваются от прежних отрезков к хорде между соседями: путь от
+     * этого только короче, а звено луча, который стоит на месте, лишь укорачивается от своего конца, и его проверки
      * {@link #removalFits} не ломаются. Лучи поворачиваются по очереди до края допустимого, пока поворот растёт;
-     * поворот в новой вершине — сумма пары без поворотов лучей, он проверяется в конце и не меньше MIN_TURN_DEG.
-     * Сосед пары — вершина или граница специальной части, как у {@link #drop}. Удерживаемые вершины не заменяются,
-     * пары у специальных частей не трогаются. true — coords заменены.
+     * поворот в новой вершине — сумма пары без поворотов лучей, он проверяется в конце и не меньше MIN_TURN_DEG. Сосед
+     * пары — вершина или граница специальной части, как у {@link #drop}. Удерживаемые вершины не заменяются, пары у
+     * специальных частей не трогаются. true — coords заменены.
      */
     private boolean bend(ObstacleSet zones, List<Coordinate> coords, boolean[] held, List<SpecialSpan> spans,
-            Set<String> ignored, List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
+            Set<String> ignored, List<LineSegment> apart, Coordinate before, List<Coordinate> after, double extraM) {
         int n = coords.size();
         double[] turns = turns(coords);
         double[] at = new double[n];
@@ -1283,8 +1291,10 @@ public final class Router {
             // сосед внутри участка остаётся поворотом от MIN_TURN_DEG; у узла и границы специальной части излом любой
             boolean[] kept = {!start && j >= 2 && !overlapsSpan(spans, from - SPAN_EPS_M, from + SPAN_EPS_M),
                 !end && j + 3 < n && !overlapsSpan(spans, to - SPAN_EPS_M, to + SPAN_EPS_M)};
-            if (bent(zones, shape, x, coords.get(j), coords.get(j + 1), kept, Math.abs(turns[j] + turns[j + 1]),
-                    to - from, ignored, apart, before, after)) {
+            double total = Math.abs(turns[j] + turns[j + 1]);
+            boolean pair = total >= PAIR_MIN_DEG && total <= PAIR_MAX_DEG && at[j + 1] - at[j] < PAIR_LINK_M;
+            if (bent(zones, shape, x, coords.get(j), coords.get(j + 1), kept, total, to - from + (pair ? extraM : 0),
+                    ignored, apart, before, after)) {
                 coords.clear();
                 coords.addAll(shape);
                 return true;
@@ -2116,7 +2126,7 @@ public final class Router {
                 return true;
             }
         }
-        return bend(zones, probe, held, spans, ignored, apart, before, after);
+        return bend(zones, probe, held, spans, ignored, apart, before, after, 0);
     }
 
     /** Отладка {@link #square} (свойство heatnet.square.debug): почему участок не лёг по осям. */

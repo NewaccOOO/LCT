@@ -3816,11 +3816,12 @@ public final class VariantEnumerator {
 
     /**
      * Деревья варианта, где два соседних поворота в одну сторону на ребре при звене любой длины заменяет одна вершина
-     * в лучшей точке, если путь не длиннее (толкование п. 5, {@link Router#sharpen} шаг Г). Рёбра с такими парами
+     * в лучшей точке, если путь не длиннее, а у пары от 60° до 120° со звеном короче 30 м — длиннее не больше чем на
+     * 5 м (толкование п. 5, {@link Router#sharpen} шаг Г). Рёбра с такими парами
      * доводятся по зонам своего Ду с поворотами в камерах на пути точки ({@link #sharpened}), сначала все рёбра
      * дерева, а если так не выходит, по одному. Ребро, найденное повтором поиска на графе фактического Ду, у которого
-     * граф есть только в широкой области, доводится по ней. Замена берётся, если S узла врезки не растёт, Ду рёбер не
-     * растут, а дерево не касается других.
+     * граф есть только в широкой области, доводится по ней. Замена берётся, если S узла врезки растёт не больше, чем
+     * стоит добавленная длина рёбер по их Ду, Ду рёбер не растут, а дерево не касается других.
      */
     private List<Tree> bent(List<Tree> trees) {
         long started = System.nanoTime();
@@ -3898,7 +3899,15 @@ public final class VariantEnumerator {
         for (Tree other : unit) {
             attempt.add(other == tree ? changed : other);
         }
-        return compatible(changed, others) && unitScore(attempt) <= unitScore(unit) + UNKINK_EPS
+        double addedRub = 0;
+        double addedM = 0;
+        for (Map.Entry<Integer, LineString> entry : sharp.entrySet()) {
+            double added = Math.max(0, entry.getValue().getLength() - tree.edges.get(entry.getKey()).line.getLength());
+            addedRub += added * rules.diameter(dnByEdge.get(tree.edges.get(entry.getKey()))).getNewRubM();
+            addedM += added;
+        }
+        return compatible(changed, others)
+                && unitScore(attempt) <= unitScore(unit) + rules.score(addedRub, addedM) + UNKINK_EPS
                 && !worse(tree, unit, changed, attempt) ? changed : null;
     }
 
