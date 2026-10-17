@@ -66,13 +66,13 @@ class ExactSteinerTest {
                 flows[t] = 5 + random.nextDouble() * 50;
             }
             int root = k;
-            double opt = new ExactSteiner(w, leaf, leafCost, flows, RATE, CHAMBER, root, Double.POSITIVE_INFINITY, false)
+            double opt = new ExactSteiner(w, leaf, leafCost, flows, RATE, CHAMBER, root, Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, false)
                     .tree(root, 3, 0.05).cost;
             for (double factor : new double[] {0.98, 1.0 + 1e-6, 1.01, 1.2}) {
                 double bound = opt * factor;
-                ExactSteiner.Skeleton full = new ExactSteiner(w, leaf, leafCost, flows, RATE, CHAMBER, root, bound, false)
+                ExactSteiner.Skeleton full = new ExactSteiner(w, leaf, leafCost, flows, RATE, CHAMBER, root, bound, bound, false)
                         .tree(root, 3, 0.05);
-                ExactSteiner.Skeleton pruned = new ExactSteiner(w, leaf, leafCost, flows, RATE, CHAMBER, root, bound, true)
+                ExactSteiner.Skeleton pruned = new ExactSteiner(w, leaf, leafCost, flows, RATE, CHAMBER, root, bound, bound, true)
                         .tree(root, 3, 0.05);
                 String at = "набор " + trial + " граница ×" + factor;
                 if (bound >= opt) {
@@ -90,6 +90,58 @@ class ExactSteinerTest {
                 }
             }
         }
+    }
+
+    @Test
+    void trialBoundKeepsSkeletonOnNonMetricWeights() {
+        // веса маршрутов не метрика: прямой вес бывает дороже пути через места, и прежнее правило r·w(v, root)
+        // не нижняя оценка. С пробной границей ответ должен совпасть с прежним счётом с прежней границей
+        Random random = new Random(5);
+        int checked = 0;
+        for (int trial = 0; trial < 80; trial++) {
+            int k = 6;
+            int n = 24;
+            double[][] w = new double[n][n];
+            for (int i = 0; i < n; i++) {
+                for (int j = 0; j < i; j++) {
+                    w[i][j] = w[j][i] = 10 + random.nextDouble() * (random.nextInt(4) == 0 ? 600 : 150);
+                }
+            }
+            int[] leaf = {0, 1, 2, 3, 4, 5};
+            double[] leafCost = new double[k];
+            double[] flows = new double[k];
+            for (int t = 0; t < k; t++) {
+                leafCost[t] = random.nextDouble() * 0.05;
+                flows[t] = 5 + random.nextDouble() * 50;
+            }
+            int root = k;
+            double loose = new ExactSteiner(w, leaf, leafCost, flows, RATE, CHAMBER, root, Double.POSITIVE_INFINITY,
+                    Double.POSITIVE_INFINITY, false).tree(root, 3, 0.05).cost;
+            double bound = loose * 1.02;
+            ExactSteiner.Skeleton full = new ExactSteiner(w, leaf, leafCost, flows, RATE, CHAMBER, root, bound, bound, false)
+                    .tree(root, 3, 0.05);
+            if (full == null) {
+                continue;
+            }
+            checked++;
+            for (double factor : new double[] {0.97, 0.99, 1.0, 1.005, 1.01}) {
+                double guess = full.cost * factor;
+                String at = "набор " + trial + " пробная ×" + factor;
+                ExactSteiner.Skeleton pruned = new ExactSteiner(w, leaf, leafCost, flows, RATE, CHAMBER, root, bound, guess, true)
+                        .tree(root, 3, 0.05);
+                if (full.cost <= guess) {
+                    assertNotNull(pruned, at);
+                    assertTrue(pruned.cost <= guess, at);
+                }
+                if (pruned != null && pruned.cost <= guess) {
+                    assertEquals(full.cost, pruned.cost, 0, at);
+                    assertEquals(full.junctions, pruned.junctions, at);
+                    assertEquals(full.parents, pruned.parents, at);
+                    assertEquals(java.util.Arrays.toString(full.leafParent), java.util.Arrays.toString(pruned.leafParent), at);
+                }
+            }
+        }
+        assertTrue(checked >= 25, "наборов с деревом " + checked);
     }
 
     private static double brute(double[][] w, double[] flows, int root) {

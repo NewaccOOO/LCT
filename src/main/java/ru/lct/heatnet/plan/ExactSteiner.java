@@ -40,6 +40,7 @@ final class ExactSteiner {
     // argmin те же. Иначе прежний счёт отдаёт дерево у врезки из неотсечённых m2 — его повторяют без отсечения (prune)
     private static final boolean LOWER_BOUND = Boolean.parseBoolean(System.getProperty("heatnet.exact.lb", "true"));
     private final float[] remaining;
+    private final double trial;
     // ponytail: оценка по месту v: путь v→врезка несёт расход d (не меньше r_d·cd(v, root)), а каждая непокрытая
     // точка t доходит до этого пути (не меньше (cd(t,v) + cd(t,root) − cd(v,root)) / 2); detour[t][v] — эта разность
     private static final boolean PLACE_BOUND = Boolean.parseBoolean(System.getProperty("heatnet.exact.placeLb", "true"));
@@ -50,11 +51,11 @@ final class ExactSteiner {
 
     ExactSteiner(double[][] weight, int[] leaf, double[] leafCost, double[] flows, DoubleUnaryOperator rate,
             DoubleUnaryOperator chamber) {
-        this(weight, leaf, leafCost, flows, rate, chamber, -1, Double.POSITIVE_INFINITY, false);
+        this(weight, leaf, leafCost, flows, rate, chamber, -1, Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, false);
     }
 
     ExactSteiner(double[][] weight, int[] leaf, double[] leafCost, double[] flows, DoubleUnaryOperator rate,
-            DoubleUnaryOperator chamber, int root, double bound, boolean prune) {
+            DoubleUnaryOperator chamber, int root, double bound, double trial, boolean prune) {
         this.k = leaf.length;
         this.n = weight.length;
         // места по удалённости от врезки: живые места подмножества идут почти одним отрезком, и слияния идут только
@@ -92,7 +93,11 @@ final class ExactSteiner {
             rest[d] = (float) (leaves - inside);
         }
         remaining = new float[full];
-        if (prune && LOWER_BOUND && root >= 0 && Double.isFinite(bound)) {
+        // прежнее правило r·w(v, root) > bound (веса маршрутов не метрика, но так считал и прежний счёт) остаётся с
+        // прежней границей, а пробная граница trial сравнивается только с оценками по метрическому замыканию: тогда
+        // оставшиеся состояния — часть прежних, и прежний ответ, если он не дороже trial, среди них
+        this.trial = prune ? trial : Double.POSITIVE_INFINITY;
+        if (prune && LOWER_BOUND && root >= 0 && Double.isFinite(trial)) {
             lowerBounds(leaf, flows, rate, root);
         }
         double[] flow = new double[full];
@@ -114,7 +119,7 @@ final class ExactSteiner {
             float[] tv = new float[n];
             Arrays.fill(tv, INF);
             tv[leaf[t]] = (float) leafCost[t];
-            e[1 << t] = extend(tv, 1 << t, this.rate[1 << t], root, bound - rest[1 << t], remaining[1 << t]);
+            e[1 << t] = extend(tv, 1 << t, this.rate[1 << t], root, bound - rest[1 << t], this.trial - rest[1 << t], remaining[1 << t]);
             span(e[1 << t], 1 << t, eLo, eHi);
         }
         int rootAt = root;
@@ -140,7 +145,7 @@ final class ExactSteiner {
                     tv[v] = Math.min(merged[0][v], merged[1][v]) + this.chamber[d];
                 }
                 long t1 = System.nanoTime();
-                e[d] = extend(tv, d, this.rate[d], rootAt, bound - rest[d], remaining[d]);
+                e[d] = extend(tv, d, this.rate[d], rootAt, bound - rest[d], this.trial - rest[d], remaining[d]);
                 span(e[d], d, eLo, eHi);
                 extendNanos.addAndGet(System.nanoTime() - t1);
                 liveCount.addAndGet(live(e[d]));
@@ -414,10 +419,12 @@ final class ExactSteiner {
         return count;
     }
 
-    private float[] extend(float[] tv, int d, float r, int root, double bound, float lower) {
+    private float[] extend(float[] tv, int d, float r, int root, double bound, double trial, float lower) {
+        float[] toRootRate = new float[n];
         float[] lowerAt = new float[n];
         for (int v = 0; v < n; v++) {
-            float at = root >= 0 ? Math.max(r * weight[v][root], lower) : lower;
+            toRootRate[v] = root >= 0 ? r * weight[v][root] : 0;
+            float at = lower;
             if (detour != null) {
                 int[] order = byDetour[v];
                 int q = 0;
@@ -430,7 +437,7 @@ final class ExactSteiner {
         }
         if (root >= 0) {
             for (int u = 0; u < n; u++) {
-                if (tv[u] + lowerAt[u] > bound) {
+                if (tv[u] + toRootRate[u] > bound || tv[u] + lowerAt[u] > trial) {
                     tv[u] = INF;
                 }
             }
@@ -459,10 +466,10 @@ final class ExactSteiner {
         int last = n - 1;
         for (int q = 0; q < count; q += 8) {
             float t = value[q];
-            while (done <= last && (out[done] <= t || toRoot != null && t + lowerAt[done] > bound)) {
+            while (done <= last && (out[done] <= t || toRoot != null && (t + toRootRate[done] > bound || t + lowerAt[done] > trial))) {
                 done++;
             }
-            while (last >= done && (out[last] <= t || toRoot != null && t + lowerAt[last] > bound)) {
+            while (last >= done && (out[last] <= t || toRoot != null && (t + toRootRate[last] > bound || t + lowerAt[last] > trial))) {
                 last--;
             }
             if (done > last) {
@@ -502,7 +509,7 @@ final class ExactSteiner {
         }
         if (root >= 0) {
             for (int v = 0; v < n; v++) {
-                if (out[v] + lowerAt[v] > bound) {
+                if (out[v] + toRootRate[v] > bound || out[v] + lowerAt[v] > trial) {
                     out[v] = INF;
                 }
             }
