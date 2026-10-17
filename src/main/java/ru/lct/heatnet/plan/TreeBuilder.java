@@ -656,11 +656,16 @@ final class TreeBuilder {
             return null;
         }
         Coordinate nearest = null;
+        double nearestM = Double.POSITIVE_INFINITY;
         for (int g = 0; g < polygon.getNumGeometries(); g++) {
             Coordinate[] ring = ((org.locationtech.jts.geom.Polygon) polygon.getGeometryN(g)).getExteriorRing().getCoordinates();
             for (int k = 0; k + 1 < ring.length; k++) {
                 Coordinate q = new LineSegment(ring[k], ring[k + 1]).closestPoint(cp);
-                nearest = nearest == null || q.distance(cp) < nearest.distance(cp) ? q : nearest;
+                double m = q.distance(cp);
+                if (nearest == null || m < nearestM) {
+                    nearest = q;
+                    nearestM = m;
+                }
             }
         }
         Coordinate entry = new Coordinate(cp.x + ux * out[0], cp.y + uy * out[0]);

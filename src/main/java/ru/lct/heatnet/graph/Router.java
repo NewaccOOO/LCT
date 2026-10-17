@@ -2403,6 +2403,9 @@ public final class Router {
         Arrays.fill(pred, -1);
         Map<Long, Boolean> link = new HashMap<>();
         java.util.PriorityQueue<double[]> queue = new java.util.PriorityQueue<>(Comparator.comparingDouble(e -> e[0]));
+        // длина звена сетки: состояние — узел и направление прихода, и звено из узла релаксируется до 4 раз
+        double[] lengths = new double[states];
+        Arrays.fill(lengths, Double.NaN);
         int[] du = {1, 0, -1, 0};
         int[] dw = {0, 1, 0, -1};
         for (int d = 0; d < 4; d++) {
@@ -2443,7 +2446,7 @@ public final class Router {
                 if (next < 0 || !open(zones, node[at], node[next], at, e, ignored, far, fan, p, q, link)) {
                     continue;
                 }
-                double fresh = cost[state] + node[at].distance(node[next]) + (e == d ? 0 : turnM);
+                double fresh = cost[state] + length(lengths, node, at, e, next) + (e == d ? 0 : turnM);
                 int to = 4 * next + e;
                 if (fresh < cost[to]) {
                     cost[to] = fresh;
@@ -2525,6 +2528,15 @@ public final class Router {
             }
         }
         return kept.stream().mapToDouble(Double::doubleValue).distinct().sorted().toArray();
+    }
+
+    private static double length(double[] lengths, Coordinate[] node, int at, int e, int next) {
+        double length = lengths[4 * at + e];
+        if (Double.isNaN(length)) {
+            length = node[at].distance(node[next]);
+            lengths[4 * at + e] = length;
+        }
+        return length;
     }
 
     /** Соседний узел сетки от at в направлении d или -1 за краем. */
