@@ -286,7 +286,7 @@ def main(inp, out):
         lb = flat + rest + extra
         gap = s["calculated_cost"] - lb
         # округление: стоимость участка до копейки, длина в выходе и глубины до микрона (c·Kспец·0,1 на 1 мкм)
-        tol = 0.005 * len(segs) + 0.01 + sum(p["cost"] / p["length"] * 3e-6 * line.length + p["cost"] * 2e-6
+        tol = 0.005 * len(segs) + 0.01 + sum(p["cost"] / p["length"] * 1e-6 + p["cost"] * 2e-7
                                               for p, line in segs if p["length"])
         worst = max(worst, gap - tol)
         if gap < -tol:

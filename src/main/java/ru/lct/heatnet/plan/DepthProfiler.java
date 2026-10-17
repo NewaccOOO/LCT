@@ -49,6 +49,8 @@ final class DepthProfiler {
     /** Кандидатов глубины узла в move(): пара узлов — их квадрат, на каждое сочетание решаются все цепочки узлов. */
     private static final int MOVE_CANDIDATES = 24;
     private static final double SNAP_M = 0.1;
+    /** Знаков градуса в координатах 2D-выхода (GeoJsonStreamWriter.COORDINATE_SCALE). */
+    private static final int WGS_SCALE = 9;
     /** Кратчайший кусок у точного края зоны: на 1 см округление координат и глубин меняет уклон меньше чем на 0,02 %. */
     private static final double MIN_PIECE_M = 0.01;
     /** Зазор между отрезками постоянной глубины короче этого связывается прямой, без излома. */
@@ -146,6 +148,7 @@ final class DepthProfiler {
         if (variant.getSegments().isEmpty()) {
             return variant;
         }
+        variant = written(variant);
         Set<String> technical = new HashSet<>();
         variant.getNodes().forEach(node -> technical.add(node.getId()));
         Map<String, NewSegment> byStart = new HashMap<>();
@@ -444,6 +447,14 @@ final class DepthProfiler {
                 }
                 if (Math.abs(to - b) < SNAP_M) {
                     to = Math.max(to, b);
+                }
+            }
+            // остаток короче 1 см — до 1 см: кусок в миллиметры уклоном не проверить
+            if (to - from < MIN_PIECE_M) {
+                if (node.equals(from())) {
+                    to = Math.min(total, from + MIN_PIECE_M);
+                } else {
+                    from = Math.max(0, to - MIN_PIECE_M);
                 }
             }
             Range range = range(from, to, group);
@@ -1058,6 +1069,41 @@ final class DepthProfiler {
             result.add(new DepthCrossing(c.type, over >= under ? "over" : "under", mm(Math.max(over, under))));
         }
         return result.isEmpty() ? null : result;
+    }
+
+    /**
+     * Вариант на сетке выхода: вершины трассы так, как их пишет 2D (9 знаков градуса), в метрах. Профиль, длины и
+     * разрезы считаются на той же геометрии, которую увидит проверка: вершины плана совпадают с 2D-выходом, а куски
+     * в сантиметры не расходятся с length на доли миллиметра (иначе уклон по геометрии выходил круче 0,10).
+     */
+    private static Variant written(Variant variant) {
+        List<NewSegment> segments = new ArrayList<>();
+        for (NewSegment s : variant.getSegments()) {
+            segments.add(new NewSegment(s.getId(), s.getVariantId(), (LineString) grid(s.getGeometry()), s.getStartNodeId(),
+                    s.getEndNodeId(), s.getFlowTph(), s.getDiameter(), s.getLength(), s.getLayingMethod(), s.getDepthStart(),
+                    s.getDepthEnd(), s.getCost(), s.getDepthCrossings(), s.isManualReview()));
+        }
+        List<NewChamber> chambers = new ArrayList<>();
+        for (NewChamber c : variant.getChambers()) {
+            chambers.add(new NewChamber(c.getId(), c.getVariantId(), (org.locationtech.jts.geom.Point) grid(c.getGeometry()),
+                    c.getDiameter(), c.getCost()));
+        }
+        List<TechnicalNode> nodes = new ArrayList<>();
+        for (TechnicalNode n : variant.getNodes()) {
+            nodes.add(new TechnicalNode(n.getId(), n.getVariantId(), (org.locationtech.jts.geom.Point) grid(n.getGeometry()),
+                    n.getReason()));
+        }
+        return new Variant(variant.getId(), segments, chambers, nodes, variant.getSummary());
+    }
+
+    private static Geometry grid(Geometry utm) {
+        Geometry wgs = ru.lct.heatnet.io.Projector.toWgs(utm).copy();
+        wgs.apply((org.locationtech.jts.geom.CoordinateFilter) c -> {
+            c.x = java.math.BigDecimal.valueOf(c.x).setScale(WGS_SCALE, java.math.RoundingMode.HALF_UP).doubleValue();
+            c.y = java.math.BigDecimal.valueOf(c.y).setScale(WGS_SCALE, java.math.RoundingMode.HALF_UP).doubleValue();
+        });
+        wgs.geometryChanged();
+        return ru.lct.heatnet.io.Projector.toUtm(wgs);
     }
 
     /** Глубина профиля в точке s цепочки. */
