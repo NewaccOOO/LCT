@@ -64,6 +64,7 @@ public final class Router {
     private static final int BEND_SCAN_LIMIT = 400;
     /** Вершина ближе этого к границе специальной части стоит на ней, см. {@link #drop}. */
     private static final double SPAN_EPS_M = 1e-3;
+    private static final double CROSS_END_M = 0.01;
     /**
      * Мелкий излом — поворот меньше MIN_TURN_DEG, у которого конец короткого плеча уходит с прямой хотя бы на MICRO_M:
      * так он не путается с округлением координат выхода до 9 знаков (десятые доли миллиметра), см. {@link #micro}.
@@ -1011,8 +1012,8 @@ public final class Router {
             if (span.getFromM() >= to || span.getToM() <= from) {
                 continue;
             }
-            boolean start = Math.abs(span.getFromM() - from) <= SPAN_EPS_M || span.getFromM() >= from + MIN_PIECE_M;
-            boolean end = Math.abs(span.getToM() - to) <= SPAN_EPS_M || span.getToM() <= to - MIN_PIECE_M;
+            boolean start = Math.abs(span.getFromM() - from) <= CROSS_END_M || span.getFromM() >= from + MIN_PIECE_M;
+            boolean end = Math.abs(span.getToM() - to) <= CROSS_END_M || span.getToM() <= to - MIN_PIECE_M;
             if (!start || !end) {
                 return false;
             }
@@ -1958,7 +1959,7 @@ public final class Router {
     }
 
     /** Отрезок ломаной уже идёт по оси, см. {@link #square}: отклонение от axis или axis + 90° меньше этого. */
-    private static final double SQUARE_TOL_RAD = Math.toRadians(0.5);
+    public static final double SQUARE_TOL_RAD = Math.toRadians(0.5);
     /**
      * Поворот между оставленным прежним отрезком и участком по осям, см. {@link #square}: мельче этого — лишняя вершина
      * (мелкий излом, как SMALL_BEND_DEG у TreeBuilder).

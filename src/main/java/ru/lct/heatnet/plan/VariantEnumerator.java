@@ -202,6 +202,7 @@ public final class VariantEnumerator {
     private static final double JUNCTION_STEP_M = 2;
     /** Отрезок отходит от оси больше этого — не по оси, см. {@link #offAxis}. */
     private static final double OFF_AXIS_RAD = Math.toRadians(1);
+    private static final double RIGHT_TOL_DEG = 2;
     /** Стороны короче этого (зубцы детального контура) на оси не влияют. */
     private static final double AXIS_SIDE_M = 8;
     /** Сколько раз повторяется проход {@link #squared}: ребро, переложенное по осям, открывает повороты соседям. */
@@ -704,7 +705,7 @@ public final class VariantEnumerator {
                 variant = assembler.assemble(String.valueOf(i + 1), i + 1, trees, draft.unconnected);
             }
             shaped.add(new Draft(trees, unconnected(draft, trees), variant));
-            sharp.add(trees.stream().anyMatch(tree -> sharpPairs(tree) > 0));
+            sharp.add(trees.stream().anyMatch(tree -> sharpPairs(tree, null) > 0));
         }
         // поворот круче 90° в камере, который правки не сняли, правило не допускает: вариант уступает место следующему
         // черновику, если хоть один вариант без таких поворотов есть
@@ -731,7 +732,7 @@ public final class VariantEnumerator {
         Set<Tree> same = Collections.newSetFromMap(new IdentityHashMap<>());
         same.addAll(unkinked);
         List<Tree> squared = squared(unkinked(unkinked(evened(entered(bent(unkinked))), false, same), true));
-        List<Tree> result = entered(unkinked(squared));
+        List<Tree> result = entered(unkinked(unkinked(evened(entered(unkinked(squared))), true), false, Set.of(), true));
         for (int t = 0; t < result.size(); t++) {
             Tree tree = result.get(t);
             if (tree != squared.get(t) && tree.unsquared == null && squared.get(t).unsquared != null) {
@@ -3072,6 +3073,10 @@ public final class VariantEnumerator {
         }
     }
 
+    private boolean worse(Tree tree, List<Tree> before, Tree changed, List<Tree> after) {
+        return thicker(tree, before, changed, after) || sharpPairs(changed, Set.of()) > sharpPairs(tree, Set.of());
+    }
+
     /** Ду какого-то ребра дерева {@code changed} в узле {@code after} выше, чем у {@code tree} в узле {@code before}. */
     private boolean thicker(Tree tree, List<Tree> before, Tree changed, List<Tree> after) {
         Map<Tree.Edge, Integer> dnBefore = assembler.diameters(before);
@@ -3253,6 +3258,10 @@ public final class VariantEnumerator {
 
     /** {@link #unkinked(List, boolean)} без деревьев из skip. */
     private List<Tree> unkinked(List<Tree> trees, boolean evensOnly, Set<Tree> skip) {
+        return unkinked(trees, evensOnly, skip, false);
+    }
+
+    private List<Tree> unkinked(List<Tree> trees, boolean evensOnly, Set<Tree> skip, boolean axes) {
         long started = System.nanoTime();
         List<Tree> result = new ArrayList<>(trees);
         int taken = 0;
@@ -3294,14 +3303,15 @@ public final class VariantEnumerator {
                         continue;
                     }
                     for (TreeBuilder.Slide slide : builder.unkinks(tree, junction,
-                            edge -> region.obstacles(dnByEdge.get(edge), area), dnByEdge, priceRub, maxGainRub, evensOnly)) {
+                            edge -> region.obstacles(dnByEdge.get(edge), area), dnByEdge, priceRub, maxGainRub, evensOnly,
+                            axes ? this::keepsAxes : null)) {
                         if (!tried.add(List.of(junction.point.x, junction.point.y, slide.point.x, slide.point.y))) {
                             continue;
                         }
                         Tree changed = unkinked(tree, slide, tree.tie, dnByEdge, region, area, true);
                         List<Tree> others = new ArrayList<>(result);
                         others.remove(t);
-                        if (changed == null || !compatible(changed, others)) {
+                        if (changed == null || axes && !keepsAxes(tree, changed) || !compatible(changed, others)) {
                             continue;
                         }
                         List<Tree> attempt = new ArrayList<>();
@@ -3309,7 +3319,7 @@ public final class VariantEnumerator {
                             attempt.add(other == tree ? changed : other);
                         }
                         before = Double.isNaN(before) ? unitScore(unit) : before;
-                        if (!(unitScore(attempt) <= before + TURN_TOLERANCE_S) || thicker(tree, unit, changed, attempt)) {
+                        if (!(unitScore(attempt) <= before + TURN_TOLERANCE_S) || worse(tree, unit, changed, attempt)) {
                             continue;
                         }
                         result.set(t, changed);
@@ -3323,7 +3333,7 @@ public final class VariantEnumerator {
                     settled.add(key);
                 }
                 // врезка сдвигается, когда у камер ветвления сдвигов больше нет: одна попытка на дерево
-                if (!moved && !retieTried && unit.size() == 1 && !evensOnly) {
+                if (!moved && !retieTried && unit.size() == 1 && !evensOnly && !axes) {
                     retieTried = true;
                     List<Tree> others = new ArrayList<>(result);
                     others.remove(t);
@@ -3336,7 +3346,8 @@ public final class VariantEnumerator {
                 }
             }
         }
-        log.info("unkinked: {}moves={} elapsed={}ms", evensOnly ? "evens " : "", taken, (System.nanoTime() - started) / 1_000_000);
+        log.info("unkinked: {}moves={} elapsed={}ms", evensOnly ? "evens " : axes ? "axes " : "", taken,
+                (System.nanoTime() - started) / 1_000_000);
         return result;
     }
 
@@ -3377,12 +3388,11 @@ public final class VariantEnumerator {
     /**
      * Деревья варианта без поворотов круче MAX_TURN_DEG в камерах ветвления на пути точки к врезке (п. 2.1, разъяснение
      * 5), которые снимает правка у камеры: сдвиг камеры вдоль первого звена одного из её рёбер
-     * ({@link TreeBuilder#turnSlides}) или излом звена ребра у камеры ({@link TreeBuilder#bends}); правки пробуются по
-     * возрастанию цены рёбер. Поиск таких поворотов не проверяет, проход правит готовые варианты. Рёбра камеры
-     * доводятся до строгой формы, где убранная вершина не делает поворот в камере круче ({@link #sharpened}). Правка
-     * берётся, если таких поворотов в дереве стало меньше, S узла врезки вырос не больше TURN_TOLERANCE_S, Ду рёбер не
-     * выросли, а дерево не касается других; дальше повороты ищутся на новом дереве. Поворот, который так не снят,
-     * правит {@link #unsharpened} при любом росте S: правило его не допускает.
+     * ({@link TreeBuilder#turnSlides}); правки пробуются по возрастанию цены рёбер. Поиск таких поворотов не проверяет,
+     * проход правит готовые варианты. Рёбра камеры доводятся до строгой формы, где убранная вершина не делает поворот в
+     * камере круче ({@link #sharpened}). Правка берётся, если таких поворотов в дереве стало меньше, S узла врезки вырос
+     * не больше TURN_TOLERANCE_S, Ду рёбер не выросли, а дерево не касается других; дальше повороты ищутся на новом
+     * дереве. Поворот, который так не снят, правит {@link #unsharpened} при любом росте S: правило его не допускает.
      */
     private List<Tree> turned(List<Tree> trees) {
         long started = System.nanoTime();
@@ -3394,7 +3404,8 @@ public final class VariantEnumerator {
             Tree first = result.get(t);
             Region region = regionByConnection.get(first.connected().get(0).getId());
             Envelope area = region.area.contains(first.envelope()) ? region.area : region.wideArea;
-            for (int sharp = sharpTurns(first).size(); sharp > 0 && area.contains(first.envelope()); ) {
+            Set<String> kneed = new HashSet<>();
+            for (int sharp = sharpTurns(first, kneed).size(); sharp > 0 && area.contains(first.envelope()); ) {
                 Tree tree = result.get(t);
                 List<Tree> unit = new ArrayList<>();
                 for (Tree other : result) {
@@ -3414,25 +3425,24 @@ public final class VariantEnumerator {
                 List<Tree> others = new ArrayList<>(result);
                 others.remove(t);
                 Tree changed = null;
-                for (Tree.Node junction : sharpTurns(tree)) {
+                for (Tree.Node junction : sharpTurns(tree, kneed)) {
                     java.util.function.Function<Tree.Edge, ObstacleSet> zones = edge -> region.obstacles(dnByEdge.get(edge), area);
                     List<TreeBuilder.Slide> slides = new ArrayList<>(builder.turnSlides(tree, junction, zones, dnByEdge,
                             priceRub, maxGainRub, TURN_STEP_M, TURN_MAX_M));
-                    slides.addAll(builder.bends(tree, junction, zones, priceRub, maxGainRub));
                     if (TURN_GRID) {
                         slides.addAll(builder.turnMoves(tree, junction, zones, dnByEdge, priceRub, maxGainRub));
                     }
                     slides.sort(Comparator.comparingDouble(slide -> slide.gain));
                     for (TreeBuilder.Slide slide : slides) {
                         Tree attempt = unkinked(tree, slide, tree.tie, dnByEdge, region, area, true);
-                        if (attempt == null || sharpTurns(attempt).size() >= sharp || !compatible(attempt, others)) {
+                        if (attempt == null || sharpTurns(attempt, kneed).size() >= sharp || !compatible(attempt, others)) {
                             continue;
                         }
                         List<Tree> after = new ArrayList<>();
                         for (Tree other : unit) {
                             after.add(other == tree ? attempt : other);
                         }
-                        if (unitScore(after) <= before + TURN_TOLERANCE_S && !thicker(tree, unit, attempt, after)) {
+                        if (unitScore(after) <= before + TURN_TOLERANCE_S && !worse(tree, unit, attempt, after)) {
                             changed = attempt;
                             break;
                         }
@@ -3442,23 +3452,34 @@ public final class VariantEnumerator {
                     }
                 }
                 if (changed == null) {
-                    changed = unsharpened(tree, unit, others, dnByEdge, priceRub, region, area);
-                    if (changed == null && TURN_DETACH) {
-                        changed = detached(tree, dnByEdge, region, area);
+                    changed = unsharpened(tree, unit, others, dnByEdge, priceRub, region, area, kneed, false);
+                    for (Tree.Node junction : changed == null ? sharpTurns(tree, kneed) : List.<Tree.Node>of()) {
+                        Set<String> knee = new HashSet<>(kneed);
+                        knee.add(junction.key);
+                        changed = sharpTurns(tree, knee).size() < sharp ? tree
+                                : unsharpened(tree, unit, others, dnByEdge, priceRub, region, area, knee, true);
                         if (changed != null) {
-                            log.warn("turned: поворот в камере {} не снят, без сети остаются {}", sharpTurns(tree).get(0).key,
+                            kneed = knee;
+                            log.info("turned: у камеры {} оставлено колено, без него точки остались бы без сети", junction.key);
+                            break;
+                        }
+                    }
+                    if (changed == null && TURN_DETACH) {
+                        changed = detached(tree, kneed, dnByEdge, region, area);
+                        if (changed != null) {
+                            log.warn("turned: поворот в камере {} не снят, без сети остаются {}", sharpTurns(tree, kneed).get(0).key,
                                     changed.unconnected.subList(tree.unconnected.size(), changed.unconnected.size()).stream().map(ConnectionPoint::getId).collect(Collectors.toList()));
                         }
                     }
                     if (changed == null) {
-                        sharpTurns(tree).forEach(junction -> log.info("turned: поворот в камере {} не снят", junction.key));
+                        sharpTurns(tree, kneed).forEach(junction -> log.info("turned: поворот в камере {} не снят", junction.key));
                         break;
                     }
                     forced++;
                 }
                 result.set(t, changed);
                 taken++;
-                sharp = sharpTurns(changed).size();
+                sharp = sharpTurns(changed, kneed).size();
             }
         }
         log.info("turned: moves={} forced={} elapsed={}ms", taken, forced, (System.nanoTime() - started) / 1_000_000);
@@ -3468,20 +3489,22 @@ public final class VariantEnumerator {
     /**
      * Дерево tree с меньшим числом поворотов круче MAX_TURN_DEG на пути точки в камерах ветвления, чем у него, при
      * любом росте S (п. 2.1, разъяснение 5: поворот до 90° включительно в любой точке); null — правки нет. Правки: те же,
-     * что у {@link #turned}, изломы нескольких рёбер камеры ({@link TreeBuilder#fans}) и обход камеры
-     * ({@link #bypasses}). Из годных правок, как у {@link #turned}, берётся та, после которой S узла врезки меньше;
+     * что у {@link #turned}, и обход камеры ({@link #bypasses}), при knees — ещё изломы рёбер у камеры
+     * ({@link TreeBuilder#bends}, {@link TreeBuilder#fans}). Из годных правок, как у {@link #turned}, берётся та, после которой S узла врезки меньше;
      * проверяются первые TURN_FIXES по оценке цены рёбер. unit — деревья узла врезки, others — деревья других.
      */
     private Tree unsharpened(Tree tree, List<Tree> unit, List<Tree> others, Map<Tree.Edge, Integer> dnByEdge,
-            Map<Tree.Edge, Double> priceRub, Region region, Envelope area) {
+            Map<Tree.Edge, Double> priceRub, Region region, Envelope area, Set<String> kneed, boolean knees) {
         java.util.function.Function<Tree.Edge, ObstacleSet> zones = edge -> region.obstacles(dnByEdge.get(edge), area);
-        int sharp = sharpPairs(tree);
+        int sharp = sharpPairs(tree, kneed);
         List<TreeBuilder.Slide> slides = new ArrayList<>();
-        for (Tree.Node junction : sharpTurns(tree)) {
+        for (Tree.Node junction : sharpTurns(tree, kneed)) {
             slides.addAll(builder.turnSlides(tree, junction, zones, dnByEdge, priceRub, Double.POSITIVE_INFINITY,
                     TURN_STEP_M, TURN_MAX_M));
-            slides.addAll(builder.bends(tree, junction, zones, priceRub, Double.POSITIVE_INFINITY));
-            slides.addAll(builder.fans(tree, junction, zones, priceRub));
+            if (knees) {
+                slides.addAll(builder.bends(tree, junction, zones, priceRub, Double.POSITIVE_INFINITY));
+                slides.addAll(builder.fans(tree, junction, zones, priceRub));
+            }
             if (TURN_GRID) {
                 slides.addAll(builder.turnMoves(tree, junction, zones, dnByEdge, priceRub, Double.POSITIVE_INFINITY));
             }
@@ -3489,8 +3512,8 @@ public final class VariantEnumerator {
         slides.sort(Comparator.comparingDouble(slide -> slide.gain));
         // обходов по одному на ветку, они первыми: камера и спецпроход уходят, S часто ниже
         List<java.util.function.Supplier<Tree>> attempts = new ArrayList<>();
-        for (Tree.Node junction : sharpTurns(tree)) {
-            bypasses(tree, junction, dnByEdge, region, area, sharp).forEach(bypass -> attempts.add(() -> bypass));
+        for (Tree.Node junction : sharpTurns(tree, kneed)) {
+            bypasses(tree, junction, dnByEdge, region, area, sharp, kneed).forEach(bypass -> attempts.add(() -> bypass));
         }
         slides.forEach(slide -> attempts.add(() -> unkinked(tree, slide, tree.tie, dnByEdge, region, area, true)));
         Tree best = null;
@@ -3498,7 +3521,7 @@ public final class VariantEnumerator {
         int checked = 0;
         for (int k = 0; k < attempts.size() && checked < TURN_FIXES; k++) {
             Tree attempt = attempts.get(k).get();
-            if (attempt == null || sharpPairs(attempt) >= sharp || !compatible(attempt, others)) {
+            if (attempt == null || sharpPairs(attempt, kneed) >= sharp || !compatible(attempt, others)) {
                 continue;
             }
             List<Tree> after = new ArrayList<>();
@@ -3524,8 +3547,8 @@ public final class VariantEnumerator {
      * деревом под ними, а их точки остаются без сети. Камера с одной оставшейся веткой сливается с ребром к родителю
      * в строгой форме, как у {@link #bypassed}; null — веток у камеры не осталось или форма не собралась.
      */
-    private Tree detached(Tree tree, Map<Tree.Edge, Integer> dnByEdge, Region region, Envelope area) {
-        Tree.Node junction = sharpTurns(tree).get(0);
+    private Tree detached(Tree tree, Set<String> kneed, Map<Tree.Edge, Integer> dnByEdge, Region region, Envelope area) {
+        Tree.Node junction = sharpTurns(tree, kneed).get(0);
         Tree.Edge up = tree.edges.stream().filter(edge -> edge.to == junction).findFirst().orElseThrow();
         Coordinate before = up.line.getCoordinateN(up.line.getNumPoints() - 2);
         Set<Tree.Node> gone = new HashSet<>();
@@ -3602,7 +3625,7 @@ public final class VariantEnumerator {
      * ({@link #sharpened}); берутся деревья, где таких поворотов меньше, чем sharp.
      */
     private List<Tree> bypasses(Tree tree, Tree.Node junction, Map<Tree.Edge, Integer> dnByEdge, Region region,
-            Envelope area, int sharp) {
+            Envelope area, int sharp, Set<String> kneed) {
         Tree.Edge up = tree.edges.stream().filter(edge -> edge.to == junction).findFirst().orElse(null);
         if (up == null) {
             return List.of();
@@ -3662,7 +3685,7 @@ public final class VariantEnumerator {
             lines.sort(Comparator.comparingDouble(VariantEnumerator::length));
             for (Coordinate[] line : lines) {
                 Tree changed = bypassed(tree, junction, up, child, line, dnByEdge, region, area);
-                if (changed != null && sharpPairs(changed) < sharp) {
+                if (changed != null && sharpPairs(changed, kneed) < sharp) {
                     result.add(changed);
                     break;
                 }
@@ -3767,21 +3790,27 @@ public final class VariantEnumerator {
     }
 
     /** Пары рёбер в камерах ветвления дерева, где путь точки к врезке поворачивает круче MAX_TURN_DEG. */
-    private static int sharpPairs(Tree tree) {
+    private static int sharpPairs(Tree tree, Set<String> kneed) {
         int count = 0;
         for (Tree.Edge in : tree.edges) {
             if (in.to.kind != Tree.Kind.JUNCTION) {
                 continue;
             }
-            Coordinate[] c = in.line.getCoordinates();
             for (Tree.Edge out : tree.edges) {
-                if (out.from == in.to && Router.deflectionDeg(c[c.length - 2], in.to.point,
-                        out.line.getCoordinateN(1)) > Router.MAX_TURN_DEG) {
+                if (out.from == in.to && sharp(in, out, kneed)) {
                     count++;
                 }
             }
         }
         return count;
+    }
+
+    private static boolean sharp(Tree.Edge in, Tree.Edge out, Set<String> kneed) {
+        Coordinate[] c = in.line.getCoordinates();
+        double turn = kneed == null || kneed.contains(in.to.key)
+                ? Router.deflectionDeg(c[c.length - 2], in.to.point, out.line.getCoordinateN(1))
+                : TreeBuilder.pathTurnDeg(c, out.line.getCoordinates());
+        return turn > Router.MAX_TURN_DEG;
     }
 
     /**
@@ -3869,7 +3898,7 @@ public final class VariantEnumerator {
             attempt.add(other == tree ? changed : other);
         }
         return compatible(changed, others) && unitScore(attempt) <= unitScore(unit) + UNKINK_EPS
-                && !thicker(tree, unit, changed, attempt) ? changed : null;
+                && !worse(tree, unit, changed, attempt) ? changed : null;
     }
 
     /**
@@ -3951,7 +3980,7 @@ public final class VariantEnumerator {
                     attempt.add(other == tree ? changed : other);
                 }
                 if (changed == null || !apart(sharp.values(), result, tree) || !compatible(changed, others)
-                        || Double.isNaN(unitScore(attempt)) || thicker(tree, unit, changed, attempt)) {
+                        || Double.isNaN(unitScore(attempt)) || worse(tree, unit, changed, attempt)) {
                     log.info("entered: вход точки {} не перенесён", edge.to.connection.getId());
                     continue;
                 }
@@ -4049,7 +4078,7 @@ public final class VariantEnumerator {
                     attempt.add(other == tree ? changed : other);
                 }
                 if (rub > EVEN_EPS_RUB || !compatible(changed, others) || Double.isNaN(unitScore(attempt))
-                        || thicker(tree, unit, changed, attempt)) {
+                        || worse(tree, unit, changed, attempt)) {
                     log.info("evened: излом у технического узла на ребре к {} не снят, {} руб.", edge.to.key, Math.round(rub));
                     continue;
                 }
@@ -4278,7 +4307,7 @@ public final class VariantEnumerator {
                 junctionDebug(spot, junction, String.format(Locale.ROOT, "не по оси %.1f м (нужно < %.1f), длина %.1f из %.1f, лучше=%b",
                         workOff, bestOff, workLength, SQUARE_RATIO * length, better));
             }
-            if (better && workLength <= SQUARE_RATIO * length && sharpPairs(work) <= sharpPairs(tree)
+            if (better && workLength <= SQUARE_RATIO * length && sharpPairs(work, Set.of()) <= sharpPairs(tree, Set.of())
                     && bends(work, incident) <= bends(tree, incident)
                     && pairs(work, incident) <= pairs(tree, incident)
                     && accepted(result, t, unit, work)) {
@@ -4501,6 +4530,46 @@ public final class VariantEnumerator {
         return off;
     }
 
+    private boolean keepsAxes(Tree before, Tree after) {
+        for (int e = 0; e < before.edges.size(); e++) {
+            if (!keepsAxes(before.edges.get(e).line.getCoordinates(), after.edges.get(e).line.getCoordinates())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean keepsAxes(Coordinate[] was, Coordinate[] now) {
+        if (Arrays.equals(was, now)) {
+            return true;
+        }
+        double axis = axis(factory.createLineString(was).getEnvelopeInternal());
+        for (int i = 0; i + 1 < was.length; i++) {
+            if ((onAxis(was[i], was[i + 1], axis) || right(was, i) || right(was, i + 1)) && !kept(was[i], was[i + 1], now)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean right(Coordinate[] line, int v) {
+        return v > 0 && v + 1 < line.length && Math.abs(Router.deflectionDeg(line[v - 1], line[v], line[v + 1]) - 90) <= RIGHT_TOL_DEG;
+    }
+
+    private static boolean kept(Coordinate a, Coordinate b, Coordinate[] line) {
+        double heading = Math.atan2(b.y - a.y, b.x - a.x);
+        for (int j = 0; j + 1 < line.length; j++) {
+            if (along(a, b, line[j]) && along(a, b, line[j + 1]) && onAxis(line[j], line[j + 1], heading)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean onAxis(Coordinate a, Coordinate b, double axis) {
+        return Math.abs(Math.IEEEremainder(Math.atan2(b.y - a.y, b.x - a.x) - axis, Math.PI / 2)) <= Router.SQUARE_TOL_RAD;
+    }
+
     /** Деревья result с тем же узлом врезки, что у tree. */
     private static List<Tree> unit(List<Tree> result, Tree tree) {
         List<Tree> unit = new ArrayList<>();
@@ -4521,7 +4590,7 @@ public final class VariantEnumerator {
         for (Tree other : unit) {
             attempt.add(other == tree ? changed : other);
         }
-        return compatible(changed, others) && !Double.isNaN(unitScore(attempt)) && !thicker(tree, unit, changed, attempt);
+        return compatible(changed, others) && !Double.isNaN(unitScore(attempt)) && !worse(tree, unit, changed, attempt);
     }
 
     /** Окружение ребра для {@link Router#square}: маршрутизатор и зоны по Ду ребра, соседние вершины, выход. */
@@ -4631,16 +4700,14 @@ public final class VariantEnumerator {
     }
 
     /** Камеры ветвления дерева, где путь точки к врезке поворачивает круче MAX_TURN_DEG. */
-    private static List<Tree.Node> sharpTurns(Tree tree) {
+    private static List<Tree.Node> sharpTurns(Tree tree, Set<String> kneed) {
         List<Tree.Node> result = new ArrayList<>();
         for (Tree.Edge in : tree.edges) {
             if (in.to.kind != Tree.Kind.JUNCTION) {
                 continue;
             }
-            Coordinate[] c = in.line.getCoordinates();
             for (Tree.Edge out : tree.edges) {
-                if (out.from == in.to && Router.deflectionDeg(c[c.length - 2], in.to.point,
-                        out.line.getCoordinateN(1)) > Router.MAX_TURN_DEG) {
+                if (out.from == in.to && sharp(in, out, kneed)) {
                     result.add(in.to);
                     break;
                 }
@@ -4711,7 +4778,7 @@ public final class VariantEnumerator {
                 continue;
             }
             before = Double.isNaN(before) ? unitScore(List.of(tree)) : before;
-            if (unitScore(List.of(changed)) <= before + UNKINK_EPS && !thicker(tree, List.of(tree), changed, List.of(changed))) {
+            if (unitScore(List.of(changed)) <= before + UNKINK_EPS && !worse(tree, List.of(tree), changed, List.of(changed))) {
                 return changed;
             }
         }

@@ -393,6 +393,25 @@ class TreeBuilderTest {
     }
 
     @Test
+    void turnAtJunctionCountsWithSameSideTurnsOnShortLinks() {
+        Coordinate[] in = {new Coordinate(-20, 0), new Coordinate(0, 0)};
+        Coordinate[] knee = {new Coordinate(0, 0), rotatedFrom(80, 1.5), farther(80, 1.5, 120)};
+        Coordinate[] far = {new Coordinate(0, 0), rotatedFrom(80, 2.5), farther(80, 2.5, 120)};
+
+        assertEquals(120, TreeBuilder.pathTurnDeg(in, knee), 1e-9);
+        assertEquals(80, TreeBuilder.pathTurnDeg(in, far), 1e-9);
+    }
+
+    private static Coordinate rotatedFrom(double deg, double length) {
+        return new Coordinate(length * Math.cos(Math.toRadians(deg)), length * Math.sin(Math.toRadians(deg)));
+    }
+
+    private static Coordinate farther(double deg, double length, double nextDeg) {
+        Coordinate at = rotatedFrom(deg, length);
+        return new Coordinate(at.x + 20 * Math.cos(Math.toRadians(nextDeg)), at.y + 20 * Math.sin(Math.toRadians(nextDeg)));
+    }
+
+    @Test
     void branchesSpreadingWiderThanOneBendAllowBendAtJunctionTogether() {
         // ветки к o-1 и o-2 уходят от камеры назад по обе стороны ствола, на 99,5° к нему: излома одного ребра мало,
         // гнутся обе, и путь каждой точки к врезке поворачивает в камере не круче 89,9°

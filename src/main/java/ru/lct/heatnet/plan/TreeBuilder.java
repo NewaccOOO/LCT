@@ -48,6 +48,7 @@ final class TreeBuilder {
     /** Шаг и наибольший угол поворота звена у камеры ветвления, см. {@link #bends}. */
     private static final double BEND_STEP_DEG = 0.5;
     private static final double MAX_BEND_DEG = 90;
+    static final double SPLIT_LINK_M = 2;
     private static final double TOUCH_M = 0.05;
     /** Валидатор не проверяет касание участков в круге 0,15 м вокруг общего узла. */
     private static final double JUNCTION_CLIP_M = 0.15;
@@ -1780,7 +1781,13 @@ final class TreeBuilder {
     /** {@link #unkinks}; при evensOnly — только переносы, которые снимают излом меньше MIN_TURN_DEG без роста цены. */
     List<Slide> unkinks(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
             Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub, boolean evensOnly) {
-        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, evensOnly, false);
+        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, evensOnly, null);
+    }
+
+    List<Slide> unkinks(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
+            Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub, boolean evensOnly,
+            java.util.function.BiPredicate<Coordinate[], Coordinate[]> keeps) {
+        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, evensOnly, false, keeps);
     }
 
     /**
@@ -1790,12 +1797,12 @@ final class TreeBuilder {
      */
     List<Slide> turnMoves(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
             Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub) {
-        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, false, true);
+        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, false, true, null);
     }
 
     private List<Slide> unkinks(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
             Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub, boolean evensOnly,
-            boolean turnsOnly) {
+            boolean turnsOnly, java.util.function.BiPredicate<Coordinate[], Coordinate[]> keeps) {
         Ends ends = ends(tree, junction, zones);
         int[] paths = ends == null ? null : paths(ends, ends.heads);
         if (ends == null || !turnsOnly && (evensOnly ? paths[2] == 0 : ends.vertices == 0 && paths[1] == 0)) {
@@ -1824,7 +1831,17 @@ final class TreeBuilder {
         double[][] costs = new double[count][2];
         int[][] verdicts = new int[count][2];
         int[] sizes = new int[count];
-        for (Coordinate point : spots(junction.point, from, ends.up, evensOnly ? ends.tails : null)) {
+        List<Coordinate> spots = spots(junction.point, from, ends.up, evensOnly ? ends.tails : null);
+        for (int e = 0; keeps != null && e < count; e++) {
+            double length = from[e][0].distance(from[e][1]);
+            for (double d = -SHIFT_M; d <= SHIFT_M; d += SHIFT_STEP_M) {
+                if (d != 0) {
+                    spots.add(new Coordinate(from[e][0].x + d * (from[e][1].x - from[e][0].x) / length,
+                            from[e][0].y + d * (from[e][1].y - from[e][0].y) / length));
+                }
+            }
+        }
+        for (Coordinate point : spots) {
             double bound = 0;
             int combos = 1;
             for (int e = 0; e < count; e++) {
@@ -1887,7 +1904,7 @@ final class TreeBuilder {
                 }
                 boolean fits = turnsOnly || (evensOnly ? left == ends.vertices && gain <= 0 && evens(ends, layout, paths)
                         : left < ends.vertices || left == ends.vertices && straightens(ends, layout, paths));
-                if (!bad && fits && gain <= maxGainRub && turnsAllowed(layout, ends.up, point)) {
+                if (!bad && fits && gain <= maxGainRub && turnsAllowed(layout, ends.up, point) && kept(from, layout, keeps)) {
                     gains.add(gain);
                     layouts.add(layout);
                 }
@@ -1906,6 +1923,16 @@ final class TreeBuilder {
             }
         }
         return found;
+    }
+
+    private static boolean kept(Coordinate[][] from, Coordinate[][] layout,
+            java.util.function.BiPredicate<Coordinate[], Coordinate[]> keeps) {
+        for (int e = 0; keeps != null && e < from.length; e++) {
+            if (!keeps.test(from[e], layout[e])) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -2361,8 +2388,8 @@ final class TreeBuilder {
      * рёбра, которые не гнутся: финальный участок прямо от камеры в здание и ребро со специальной частью в первом
      * звене. Остальные рёбра с поворотом круче гнутся к нему на наименьший угол, как у {@link #bends}. Новая вершина
      * стоит в 1,05·2^k м от камеры, звенья проверяются, как у {@link #bend}, звено до прежней первой вершины — по своей
-     * длине, поворот в дальнем узле ребра из одного звена — не круче MAX_TURN_DEG. Разъяснение 5 не задаёт длину между
-     * поворотами, поэтому излом в 1,05 м от камеры законен. До MOVES_PER_JUNCTION правок по возрастанию gain.
+     * длине, поворот в дальнем узле ребра из одного звена — не круче MAX_TURN_DEG. До MOVES_PER_JUNCTION правок по
+     * возрастанию gain.
      */
     List<Slide> fans(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
             Map<Tree.Edge, Double> priceRub) {
@@ -2773,6 +2800,35 @@ final class TreeBuilder {
 
     static double deflectionDeg(Coordinate a, Coordinate b, Coordinate c) {
         return 180 - Math.toDegrees(Angle.angleBetween(a, b, c));
+    }
+
+    static double pathTurnDeg(Coordinate[] in, Coordinate[] out) {
+        Coordinate[] c = new Coordinate[in.length + out.length - 1];
+        System.arraycopy(in, 0, c, 0, in.length);
+        System.arraycopy(out, 1, c, in.length, out.length - 1);
+        int at = in.length - 1;
+        double base = signedTurn(c[at - 1], c[at], c[at + 1]);
+        double total = base;
+        for (int i = at - 1; i >= 1 && c[i].distance(c[i + 1]) < SPLIT_LINK_M; i--) {
+            double t = signedTurn(c[i - 1], c[i], c[i + 1]);
+            if (t * base <= 0) {
+                break;
+            }
+            total += t;
+        }
+        for (int i = at + 1; i + 1 < c.length && c[i - 1].distance(c[i]) < SPLIT_LINK_M; i++) {
+            double t = signedTurn(c[i - 1], c[i], c[i + 1]);
+            if (t * base <= 0) {
+                break;
+            }
+            total += t;
+        }
+        return Math.abs(total);
+    }
+
+    private static double signedTurn(Coordinate a, Coordinate b, Coordinate c) {
+        double cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+        return Math.copySign(turn(a, b, c), cross);
     }
 
     /** {@link #deflectionDeg} одним atan2, как у проверщика: у звена нулевой длины поворота нет. */
