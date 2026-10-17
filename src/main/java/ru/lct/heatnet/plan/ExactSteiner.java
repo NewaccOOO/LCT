@@ -7,6 +7,7 @@ import java.util.function.DoubleUnaryOperator;
 
 final class ExactSteiner {
     private static final float INF = 1e30f;
+    private static final boolean VECTOR_MIN = Runtime.version().feature() >= 21;
 
     static final class Skeleton {
         final List<Integer> junctions = new ArrayList<>();
@@ -191,14 +192,29 @@ final class ExactSteiner {
                 float[] eb = e[b];
                 if (Integer.bitCount(b) >= 2) {
                     float[] mb = m2[b];
+                    if (VECTOR_MIN) {
+                        for (int v = 0; v < n; v++) {
+                            float x = ea[v];
+                            two[v] = Math.min(two[v], x + eb[v]);
+                            three[v] = Math.min(three[v], x + mb[v]);
+                        }
+                    } else {
+                        for (int v = 0; v < n; v++) {
+                            float x = ea[v];
+                            float y = x + eb[v];
+                            float z = x + mb[v];
+                            two[v] = y < two[v] ? y : two[v];
+                            three[v] = z < three[v] ? z : three[v];
+                        }
+                    }
+                } else if (VECTOR_MIN) {
                     for (int v = 0; v < n; v++) {
-                        float x = ea[v];
-                        two[v] = Math.min(two[v], x + eb[v]);
-                        three[v] = Math.min(three[v], x + mb[v]);
+                        two[v] = Math.min(two[v], ea[v] + eb[v]);
                     }
                 } else {
                     for (int v = 0; v < n; v++) {
-                        two[v] = Math.min(two[v], ea[v] + eb[v]);
+                        float y = ea[v] + eb[v];
+                        two[v] = y < two[v] ? y : two[v];
                     }
                 }
             }
@@ -245,8 +261,15 @@ final class ExactSteiner {
         for (int q = 0; q < count && value[q] < worst; q++) {
             float t = value[q];
             float[] row = transposed[live[q]];
-            for (int v = 0; v < n; v++) {
-                out[v] = Math.min(out[v], t + r * row[v]);
+            if (VECTOR_MIN) {
+                for (int v = 0; v < n; v++) {
+                    out[v] = Math.min(out[v], t + r * row[v]);
+                }
+            } else {
+                for (int v = 0; v < n; v++) {
+                    float y = t + r * row[v];
+                    out[v] = y < out[v] ? y : out[v];
+                }
             }
             if ((q & 7) == 7) {
                 worst = 0;
