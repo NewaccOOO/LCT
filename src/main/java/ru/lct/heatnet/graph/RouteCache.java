@@ -15,8 +15,9 @@ import java.util.function.Supplier;
  * Кэш только ускоряет: вытесненная запись при следующем запросе считается заново так же, выход не меняется.
  */
 public final class RouteCache {
-    /** Потолок по умолчанию, МБ; свойство {@code heatnet.route.cache.mb}. */
-    public static final long DEFAULT_MB = Long.getLong("heatnet.route.cache.mb", 1024);
+    /** Потолок по умолчанию, МБ: 1024, но не больше половины кучи; свойство {@code heatnet.route.cache.mb}. */
+    public static final long DEFAULT_MB = Long.getLong("heatnet.route.cache.mb",
+            Math.min(1024, Runtime.getRuntime().maxMemory() / 2 / (1024 * 1024)));
     // заголовок массива, ключ со ссылкой на маршрутизатор и координатами, узел LinkedHashMap
     private static final long ENTRY_OVERHEAD = 160;
 

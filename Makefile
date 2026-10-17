@@ -10,7 +10,7 @@ RULES ?=
 ENV := . scripts/env.sh
 PY := uv run --project tools
 
-.PHONY: help up down logs jar cli synth validate run real test test-unit test-java viz ui3d
+.PHONY: help up down logs jar cli synth validate run real test test-unit test-java viz ui3d platform platform-test
 
 help: ## список команд
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -43,6 +43,12 @@ viz: ## офлайн HTML-карта результата OUT рядом с ни
 ui3d: ## 3D-просмотр: сцена из IN/OUT (NAME=имя) и сервер http://localhost:8090/?scene=NAME
 	python3 scripts/ui3d/prep.py $(IN) $(OUT) $(if $(NAME),--name $(NAME))
 	python3 -m http.server -d scripts/ui3d 8090
+
+platform: ## платформа инженера с демо-наборами: http://localhost:8091 (с сервисом — http://localhost:8080 после make up)
+	python3 -m http.server -d platform 8091
+
+platform-test: ## тесты модели сцены платформы (node)
+	node --test platform/test/*.test.mjs
 
 run: cli validate ## посчитать IN и проверить выход
 

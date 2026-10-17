@@ -57,8 +57,18 @@ public final class Router {
     private static final double BEND_EPS_RAD = 1e-5;
     /** Предел поочерёдных поворотов лучей в {@link #bend}: они сходятся за несколько кругов. */
     private static final int BEND_ROUNDS = 20;
+    private static final int BEND_GRID = 20;
+    private static final double BEND_GRID_MIN_M = 0.02;
+    private static final double BEND_DESCENT_M = 0.002;
+    private static final int BEND_DIRECTIONS = 16;
+    private static final int BEND_SCAN_LIMIT = 400;
+    private static final double BEND_EXTRA_M = 5;
+    private static final double PAIR_MIN_DEG = 60;
+    private static final double PAIR_MAX_DEG = 120;
+    private static final double PAIR_LINK_M = 30;
     /** Вершина ближе этого к границе специальной части стоит на ней, см. {@link #drop}. */
     private static final double SPAN_EPS_M = 1e-3;
+    private static final double CROSS_END_M = 0.01;
     /**
      * Мелкий излом — поворот меньше MIN_TURN_DEG, у которого конец короткого плеча уходит с прямой хотя бы на MICRO_M:
      * так он не путается с округлением координат выхода до 9 знаков (десятые доли миллиметра), см. {@link #micro}.
@@ -389,6 +399,63 @@ public final class Router {
             }
         }
         return bestTarget == null ? null : new Choice(bestTarget, bestVia, bestWeight, bestExtra, tied, pred);
+    }
+
+    private static final int SQUARE_PATHS_MAX = 100_000;
+    private final Map<SquareKey, Coordinate[]> squarePaths = new java.util.concurrent.ConcurrentHashMap<>();
+
+    public double[][] weights(List<Coordinate> points, Set<String> ignored) {
+        int m = points.size();
+        double[][] result = weights(points, points, ignored);
+        for (int i = 0; i < m; i++) {
+            result[i][i] = 0;
+            for (int j = 0; j < i; j++) {
+                double w = Math.min(result[i][j], result[j][i]);
+                result[i][j] = w;
+                result[j][i] = w;
+            }
+        }
+        return result;
+    }
+
+    public double[][] weights(List<Coordinate> sources, List<Coordinate> targets, Set<String> ignored) {
+        int m = targets.size();
+        int n = nodes.size();
+        double[][] toNodes = new double[m][];
+        int[][] visible = new int[m][];
+        for (int j = 0; j < m; j++) {
+            double[] toNode = nodeWeights(targets.get(j), ignored);
+            toNodes[j] = toNode;
+            visible[j] = java.util.stream.IntStream.range(0, n).filter(v -> !Double.isNaN(toNode[v])).toArray();
+        }
+        double[][] result = new double[sources.size()][m];
+        java.util.stream.IntStream.range(0, sources.size()).parallel().forEach(i -> {
+            Coordinate source = sources.get(i);
+            Table table = table(source, ignored);
+            table.settle(n);
+            ObstacleSet.Hint hint = ObstacleSet.hint();
+            for (int j = 0; j < m; j++) {
+                Coordinate t = targets.get(j);
+                if (t.equals2D(source)) {
+                    result[i][j] = 0;
+                    continue;
+                }
+                double direct = obstacles.edgeWeight(t, source, ignored, false, false, hint);
+                double weight = Double.isNaN(direct) ? Double.POSITIVE_INFINITY : direct;
+                double[] w = toNodes[j];
+                for (int v : visible[j]) {
+                    if (table.dist[v] + w[v] >= weight) {
+                        continue;
+                    }
+                    int p = table.pred[v];
+                    if (turnAllowed(p < 0 ? source : nodes.get(p), nodes.get(v), t)) {
+                        weight = table.dist[v] + w[v];
+                    }
+                }
+                result[i][j] = weight;
+            }
+        });
+        return result;
     }
 
     /** Маршрут до цели choice, выбранной {@link #choose} из точки from. */
@@ -837,7 +904,9 @@ public final class Router {
      * соединить прямой, см. {@link #drop}; (В) так же убираются две вершины со звеном короче SHORT_LINK_M между ними;
      * (Б) повороты подряд в одну сторону со звеньями короче SHORT_LINK_M заменяются наименьшим числом поворотов в
      * пересечениях продолженных отрезков, см. {@link #sharpenWindow}; (Г) у готовых вариантов два соседних поворота в
-     * одну сторону при звене любой длины заменяет одна вершина, если путь не длиннее, см. {@link #bend}. Замена
+     * одну сторону при звене любой длины заменяет одна вершина, если путь не длиннее, а у пары с суммой поворотов
+     * от PAIR_MIN_DEG до PAIR_MAX_DEG и звеном короче PAIR_LINK_M — длиннее не больше чем на BEND_EXTRA_M, см.
+     * {@link #bend}. Замена
      * проверяется по зонам zones (Ду графа или ребра дерева) как хорда {@link #cutPass}: область, где взяты
      * препятствия, отступы с запасом CUT_MARGIN_M, без спецпрохода, не ближе CUT_APART_M к apart (отрезкам других
      * рёбер дерева) и к своей ломаной, повороты до MAX_TURN_DEG, звенья от CUT_PIECE_M. Вершины убираются раньше
@@ -874,7 +943,8 @@ public final class Router {
             if (!drop(zones, coords, 1, keep, spans, ignored, others, before, after)
                     && !drop(zones, coords, 2, keep, spans, ignored, others, before, after)
                     && !merge(zones, coords, held(coords, keep, spans), spans, ignored, others)
-                    && !(bends && bend(zones, coords, held(coords, keep, spans), spans, ignored, others, before, after))) {
+                    && !(bends && bend(zones, coords, held(coords, keep, spans), spans, ignored, others, before, after,
+                            BEND_EXTRA_M))) {
                 break;
             }
             changed = true;
@@ -1006,8 +1076,8 @@ public final class Router {
             if (span.getFromM() >= to || span.getToM() <= from) {
                 continue;
             }
-            boolean start = Math.abs(span.getFromM() - from) <= SPAN_EPS_M || span.getFromM() >= from + MIN_PIECE_M;
-            boolean end = Math.abs(span.getToM() - to) <= SPAN_EPS_M || span.getToM() <= to - MIN_PIECE_M;
+            boolean start = Math.abs(span.getFromM() - from) <= CROSS_END_M || span.getFromM() >= from + MIN_PIECE_M;
+            boolean end = Math.abs(span.getToM() - to) <= CROSS_END_M || span.getToM() <= to - MIN_PIECE_M;
             if (!start || !end) {
                 return false;
             }
@@ -1226,17 +1296,18 @@ public final class Router {
     }
 
     /**
-     * (Г) Два соседних поворота в одну сторону при звене любой длины заменяет одна вершина в лучшей точке, если путь
-     * с ней не длиннее прежнего (толкование п. 5): такой двойной поворот ничем не обоснован. Вершина — пересечение
-     * лучей из соседей пары, которые поворачиваются от прежних отрезков к хорде между соседями: путь от этого только
-     * короче, а звено луча, который стоит на месте, лишь укорачивается от своего конца, и его проверки
+     * (Г) Два соседних поворота в одну сторону при звене любой длины заменяет одна вершина в лучшей точке, если путь с
+     * ней не длиннее прежнего, а у пары с суммой поворотов от PAIR_MIN_DEG до PAIR_MAX_DEG и звеном короче PAIR_LINK_M
+     * — длиннее не больше чем на extraM (толкование п. 5): такой двойной поворот ничем не обоснован. Вершина —
+     * пересечение лучей из соседей пары, которые поворачиваются от прежних отрезков к хорде между соседями: путь от
+     * этого только короче, а звено луча, который стоит на месте, лишь укорачивается от своего конца, и его проверки
      * {@link #removalFits} не ломаются. Лучи поворачиваются по очереди до края допустимого, пока поворот растёт;
-     * поворот в новой вершине — сумма пары без поворотов лучей, он проверяется в конце и не меньше MIN_TURN_DEG.
-     * Сосед пары — вершина или граница специальной части, как у {@link #drop}. Удерживаемые вершины не заменяются,
-     * пары у специальных частей не трогаются. true — coords заменены.
+     * поворот в новой вершине — сумма пары без поворотов лучей, он проверяется в конце и не меньше MIN_TURN_DEG. Сосед
+     * пары — вершина или граница специальной части, как у {@link #drop}. Удерживаемые вершины не заменяются, пары у
+     * специальных частей не трогаются. true — coords заменены.
      */
     private boolean bend(ObstacleSet zones, List<Coordinate> coords, boolean[] held, List<SpecialSpan> spans,
-            Set<String> ignored, List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
+            Set<String> ignored, List<LineSegment> apart, Coordinate before, List<Coordinate> after, double extraM) {
         int n = coords.size();
         double[] turns = turns(coords);
         double[] at = new double[n];
@@ -1277,8 +1348,10 @@ public final class Router {
             // сосед внутри участка остаётся поворотом от MIN_TURN_DEG; у узла и границы специальной части излом любой
             boolean[] kept = {!start && j >= 2 && !overlapsSpan(spans, from - SPAN_EPS_M, from + SPAN_EPS_M),
                 !end && j + 3 < n && !overlapsSpan(spans, to - SPAN_EPS_M, to + SPAN_EPS_M)};
-            if (bent(zones, shape, x, coords.get(j), coords.get(j + 1), kept, Math.abs(turns[j] + turns[j + 1]),
-                    to - from, ignored, apart, before, after)) {
+            double total = Math.abs(turns[j] + turns[j + 1]);
+            boolean pair = total >= PAIR_MIN_DEG && total <= PAIR_MAX_DEG && at[j + 1] - at[j] < PAIR_LINK_M;
+            if (bent(zones, shape, x, coords.get(j), coords.get(j + 1), kept, total, to - from + (pair ? extraM : 0),
+                    ignored, apart, before, after)) {
                 coords.clear();
                 coords.addAll(shape);
                 return true;
@@ -1331,7 +1404,84 @@ public final class Router {
                 && bendFits(zones, shape, x, 1, kept, ends, base, room, turn, ignored, apart, before, after)
                 && turnAllowed(ends[0], shape.get(x), ends[1]);
         Coordinate at = shape.get(x);
-        return fits && ends[0].distance(at) + at.distance(ends[1]) <= length + SHARPEN_EPS;
+        if (fits && ends[0].distance(at) + at.distance(ends[1]) <= length + SHARPEN_EPS) {
+            return true;
+        }
+        return scanned(zones, shape, x, new LineSegment(p, q), kept, length, ignored, apart, before, after);
+    }
+
+    private boolean scanned(ObstacleSet zones, List<Coordinate> shape, int x, LineSegment pair, boolean[] kept,
+            double length, Set<String> ignored, List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
+        Coordinate a = shape.get(x - 1);
+        Coordinate b = shape.get(x + 1);
+        double d = a.distance(b);
+        double half = length / 2;
+        double minor = Math.sqrt(Math.max(0, half * half - d * d / 4));
+        if (d == 0 || minor == 0) {
+            return false;
+        }
+        double ex = (b.x - a.x) / d;
+        double ey = (b.y - a.y) / d;
+        double step = Math.max(minor / BEND_GRID, BEND_GRID_MIN_M);
+        List<Coordinate> grid = new ArrayList<>();
+        for (double u = -half; u < half; u += step) {
+            for (double v = -minor; v < minor; v += step) {
+                if ((u / half) * (u / half) + (v / minor) * (v / minor) <= 1) {
+                    grid.add(new Coordinate((a.x + b.x) / 2 + u * ex - v * ey, (a.y + b.y) / 2 + u * ey + v * ex));
+                }
+            }
+        }
+        grid.sort(Comparator.comparingDouble(pair::distance));
+        int tried = 0;
+        for (Coordinate c : grid) {
+            if (tried >= BEND_SCAN_LIMIT) {
+                break;
+            }
+            if (!(a.distance(c) + c.distance(b) <= length + SHARPEN_EPS) || !vertexFits(shape, x, c)) {
+                continue;
+            }
+            tried++;
+            if (!pointFits(zones, shape, x, c, kept, ignored, apart, before, after)) {
+                continue;
+            }
+            Coordinate best = c;
+            for (double h = step; h > BEND_DESCENT_M; ) {
+                Coordinate next = null;
+                double shortest = a.distance(best) + best.distance(b);
+                for (int k = 0; k < BEND_DIRECTIONS; k++) {
+                    double t = 2 * Math.PI * k / BEND_DIRECTIONS;
+                    Coordinate probe = new Coordinate(best.x + h * Math.cos(t), best.y + h * Math.sin(t));
+                    double len = a.distance(probe) + probe.distance(b);
+                    if (len < shortest && vertexFits(shape, x, probe)
+                            && pointFits(zones, shape, x, probe, kept, ignored, apart, before, after)) {
+                        next = probe;
+                        shortest = len;
+                    }
+                }
+                if (next == null) {
+                    h /= 2;
+                } else {
+                    best = next;
+                }
+            }
+            shape.set(x, best);
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean vertexFits(List<Coordinate> shape, int x, Coordinate c) {
+        Coordinate a = shape.get(x - 1);
+        Coordinate b = shape.get(x + 1);
+        return a.distance(c) >= CUT_PIECE_M && c.distance(b) >= CUT_PIECE_M && turnAllowed(a, c, b)
+                && deflectionDeg(a, c, b) >= MIN_TURN_DEG;
+    }
+
+    private boolean pointFits(ObstacleSet zones, List<Coordinate> shape, int x, Coordinate c, boolean[] kept,
+            Set<String> ignored, List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
+        shape.set(x, c);
+        return linkFits(zones, shape, x, 0, kept, ignored, apart, before, after)
+                && linkFits(zones, shape, x, 1, kept, ignored, apart, before, after);
     }
 
     /**
@@ -1357,6 +1507,11 @@ public final class Router {
             return false;
         }
         shape.set(x, new Coordinate(ends[0].x + s * ux, ends[0].y + s * uy));
+        return linkFits(zones, shape, x, side, kept, ignored, apart, before, after);
+    }
+
+    private boolean linkFits(ObstacleSet zones, List<Coordinate> shape, int x, int side, boolean[] kept,
+            Set<String> ignored, List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
         int join = x - 1 + side;
         // поворот в новой вершине убывает с поворотом лучей и проверяется в конце, см. bent
         boolean outer = side == 0 ? join < 1 || turnAllowed(shape.get(join - 1), shape.get(join), shape.get(x))
@@ -1403,6 +1558,17 @@ public final class Router {
             }
         }
         return false;
+    }
+
+    public static int pairs(Coordinate[] coords) {
+        double[] turns = turns(Arrays.asList(coords));
+        int count = 0;
+        for (int v = 1; v + 2 < coords.length; v++) {
+            if (Math.abs(turns[v]) >= MIN_TURN_DEG && Math.abs(turns[v + 1]) >= MIN_TURN_DEG && turns[v] * turns[v + 1] > 0) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /** Повороты ломаной в вершинах со знаком (плюс — влево), 0 у концов; для {@link #chains}. */
@@ -1860,7 +2026,7 @@ public final class Router {
     }
 
     /** Отрезок ломаной уже идёт по оси, см. {@link #square}: отклонение от axis или axis + 90° меньше этого. */
-    private static final double SQUARE_TOL_RAD = Math.toRadians(0.5);
+    public static final double SQUARE_TOL_RAD = Math.toRadians(0.5);
     /**
      * Поворот между оставленным прежним отрезком и участком по осям, см. {@link #square}: мельче этого — лишняя вершина
      * (мелкий излом, как SMALL_BEND_DEG у TreeBuilder).
@@ -1887,8 +2053,9 @@ public final class Router {
      * Ортогональная форма (замечание экспертов 16.10.2026: трасса прямыми вдоль застройки, один поворот 90° вместо
      * двух по 45°, без зигзагов; п. 2.1 приложения): обычные участки ломаной между неподвижными вершинами — концами,
      * keep и вершинами у специальных частей ({@link #held}) — перекладываются по прямым вдоль axis и axis + 90°
-     * ({@link #squarePath}). Новый участок берётся, если он не длиннее ratio старого, вершин у ломаной не больше чем на
-     * одну больше, чем было (прямую заменяет один поворот 90°, а не ступенька), а ломаная проходит те же
+     * ({@link #squarePath}). Новый участок берётся, если он не длиннее ratio старого, вершин и соседних поворотов в одну
+     * сторону у ломаной не больше, чем было, ни одну её вершину нельзя убрать прямой ({@link #removable}), двух соседних
+     * поворотов в одну сторону не заменяет одна вершина ({@link #bend}), а ломаная проходит те же
      * проверки, что после {@link #sharpen}: зоны и отступы, CUT_APART_M до apart и своих отрезков, повороты до
      * MAX_TURN_DEG, в том числе к before и after, без изломов меньше MIN_TURN_DEG. true — coords заменены.
      */
@@ -1960,9 +2127,8 @@ public final class Router {
                         shape.remove(v);
                     }
                 }
-                // прямую заменяет один поворот 90°, а не ступенька: вершин ребра не больше чем на одну больше прежнего
-                // (считается после слияния: последнее звено по оси часто продолжает финальный участок, и выход уходит)
-                if (shape.size() > coords.size() + 1) {
+                if (shape.size() > coords.size() || pairs(shape.toArray(new Coordinate[0])) > pairs(coords.toArray(new Coordinate[0]))
+                        || bendable(zones, shape, keep, ignored, apart, before, after)) {
                     debug(coords, i, j, String.format(java.util.Locale.ROOT, "вершин %d против %d", shape.size() - 2,
                             coords.size() - 2), path);
                     continue;
@@ -2007,6 +2173,19 @@ public final class Router {
         return removalFits(zones, without, v - 1, ignored, apart, before, after);
     }
 
+    private boolean bendable(ObstacleSet zones, List<Coordinate> shape, Coordinate keep, Set<String> ignored,
+            List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
+        List<Coordinate> probe = new ArrayList<>(shape);
+        List<SpecialSpan> spans = zones.spans(factory.createLineString(probe.toArray(new Coordinate[0])), ignored);
+        boolean[] held = held(probe, keep, spans);
+        for (int v = 1; v + 1 < probe.size(); v++) {
+            if (!held[v] && removable(zones, probe, v, ignored, apart, before, after)) {
+                return true;
+            }
+        }
+        return bend(zones, probe, held, spans, ignored, apart, before, after, 0);
+    }
+
     /** Отладка {@link #square} (свойство heatnet.square.debug): почему участок не лёг по осям. */
     private static final boolean SQUARE_DEBUG = Boolean.getBoolean("heatnet.square.debug");
 
@@ -2045,6 +2224,97 @@ public final class Router {
      * Coordinate, что в coords: keep сравнивается по ссылке.
      */
     private List<Coordinate> squarePath(ObstacleSet zones, List<Coordinate> coords, int i, int j, Set<String> ignored,
+            List<LineSegment> apart, Coordinate before, List<Coordinate> after, double axis, double turnM, boolean exit) {
+        Coordinate in = i > 0 ? coords.get(i - 1) : before;
+        List<Coordinate> outs = j + 1 < coords.size() ? List.of(coords.get(j + 1)) : after;
+        Envelope box = new Envelope();
+        for (int v = i; v <= j; v++) {
+            box.expandToInclude(coords.get(v));
+        }
+        Coordinate center = box.centre();
+        double reach = (Math.hypot(box.getWidth() / 2 + SQUARE_MARGIN_M, box.getHeight() / 2 + SQUARE_MARGIN_M) + SQUARE_MARGIN_M)
+                * Math.sqrt(2) + 2 * CUT_APART_M;
+        List<LineSegment> near = new ArrayList<>();
+        for (LineSegment segment : apart) {
+            if (segment.distance(center) <= reach) {
+                near.add(segment);
+            }
+        }
+        double[] values = new double[2 * (j - i + 2 + outs.size() + 2 * near.size()) + 3];
+        int k = 0;
+        for (int v = i; v <= j; v++) {
+            values[k++] = coords.get(v).x;
+            values[k++] = coords.get(v).y;
+        }
+        values[k++] = in == null ? Double.NaN : in.x;
+        values[k++] = in == null ? Double.NaN : in.y;
+        for (Coordinate out : outs) {
+            values[k++] = out.x;
+            values[k++] = out.y;
+        }
+        for (LineSegment segment : near) {
+            values[k++] = segment.p0.x;
+            values[k++] = segment.p0.y;
+            values[k++] = segment.p1.x;
+            values[k++] = segment.p1.y;
+        }
+        values[k++] = axis;
+        values[k++] = turnM;
+        values[k] = j - i;
+        SquareKey key = new SquareKey(zones, ignored, exit, values);
+        Coordinate[] known = squarePaths.get(key);
+        if (known == null) {
+            List<Coordinate> path = searchSquarePath(zones, coords, i, j, ignored, apart, before, after, axis, turnM, exit);
+            if (squarePaths.size() < SQUARE_PATHS_MAX) {
+                squarePaths.putIfAbsent(key, path == null ? new Coordinate[0]
+                        : path.stream().map(Coordinate::new).toArray(Coordinate[]::new));
+            }
+            return path;
+        }
+        if (known.length == 0) {
+            return null;
+        }
+        List<Coordinate> path = new ArrayList<>(known.length);
+        path.add(coords.get(i));
+        for (int v = 1; v + 1 < known.length; v++) {
+            path.add(new Coordinate(known[v]));
+        }
+        path.add(coords.get(j));
+        return path;
+    }
+
+    private static final class SquareKey {
+        final ObstacleSet zones;
+        final Set<String> ignored;
+        final boolean exit;
+        final double[] values;
+        final int hash;
+
+        SquareKey(ObstacleSet zones, Set<String> ignored, boolean exit, double[] values) {
+            this.zones = zones;
+            this.ignored = ignored;
+            this.exit = exit;
+            this.values = values;
+            this.hash = (System.identityHashCode(zones) * 31 + ignored.hashCode()) * 31 + Arrays.hashCode(values) + (exit ? 1 : 0);
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (!(other instanceof SquareKey)) {
+                return false;
+            }
+            SquareKey key = (SquareKey) other;
+            return zones == key.zones && exit == key.exit && hash == key.hash && Arrays.equals(values, key.values)
+                    && ignored.equals(key.ignored);
+        }
+
+        @Override
+        public int hashCode() {
+            return hash;
+        }
+    }
+
+    private List<Coordinate> searchSquarePath(ObstacleSet zones, List<Coordinate> coords, int i, int j, Set<String> ignored,
             List<LineSegment> apart, Coordinate before, List<Coordinate> after, double axis, double turnM, boolean exit) {
         Coordinate p = coords.get(i);
         Coordinate q = coords.get(j);

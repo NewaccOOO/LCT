@@ -48,6 +48,7 @@ final class TreeBuilder {
     /** Шаг и наибольший угол поворота звена у камеры ветвления, см. {@link #bends}. */
     private static final double BEND_STEP_DEG = 0.5;
     private static final double MAX_BEND_DEG = 90;
+    static final double SPLIT_LINK_M = 2;
     private static final double TOUCH_M = 0.05;
     /** Валидатор не проверяет касание участков в круге 0,15 м вокруг общего узла. */
     private static final double JUNCTION_CLIP_M = 0.15;
@@ -59,6 +60,7 @@ final class TreeBuilder {
     private static final double[] SLIDE_STEPS_M = {1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50};
     /** Сетка мест переноса камеры ветвления вокруг прежнего, см. {@link #unkinks}; у проверщика B21 та же. */
     private static final double SHIFT_M = 6;
+    private static final double RIGHT_TOL_DEG = 2;
     private static final double SHIFT_STEP_M = 0.5;
     /** Точка на прямой звена — ближе LINE_TOL_M. */
     private static final double LINE_TOL_M = 1e-6;
@@ -84,6 +86,7 @@ final class TreeBuilder {
     private static final double PORTAL_MAX_M = 30;
     /** Сколько точек границы пробуется как начало финального участка: ближайшая, затем ближайшие точки сторон. */
     private static final int PORTAL_TRIES = 8;
+    private static final double SIDE_APART_M = 2.0;
     /**
      * Шаг точек входа вдоль сторон контура ({@link #entries}), точек выхода на луче ({@link #entered}) и проверки
      * подхода финального участка к своему зданию ({@link #recedes}). В зоне отступа участок не подходит к зданию
@@ -235,7 +238,7 @@ final class TreeBuilder {
      */
     Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
             double chamberPenaltyM, double tieInPenaltyM, boolean fromPortalDirection, Graphs graphs) {
-        return build(router, dn, area, tie, connections, chamberPenaltyM, tieInPenaltyM, fromPortalDirection, graphs, false);
+        return build(router, dn, area, tie, connections, chamberPenaltyM, tieInPenaltyM, fromPortalDirection, graphs, false, false);
     }
 
     /**
@@ -244,12 +247,99 @@ final class TreeBuilder {
      * помечается {@link Tree#turnStuck}.
      */
     Tree build(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
-            double chamberPenaltyM, double tieInPenaltyM, boolean fromPortalDirection, Graphs graphs, boolean link) {
+            double chamberPenaltyM, double tieInPenaltyM, boolean fromPortalDirection, Graphs graphs, boolean link,
+            boolean anySide) {
         Run run = new Run(router, dn, area, tie, chamberPenaltyM, tieInPenaltyM);
         run.link = link;
+        run.anySide = anySide;
         run.fromPortalDirection = fromPortalDirection;
         run.graphs = graphs;
         return run.build(connections);
+    }
+
+    Tree buildOnSkeleton(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
+            List<Coordinate> junctions, int[] junctionParent, double chamberPenaltyM, double tieInPenaltyM, Graphs graphs) {
+        Run run = new Run(router, dn, area, tie, chamberPenaltyM, tieInPenaltyM);
+        run.graphs = graphs;
+        run.link = true;
+        Tree tree = run.tree;
+        List<Tree.Node> nodes = new ArrayList<>();
+        for (int j = 0; j < junctions.size(); j++) {
+            Tree.Node parent = junctionParent[j] < 0 ? tree.root : nodes.get(junctionParent[j]);
+            Tree.Node node = Tree.Node.junction(junctions.get(j));
+            Coordinate[] line = upward(router, junctions.get(j), parent.point, run.ignored);
+            if (line == null) {
+                log.warn("skeleton: нет маршрута от камеры {} к {}", junctions.get(j), parent.point);
+                nodes.add(parent);
+                continue;
+            }
+            tree.edges.add(new Tree.Edge(parent, node, factory.createLineString(line)));
+            nodes.add(node);
+        }
+        run.build(connections);
+        pruned(tree);
+        return tree;
+    }
+
+    private void pruned(Tree tree) {
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (int i = tree.edges.size() - 1; i >= 0; i--) {
+                Tree.Edge edge = tree.edges.get(i);
+                if (edge.to.kind == Tree.Kind.JUNCTION && tree.edges.stream().noneMatch(e -> e.from == edge.to)) {
+                    tree.edges.remove(i);
+                    changed = true;
+                }
+            }
+            for (Tree.Edge up : new ArrayList<>(tree.edges)) {
+                Tree.Node middle = up.to;
+                if (middle.kind != Tree.Kind.JUNCTION) {
+                    continue;
+                }
+                List<Tree.Edge> down = new ArrayList<>();
+                for (Tree.Edge e : tree.edges) {
+                    if (e.from == middle) {
+                        down.add(e);
+                    }
+                }
+                if (down.size() == 1) {
+                    Coordinate[] a = up.line.getCoordinates();
+                    Coordinate[] b = down.get(0).line.getCoordinates();
+                    Coordinate[] joined = new Coordinate[a.length + b.length - 1];
+                    System.arraycopy(a, 0, joined, 0, a.length);
+                    System.arraycopy(b, 1, joined, a.length, b.length - 1);
+                    int index = tree.edges.indexOf(up);
+                    tree.edges.set(index, new Tree.Edge(up.from, down.get(0).to, factory.createLineString(joined)));
+                    tree.edges.remove(down.get(0));
+                    changed = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    private Coordinate[] upward(Router router, Coordinate from, Coordinate to, Set<String> ignored) {
+        Route route = router.routeToAny(factory.createPoint(from), List.of(factory.createPoint(to)), ignored, true);
+        if (route == null) {
+            return null;
+        }
+        Coordinate[] coords = route.getGeometry().getCoordinates();
+        Coordinate[] reversed = new Coordinate[coords.length];
+        for (int i = 0; i < coords.length; i++) {
+            reversed[i] = coords[coords.length - 1 - i];
+        }
+        reversed[0] = to;
+        reversed[reversed.length - 1] = from;
+        List<Coordinate> kept = new ArrayList<>(Arrays.asList(reversed));
+        for (int i = 1; i + 1 < kept.size(); ) {
+            if (kept.get(i).distance(kept.get(i - 1)) < Router.CUT_PIECE_M || kept.get(i).distance(kept.get(i + 1)) < Router.CUT_PIECE_M) {
+                kept.remove(i);
+            } else {
+                i++;
+            }
+        }
+        return kept.toArray(new Coordinate[0]);
     }
 
     /**
@@ -790,6 +880,7 @@ final class TreeBuilder {
 
         /** Звено после выхода разрешено, см. {@link #build}; turned — на шаге его не хватило какой-то точке. */
         boolean link;
+        boolean anySide;
         boolean turned;
 
         Tree build(List<ConnectionPoint> connections) {
@@ -819,7 +910,7 @@ final class TreeBuilder {
                 if (best == null) {
                     // выход через другую сторону здания допустим только при закрытой ближней (п. 2.2), поэтому точку,
                     // от выхода которой нет ветки к этому дереву, не переводят на дальнюю сторону: она уходит из дерева
-                    // и подключается отдельно
+                    // и подключается отдельно; дальнюю сторону пробует только последняя попытка для одиночной точки
                     tree.unconnected.addAll(remaining);
                     break;
                 }
@@ -862,10 +953,15 @@ final class TreeBuilder {
 
         /**
          * Выход на луче от точки подключения через ближайшую точку границы полигона, сразу за зоной отступа zones,
-         * дальше, пока выход лежит в чужой зоне запрета. Если участок до такого выхода недопустим или снова входит в
+         * за концом спецучастка, если участок до выхода пересёк объект специального прохода (спецпроход — один прямой
+         * участок, разъяснение 6), и дальше, пока выход лежит в чужой зоне запрета. Если участок до такого выхода недопустим или снова входит в
          * своё здание или его зону отступа, пробуются ближайшие точки других сторон полигона. NO_EXIT — выхода нет.
          */
         Exit exit(ConnectionPoint connection, ExistingOks building, ObstacleSet zones, Router branchRouter) {
+            return exit(connection, building, zones, branchRouter, 0);
+        }
+
+        Exit exit(ConnectionPoint connection, ExistingOks building, ObstacleSet zones, Router branchRouter, int after) {
             Coordinate cp = connection.getGeometry().getCoordinate();
             // сначала внешние контуры: ближайшая граница двора (дырки) ведёт внутрь зоны отступа, выхода там нет
             List<Coordinate> anchors = anchors(building.getGeometry(), cp);
@@ -882,6 +978,9 @@ final class TreeBuilder {
                 if (tries++ >= PORTAL_TRIES) {
                     break;
                 }
+                if (tries <= after) {
+                    continue;
+                }
                 double dx = anchor.x - cp.x;
                 double dy = anchor.y - cp.y;
                 double length = Math.hypot(dx, dy);
@@ -895,7 +994,7 @@ final class TreeBuilder {
                 }
                 dx /= length;
                 dy /= length;
-                double along = cp.distance(anchor) + zones.oksClearance() + PORTAL_EXTRA_M;
+                double along = beyondSpecial(zones, cp, dx, dy, cp.distance(anchor) + zones.oksClearance() + PORTAL_EXTRA_M, own);
                 Coordinate exit = new Coordinate(cp.x + dx * along, cp.y + dy * along);
                 for (double extra = 0; zones.insideForbid(exit) && extra < PORTAL_MAX_M; extra += PORTAL_STEP_M) {
                     exit = new Coordinate(cp.x + dx * (along + extra), cp.y + dy * (along + extra));
@@ -920,19 +1019,44 @@ final class TreeBuilder {
                     id -> entries(building.getGeometry(), cp, Double.POSITIVE_INFINITY));
             List<Coordinate[]> rings = rings(building.getGeometry());
             for (int i = 0; i < entries.size(); i++) {
+                if (PORTAL_TRIES + 1 + i <= after) {
+                    continue;
+                }
                 double[] window = window(zones, building, rings, cp, entries.get(i));
                 if (window.length == 0) {
                     continue;
                 }
                 double r = cp.distance(entries.get(i));
-                Coordinate exit = new Coordinate(cp.x + (entries.get(i).x - cp.x) / r * window[0],
-                        cp.y + (entries.get(i).y - cp.y) / r * window[0]);
-                if (area.contains(exit) && !Double.isNaN(zones.edgeWeight(cp, exit, own))) {
+                double ux = (entries.get(i).x - cp.x) / r;
+                double uy = (entries.get(i).y - cp.y) / r;
+                Coordinate exit = new Coordinate(cp.x + ux * window[0], cp.y + uy * window[0]);
+                if (!area.contains(exit) || Double.isNaN(zones.edgeWeight(cp, exit, own))) {
+                    continue;
+                }
+                double along = beyondSpecial(zones, cp, ux, uy, window[0], own);
+                exit = new Coordinate(cp.x + ux * along, cp.y + uy * along);
+                if (along <= window[1] && area.contains(exit) && !Double.isNaN(zones.edgeWeight(cp, exit, own))) {
                     log.debug("portal: {} entry {} at {} m", connection.getId(), i + 1, r);
                     return new Exit(exit, branchRouter, PORTAL_TRIES + 1 + i);
                 }
             }
             return NO_EXIT;
+        }
+
+        double beyondSpecial(ObstacleSet zones, Coordinate cp, double ux, double uy, double along, Set<String> own) {
+            Coordinate exit = new Coordinate(cp.x + ux * along, cp.y + uy * along);
+            List<SpecialSpan> before = zones.spans(factory.createLineString(new Coordinate[] {cp, exit}), own);
+            if (before.isEmpty() || before.get(before.size() - 1).getToM() < cp.distance(exit) - TOUCH_M) {
+                return along;
+            }
+            double reach = along + PORTAL_MAX_M;
+            Coordinate far = new Coordinate(cp.x + ux * reach, cp.y + uy * reach);
+            for (SpecialSpan span : zones.spans(factory.createLineString(new Coordinate[] {cp, far}), own)) {
+                if (span.getFromM() <= along && along <= span.getToM()) {
+                    along = span.getToM() + PORTAL_EXTRA_M;
+                }
+            }
+            return along;
         }
 
         /** Ближайшие к cp точки сторон полигона по возрастанию расстояния: внешние контуры, затем дырки. */
@@ -982,6 +1106,27 @@ final class TreeBuilder {
             if (portal == NO_EXIT) {
                 return null;
             }
+            Attach attach = attach(connection, targets, fromPortalDirection, portal);
+            if (attach != null || !anySide || portal == null) {
+                return attach;
+            }
+            ExistingOks building = buildingByConnection.get(connection.getId());
+            List<Coordinate> tried = new ArrayList<>(List.of(portal.point));
+            for (Exit next = exit(connection, building, obstacles, router, portal.anchor);
+                    next != NO_EXIT && attach == null && tried.size() <= PORTAL_TRIES;
+                    next = exit(connection, building, obstacles, router, next.anchor)) {
+                Coordinate at = next.point;
+                if (tried.stream().anyMatch(c -> c.distance(at) < SIDE_APART_M)) {
+                    continue;
+                }
+                tried.add(at);
+                log.debug("portal: {} next side, anchor {}", connection.getId(), next.anchor);
+                attach = attach(connection, targets, fromPortalDirection, next);
+            }
+            return attach;
+        }
+
+        Attach attach(ConnectionPoint connection, List<Point> targets, boolean fromPortalDirection, Exit portal) {
             Router branchRouter = portal == null ? router : portal.router;
             Point start = portal == null ? connection.getGeometry() : factory.createPoint(portal.point);
             // маршруты со срезанными углами у вершин зон, см. Router#cutPass
@@ -1272,7 +1417,8 @@ final class TreeBuilder {
          * идёт через своё здание. Так не строилась ветка к врезке у перпендикуляра на трубе вдоль стены, и точка
          * оставалась без сети или уходила к дальней врезке (п. 2.5, разъяснения 11 и 15). Выход на прямой от точки к
          * следующей вершине просто убирается: участок тот же. Иначе прямой участок от точки берётся, если входит в
-         * здание у ближайшей точки контура и держит запасы строгой формы, см. {@link #straightened}; если нет — выход
+         * здание у ближайшей точки контура и держит запасы строгой формы, см. {@link #straightened}, а если участок до
+         * выхода пересёк объект специального прохода, прямая пересекает его по правилам, как у {@link #evened}; если нет — выход
          * отодвигается по тому же лучу, пока поворот в нём не дойдёт до MIN_TURN_DEG, см. {@link #relinked}.
          */
         Coordinate[] throughExit(ConnectionPoint connection, Coordinate[] branch, ObstacleSet zones, Spot spot) {
@@ -1291,6 +1437,11 @@ final class TreeBuilder {
             Coordinate[] edge = reversed(branch);
             boolean fromRoot = spot.node == tree.root;
             Coordinate[] line = straightened(building, edge, zones, ignored, null, List.of(), fromRoot);
+            Coordinate entry = line != null || zones.spans(factory.createLineString(new Coordinate[] {branch[0], branch[1]}), ignored).isEmpty()
+                    ? null : straightEntry(building.getGeometry(), edge);
+            if (entry != null) {
+                line = relinked(building, edge, zones, ignored, null, List.of(), fromRoot, List.of(entry), true, true);
+            }
             if (line == null) {
                 Coordinate cp = branch[0];
                 double length = cp.distance(branch[1]);
@@ -1716,7 +1867,18 @@ final class TreeBuilder {
     /** {@link #unkinks}; при evensOnly — только переносы, которые снимают излом меньше MIN_TURN_DEG без роста цены. */
     List<Slide> unkinks(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
             Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub, boolean evensOnly) {
-        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, evensOnly, false);
+        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, evensOnly, null);
+    }
+
+    List<Slide> unkinks(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
+            Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub, boolean evensOnly,
+            java.util.function.BiPredicate<Coordinate[], Coordinate[]> keeps) {
+        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, evensOnly, false, keeps, false);
+    }
+
+    List<Slide> rightFreeUnkinks(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
+            Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub, boolean evensOnly) {
+        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, evensOnly, false, null, true);
     }
 
     /**
@@ -1726,15 +1888,19 @@ final class TreeBuilder {
      */
     List<Slide> turnMoves(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
             Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub) {
-        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, false, true);
+        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, false, true, null, false);
     }
 
     private List<Slide> unkinks(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
             Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub, boolean evensOnly,
-            boolean turnsOnly) {
+            boolean turnsOnly, java.util.function.BiPredicate<Coordinate[], Coordinate[]> keeps, boolean rights) {
         Ends ends = ends(tree, junction, zones);
         int[] paths = ends == null ? null : paths(ends, ends.heads);
-        if (ends == null || !turnsOnly && (evensOnly ? paths[2] == 0 : ends.vertices == 0 && paths[1] == 0)) {
+        int vertices = 0;
+        for (int e = 0; ends != null && e < ends.heads.length; e++) {
+            vertices += rights ? bent(ends.heads[e]) : ends.heads[e].length - 2;
+        }
+        if (ends == null || !turnsOnly && (evensOnly ? paths[2] == 0 : vertices == 0 && paths[1] == 0)) {
             return List.of();
         }
         int count = ends.heads.length;
@@ -1760,7 +1926,17 @@ final class TreeBuilder {
         double[][] costs = new double[count][2];
         int[][] verdicts = new int[count][2];
         int[] sizes = new int[count];
-        for (Coordinate point : spots(junction.point, from, ends.up, evensOnly ? ends.tails : null)) {
+        List<Coordinate> spots = spots(junction.point, from, ends.up, evensOnly ? ends.tails : null);
+        for (int e = 0; keeps != null && e < count; e++) {
+            double length = from[e][0].distance(from[e][1]);
+            for (double d = -SHIFT_M; d <= SHIFT_M; d += SHIFT_STEP_M) {
+                if (d != 0) {
+                    spots.add(new Coordinate(from[e][0].x + d * (from[e][1].x - from[e][0].x) / length,
+                            from[e][0].y + d * (from[e][1].y - from[e][0].y) / length));
+                }
+            }
+        }
+        for (Coordinate point : spots) {
             double bound = 0;
             int combos = 1;
             for (int e = 0; e < count; e++) {
@@ -1796,7 +1972,7 @@ final class TreeBuilder {
                     }
                 }
             }
-            if (!shorter && paths[1] == 0 && !evensOnly && !turnsOnly) {
+            if (!shorter && paths[1] == 0 && !evensOnly && !turnsOnly && !rights) {
                 continue;
             }
             Coordinate[][][] lines = new Coordinate[count][2][];
@@ -1817,13 +1993,13 @@ final class TreeBuilder {
                     int option = digits % sizes[e];
                     digits /= sizes[e];
                     layout[e] = lines[e][option];
-                    left += layout[e].length - 2;
+                    left += rights ? bent(layout[e]) : layout[e].length - 2;
                     gain += costs[e][option];
                     bad |= verdicts[e][option] < 0;
                 }
-                boolean fits = turnsOnly || (evensOnly ? left == ends.vertices && gain <= 0 && evens(ends, layout, paths)
-                        : left < ends.vertices || left == ends.vertices && straightens(ends, layout, paths));
-                if (!bad && fits && gain <= maxGainRub && turnsAllowed(layout, ends.up, point)) {
+                boolean fits = turnsOnly || (evensOnly ? left == vertices && gain <= 0 && evens(ends, layout, paths)
+                        : left < vertices || left == vertices && straightens(ends, layout, paths));
+                if (!bad && fits && gain <= maxGainRub && turnsAllowed(layout, ends.up, point) && kept(from, layout, keeps)) {
                     gains.add(gain);
                     layouts.add(layout);
                 }
@@ -1842,6 +2018,16 @@ final class TreeBuilder {
             }
         }
         return found;
+    }
+
+    private static boolean kept(Coordinate[][] from, Coordinate[][] layout,
+            java.util.function.BiPredicate<Coordinate[], Coordinate[]> keeps) {
+        for (int e = 0; keeps != null && e < from.length; e++) {
+            if (!keeps.test(from[e], layout[e])) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -2297,8 +2483,8 @@ final class TreeBuilder {
      * рёбра, которые не гнутся: финальный участок прямо от камеры в здание и ребро со специальной частью в первом
      * звене. Остальные рёбра с поворотом круче гнутся к нему на наименьший угол, как у {@link #bends}. Новая вершина
      * стоит в 1,05·2^k м от камеры, звенья проверяются, как у {@link #bend}, звено до прежней первой вершины — по своей
-     * длине, поворот в дальнем узле ребра из одного звена — не круче MAX_TURN_DEG. Разъяснение 5 не задаёт длину между
-     * поворотами, поэтому излом в 1,05 м от камеры законен. До MOVES_PER_JUNCTION правок по возрастанию gain.
+     * длине, поворот в дальнем узле ребра из одного звена — не круче MAX_TURN_DEG. До MOVES_PER_JUNCTION правок по
+     * возрастанию gain.
      */
     List<Slide> fans(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
             Map<Tree.Edge, Double> priceRub) {
@@ -2711,7 +2897,44 @@ final class TreeBuilder {
         return 180 - Math.toDegrees(Angle.angleBetween(a, b, c));
     }
 
+    static double pathTurnDeg(Coordinate[] in, Coordinate[] out) {
+        Coordinate[] c = new Coordinate[in.length + out.length - 1];
+        System.arraycopy(in, 0, c, 0, in.length);
+        System.arraycopy(out, 1, c, in.length, out.length - 1);
+        int at = in.length - 1;
+        double base = signedTurn(c[at - 1], c[at], c[at + 1]);
+        double total = base;
+        for (int i = at - 1; i >= 1 && c[i].distance(c[i + 1]) < SPLIT_LINK_M; i--) {
+            double t = signedTurn(c[i - 1], c[i], c[i + 1]);
+            if (t * base <= 0) {
+                break;
+            }
+            total += t;
+        }
+        for (int i = at + 1; i + 1 < c.length && c[i - 1].distance(c[i]) < SPLIT_LINK_M; i++) {
+            double t = signedTurn(c[i - 1], c[i], c[i + 1]);
+            if (t * base <= 0) {
+                break;
+            }
+            total += t;
+        }
+        return Math.abs(total);
+    }
+
+    private static double signedTurn(Coordinate a, Coordinate b, Coordinate c) {
+        double cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+        return Math.copySign(turn(a, b, c), cross);
+    }
+
     /** {@link #deflectionDeg} одним atan2, как у проверщика: у звена нулевой длины поворота нет. */
+    private static int bent(Coordinate[] c) {
+        int count = 0;
+        for (int i = 1; i + 1 < c.length; i++) {
+            count += Math.abs(turn(c[i - 1], c[i], c[i + 1]) - 90) > RIGHT_TOL_DEG ? 1 : 0;
+        }
+        return count;
+    }
+
     private static double turn(Coordinate a, Coordinate b, Coordinate c) {
         double ux = b.x - a.x;
         double uy = b.y - a.y;

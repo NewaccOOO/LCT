@@ -1,11 +1,15 @@
 package ru.lct.heatnet.plan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
+import org.locationtech.jts.geom.Coordinate;
+import ru.lct.heatnet.graph.Router;
+import ru.lct.heatnet.model.NewSegment;
 import ru.lct.heatnet.model.Result;
 import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.rules.Rules;
@@ -30,12 +34,15 @@ import ru.lct.heatnet.rules.Rules;
  * до вывода score с четырьмя знаками, п. 7.3; 12.7488 до переноса камеры, который без роста S снимает излом меньше
  * 3° в ней: v1_ch_6 на прямой v1_ch_5–v1_ch_7; 12.7483 до ортогональной формы по замечанию экспертов 16.10.2026:
  * рёбра по осям застройки, поворот 90° вместо двух по 45°, длина трассы растёт, S тоже; 13.434 до переноса камер
- * * ветвления под оси: ствол v1_ch_6–v1_ch_10 одной прямой; 13.5176 до сдвига камер вдоль своих рёбер и оси по отрезку, из
- * которого выходит ребро).
+ * ветвления под оси: ствол v1_ch_6–v1_ch_10 одной прямой; 13.5176 до сдвига камер вдоль своих рёбер и оси по отрезку, из
+ * которого выходит ребро; 13.6408 до запрета перекладки по осям, которая добавляет вершины или пары поворотов,
+ * даёт двойной поворот, заменимый одной вершиной, или удлиняет участок больше чем в 1,3 раза; 13.1574 до точного
+ * скелета дерева врезки, который берётся, только если после проходов формы не хуже ни по одному показателю).
  * Менять константу только при намеренной смене качества.
  */
 class OrganizerDatasetRegressionTest {
-    private static final double ORGANIZER_RANK1_SCORE = 13.6408;
+    private static final double ORGANIZER_RANK1_SCORE = 12.7841;
+    private static final int TURNS_BEFORE_AXES = 26;
 
     @Test
     void rank1ScoreMatchesBaseline() throws Exception {
@@ -48,7 +55,21 @@ class OrganizerDatasetRegressionTest {
         assertEquals(ORGANIZER_RANK1_SCORE, best.getSummary().getScore(), 1e-6);
         // с общим правилом выхода из здания (B19, 28.09.2026) черновик с точкой 4 отдельной частью проходит проверки и
         // отличается от первого по устройству: второй вариант (S 13,1835 до ортогональной формы); первый прежний
-        assertEquals(2, result.getVariants().size());
-        assertEquals(14.1148, result.getVariants().get(1).getSummary().getScore(), 1e-6);
+        assertEquals(3, result.getVariants().size());
+        assertEquals(13.0943, result.getVariants().get(1).getSummary().getScore(), 1e-6);
+        assertTrue(turns(best) <= TURNS_BEFORE_AXES, "поворотов " + turns(best));
+    }
+
+    private static int turns(Variant variant) {
+        int count = 0;
+        for (NewSegment segment : variant.getSegments()) {
+            Coordinate[] c = segment.getGeometry().getCoordinates();
+            for (int v = 1; v + 1 < c.length; v++) {
+                if (Router.deflectionDeg(c[v - 1], c[v], c[v + 1]) >= TreeBuilder.MIN_TURN_DEG) {
+                    count++;
+                }
+            }
+        }
+        return count;
     }
 }

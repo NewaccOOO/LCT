@@ -12,7 +12,7 @@
 
     <groupId>ru.lct</groupId>
     <artifactId>heatnet</artifactId>
-    <version>0.9.0</version>
+    <version>0.11.0</version>
     <name>heatnet</name>
 
     <properties>
@@ -108,6 +108,16 @@
             </resource>
             <resource>
                 <directory>rules</directory>
+            </resource>
+            <!-- платформа инженера (platform/): сервис отдаёт её на / рядом с API -->
+            <resource>
+                <directory>platform</directory>
+                <targetPath>static</targetPath>
+                <excludes>
+                    <exclude>test/**</exclude>
+                    <exclude>tools/**</exclude>
+                    <exclude>docs/**</exclude>
+                </excludes>
             </resource>
         </resources>
         <plugins>
