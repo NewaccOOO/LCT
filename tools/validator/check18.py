@@ -64,6 +64,7 @@ CUT_APART_M = 0.5
 MAX_TURN_DEG = 90 + 1e-6
 # поворот ровно 90° после округления координат выхода до 9 знаков градуса меряется с ошибкой в тысячные доли градуса
 ROUND_TURN_DEG = 0.01
+KNEE_LINK_M = 2.0
 # прямой угол трассы по осям застройки не лишняя вершина (B16, B21): эксперты 16.10.2026 — трасса прямыми вдоль стен
 # и дорог, один поворот 90° вместо двух по 45°, хотя диагональ короче
 RIGHT_TOL_DEG = 2.0
@@ -163,10 +164,10 @@ def entry_window(cg, q, own, zone, dn, trees):
     """Где на луче от точки через точку контура q может кончиться финальный участок ДУ dn: (причина, None) или
     (None, (ux, uy, от, до)) в метрах от точки.
 
-    Луч выходит из здания один раз и в зоне отступа своего здания не подходит к нему снова (к другой стене, больше
-    чем на APPROACH_ENTRY_M), конец участка лежит за зоной отступа сервиса (норма + ZONE_WIDER_M) до нового входа луча
-    в зону. Участок до конца не задевает зон чужих зданий и запретных объектов и не идёт ближе отступа вдоль объекта
-    специального прохода (B10): это проверяет nearer_entry у каждого конца."""
+    Луч выходит из здания один раз и в зоне отступа своего здания, считая от выхода из здания, как у B19, не подходит
+    к нему снова (к другой стене, больше чем на APPROACH_ENTRY_M), конец участка лежит за зоной отступа сервиса (норма
+    + ZONE_WIDER_M) до нового входа луча в зону. Участок до конца не задевает зон чужих зданий и запретных объектов
+    и не идёт ближе отступа вдоль объекта специального прохода (B10): это проверяет nearer_entry у каждого конца."""
     r = q.distance(cg)
     if r < 1e-6:
         return "точка на границе", None
@@ -186,7 +187,8 @@ def entry_window(cg, q, own, zone, dn, trees):
     inside = ray.intersection(own) if t1 == math.inf else LineString([(cg.x, cg.y), along(t1)]).intersection(own)
     if len([g for g in getattr(inside, "geoms", [inside]) if g.length > 0.05]) != 1:
         return "луч снова входит в своё здание", None
-    ts = np.arange(r, t1, ENTRY_STEP_M)
+    start = next((g.length for g in getattr(inside, "geoms", [inside]) if g.distance(cg) < 0.05), 0.0)
+    ts = np.arange(start, t1, ENTRY_STEP_M)
     d = shapely.distance(shapely.points(cg.x + ux * ts, cg.y + uy * ts), own)
     if len(d) and (np.maximum.accumulate(d) - d).max() > APPROACH_ENTRY_M:
         return "луч в зоне отступа подходит к другой стене своего здания", None
@@ -630,6 +632,9 @@ def check_variant(inp, trees, vid, feats, rep):
     for n, k in kinds.items():
         if k == "existing_chamber":
             existing_tie_ins += len(adj[n])
+            if trees["chamber_links"](n) + len(adj[n]) > 4:
+                rep.add("D5 у существующей камеры больше 4 примыканий",
+                        f"{n}: сеть {trees['chamber_links'](n)} + новых {len(adj[n])}")
 
     # B. препятствия: ОКС (все полигоны), запретные, специальные
     # финальный прямой участок к точке: последнее звено участка у точки и коллинеарные с ним участки через
@@ -1237,6 +1242,19 @@ def signed_turn(a, b, c):
     return math.copysign(turn_deg(a, b, c), cross)
 
 
+def path_turn(c, at):
+    base = signed_turn(c[at - 1], c[at], c[at + 1])
+    total, lo, hi = base, at, at
+    while lo > 1 and math.dist(c[lo - 1], c[lo]) < KNEE_LINK_M and signed_turn(c[lo - 2], c[lo - 1], c[lo]) * base > 0:
+        lo -= 1
+        total += signed_turn(c[lo - 1], c[lo], c[lo + 1])
+    while (hi < len(c) - 2 and math.dist(c[hi], c[hi + 1]) < KNEE_LINK_M
+           and signed_turn(c[hi], c[hi + 1], c[hi + 2]) * base > 0):
+        hi += 1
+        total += signed_turn(c[hi - 1], c[hi], c[hi + 1])
+    return abs(total), lo, hi
+
+
 def extend_cross(p1, p2, q1, q2):
     """Точка, где прямая p1→p2, продолженная вперёд, встречает прямую q2→q1, продолженную назад; None, если нет."""
     d1x, d1y = p2[0] - p1[0], p2[1] - p1[1]
@@ -1293,6 +1311,28 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
         return max([turn_deg(next_to(geo, other, node), pt, nb) for cs, ps in path_pairs.get(node, [])
                     for other in [ps if cs is s else cs if ps is s else None] if other is not None], default=0.0)
 
+    def kneed(s, node, new):
+        if node is None or kinds.get(node) != "heat_chamber":
+            return False
+        old = list(geo[str(s["properties"]["id"])].coords)
+        ending = str(s["properties"]["end_node_id"]) == node
+        for cs, ps in path_pairs.get(node, []):
+            if cs is not s and ps is not s:
+                continue
+            other = ps if cs is s else cs
+            oc = list(geo[str(other["properties"]["id"])].coords)
+            o_end = str(other["properties"]["end_node_id"]) == node
+            turns = []
+            for mine in (new, old):
+                m = mine if ending else mine[::-1]
+                o = oc if o_end else oc[::-1]
+                seq = m + o[::-1][1:] if cs is s else o + m[::-1][1:]
+                at = len(m) - 1 if cs is s else len(o) - 1
+                turns.append(path_turn(seq, at)[0] > MAX_TURN_DEG)
+            if turns[0] and not turns[1]:
+                return True
+        return False
+
     def blocked(k, new, changed, moved=None, min_piece=CUT_PIECE_M, apart=True, skip=None):
         """Почему геометрия new вместо участка k недопустима; None — допустима. changed — номера новых звеньев,
         moved — новые координаты других участков по номеру, min_piece — наименьшее новое звено, apart — проверять
@@ -1311,6 +1351,8 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
         if changed[0] == 0 and node_turn(segs[k], start, new[0], new[1]) > MAX_TURN_DEG \
                 or changed[-1] == len(new) - 2 and node_turn(segs[k], end, new[-1], new[-2]) > MAX_TURN_DEG:
             return f"поворот в узле на пути точки > {MAX_TURN_DEG}°"
+        if changed[0] <= 1 and kneed(segs[k], start, new) or changed[-1] >= len(new) - 3 and kneed(segs[k], end, new):
+            return f"колено у камеры: поворот круче 90° через звено короче {KNEE_LINK_M} м (разъяснение 18)"
         for i in changed:
             link = LineString(new[i:i + 2])
             if link.length < min_piece:
@@ -1686,9 +1728,18 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
         for q in inc:
             if up is not None and q is not up and turn_deg(new[id(up)][1], x, new[id(q)][1]) > MAX_TURN_DEG:
                 return f"поворот в камере {turn_deg(new[id(up)][1], x, new[id(q)][1]):.1f}° > {MAX_TURN_DEG}°"
+            if up is not None and q is not up and all(
+                    (path_turn(c[id(up)][::-1] + c[id(q)][1:], len(c[id(up)]) - 1)[0] > MAX_TURN_DEG) == want
+                    for c, want in ((new, True), (out, False))):
+                return f"колено в камере: поворот круче 90° через звено короче {KNEE_LINK_M} м (разъяснение 18)"
         # новые координаты участков в их собственном направлении
         forward = {id(r): out[id(r)][0] == lines[index[id(r)]].coords[0] for r in inc}
         own = {index[id(r)]: new[id(r)] if forward[id(r)] else new[id(r)][::-1] for r in inc}
+        for r in inc:
+            rp = r["properties"]
+            far = str(rp["end_node_id"]) if str(rp["start_node_id"]) == cid else str(rp["start_node_id"])
+            if kneed(r, far, own[index[id(r)]]):
+                return f"{rp['id']}: колено в камере {far} через звено короче {KNEE_LINK_M} м (разъяснение 18)"
         for r in inc:
             c, line = out[id(r)], new[id(r)]
             rp = r["properties"]
@@ -2058,6 +2109,34 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
             where = "камере" if kinds.get(n) == "heat_chamber" else "узле"
             rep.add(f"B20 поворот на пути точки в {where} круче 90°",
                     f"{n}: " + ", ".join(f"{cs['properties']['id']} → {s['properties']['id']} {a:.2f}°" for cs, s, a in sharp))
+
+    def oriented(seg, node, ending):
+        c = list(geo[str(seg["properties"]["id"])].coords)
+        key = "end_node_id" if ending else "start_node_id"
+        return c if str(seg["properties"][key]) == node else c[::-1]
+
+    def other_end(seg, node):
+        p = seg["properties"]
+        return str(p["start_node_id"]) if str(p["end_node_id"]) == node else str(p["end_node_id"])
+
+    for n, pairs in sorted(path_pairs.items()):
+        for cs, s in pairs if kinds.get(n) == "heat_chamber" else []:
+            inc, m = oriented(cs, n, True), other_end(cs, n)
+            while kinds.get(m) == "technical_node" and len(path_pairs.get(m, [])) == 1:
+                seg = path_pairs[m][0][0]
+                inc = oriented(seg, m, True)[:-1] + inc
+                m = other_end(seg, m)
+            out, m = oriented(s, n, False), other_end(s, n)
+            while kinds.get(m) == "technical_node" and m in parent:
+                seg = parent[m][1]
+                out = out + oriented(seg, m, False)[1:]
+                m = other_end(seg, m)
+            c = inc + out[1:]
+            total, lo, hi = path_turn(c, len(inc) - 1)
+            if hi > lo and total > MAX_TURN_DEG:
+                rep.add("i  B23 колено у камеры: поворот круче 90° на пути точки разбит короткими звеньями (разъяснение 18)",
+                        f"{n}: {cs['properties']['id']} → {s['properties']['id']} {total:.1f}° на {hi - lo + 1} "
+                        f"вершинах, звенья {', '.join(f'{math.dist(c[i], c[i + 1]):.2f}' for i in range(lo, hi))} м")
 
 
 def project_line(p, a, b):

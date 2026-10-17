@@ -51,18 +51,23 @@ class RouterTest {
     }
 
     @Test
-    void squareReplacesDiagonalWithOneRightTurnAroundPark() {
-        // диагональ (0,0)–(30,40) по осям 0°/90°: угол (30,0) в зоне парка, остаётся один поворот 90° через (0,40)
+    void squareKeepsStraightDiagonalAndReplacesKinkWithOneRightTurn() {
         Geometry park = rect(25, -10, 45, 10);
-        Router router = router(List.of(new Restriction("park-1", park, "park")), List.of());
-        List<Coordinate> coords = new ArrayList<>(List.of(new Coordinate(0, 0), new Coordinate(30, 40)));
+        Router open = router(List.of(new Restriction("park-1", park, "park")), List.of());
+        List<Coordinate> straight = new ArrayList<>(List.of(new Coordinate(0, 0), new Coordinate(30, 40)));
 
-        assertTrue(router.square(router.obstacles(), coords, Set.of(), null, List.of(), null, List.of(), 0, 1.5, 10));
+        assertFalse(open.square(open.obstacles(), straight, Set.of(), null, List.of(), null, List.of(), 0, 1.5, 10));
+        assertEquals(List.of(new Coordinate(0, 0), new Coordinate(30, 40)), straight);
 
-        assertEquals(List.of(new Coordinate(0, 0), new Coordinate(0, 40), new Coordinate(30, 40)), coords);
-        assertEquals(90, Router.deflectionDeg(coords.get(0), coords.get(1), coords.get(2)), EPS);
-        // длиннее ratio прежнего участка — не перекладывается
-        List<Coordinate> tight = new ArrayList<>(List.of(new Coordinate(0, 0), new Coordinate(30, 40)));
+        Geometry pond = rect(13, 18, 17, 22);
+        Router router = router(List.of(new Restriction("park-1", park, "park"), new Restriction("park-2", pond, "park")), List.of());
+        List<Coordinate> kinked = new ArrayList<>(List.of(new Coordinate(0, 0), new Coordinate(10, 25), new Coordinate(30, 40)));
+
+        assertTrue(router.square(router.obstacles(), kinked, Set.of(), null, List.of(), null, List.of(), 0, 1.5, 10));
+
+        assertEquals(List.of(new Coordinate(0, 0), new Coordinate(0, 40), new Coordinate(30, 40)), kinked);
+        assertEquals(90, Router.deflectionDeg(kinked.get(0), kinked.get(1), kinked.get(2)), EPS);
+        List<Coordinate> tight = new ArrayList<>(List.of(new Coordinate(0, 0), new Coordinate(10, 25), new Coordinate(30, 40)));
         assertFalse(router.square(router.obstacles(), tight, Set.of(), null, List.of(), null, List.of(), 0, 1.3, 10));
     }
 
@@ -153,6 +158,33 @@ class RouterTest {
         assertTrue(router.sharpen(router.obstacles(), detour, Set.of(), null, null));
         assertEquals(2, detour.size(), detour.toString());
         assertFalse(router.sharpen(router.obstacles(), around, Set.of(), null, null), around.toString());
+    }
+
+    @Test
+    void sharpenBendsReplacePairOfSixtyToHundredTwentyWithLongerVertexUpToFiveMeters() {
+        double clearance = rules.restriction("park").clearanceM(DN) + halfWidth;
+        Router router = router(List.of(new Restriction("park-1", rect(-4, -20, 4, 20 - clearance - 0.3), "park")), List.of());
+        List<Coordinate> path = new ArrayList<>(List.of(new Coordinate(-30, 0), new Coordinate(-6, 20),
+                new Coordinate(6, 20), new Coordinate(30, 0)));
+        double before = factory.createLineString(path.toArray(new Coordinate[0])).getLength();
+
+        assertTrue(router.sharpen(router.obstacles(), path, Set.of(), null, null, null, List.of(), true));
+
+        double after = factory.createLineString(path.toArray(new Coordinate[0])).getLength();
+        assertEquals(3, path.size(), path.toString());
+        assertTrue(after > before && after <= before + 5, before + " → " + after);
+    }
+
+    @Test
+    void sharpenBendsKeepShallowPairWhenOneVertexIsLonger() {
+        double clearance = rules.restriction("park").clearanceM(DN) + halfWidth;
+        Router router = router(List.of(new Restriction("park-1", rect(-4, -20, 4, 20 - clearance - 0.3), "park")), List.of());
+        List<Coordinate> path = new ArrayList<>(List.of(new Coordinate(-60, 0), new Coordinate(-6, 20),
+                new Coordinate(6, 20), new Coordinate(60, 0)));
+
+        router.sharpen(router.obstacles(), path, Set.of(), null, null, null, List.of(), true);
+
+        assertEquals(4, path.size(), path.toString());
     }
 
     @Test

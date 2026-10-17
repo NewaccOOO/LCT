@@ -1,0 +1,266 @@
+diff --git a/src/main/java/ru/lct/heatnet/graph/ObstacleSet.java b/src/main/java/ru/lct/heatnet/graph/ObstacleSet.java
+index 9066600..92cfbf0 100644
+--- a/src/main/java/ru/lct/heatnet/graph/ObstacleSet.java
++++ b/src/main/java/ru/lct/heatnet/graph/ObstacleSet.java
+@@ -850,6 +850,11 @@ public final class ObstacleSet {
+      */
+     public ObstacleSet(ObstacleIndex index, Rules rules, Envelope area, int dn, Geometry corridor, RouteCache cache,
+             boolean withNodes) {
++        this(index, rules, area, dn, corridor, cache, withNodes, 0);
++    }
++
++    ObstacleSet(ObstacleIndex index, Rules rules, Envelope area, int dn, Geometry corridor, RouteCache cache,
++            boolean withNodes, double halo) {
+         long started = System.nanoTime();
+         this.withNodes = withNodes;
+         this.cache = cache;
+@@ -994,6 +999,19 @@ public final class ObstacleSet {
+                 }
+             }
+         }
++        int gates = nodes.size() - beforeGates;
++        for (int i = 0, zoneNodes = halo > 0 ? beforeGates : 0; i < zoneNodes; i++) {
++            Coordinate[] ring = rings.get(i);
++            if (ring != null && ring[1] != null) {
++                Coordinate c = nodes.get(i);
++                double ax = (c.x - ring[0].x) / c.distance(ring[0]) + (c.x - ring[1].x) / c.distance(ring[1]);
++                double ay = (c.y - ring[0].y) / c.distance(ring[0]) + (c.y - ring[1].y) / c.distance(ring[1]);
++                double length = Math.hypot(ax, ay);
++                if (length > 0) {
++                    addNode(new Coordinate(c.x + ax / length * halo, c.y + ay / length * halo), null, area, inside, margins, rings);
++                }
++            }
++        }
+         around = new double[6 * nodes.size()];
+         for (int i = 0; i < nodes.size(); i++) {
+             Coordinate[] ring = rings.get(i);
+@@ -1006,7 +1024,7 @@ public final class ObstacleSet {
+         }
+         LOG.debug("obstacles: dn={} area={}x{} forbid={} specials={} margins={} candidates zone={} crossing={} nodes={} gates={} ms={}",
+                 dn, Math.round(area.getWidth()), Math.round(area.getHeight()), forbid.size(), specialList.size(), marginZones.size(),
+-                zoneCandidates, candidates.size() - zoneCandidates, nodes.size(), nodes.size() - beforeGates,
++                zoneCandidates, candidates.size() - zoneCandidates, nodes.size(), gates,
+                 (System.nanoTime() - started) / 1_000_000);
+     }
+ 
+diff --git a/src/main/java/ru/lct/heatnet/graph/Router.java b/src/main/java/ru/lct/heatnet/graph/Router.java
+index aecd66f..01ffe3e 100644
+--- a/src/main/java/ru/lct/heatnet/graph/Router.java
++++ b/src/main/java/ru/lct/heatnet/graph/Router.java
+@@ -63,6 +63,7 @@ public final class Router {
+     private static final double UNKNOWN = Double.NEGATIVE_INFINITY;
+     /** Предел состояний точного поиска: дальше перебор считается безнадёжным и маршрут не ищется. */
+     private static final int EXACT_STATES = 100_000;
++    private static final double HALO_M = 10;
+     private static final double HYPOT_TOL = 1e-15;
+     /** Запас предела перебора в routeToAny: на порядки больше ошибки округления суммы весов. */
+     private static final double CAP_TOL = 1e-9;
+@@ -82,6 +83,8 @@ public final class Router {
+     private final int[] edgeStart;
+     // веса точек запроса и таблицы Дейкстры: одни и те же точки запрашиваются десятки и сотни раз за расчёт
+     private final RouteCache cache;
++    private final java.util.function.Supplier<Router> haloFactory;
++    private Router halo;
+     private final java.util.concurrent.atomic.AtomicLong tableRequests = new java.util.concurrent.atomic.AtomicLong();
+     private final java.util.concurrent.atomic.AtomicLong tableHits = new java.util.concurrent.atomic.AtomicLong();
+ 
+@@ -169,9 +172,15 @@ public final class Router {
+ 
+     /** С коридором: узлы и препятствия только внутри полигона corridor, см. {@link ObstacleSet}. */
+     public Router(ObstacleIndex index, Rules rules, Envelope area, int dn, RouteCache cache, org.locationtech.jts.geom.Geometry corridor) {
++        this(index, rules, area, dn, cache, corridor, 0);
++    }
++
++    private Router(ObstacleIndex index, Rules rules, Envelope area, int dn, RouteCache cache,
++            org.locationtech.jts.geom.Geometry corridor, double halo) {
+         this.cache = cache;
++        haloFactory = halo > 0 ? null : () -> new Router(index, rules, area, dn, cache, corridor, HALO_M);
+         long started = System.nanoTime();
+-        obstacles = new ObstacleSet(index, rules, area, dn, corridor, cache);
++        obstacles = new ObstacleSet(index, rules, area, dn, corridor, cache, true, halo);
+         long built = System.nanoTime();
+         nodes = obstacles.nodes();
+         int n = nodes.size();
+@@ -440,7 +449,15 @@ public final class Router {
+         Exact search = cache.computeIfAbsent(List.of(this, "exact", source.x, source.y, ignored, incoming.x, incoming.y),
+                 64L * nodes.size(), () -> exactStates(source, ignored, incoming));
+         // даже без состояний цель бывает видна из точки выхода напрямую
+-        return exactBest(start, targets, ignored, incoming, search, cut);
++        Route route = exactBest(start, targets, ignored, incoming, search, cut);
++        return route != null || haloFactory == null ? route : halo().routeExact(start, targets, ignored, incoming, cut);
++    }
++
++    private synchronized Router halo() {
++        if (halo == null) {
++            halo = haloFactory.get();
++        }
++        return halo;
+     }
+ 
+     /**
+diff --git a/src/main/java/ru/lct/heatnet/plan/TreeBuilder.java b/src/main/java/ru/lct/heatnet/plan/TreeBuilder.java
+index 1184a69..629394a 100644
+--- a/src/main/java/ru/lct/heatnet/plan/TreeBuilder.java
++++ b/src/main/java/ru/lct/heatnet/plan/TreeBuilder.java
+@@ -862,7 +862,8 @@ final class TreeBuilder {
+ 
+         /**
+          * Выход на луче от точки подключения через ближайшую точку границы полигона, сразу за зоной отступа zones,
+-         * дальше, пока выход лежит в чужой зоне запрета. Если участок до такого выхода недопустим или снова входит в
++         * за концом спецучастка, если участок до выхода пересёк объект специального прохода (спецпроход — один прямой
++         * участок, разъяснение 6), и дальше, пока выход лежит в чужой зоне запрета. Если участок до такого выхода недопустим или снова входит в
+          * своё здание или его зону отступа, пробуются ближайшие точки других сторон полигона. NO_EXIT — выхода нет.
+          */
+         Exit exit(ConnectionPoint connection, ExistingOks building, ObstacleSet zones, Router branchRouter) {
+@@ -895,7 +896,7 @@ final class TreeBuilder {
+                 }
+                 dx /= length;
+                 dy /= length;
+-                double along = cp.distance(anchor) + zones.oksClearance() + PORTAL_EXTRA_M;
++                double along = beyondSpecial(zones, cp, dx, dy, cp.distance(anchor) + zones.oksClearance() + PORTAL_EXTRA_M, own);
+                 Coordinate exit = new Coordinate(cp.x + dx * along, cp.y + dy * along);
+                 for (double extra = 0; zones.insideForbid(exit) && extra < PORTAL_MAX_M; extra += PORTAL_STEP_M) {
+                     exit = new Coordinate(cp.x + dx * (along + extra), cp.y + dy * (along + extra));
+@@ -925,9 +926,11 @@ final class TreeBuilder {
+                     continue;
+                 }
+                 double r = cp.distance(entries.get(i));
+-                Coordinate exit = new Coordinate(cp.x + (entries.get(i).x - cp.x) / r * window[0],
+-                        cp.y + (entries.get(i).y - cp.y) / r * window[0]);
+-                if (area.contains(exit) && !Double.isNaN(zones.edgeWeight(cp, exit, own))) {
++                double ux = (entries.get(i).x - cp.x) / r;
++                double uy = (entries.get(i).y - cp.y) / r;
++                double along = beyondSpecial(zones, cp, ux, uy, window[0], own);
++                Coordinate exit = new Coordinate(cp.x + ux * along, cp.y + uy * along);
++                if (along <= window[1] && area.contains(exit) && !Double.isNaN(zones.edgeWeight(cp, exit, own))) {
+                     log.debug("portal: {} entry {} at {} m", connection.getId(), i + 1, r);
+                     return new Exit(exit, branchRouter, PORTAL_TRIES + 1 + i);
+                 }
+@@ -935,6 +938,22 @@ final class TreeBuilder {
+             return NO_EXIT;
+         }
+ 
++        double beyondSpecial(ObstacleSet zones, Coordinate cp, double ux, double uy, double along, Set<String> own) {
++            Coordinate exit = new Coordinate(cp.x + ux * along, cp.y + uy * along);
++            List<SpecialSpan> before = zones.spans(factory.createLineString(new Coordinate[] {cp, exit}), own);
++            if (before.isEmpty() || before.get(before.size() - 1).getToM() < cp.distance(exit) - TOUCH_M) {
++                return along;
++            }
++            double reach = along + PORTAL_MAX_M;
++            Coordinate far = new Coordinate(cp.x + ux * reach, cp.y + uy * reach);
++            for (SpecialSpan span : zones.spans(factory.createLineString(new Coordinate[] {cp, far}), own)) {
++                if (span.getFromM() <= along && along <= span.getToM()) {
++                    along = span.getToM() + PORTAL_EXTRA_M;
++                }
++            }
++            return along;
++        }
++
+         /** Ближайшие к cp точки сторон полигона по возрастанию расстояния: внешние контуры, затем дырки. */
+         List<Coordinate> anchors(Geometry building, Coordinate cp) {
+             List<Coordinate> shells = new ArrayList<>();
+@@ -1272,7 +1291,8 @@ final class TreeBuilder {
+          * идёт через своё здание. Так не строилась ветка к врезке у перпендикуляра на трубе вдоль стены, и точка
+          * оставалась без сети или уходила к дальней врезке (п. 2.5, разъяснения 11 и 15). Выход на прямой от точки к
+          * следующей вершине просто убирается: участок тот же. Иначе прямой участок от точки берётся, если входит в
+-         * здание у ближайшей точки контура и держит запасы строгой формы, см. {@link #straightened}; если нет — выход
++         * здание у ближайшей точки контура и держит запасы строгой формы, см. {@link #straightened}, а если участок до
++         * выхода пересёк объект специального прохода, прямая пересекает его по правилам, как у {@link #evened}; если нет — выход
+          * отодвигается по тому же лучу, пока поворот в нём не дойдёт до MIN_TURN_DEG, см. {@link #relinked}.
+          */
+         Coordinate[] throughExit(ConnectionPoint connection, Coordinate[] branch, ObstacleSet zones, Spot spot) {
+@@ -1291,6 +1311,11 @@ final class TreeBuilder {
+             Coordinate[] edge = reversed(branch);
+             boolean fromRoot = spot.node == tree.root;
+             Coordinate[] line = straightened(building, edge, zones, ignored, null, List.of(), fromRoot);
++            Coordinate entry = line != null || zones.spans(factory.createLineString(new Coordinate[] {branch[0], branch[1]}), ignored).isEmpty()
++                    ? null : straightEntry(building.getGeometry(), edge);
++            if (entry != null) {
++                line = relinked(building, edge, zones, ignored, null, List.of(), fromRoot, List.of(entry), true, true);
++            }
+             if (line == null) {
+                 Coordinate cp = branch[0];
+                 double length = cp.distance(branch[1]);
+diff --git a/src/main/java/ru/lct/heatnet/plan/VariantEnumerator.java b/src/main/java/ru/lct/heatnet/plan/VariantEnumerator.java
+index f5b7b99..7482b09 100644
+--- a/src/main/java/ru/lct/heatnet/plan/VariantEnumerator.java
++++ b/src/main/java/ru/lct/heatnet/plan/VariantEnumerator.java
+@@ -2466,6 +2466,8 @@ public final class VariantEnumerator {
+             int maxDn = alone.getSegments().stream().mapToInt(NewSegment::getDiameter).max().orElse(graphDn);
+             boolean check = verify || maxDn > graphDn;
+             boolean holds = narrow ? forbidClear(tree, alone, area, region) : !check || clearanceHolds(tree, alone, area, region);
++            log.info("D67 {} {} narrow={} check={} holds={} rays={} maxDn={} graphDn={} edges={}", label, tree.tie.nodeKey(), narrow, check, holds, raysClear(tree, alone), maxDn, graphDn,
++                    tree.edges.stream().map(e -> e.line.toText()).collect(Collectors.toList()));
+             return holds && raysClear(tree, alone) ? new Option(tree, searchScore(alone), exact(alone)) : null;
+         } catch (IllegalStateException | IllegalArgumentException e) {
+             // дерево нарушает правила при сборке (предельная длина, отступ участка, число поворотов): кандидат отбрасывается
+diff --git a/src/test/java/ru/lct/heatnet/plan/NoRouteRegressionTest.java b/src/test/java/ru/lct/heatnet/plan/NoRouteRegressionTest.java
+new file mode 100644
+index 0000000..be053f7
+--- /dev/null
++++ b/src/test/java/ru/lct/heatnet/plan/NoRouteRegressionTest.java
+@@ -0,0 +1,48 @@
++package ru.lct.heatnet.plan;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++import java.nio.file.Path;
++import java.util.List;
++import java.util.Set;
++import java.util.stream.Collectors;
++import org.junit.jupiter.api.Test;
++import ru.lct.heatnet.model.InputData;
++import ru.lct.heatnet.model.NewSegment;
++import ru.lct.heatnet.model.Variant;
++import ru.lct.heatnet.rules.Rules;
++
++class NoRouteRegressionTest {
++    private final Rules rules = Rules.load();
++
++    @Test
++    void finalPieceCrossesTramTracksInFrontOfBuilding() {
++        List<Variant> variants = new VariantEnumerator(read("tram-polygon-21.geojson"), rules).run().getVariants();
++
++        assertFalse(variants.isEmpty());
++        for (Variant variant : variants) {
++            assertEquals(List.of(), variant.getSummary().getUnconnectedOksIds(), "вариант " + variant.getId());
++            List<NewSegment> special = variant.getSegments().stream()
++                    .filter(segment -> "special".equals(segment.getLayingMethod())).collect(Collectors.toList());
++            assertEquals(1, special.size(), "вариант " + variant.getId());
++            assertEquals(2, special.get(0).getGeometry().getNumPoints(), "спецпроход не прямой: " + special.get(0).getId());
++        }
++    }
++
++    @Test
++    void wideGapInRingIsPassedAndClosedRingsStayUnconnected() {
++        List<Variant> variants = new VariantEnumerator(read("rings.geojson"), rules).run().getVariants();
++
++        assertFalse(variants.isEmpty());
++        for (Variant variant : variants) {
++            assertEquals(Set.of("20", "22"), Set.copyOf(variant.getSummary().getUnconnectedOksIds()), "вариант " + variant.getId());
++            assertTrue(variant.getSegments().stream().anyMatch(segment -> "24".equals(segment.getEndNodeId())), "вариант " + variant.getId());
++        }
++    }
++
++    private InputData read(String name) {
++        return VariantEnumerator.read(Path.of("src/test/resources/expert", name), rules);
++    }
++}
+diff --git a/src/test/resources/expert/rings.geojson b/src/test/resources/expert/rings.geojson
+new file mode 100644
+index 0000000..8c91014
+--- /dev/null
++++ b/src/test/resources/expert/rings.geojson
+@@ -0,0 +1 @@
++{"type": "FeatureCollection", "name": "rings", "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84"}}, "features": [{"type": "Feature", "properties": {"id": 1, "object_type": "source"}, "geometry": {"type": "Point", "coordinates": [37.632068525, 55.687067825]}}, {"type": "Feature", "properties": {"id": 2, "object_type": "heat_network", "diameter": 500}, "geometry": {"type": "LineString", "coordinates": [[37.632068525, 55.687067825], [37.632131247, 55.685271257]]}}, {"type": "Feature", "properties": {"id": 3, "object_type": "heat_network", "diameter": 500}, "geometry": {"type": "LineString", "coordinates": [[37.632131247, 55.685271257], [37.632193962, 55.683474688]]}}, {"type": "Feature", "properties": {"id": 4, "object_type": "heat_network", "diameter": 500}, "geometry": {"type": "LineString", "coordinates": [[37.632193962, 55.683474688], [37.632256671, 55.681678118]]}}, {"type": "Feature", "properties": {"id": 5, "object_type": "heat_network", "diameter": 500}, "geometry": {"type": "LineString", "coordinates": [[37.632256671, 55.681678118], [37.632319372, 55.679881547]]}}, {"type": "Feature", "properties": {"id": 6, "object_type": "heat_network", "diameter": 500}, "geometry": {"type": "LineString", "coordinates": [[37.632319372, 55.679881547], [37.632382065, 55.678084976]]}}, {"type": "Feature", "properties": {"id": 7, "object_type": "heat_network", "diameter": 500}, "geometry": {"type": "LineString", "coordinates": [[37.632382065, 55.678084976], [37.632444752, 55.676288405]]}}, {"type": "Feature", "properties": {"id": 8, "object_type": "heat_chamber"}, "geometry": {"type": "Point", "coordinates": [37.632131247, 55.685271257]}}, {"type": "Feature", "properties": {"id": 9, "object_type": "heat_chamber"}, "geometry": {"type": "Point", "coordinates": [37.632193962, 55.683474688]}}, {"type": "Feature", "properties": {"id": 10, "object_type": "heat_chamber"}, "geometry": {"type": "Point", "coordinates": [37.632256671, 55.681678118]}}, {"type": "Feature", "properties": {"id": 11, "object_type": "heat_chamber"}, "geometry": {"type": "Point", "coordinates": [37.632319372, 55.679881547]}}, {"type": "Feature", "properties": {"id": 12, "object_type": "heat_chamber"}, "geometry": {"type": "Point", "coordinates": [37.632382065, 55.678084976]}}, {"type": "Feature", "properties": {"id": 13, "object_type": "restriction", "restriction_type": "water"}, "geometry": {"type": "Polygon", "coordinates": [[[37.635650939, 55.684975612], [37.635676756, 55.685089302], [37.635722174, 55.685201015], [37.635786756, 55.685309675], [37.635869879, 55.685414236], [37.635970743, 55.68551369], [37.636088378, 55.68560708], [37.63622165, 55.685693506], [37.636369276, 55.685772136], [37.636529833, 55.685842213], [37.636701777, 55.685903061], [37.63688345, 55.685954095], [37.637073104, 55.685994823], [37.637268911, 55.686024853], [37.637468985, 55.686043895], [37.6376714, 55.686051767], [37.637874206, 55.686048392], [37.63807545, 55.686033803], [37.638273193, 55.68600814], [37.638465532, 55.685971651], [37.638650612, 55.685924687], [37.638826653, 55.6858677], [37.638991958, 55.68580124], [37.639144936, 55.685725945], [37.639284113, 55.685642542], [37.639408149, 55.685551834], [37.639515849, 55.685454694], [37.639606176, 55.685352059], [37.639678261, 55.685244915], [37.639731409, 55.685134296], [37.639765108, 55.685021266], [37.639779035, 55.684906914], [37.639778566, 55.684897923], [37.639142555, 55.684890874], [37.639143025, 55.684899866], [37.639133382, 55.684979032], [37.63911005, 55.685057283], [37.639073254, 55.685133866], [37.639023348, 55.685208042], [37.638960813, 55.685279097], [37.638886251, 55.685346348], [37.63880038, 55.685409145], [37.638704027, 55.685466885], [37.638598119, 55.685519012], [37.638483678, 55.685565023], [37.638361804, 55.685604475], [37.638233672, 55.685636988], [37.638100516, 55.68566225], [37.637963618, 55.685680016], [37.637824296, 55.685690116], [37.637683893, 55.685692452], [37.637543761, 55.685687003], [37.637405249, 55.68567382], [37.637269692, 55.68565303], [37.637138394, 55.685624834], [37.637012621, 55.685589503], [37.636893584, 55.685547378], [37.636782429, 55.685498864], [37.636680226, 55.685444428], [37.636587961, 55.685384595], [37.636506521, 55.68531994], [37.636436691, 55.685251088], [37.636379143, 55.6851787], [37.636334432, 55.685103474], [37.636302988, 55.685026134], [37.636285113, 55.684947426], [37.63628098, 55.684868107], [37.636282074, 55.684859132], [37.635646065, 55.684852066], [37.635644971, 55.68486104], [37.635650939, 55.684975612]]]}}, {"type": "Feature", "properties": {"id": 14, "object_type": "restriction", "restriction_type": "park"}, "geometry": {"type": "Polygon", "coordinates": [[[37.639701798, 55.684566941], [37.639637207, 55.684458283], [37.639554075, 55.684353725], [37.639453204, 55.684254274], [37.639335566, 55.684160887], [37.639202292, 55.684074464], [37.639054667, 55.683995838], [37.638894112, 55.683925764], [37.638722174, 55.683864919], [37.638540508, 55.683813888], [37.638350863, 55.683773162], [37.638155067, 55.683743134], [37.637955004, 55.683724093], [37.637752601, 55.683716222], [37.637549807, 55.683719597], [37.637348574, 55.683734185], [37.637150842, 55.683759846], [37.636958513, 55.683796333], [37.636773441, 55.683843295], [37.636597406, 55.683900279], [37.636432105, 55.683966736], [37.636279129, 55.684042027], [37.636139952, 55.684125427], [37.636015913, 55.684216132], [37.635908208, 55.684313268], [37.635817873, 55.684415902], [37.63574578, 55.684523043], [37.635692621, 55.68463366], [37.63565891, 55.684746689], [37.635644971, 55.68486104], [37.63564544, 55.684870032], [37.636281449, 55.684877098], [37.63628098, 55.684868107], [37.636290629, 55.684788941], [37.636313966, 55.68471069], [37.636350767, 55.684634108], [37.636400677, 55.684559933], [37.636463216, 55.684488879], [37.63653778, 55.68442163], [37.636623653, 55.684358834], [37.636720006, 55.684301096], [37.636825913, 55.684248971], [37.636940353, 55.684202962], [37.637062223, 55.684163511], [37.637190352, 55.684130999], [37.637323503, 55.684105738], [37.637460396, 55.684087973], [37.637599712, 55.684077873], [37.637740109, 55.684075537], [37.637880235, 55.684080986], [37.638018742, 55.684094168], [37.638154294, 55.684114957], [37.638285588, 55.684143152], [37.638411357, 55.684178482], [37.638530392, 55.684220606], [37.638641546, 55.684269118], [37.638743748, 55.684323553], [37.638836014, 55.684383384], [37.638917456, 55.684448037], [37.638987289, 55.684516888], [37.63904484, 55.684589275], [37.639089556, 55.6846645], [37.639121006, 55.684741839], [37.639138886, 55.684820547], [37.639143025, 55.684899866], [37.639141931, 55.68490884], [37.639777942, 55.684915889], [37.639779035, 55.684906914], [37.639773055, 55.684792342], [37.639747227, 55.684678653], [37.639701798, 55.684566941]]]}}, {"type": "Feature", "properties": {"id": 15, "object_type": "restriction", "restriction_type": "water"}, "geometry": {"type": "MultiPolygon", "coordinates": [[[[37.635760402, 55.681831611], [37.635786218, 55.681945301], [37.635831633, 55.682057014], [37.635896209, 55.682165674], [37.635979326, 55.682270235], [37.636080183, 55.682369689], [37.636197809, 55.682463078], [37.636331071, 55.682549504], [37.636478685, 55.682628134], [37.63663923, 55.682698211], [37.63681116, 55.682759059], [37.636992819, 55.682810093], [37.637182457, 55.68285082], [37.637378248, 55.68288085], [37.637578307, 55.682899892], [37.637780706, 55.682907764], [37.637983495, 55.682904388], [37.638184723, 55.682889799], [37.638382451, 55.682864136], [37.638574773, 55.682827647], [37.638759839, 55.682780682], [37.638935865, 55.682723695], [37.639101157, 55.682657234], [37.639254122, 55.68258194], [37.639393288, 55.682498537], [37.639517313, 55.682407828], [37.639625004, 55.682310688], [37.639715324, 55.682208052], [37.639787402, 55.682100908], [37.639840545, 55.681990289], [37.639874242, 55.681877259], [37.639887347, 55.681769638], [37.639251388, 55.681762591], [37.639242566, 55.681835026], [37.639219236, 55.681913278], [37.639182444, 55.68198986], [37.639132542, 55.682064036], [37.639070012, 55.682135092], [37.638995456, 55.682202342], [37.638909592, 55.68226514], [37.638813247, 55.68232288], [37.638707348, 55.682375007], [37.638592916, 55.682421018], [37.638471052, 55.68246047], [37.638342931, 55.682492984], [37.638209785, 55.682518245], [37.638072898, 55.682536012], [37.637933588, 55.682546112], [37.637793196, 55.682548449], [37.637653075, 55.682542999], [37.637514575, 55.682529817], [37.637379028, 55.682509027], [37.637247741, 55.682480831], [37.637121978, 55.6824455], [37.63700295, 55.682403375], [37.636891803, 55.682354861], [37.636789609, 55.682300425], [37.636697351, 55.682240592], [37.636615917, 55.682175938], [37.636546093, 55.682107086], [37.636488549, 55.682034698], [37.636443841, 55.681959472], [37.636412399, 55.681882132], [37.636394526, 55.681803424], [37.636390393, 55.681724104], [37.636391486, 55.68171513], [37.635755529, 55.681708064], [37.635754435, 55.681717039], [37.635760402, 55.681831611]]], [[[37.639887698, 55.681753916], [37.639251738, 55.681746868], [37.639251856, 55.681749116], [37.639887815, 55.681756164], [37.639887698, 55.681753916]]]]}}, {"type": "Feature", "properties": {"id": 16, "object_type": "restriction", "restriction_type": "park"}, "geometry": {"type": "MultiPolygon", "coordinates": [[[[37.639810934, 55.681422934], [37.639746348, 55.681314276], [37.639663223, 55.681209718], [37.63956236, 55.681110267], [37.63944473, 55.681016881], [37.639311467, 55.680930458], [37.639163853, 55.680851831], [37.639003311, 55.680781758], [37.638831386, 55.680720913], [37.638649734, 55.680669882], [37.638460105, 55.680629157], [37.638264324, 55.680599129], [37.638064277, 55.680580088], [37.63786189, 55.680572217], [37.637659112, 55.680575592], [37.637457897, 55.680590181], [37.63726018, 55.680615842], [37.637067867, 55.68065233], [37.636882809, 55.680699292], [37.636706789, 55.680756276], [37.636541502, 55.680822733], [37.636388538, 55.680898025], [37.636249372, 55.680981424], [37.636125344, 55.681072129], [37.636017648, 55.681169266], [37.635927321, 55.6812719], [37.635855233, 55.681379041], [37.63580208, 55.681489659], [37.635768372, 55.681602687], [37.635754435, 55.681717039], [37.635754903, 55.68172603], [37.636390861, 55.681733096], [37.636390393, 55.681724104], [37.63640004, 55.681644938], [37.636423375, 55.681566687], [37.636460173, 55.681490106], [37.636510079, 55.681415931], [37.636572612, 55.681344877], [37.63664717, 55.681277628], [37.636733036, 55.681214831], [37.636829381, 55.681157093], [37.636935279, 55.681104968], [37.637049709, 55.681058958], [37.63717157, 55.681019507], [37.637299688, 55.680986995], [37.637432829, 55.680961734], [37.637569711, 55.680943968], [37.637709015, 55.680933869], [37.637849401, 55.680931532], [37.637989516, 55.680936981], [37.638128012, 55.680950163], [37.638263553, 55.680970952], [37.638394836, 55.680999147], [37.638520596, 55.681034476], [37.638639621, 55.6810766], [37.638750766, 55.681125113], [37.63885296, 55.681179547], [37.638945219, 55.681239378], [37.639026655, 55.681304031], [37.639096483, 55.681372882], [37.63915403, 55.681445269], [37.639198742, 55.681520494], [37.63923019, 55.681597833], [37.639248069, 55.681676541], [37.639251856, 55.681749116], [37.639887815, 55.681756164], [37.639882187, 55.681648335], [37.63985636, 55.681534646], [37.639810934, 55.681422934]]], [[[37.639251115, 55.681764834], [37.639887074, 55.681771882], [37.639887347, 55.681769638], [37.639251388, 55.681762591], [37.639251115, 55.681764834]]]]}}, {"type": "Feature", "properties": {"id": 17, "object_type": "restriction", "restriction_type": "water"}, "geometry": {"type": "Polygon", "coordinates": [[[37.635869844, 55.678687608], [37.635895658, 55.678801298], [37.63594107, 55.678913011], [37.636005642, 55.679021671], [37.636088752, 55.679126231], [37.636189602, 55.679225685], [37.636307218, 55.679319075], [37.636440469, 55.679405501], [37.636588072, 55.679484131], [37.636748605, 55.679554207], [37.636920521, 55.679615055], [37.637102166, 55.679666088], [37.637291789, 55.679706816], [37.637487565, 55.679736845], [37.637687607, 55.679755887], [37.63788999, 55.679763758], [37.638092763, 55.679760383], [37.638293975, 55.679745793], [37.638491686, 55.67972013], [37.638683993, 55.67968364], [37.638869044, 55.679636676], [37.639045056, 55.679579688], [37.639210334, 55.679513227], [37.639363287, 55.679437932], [37.639502441, 55.679354529], [37.639626456, 55.679263821], [37.639734138, 55.67916668], [37.63982445, 55.679064044], [37.639896522, 55.6789569], [37.63994966, 55.678846281], [37.639983354, 55.678733251], [37.639993999, 55.678645822], [37.63935809, 55.678638775], [37.639351728, 55.678691019], [37.639328401, 55.67876927], [37.639291611, 55.678845853], [37.639241714, 55.678920029], [37.63917919, 55.678991084], [37.63910464, 55.679058335], [37.639018783, 55.679121133], [37.638922446, 55.679178873], [37.638816556, 55.679231], [37.638702133, 55.679277011], [37.638580279, 55.679316464], [37.638452168, 55.679348978], [37.638319033, 55.679374239], [37.638182157, 55.679392006], [37.638042858, 55.679402107], [37.637902478, 55.679404443], [37.637762368, 55.679398994], [37.637623878, 55.679385811], [37.637488343, 55.679365022], [37.637357066, 55.679336826], [37.637231313, 55.679301496], [37.637112294, 55.679259371], [37.637001156, 55.679210857], [37.63689897, 55.679156421], [37.636806719, 55.679096588], [37.636725292, 55.679031934], [37.636655472, 55.678963081], [37.636597933, 55.678890694], [37.636553229, 55.678815468], [37.636521789, 55.678738128], [37.636503916, 55.67865942], [37.636499783, 55.6785801], [37.636500877, 55.678571126], [37.63586497, 55.678564061], [37.635863876, 55.678573035], [37.635869844, 55.678687608]]]}}, {"type": "Feature", "properties": {"id": 18, "object_type": "restriction", "restriction_type": "park"}, "geometry": {"type": "Polygon", "coordinates": [[[37.63992005, 55.678278926], [37.639855468, 55.678170268], [37.639772349, 55.67806571], [37.639671494, 55.677966259], [37.639553873, 55.677872872], [37.63942062, 55.67778645], [37.639273018, 55.677707823], [37.639112488, 55.67763775], [37.638940577, 55.677576906], [37.63875894, 55.677525875], [37.638569325, 55.677485149], [37.63837356, 55.677455122], [37.638173529, 55.677436081], [37.637971158, 55.677428211], [37.637768397, 55.677431586], [37.637567197, 55.677446175], [37.637369496, 55.677471837], [37.637177199, 55.677508324], [37.636992156, 55.677555286], [37.636816151, 55.677612271], [37.636650876, 55.677678729], [37.636497926, 55.67775402], [37.636358771, 55.67783742], [37.636234753, 55.677928125], [37.636127066, 55.678025263], [37.636036747, 55.678127896], [37.635964666, 55.678235038], [37.635911517, 55.678345655], [37.635877812, 55.678458684], [37.635863876, 55.678573035], [37.635864345, 55.678582027], [37.636500252, 55.678589092], [37.636499783, 55.6785801], [37.63650943, 55.678500934], [37.636532763, 55.678422683], [37.636569557, 55.678346102], [37.636619458, 55.678271926], [37.636681986, 55.678200872], [37.636756538, 55.678133623], [37.636842397, 55.678070827], [37.636938734, 55.678013088], [37.637044624, 55.677960963], [37.637159045, 55.677914953], [37.637280895, 55.677875502], [37.637409003, 55.677842989], [37.637542133, 55.677817729], [37.637679004, 55.677799962], [37.637818297, 55.677789862], [37.637958671, 55.677787526], [37.638098776, 55.677792975], [37.63823726, 55.677806157], [37.638372791, 55.677826945], [37.638504063, 55.67785514], [37.638629813, 55.677890469], [37.638748829, 55.677932593], [37.638859965, 55.677981105], [37.638962151, 55.678035539], [37.639054403, 55.678095371], [37.639135832, 55.678160023], [37.639205655, 55.678228874], [37.639263198, 55.678301261], [37.639307907, 55.678376486], [37.639339352, 55.678453825], [37.63935723, 55.678532533], [37.639359961, 55.678584877], [37.63999587, 55.678591924], [37.639991298, 55.678504327], [37.639965472, 55.678390637], [37.63992005, 55.678278926]]]}}, {"type": "Feature", "properties": {"id": 19, "object_type": "restriction", "restriction_type": "oks"}, "geometry": {"type": "MultiPolygon", "coordinates": [[[[37.637953628, 55.684796812], [37.637947383, 55.68497647], [37.637470374, 55.684971176], [37.637476622, 55.684791519], [37.637953628, 55.684796812]]]]}}, {"type": "Feature", "properties": {"id": 20, "object_type": "oks_connection_point", "flow_tph": 18.0}, "geometry": {"type": "Point", "coordinates": [37.637505299, 55.684881701]}}, {"type": "Feature", "properties": {"id": 21, "object_type": "restriction", "restriction_type": "oks"}, "geometry": {"type": "MultiPolygon", "coordinates": [[[[37.638062906, 55.681652808], [37.638056662, 55.681832465], [37.637579692, 55.681827173], [37.637585938, 55.681647515], [37.638062906, 55.681652808]]]]}}, {"type": "Feature", "properties": {"id": 22, "object_type": "oks_connection_point", "flow_tph": 10.0}, "geometry": {"type": "Point", "coordinates": [37.638027986, 55.681742284]}}, {"type": "Feature", "properties": {"id": 23, "object_type": "restriction", "restriction_type": "oks"}, "geometry": {"type": "MultiPolygon", "coordinates": [[[[37.638172162, 55.678508802], [37.63816592, 55.678688459], [37.637688988, 55.678683167], [37.637695232, 55.67850351], [37.638172162, 55.678508802]]]]}}, {"type": "Feature", "properties": {"id": 24, "object_type": "oks_connection_point", "flow_tph": 14.0}, "geometry": {"type": "Point", "coordinates": [37.638137245, 55.678598278]}}]}
+\ No newline at end of file
+diff --git a/src/test/resources/expert/tram-polygon-21.geojson b/src/test/resources/expert/tram-polygon-21.geojson
+new file mode 100644
+index 0000000..15f139e
+--- /dev/null
++++ b/src/test/resources/expert/tram-polygon-21.geojson
+@@ -0,0 +1 @@
++{"type": "FeatureCollection", "name": "tram-polygon-21", "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84"}}, "features": [{"type": "Feature", "properties": {"id": 1, "object_type": "source"}, "geometry": {"type": "Point", "coordinates": [37.632068525, 55.687067825]}}, {"type": "Feature", "properties": {"id": 2, "object_type": "heat_network", "diameter": 500}, "geometry": {"type": "LineString", "coordinates": [[37.632068525, 55.687067825], [37.632131247, 55.685271257]]}}, {"type": "Feature", "properties": {"id": 3, "object_type": "heat_network", "diameter": 500}, "geometry": {"type": "LineString", "coordinates": [[37.632131247, 55.685271257], [37.632193962, 55.683474688]]}}, {"type": "Feature", "properties": {"id": 4, "object_type": "heat_network", "diameter": 500}, "geometry": {"type": "LineString", "coordinates": [[37.632193962, 55.683474688], [37.632256671, 55.681678118]]}}, {"type": "Feature", "properties": {"id": 5, "object_type": "heat_network", "diameter": 500}, "geometry": {"type": "LineString", "coordinates": [[37.632256671, 55.681678118], [37.632319372, 55.679881547]]}}, {"type": "Feature", "properties": {"id": 6, "object_type": "heat_network", "diameter": 500}, "geometry": {"type": "LineString", "coordinates": [[37.632319372, 55.679881547], [37.632382065, 55.678084976]]}}, {"type": "Feature", "properties": {"id": 7, "object_type": "heat_network", "diameter": 500}, "geometry": {"type": "LineString", "coordinates": [[37.632382065, 55.678084976], [37.632444752, 55.676288405]]}}, {"type": "Feature", "properties": {"id": 8, "object_type": "heat_chamber"}, "geometry": {"type": "Point", "coordinates": [37.632131247, 55.685271257]}}, {"type": "Feature", "properties": {"id": 9, "object_type": "heat_chamber"}, "geometry": {"type": "Point", "coordinates": [37.632193962, 55.683474688]}}, {"type": "Feature", "properties": {"id": 10, "object_type": "heat_chamber"}, "geometry": {"type": "Point", "coordinates": [37.632256671, 55.681678118]}}, {"type": "Feature", "properties": {"id": 11, "object_type": "heat_chamber"}, "geometry": {"type": "Point", "coordinates": [37.632319372, 55.679881547]}}, {"type": "Feature", "properties": {"id": 12, "object_type": "heat_chamber"}, "geometry": {"type": "Point", "coordinates": [37.632382065, 55.678084976]}}, {"type": "Feature", "properties": {"id": 13, "object_type": "restriction", "restriction_type": "tram_tracks"}, "geometry": {"type": "Polygon", "coordinates": [[[37.63338553, 55.683057878], [37.638217814, 55.68131431], [37.638577341, 55.670964766], [37.638450184, 55.670963356], [37.638091961, 55.681274439], [37.633259675, 55.683018003], [37.632929933, 55.69246922], [37.633057159, 55.692470636], [37.63338553, 55.683057878]]]}}, {"type": "Feature", "properties": {"id": 20, "object_type": "restriction", "restriction_type": "oks"}, "geometry": {"type": "MultiPolygon", "coordinates": [[[[37.638974185, 55.67968592], [37.638958587, 55.680135064], [37.638322654, 55.680128012], [37.63833826, 55.679678868], [37.638974185, 55.67968592]]]]}}, {"type": "Feature", "properties": {"id": 21, "object_type": "oks_connection_point", "flow_tph": 20.0}, "geometry": {"type": "Point", "coordinates": [37.638362253, 55.679903793]}}]}
+\ No newline at end of file

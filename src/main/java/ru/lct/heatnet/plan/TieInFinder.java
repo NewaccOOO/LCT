@@ -114,7 +114,19 @@ final class TieInFinder {
         segmentIndex.build();
         chamberIndex.build();
         for (Chamber chamber : input.getChambers()) {
-            linksByChamber.put(chamber.getId(), links(chamber).size());
+            Coordinate at = chamber.getGeometry().getCoordinate();
+            int ends = 0;
+            int through = 0;
+            for (NetworkSegment segment : links(chamber)) {
+                LineString line = segment.getGeometry();
+                if (line.getCoordinateN(0).distance(at) <= TOUCH_M
+                        || line.getCoordinateN(line.getNumPoints() - 1).distance(at) <= TOUCH_M) {
+                    ends++;
+                } else {
+                    through++;
+                }
+            }
+            linksByChamber.put(chamber.getId(), ends + PIPE_SEGMENTS * through);
             chamberById.put(chamber.getId(), chamber);
         }
     }
@@ -356,6 +368,26 @@ final class TieInFinder {
         return new TieCandidate(segment.getId(), TieCandidate.HEAT_NETWORK, segment.getDiameter(), tie, touching, capacity);
     }
 
+    boolean crowded(TieCandidate candidate) {
+        return !candidate.isChamber() && fullNear(candidate.getPoint()) != null;
+    }
+
+    private String fullNear(Point tie) {
+        ChamberRule rule = rules.chamberRule();
+        Envelope window = new Envelope(tie.getCoordinate());
+        window.expandBy(rule.getMaxDistM() + DIST_MARGIN_M + WINDOW_EXTRA_M);
+        Chamber nearest = null;
+        for (int i : sorted(chamberIndex.query(window))) {
+            Chamber chamber = input.getChambers().get(i);
+            double distance = chamber.getGeometry().distance(tie);
+            if (distance <= rule.getMaxDistM() + DIST_MARGIN_M && links(chamber.getId()) + 1 > rule.getMaxSegments()
+                    && (nearest == null || distance < nearest.getGeometry().distance(tie))) {
+                nearest = chamber;
+            }
+        }
+        return nearest == null ? null : nearest.getId();
+    }
+
     /**
      * Разъяснение 6: спецпроход — один прямой участок, угол проверяется в точке входа. Камера врезки в полосе margin_m
      * дороги или трамвайных путей начинала бы спецучастки внутри неё, поэтому врезка переносится вдоль трубы за
@@ -483,7 +515,7 @@ final class TieInFinder {
                 && a.getPoint().distance(b.getPoint()) <= SAME_POINT_M;
     }
 
-    /** Существующие участки камеры: те, у которых конец не дальше 0,5 м от неё. */
+    /** Существующие участки камеры: те, что подходят к ней концом или проходят через неё, не дальше 0,5 м. */
     private List<NetworkSegment> links(Chamber chamber) {
         List<NetworkSegment> result = new ArrayList<>();
         Coordinate at = chamber.getGeometry().getCoordinate();
@@ -491,9 +523,7 @@ final class TieInFinder {
         envelope.expandBy(TOUCH_M);
         for (Object item : segmentIndex.query(envelope)) {
             NetworkSegment segment = input.getSegments().get((Integer) item);
-            LineString line = segment.getGeometry();
-            if (line.getCoordinateN(0).distance(at) <= TOUCH_M
-                    || line.getCoordinateN(line.getNumPoints() - 1).distance(at) <= TOUCH_M) {
+            if (within(segment.getGeometry(), at, TOUCH_M)) {
                 result.add(segment);
             }
         }
