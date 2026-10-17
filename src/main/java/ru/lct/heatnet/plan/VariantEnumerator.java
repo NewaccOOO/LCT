@@ -4044,19 +4044,28 @@ public final class VariantEnumerator {
         return result;
     }
 
-    /** Переносы {@link TreeBuilder#unkinks} по геометрии узла unit: [дерево, переносы]; те же узлы в разных черновиках собраны заново. */
+    /** Переносы по геометрии узла: [дерево, переносы]; те же узлы в разных черновиках собраны заново, см. {@link #slides}. */
     private final Map<List<Object>, Object[]> unkinksMemo = memo();
 
-    /**
-     * {@link TreeBuilder#unkinks} камеры junction дерева tree из памяти: вход — геометрия, ключи узлов и врезки деревьев
-     * узла unit (по ним Ду, цена и зоны) и флаги. Переносы с другого дерева той же геометрии переводятся на рёбра tree
-     * по номеру.
-     */
-    @SuppressWarnings("unchecked")
+    /** {@link TreeBuilder#unkinks} камеры junction дерева tree из памяти, см. {@link #slides}. */
     private List<TreeBuilder.Slide> unkinks(Tree tree, Tree.Node junction, List<Tree> unit, Region region, Envelope area,
             Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub, boolean evensOnly,
             boolean axes) {
-        List<Object> key = new ArrayList<>(List.of(junction.key, evensOnly, axes, unit.indexOf(tree)));
+        return slides(List.of("unkinks", junction.key, evensOnly, axes), tree, unit, () -> builder.unkinks(tree, junction,
+                edge -> region.obstacles(dnByEdge.get(edge), area), dnByEdge, priceRub, maxGainRub, evensOnly,
+                axes ? this::keepsAxes : null));
+    }
+
+    /**
+     * Переносы compute дерева tree из памяти: вход — геометрия, ключи узлов и врезки деревьев узла unit (по ним Ду, цена
+     * и зоны) и tag (вид переносов, камера, флаги). Переносы с другого дерева той же геометрии переводятся на рёбра
+     * tree по номеру.
+     */
+    @SuppressWarnings("unchecked")
+    private List<TreeBuilder.Slide> slides(List<Object> tag, Tree tree, List<Tree> unit,
+            java.util.function.Supplier<List<TreeBuilder.Slide>> compute) {
+        List<Object> key = new ArrayList<>(tag);
+        key.add(unit.indexOf(tree));
         for (Tree other : unit) {
             key.add(other.tie);
             for (Tree.Edge edge : other.edges) {
@@ -4070,8 +4079,7 @@ public final class VariantEnumerator {
         }
         Object[] hit = unkinksMemo.get(key);
         if (hit == null) {
-            List<TreeBuilder.Slide> slides = builder.unkinks(tree, junction, edge -> region.obstacles(dnByEdge.get(edge), area),
-                    dnByEdge, priceRub, maxGainRub, evensOnly, axes ? this::keepsAxes : null);
+            List<TreeBuilder.Slide> slides = compute.get();
             unkinksMemo.put(key, new Object[] {tree, slides});
             return slides;
         }
@@ -4091,6 +4099,9 @@ public final class VariantEnumerator {
         for (TreeBuilder.Slide slide : slides) {
             Map<Tree.Edge, Coordinate[]> lines = new IdentityHashMap<>();
             slide.lines.forEach((edge, line) -> lines.put(edgeOf.get(edge), line));
+            if (lines.containsKey(null) || !nodeOf.containsKey(slide.junction)) {
+                return compute.get();
+            }
             result.add(new TreeBuilder.Slide(slide.gain, nodeOf.get(slide.junction), slide.point, lines));
         }
         return result;
@@ -4172,10 +4183,12 @@ public final class VariantEnumerator {
                 Tree changed = null;
                 for (Tree.Node junction : sharpTurns(tree, kneed)) {
                     java.util.function.Function<Tree.Edge, ObstacleSet> zones = edge -> region.obstacles(dnByEdge.get(edge), area);
-                    List<TreeBuilder.Slide> slides = new ArrayList<>(builder.turnSlides(tree, junction, zones, dnByEdge,
-                            priceRub, maxGainRub, TURN_STEP_M, TURN_MAX_M));
+                    List<TreeBuilder.Slide> slides = new ArrayList<>(slides(List.of("turnSlides", junction.key, maxGainRub),
+                            tree, unit, () -> builder.turnSlides(tree, junction, zones, dnByEdge, priceRub, maxGainRub,
+                                    TURN_STEP_M, TURN_MAX_M)));
                     if (TURN_GRID) {
-                        slides.addAll(builder.turnMoves(tree, junction, zones, dnByEdge, priceRub, maxGainRub));
+                        slides.addAll(slides(List.of("turnMoves", junction.key, maxGainRub), tree, unit,
+                                () -> builder.turnMoves(tree, junction, zones, dnByEdge, priceRub, maxGainRub)));
                     }
                     slides.sort(Comparator.comparingDouble(slide -> slide.gain));
                     for (TreeBuilder.Slide slide : slides) {
@@ -4244,14 +4257,17 @@ public final class VariantEnumerator {
         int sharp = sharpPairs(tree, kneed);
         List<TreeBuilder.Slide> slides = new ArrayList<>();
         for (Tree.Node junction : sharpTurns(tree, kneed)) {
-            slides.addAll(builder.turnSlides(tree, junction, zones, dnByEdge, priceRub, Double.POSITIVE_INFINITY,
-                    TURN_STEP_M, TURN_MAX_M));
+            slides.addAll(slides(List.of("turnSlides", junction.key, Double.POSITIVE_INFINITY), tree, unit,
+                    () -> builder.turnSlides(tree, junction, zones, dnByEdge, priceRub, Double.POSITIVE_INFINITY, TURN_STEP_M,
+                            TURN_MAX_M)));
             if (knees) {
-                slides.addAll(builder.bends(tree, junction, zones, priceRub, Double.POSITIVE_INFINITY));
-                slides.addAll(builder.fans(tree, junction, zones, priceRub));
+                slides.addAll(slides(List.of("bends", junction.key), tree, unit,
+                        () -> builder.bends(tree, junction, zones, priceRub, Double.POSITIVE_INFINITY)));
+                slides.addAll(slides(List.of("fans", junction.key), tree, unit, () -> builder.fans(tree, junction, zones, priceRub)));
             }
             if (TURN_GRID) {
-                slides.addAll(builder.turnMoves(tree, junction, zones, dnByEdge, priceRub, Double.POSITIVE_INFINITY));
+                slides.addAll(slides(List.of("turnMoves", junction.key, Double.POSITIVE_INFINITY), tree, unit,
+                        () -> builder.turnMoves(tree, junction, zones, dnByEdge, priceRub, Double.POSITIVE_INFINITY)));
             }
         }
         slides.sort(Comparator.comparingDouble(slide -> slide.gain));
