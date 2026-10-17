@@ -7,7 +7,7 @@ import java.util.function.DoubleUnaryOperator;
 
 final class ExactSteiner {
     private static final float INF = 1e30f;
-    private static final boolean VECTOR_MIN = Runtime.version().feature() >= 21;
+    private static final boolean VECTOR_MIN = Boolean.parseBoolean(System.getProperty("heatnet.exact.mathMin", "true"));
 
     static final class Skeleton {
         final List<Integer> junctions = new ArrayList<>();
