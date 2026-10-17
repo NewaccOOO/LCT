@@ -1165,11 +1165,11 @@ public final class VariantEnumerator {
         String guessKey = label + "|" + tie.nodeKey() + "|" + blockDn;
         Double seen = exactCosts.get(guessKey);
         double trial = seen == null ? bound : Math.min(bound, seen * EXACT_GUESS);
-        ExactSteiner steiner = new ExactSteiner(weights, leaf, leafCost, flows, rate, chamber, root, trial);
+        ExactSteiner steiner = new ExactSteiner(weights, leaf, leafCost, flows, rate, chamber, root, trial, true);
         ExactSteiner.Skeleton skeleton = steiner.tree(root, tie.getCapacity(), extra);
-        if (trial < bound && (skeleton == null || skeleton.cost > trial)) {
-            log.info("exact: дерево {} сетка {} м: оптимум выше пробной границы {}, счёт заново", label, placeStep, trial);
-            steiner = new ExactSteiner(weights, leaf, leafCost, flows, rate, chamber, root, bound);
+        if (Double.isFinite(trial) && (skeleton == null || skeleton.cost > trial)) {
+            log.info("exact: дерево {} сетка {} м: оптимум выше границы {}, счёт заново без отсечения", label, placeStep, trial);
+            steiner = new ExactSteiner(weights, leaf, leafCost, flows, rate, chamber, root, bound, false);
             skeleton = steiner.tree(root, tie.getCapacity(), extra);
         }
         if (skeleton != null) {

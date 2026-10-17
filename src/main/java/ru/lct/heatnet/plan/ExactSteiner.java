@@ -30,17 +30,18 @@ final class ExactSteiner {
     final java.util.concurrent.atomic.AtomicLong liveCount = new java.util.concurrent.atomic.AtomicLong();
     private final float[] rest;
     // ponytail: нижняя оценка остатка дерева (MST/2 по метрическому замыканию на непокрытых точках и врезке);
-    // отсекает только состояния, которые дороже bound при любом достраивании, поэтому argmin не меняется
+    // отсекает только состояния, которые дороже bound при любом достраивании: если оптимум не дороже bound, он и его
+    // argmin те же. Иначе прежний счёт отдаёт дерево у врезки из неотсечённых m2 — его повторяют без отсечения (prune)
     private static final boolean LOWER_BOUND = Boolean.parseBoolean(System.getProperty("heatnet.exact.lb", "true"));
     private final float[] remaining;
 
     ExactSteiner(double[][] weight, int[] leaf, double[] leafCost, double[] flows, DoubleUnaryOperator rate,
             DoubleUnaryOperator chamber) {
-        this(weight, leaf, leafCost, flows, rate, chamber, -1, Double.POSITIVE_INFINITY);
+        this(weight, leaf, leafCost, flows, rate, chamber, -1, Double.POSITIVE_INFINITY, false);
     }
 
     ExactSteiner(double[][] weight, int[] leaf, double[] leafCost, double[] flows, DoubleUnaryOperator rate,
-            DoubleUnaryOperator chamber, int root, double bound) {
+            DoubleUnaryOperator chamber, int root, double bound, boolean prune) {
         this.k = leaf.length;
         this.n = weight.length;
         this.weight = new float[n][n];
@@ -69,7 +70,7 @@ final class ExactSteiner {
             rest[d] = (float) (leaves - inside);
         }
         remaining = new float[full];
-        if (LOWER_BOUND && root >= 0 && Double.isFinite(bound)) {
+        if (prune && LOWER_BOUND && root >= 0 && Double.isFinite(bound)) {
             lowerBounds(leaf, flows, rate, root);
         }
         double[] flow = new double[full];

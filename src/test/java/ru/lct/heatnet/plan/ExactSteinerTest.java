@@ -2,6 +2,7 @@ package ru.lct.heatnet.plan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Random;
 import java.util.function.DoubleUnaryOperator;
@@ -42,6 +43,52 @@ class ExactSteinerTest {
             ExactSteiner.Skeleton skeleton = new ExactSteiner(w, new int[] {0, 1, 2}, new double[k], flows, RATE, CHAMBER)
                     .tree(root, 1, 0);
             assertEquals(brute(w, flows, root), skeleton.cost, 1e-3, "набор " + trial);
+        }
+    }
+
+    @Test
+    void lowerBoundKeepsSkeleton() {
+        Random random = new Random(11);
+        for (int trial = 0; trial < 40; trial++) {
+            int k = 6;
+            int n = 30;
+            double[][] xy = new double[n][2];
+            for (double[] p : xy) {
+                p[0] = random.nextDouble() * 200;
+                p[1] = random.nextDouble() * 200;
+            }
+            double[][] w = euclid(xy);
+            int[] leaf = {0, 1, 2, 3, 4, 5};
+            double[] leafCost = new double[k];
+            double[] flows = new double[k];
+            for (int t = 0; t < k; t++) {
+                leafCost[t] = random.nextDouble() * 0.05;
+                flows[t] = 5 + random.nextDouble() * 50;
+            }
+            int root = k;
+            double opt = new ExactSteiner(w, leaf, leafCost, flows, RATE, CHAMBER, root, Double.POSITIVE_INFINITY, false)
+                    .tree(root, 3, 0.05).cost;
+            for (double factor : new double[] {0.98, 1.0 + 1e-6, 1.01, 1.2}) {
+                double bound = opt * factor;
+                ExactSteiner.Skeleton full = new ExactSteiner(w, leaf, leafCost, flows, RATE, CHAMBER, root, bound, false)
+                        .tree(root, 3, 0.05);
+                ExactSteiner.Skeleton pruned = new ExactSteiner(w, leaf, leafCost, flows, RATE, CHAMBER, root, bound, true)
+                        .tree(root, 3, 0.05);
+                String at = "набор " + trial + " граница ×" + factor;
+                if (bound >= opt) {
+                    // верная нижняя оценка не отсекает оптимум
+                    assertNotNull(pruned, at);
+                    assertTrue(pruned.cost <= bound, at);
+                }
+                if (pruned != null && pruned.cost <= bound) {
+                    assertNotNull(full, at);
+                    assertEquals(full.cost, pruned.cost, 0, at);
+                    assertEquals(full.junctions, pruned.junctions, at);
+                    assertEquals(full.parents, pruned.parents, at);
+                    assertEquals(full.masks, pruned.masks, at);
+                    assertEquals(java.util.Arrays.toString(full.leafParent), java.util.Arrays.toString(pruned.leafParent), at);
+                }
+            }
         }
     }
 
