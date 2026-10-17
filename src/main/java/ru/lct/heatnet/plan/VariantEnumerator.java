@@ -374,6 +374,12 @@ public final class VariantEnumerator {
     /** Как построено каждое дерево из {@link #options}: по нему сдвигаются камеры в деревьях вариантов. */
     private final Map<Tree, Shaping> shapings = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, Integer> rejectedDn = new ConcurrentHashMap<>();
+    /**
+     * Скелеты {@link #skeleton} после доводки камер: {junctions, parents} или пусто. Ключ — все входы динамики (область,
+     * Ду блока, врезка, точки по порядку, сетка, граница), так что одно и то же дерево в разных черновиках не считается
+     * заново; результат тот же, что при повторном счёте.
+     */
+    private final Map<List<Object>, Optional<Object[]>> skeletons = new ConcurrentHashMap<>();
 
     /** Работа проходов после поиска для лога: сборки одного дерева в {@link #option}, доводки формы, сборки черновика. */
     private final AtomicInteger optionCount = new AtomicInteger();
@@ -1071,6 +1077,44 @@ public final class VariantEnumerator {
     private Option skeleton(Tree tree, List<ConnectionPoint> subset, Region region, int blockDn, Router router,
             String label, double placeStep, double bound, TreeBuilder.Graphs graphs) {
         TieCandidate tie = tree.tie;
+        List<Object> key = List.of(region, blockDn, tie, subset.stream().map(ConnectionPoint::getId)
+                .collect(Collectors.toList()), placeStep, bound);
+        Optional<Object[]> found = skeletons.get(key);
+        if (found == null) {
+            found = Optional.ofNullable(skeletal(tie, subset, region, blockDn, router, label, placeStep, bound));
+            skeletons.put(key, found);
+        } else {
+            log.info("exact: дерево {} сетка {} м: скелет уже посчитан", label, placeStep);
+        }
+        if (found.isEmpty()) {
+            return null;
+        }
+        @SuppressWarnings("unchecked")
+        // копии: Coordinate изменяемы, а прежний счёт отдавал каждому вызову свои
+        List<Coordinate> junctions = ((List<Coordinate>) found.get()[0]).stream().map(Coordinate::copy)
+                .collect(Collectors.toList());
+        int[] parents = ((int[]) found.get()[1]).clone();
+        double metreRub = rules.diameter(blockDn).getNewRubM() + rules.lengthWorthRub();
+        Tree built = builder.buildOnSkeleton(router, blockDn, region.area, tie, subset, junctions, parents,
+                rules.chamberCost(blockDn) / metreRub, rules.tieInCost() / metreRub, graphs);
+        if (built == null || !built.unconnected.isEmpty()) {
+            log.info("exact: дерево {} на скелете не построено", label);
+            return null;
+        }
+        Option best = null;
+        for (Tree shape : List.of(builder.cut(built, router, blockDn, graphs, TreeBuilder.CUT_PASSES),
+                builder.cut(built, router, blockDn, graphs, 0), built)) {
+            Option option = option(shape, label, false, region.area, blockDn, region, built.narrow || shape.narrow);
+            if (option != null && (best == null || option.score < best.score)) {
+                best = option;
+            }
+        }
+        return best;
+    }
+
+    /** Скелет динамикой и доводка его камер: {junctions, parents} или null. */
+    private Object[] skeletal(TieCandidate tie, List<ConnectionPoint> subset, Region region, int blockDn, Router router,
+            String label, double placeStep, double bound) {
         List<Coordinate> places = new ArrayList<>();
         int k = subset.size();
         int[] leaf = new int[k];
@@ -1129,22 +1173,7 @@ public final class VariantEnumerator {
         double moved = refined(router, tie, region.area, places, root, subset, flows, skeleton, junctions, rate);
         log.info("exact: доводка камер скелета {} м за {}ms", String.format(Locale.ROOT, "%.1f", moved),
                 (System.nanoTime() - refining) / 1_000_000);
-        double metreRub = rules.diameter(blockDn).getNewRubM() + rules.lengthWorthRub();
-        Tree built = builder.buildOnSkeleton(router, blockDn, region.area, tie, subset, junctions, parents,
-                rules.chamberCost(blockDn) / metreRub, rules.tieInCost() / metreRub, graphs);
-        if (built == null || !built.unconnected.isEmpty()) {
-            log.info("exact: дерево {} на скелете не построено", label);
-            return null;
-        }
-        Option best = null;
-        for (Tree shape : List.of(builder.cut(built, router, blockDn, graphs, TreeBuilder.CUT_PASSES),
-                builder.cut(built, router, blockDn, graphs, 0), built)) {
-            Option option = option(shape, label, false, region.area, blockDn, region, built.narrow || shape.narrow);
-            if (option != null && (best == null || option.score < best.score)) {
-                best = option;
-            }
-        }
-        return best;
+        return new Object[] {junctions.stream().map(Coordinate::copy).collect(Collectors.toList()), parents.clone()};
     }
 
     private double refined(Router router, TieCandidate tie, Envelope area, List<Coordinate> places, int root,
