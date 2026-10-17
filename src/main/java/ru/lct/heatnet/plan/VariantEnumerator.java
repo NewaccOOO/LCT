@@ -882,7 +882,7 @@ public final class VariantEnumerator {
         }
         Map<Tree.Edge, Integer> dnByEdge;
         try {
-            dnByEdge = assembler.diameters(unit);
+            dnByEdge = diameters(unit);
         } catch (IllegalStateException | IllegalArgumentException e) {
             return moves;
         }
@@ -3647,7 +3647,7 @@ public final class VariantEnumerator {
     private List<Tree> rerouted(Draft draft) {
         long started = System.nanoTime();
         List<Tree> result = new ArrayList<>(draft.trees);
-        Map<Tree.Edge, Integer> dnByEdge = assembler.diameters(result);
+        Map<Tree.Edge, Integer> dnByEdge = diameters(result);
         List<int[]> edges = new ArrayList<>();
         for (int t = 0; t < result.size(); t++) {
             for (int e = 0; e < result.get(t).edges.size(); e++) {
@@ -3724,8 +3724,40 @@ public final class VariantEnumerator {
         return true;
     }
 
+    /** Память чистых {@link #unitScore} и {@link #diameters} по составу узла: Tree без equals, ключ по ссылкам деревьев. */
+    private final Map<List<Tree>, Double> unitScores = memo();
+    private final Map<List<Tree>, Map<Tree.Edge, Integer>> unitDiameters = memo();
+    // ponytail: глобальная блокировка на get/put, сам расчёт вне неё; LRU на 4096 узлов
+    private static <V> Map<List<Tree>, V> memo() {
+        return Collections.synchronizedMap(new LinkedHashMap<List<Tree>, V>(256, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<List<Tree>, V> eldest) {
+                return size() > 4096;
+            }
+        });
+    }
+
+    /** {@link NetworkAssembler#diameters} узла trees из памяти; карту не менять. */
+    private Map<Tree.Edge, Integer> diameters(List<Tree> trees) {
+        Map<Tree.Edge, Integer> cached = unitDiameters.get(trees);
+        if (cached == null) {
+            cached = assembler.diameters(trees);
+            unitDiameters.put(List.copyOf(trees), cached);
+        }
+        return cached;
+    }
+
     /** S узла врезки из деревьев {@code unit} без штрафа; NaN — узел не собирается. */
     private double unitScore(List<Tree> unit) {
+        Double cached = unitScores.get(unit);
+        if (cached == null) {
+            cached = computedUnitScore(unit);
+            unitScores.put(List.copyOf(unit), cached);
+        }
+        return cached;
+    }
+
+    private double computedUnitScore(List<Tree> unit) {
         try {
             VariantSummary summary = assembler.assemble("0", 0, unit, List.of()).getSummary();
             return rules.score(summary.getCalculatedCost(), summary.getNewNetworkLength());
@@ -3741,8 +3773,8 @@ public final class VariantEnumerator {
 
     /** Ду какого-то ребра дерева {@code changed} в узле {@code after} выше, чем у {@code tree} в узле {@code before}. */
     private boolean thicker(Tree tree, List<Tree> before, Tree changed, List<Tree> after) {
-        Map<Tree.Edge, Integer> dnBefore = assembler.diameters(before);
-        Map<Tree.Edge, Integer> dnAfter = assembler.diameters(after);
+        Map<Tree.Edge, Integer> dnBefore = diameters(before);
+        Map<Tree.Edge, Integer> dnAfter = diameters(after);
         for (int e = 0; e < tree.edges.size(); e++) {
             if (dnAfter.get(changed.edges.get(e)) > dnBefore.get(tree.edges.get(e))) {
                 return true;
@@ -3951,7 +3983,7 @@ public final class VariantEnumerator {
                 }
                 Map<Tree.Edge, Integer> dnByEdge;
                 try {
-                    dnByEdge = assembler.diameters(unit);
+                    dnByEdge = diameters(unit);
                 } catch (IllegalStateException | IllegalArgumentException e) {
                     break;
                 }
@@ -4077,7 +4109,7 @@ public final class VariantEnumerator {
                 }
                 Map<Tree.Edge, Integer> dnByEdge;
                 try {
-                    dnByEdge = assembler.diameters(unit);
+                    dnByEdge = diameters(unit);
                 } catch (IllegalStateException | IllegalArgumentException e) {
                     break;
                 }
@@ -4534,7 +4566,7 @@ public final class VariantEnumerator {
         }
         Map<Tree.Edge, Integer> dnByEdge;
         try {
-            dnByEdge = assembler.diameters(unit);
+            dnByEdge = diameters(unit);
         } catch (IllegalStateException | IllegalArgumentException e) {
             return null;
         }
@@ -4608,7 +4640,7 @@ public final class VariantEnumerator {
                 }
                 Map<Tree.Edge, Integer> dnByEdge = dnByRoot.get(tree.root.key);
                 try {
-                    dnByEdge = dnByEdge != null ? dnByEdge : assembler.diameters(unit);
+                    dnByEdge = dnByEdge != null ? dnByEdge : diameters(unit);
                 } catch (IllegalStateException | IllegalArgumentException ex) {
                     break;
                 }
@@ -4698,7 +4730,7 @@ public final class VariantEnumerator {
                 }
                 Map<Tree.Edge, Integer> dnByEdge;
                 try {
-                    dnByEdge = assembler.diameters(unit);
+                    dnByEdge = diameters(unit);
                 } catch (IllegalStateException | IllegalArgumentException ex) {
                     break;
                 }
@@ -4796,7 +4828,7 @@ public final class VariantEnumerator {
                 List<Tree> unit = unit(result, tree);
                 Tree changed;
                 try {
-                    changed = squaredEdge(tree, e, assembler.diameters(unit), axis(tree.edges.get(e).line.getEnvelopeInternal()));
+                    changed = squaredEdge(tree, e, diameters(unit), axis(tree.edges.get(e).line.getEnvelopeInternal()));
                 } catch (IllegalStateException | IllegalArgumentException ex) {
                     break;
                 }
@@ -4939,15 +4971,15 @@ public final class VariantEnumerator {
                 // ветки камеры, затем ребро к ней: приход выбирается по уже переложенным веткам
                 for (int k = incident.size() - 1; k >= 0; k--) {
                     int e = incident.get(k);
-                    Tree squared = squaredEdge(work, e, assembler.diameters(swapped(unit, tree, work)), axis);
+                    Tree squared = squaredEdge(work, e, diameters(swapped(unit, tree, work)), axis);
                     work = squared != null ? squared : work;
                 }
-                work = straightenedExits(work, incident, assembler.diameters(swapped(unit, tree, work)));
-                work = droppedAtJunction(work, node.key, incident, assembler.diameters(swapped(unit, tree, work)), axis);
+                work = straightenedExits(work, incident, diameters(swapped(unit, tree, work)));
+                work = droppedAtJunction(work, node.key, incident, diameters(swapped(unit, tree, work)), axis);
                 // перенос ради осей не множит диагонали у камеры: иначе у неё выходит звезда из коротких отрезков
                 String why = diagonals(work, node.key, incident, axis) > diagonals(tree, junction.key, incident, axis)
                         ? "диагоналей у камеры больше" : keptExitDiagonal(tree, work, junction, node.key, incident, axis)
-                        ? "галочка к прежнему месту" : !junctionFits(work, node.key, incident, assembler.diameters(swapped(unit, tree, work)))
+                        ? "галочка к прежнему месту" : !junctionFits(work, node.key, incident, diameters(swapped(unit, tree, work)))
                         ? "отрезок у камеры не годится" : null;
                 if (why != null) {
                     if (JUNCTION_DEBUG) {
