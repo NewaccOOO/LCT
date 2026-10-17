@@ -733,11 +733,31 @@ public final class VariantEnumerator {
             for (int i = 0; i < shaped.size() && baseOf[a] < 0; i++) {
                 baseOf[a] = layout(shaped.get(i).trees).equals(layout) ? i : -1;
             }
+        }
+        // формы независимы и только читают графы (built/obstacles, без постройки новых): считаются параллельно,
+        // при замороженном наборе графов, как сами доводки выше; раньше это был последовательный хвост ~1 с
+        List<Integer> baseIds = Arrays.stream(baseOf).filter(i -> i >= 0).distinct().boxed().collect(Collectors.toList());
+        double[][] baseForms = new double[shaped.size()][];
+        long forming = System.nanoTime();
+        outer = frozen();
+        try {
+            (PARALLEL ? IntStream.range(0, results.size() + baseIds.size()).parallel()
+                    : IntStream.range(0, results.size() + baseIds.size())).forEach(q -> {
+                if (q >= results.size()) {
+                    int i = baseIds.get(q - results.size());
+                    baseForms[i] = form(shaped.get(i));
+                } else if (baseOf[q] >= 0) {
+                    forms[q] = form(results.get(q)[1]);
+                }
+            });
+        } finally {
+            thawed(outer);
+        }
+        for (int a = 0; a < results.size(); a++) {
             if (baseOf[a] < 0) {
                 continue;
             }
-            forms[a] = form(results.get(a)[1]);
-            double[] was = bases.computeIfAbsent(baseOf[a], i -> form(shaped.get(i)));
+            double[] was = bases.computeIfAbsent(baseOf[a], i -> baseForms[i]);
             int compared = forms[a].length - 1;
             if (forms[a][5] == 0 && dominates(Arrays.copyOf(forms[a], compared), Arrays.copyOf(was, compared))
                     && (!loose.containsKey(baseOf[a]) || forms[a][0] < forms[loose.get(baseOf[a])][0])) {
@@ -754,20 +774,28 @@ public final class VariantEnumerator {
             }
         }
         Map<Integer, Integer> strict = new HashMap<>();
+        int firstBase = first;
+        long fixing = System.nanoTime();
+        outer = frozen();
+        try {
+            (PARALLEL ? IntStream.range(0, results.size()).parallel() : IntStream.range(0, results.size())).forEach(a -> {
+                if (baseOf[a] >= 0 && baseOf[a] != firstBase && forms[a][5] > 0) {
+                    Draft fixed = rightFreeFixed(results.get(a)[1]);
+                    if (fixed != results.get(a)[1]) {
+                        results.get(a)[1] = fixed;
+                        forms[a] = form(fixed);
+                    }
+                }
+            });
+        } finally {
+            thawed(outer);
+        }
         for (int a = 0; a < results.size(); a++) {
             int base = baseOf[a];
             if (base < 0 || base == first) {
                 continue;
             }
             double[] form = forms[a];
-            if (form[5] > 0) {
-                Draft fixed = rightFreeFixed(results.get(a)[1]);
-                if (fixed != results.get(a)[1]) {
-                    results.get(a)[1] = fixed;
-                    form = form(fixed);
-                    forms[a] = form;
-                }
-            }
             if (form[5] == 0 && dominates(form, bases.get(base))
                     && (!strict.containsKey(base) || form[0] < forms[strict.get(base)][0])) {
                 strict.put(base, a);
@@ -791,8 +819,9 @@ public final class VariantEnumerator {
             shaped.set(base, done[1]);
             replaced.add(done[0]);
         });
-        log.info("exact: черновиков со скелетом {}, взято {} elapsed={}ms", candidates.size(), replaced.size(),
-                (System.nanoTime() - started) / 1_000_000);
+        log.info("exact: черновиков со скелетом {}, взято {} elapsed={}ms (формы {}ms, переносы {}ms)", candidates.size(),
+                replaced.size(), (System.nanoTime() - started) / 1_000_000, (fixing - forming) / 1_000_000,
+                (System.nanoTime() - fixing) / 1_000_000);
         return replaced;
     }
 
@@ -891,33 +920,50 @@ public final class VariantEnumerator {
         double maxGainRub = TURN_TOLERANCE_S / rules.score(1, 0);
         List<Tree> others = new ArrayList<>(trees);
         others.remove(t);
-        double before = Double.NaN;
-        for (Tree.Node junction : JunctionMover.junctions(tree)) {
-            List<TreeBuilder.Slide> slides = new ArrayList<>();
-            for (boolean evensOnly : new boolean[] {false, true}) {
-                slides.addAll(builder.rightFreeUnkinks(tree, junction, edge -> region.obstacles(dnByEdge.get(edge), area),
-                        dnByEdge, priceRub, maxGainRub, evensOnly));
-            }
-            for (TreeBuilder.Slide slide : slides) {
-                Tree changed = unkinked(tree, slide, tree.tie, dnByEdge, region, area, true);
-                if (changed == null || !compatible(changed, others)) {
-                    continue;
-                }
-                List<Tree> attempt = new ArrayList<>();
-                for (Tree other : unit) {
-                    attempt.add(other == tree ? changed : other);
-                }
-                before = Double.isNaN(before) ? unitScore(unit) : before;
-                if (unitScore(attempt) <= before + TURN_TOLERANCE_S && !worse(tree, unit, changed, attempt)) {
-                    moves.add(changed);
+        List<Tree.Node> junctions = JunctionMover.junctions(tree);
+        if (junctions.isEmpty()) {
+            return moves;
+        }
+        double before = unitScore(unit);
+        // камеры проверяются независимо и параллельно, ход берётся по их порядку (при first — первый), как раньше;
+        // при first это лишняя работа за первой найденной камерой, но это хвост выбора скелетов, ядра там простаивали
+        List<Tree> found = (PARALLEL ? IntStream.range(0, junctions.size()).parallel() : IntStream.range(0, junctions.size()))
+                .mapToObj(j -> rightFreeMove(tree, junctions.get(j), unit, others, region, area, dnByEdge, priceRub,
+                        maxGainRub, before))
+                .collect(Collectors.toList());
+        for (Tree move : found) {
+            if (move != null) {
+                moves.add(move);
+                if (first) {
                     break;
                 }
             }
-            if (first && !moves.isEmpty()) {
-                break;
-            }
         }
         return moves;
+    }
+
+    private Tree rightFreeMove(Tree tree, Tree.Node junction, List<Tree> unit, List<Tree> others, Region region,
+            Envelope area, Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub,
+            double before) {
+        List<TreeBuilder.Slide> slides = new ArrayList<>();
+        for (boolean evensOnly : new boolean[] {false, true}) {
+            slides.addAll(builder.rightFreeUnkinks(tree, junction, edge -> region.obstacles(dnByEdge.get(edge), area),
+                    dnByEdge, priceRub, maxGainRub, evensOnly));
+        }
+        for (TreeBuilder.Slide slide : slides) {
+            Tree changed = unkinked(tree, slide, tree.tie, dnByEdge, region, area, true);
+            if (changed == null || !compatible(changed, others)) {
+                continue;
+            }
+            List<Tree> attempt = new ArrayList<>();
+            for (Tree other : unit) {
+                attempt.add(other == tree ? changed : other);
+            }
+            if (unitScore(attempt) <= before + TURN_TOLERANCE_S && !worse(tree, unit, changed, attempt)) {
+                return changed;
+            }
+        }
+        return null;
     }
 
     private int formDefects(List<Tree> trees) {
@@ -951,37 +997,111 @@ public final class VariantEnumerator {
         return count;
     }
 
+    /**
+     * Дерево черновика для точного скелета: всё, что нужно до динамики (считается по порядку черновиков), и деревья
+     * на сетках {@code built} после неё.
+     */
+    private static final class ExactJob {
+        final int i;
+        final Tree tree;
+        final List<ConnectionPoint> subset;
+        final Region region;
+        final int blockDn;
+        final Router router;
+        final String label;
+        final Option before;
+        final double bound;
+        final TreeBuilder.Graphs graphs;
+        final List<Double> steps;
+        List<Option> built;
+
+        ExactJob(int i, Tree tree, List<ConnectionPoint> subset, Region region, int blockDn, Router router, String label,
+                Option before, TreeBuilder.Graphs graphs, List<Double> steps) {
+            this.i = i;
+            this.tree = tree;
+            this.subset = subset;
+            this.region = region;
+            this.blockDn = blockDn;
+            this.router = router;
+            this.label = label;
+            this.before = before;
+            this.bound = before == null ? Double.POSITIVE_INFINITY : before.score;
+            this.graphs = graphs;
+            this.steps = steps;
+        }
+
+        List<List<Object>> keys() {
+            List<List<Object>> keys = new ArrayList<>();
+            for (double placeStep : steps) {
+                keys.add(skeletonKey(region, blockDn, tree.tie, subset, placeStep, bound));
+            }
+            return keys;
+        }
+    }
+
+    private static List<Object> skeletonKey(Region region, int blockDn, TieCandidate tie, List<ConnectionPoint> subset,
+            double placeStep, double bound) {
+        return List.of(region, blockDn, tie, subset.stream().map(ConnectionPoint::getId).collect(Collectors.toList()),
+                placeStep, bound);
+    }
+
+    /**
+     * Точные скелеты деревьев всех черновиков. Подготовка и сборка черновиков — по порядку, как раньше; динамика
+     * деревьев разных черновиков идёт одновременно (внутри дерева сетки по-прежнему пачками {@link #EXACT_GRIDS_AT_ONCE}),
+     * а дерево, чьи скелеты уже считает другое дерево (тот же ключ {@link #skeletons}), — после всех, из кэша.
+     * Порядок не меняет выход: кэш отдаёт то же, что повторный счёт, а пробная граница {@link #exactCosts} не меняет
+     * оптимум и его выбор.
+     */
     private List<Draft> exact(List<Draft> found) {
         long started = System.nanoTime();
-        List<Draft> candidates = new ArrayList<>();
+        List<List<ExactJob>> jobs = new ArrayList<>();
+        List<ExactJob> first = new ArrayList<>();
+        List<ExactJob> later = new ArrayList<>();
+        Set<List<Object>> claimed = new HashSet<>();
         for (Draft draft : found) {
+            List<ExactJob> draftJobs = exactJobs(draft);
+            jobs.add(draftJobs);
+            for (ExactJob job : draftJobs) {
+                List<List<Object>> keys = job.keys();
+                (keys.stream().anyMatch(claimed::contains) ? later : first).add(job);
+                claimed.addAll(keys);
+            }
+        }
+        // одновременно несколько динамик: только вне районов города и при памяти, где и сетки идут пачками (> 1),
+        // иначе таблицы до EXACT_MAX_BYTES каждая не помещаются (тесты с кучей 512 МБ, города в CITY_THREADS)
+        (PARALLEL && !district && EXACT_GRIDS_AT_ONCE > 1 ? first.parallelStream() : first.stream()).forEach(this::built);
+        later.forEach(this::built);
+        List<Draft> candidates = new ArrayList<>();
+        for (int d = 0; d < found.size(); d++) {
+            Draft draft = found.get(d);
             List<Draft> others = new ArrayList<>();
-            Draft exact = exact(draft, others);
+            Draft exact = exact(draft, jobs.get(d), others);
             if (exact != draft) {
                 candidates.add(exact);
             }
-            if (others != null) {
-                candidates.addAll(others);
-            }
+            candidates.addAll(others);
         }
         log.info("exact: черновиков со скелетом {} у {} черновиков elapsed={}ms", candidates.size(), found.size(),
                 (System.nanoTime() - started) / 1_000_000);
         return candidates;
     }
 
-    private Draft exact(Draft draft, List<Draft> alternates) {
-        List<Tree> trees = new ArrayList<>(draft.trees);
-        boolean changed = false;
-        int altTree = -1;
-        List<Option> altOptions = List.of();
+    private int exactMulti(List<Tree> trees) {
         int multi = -1;
-        for (int i = 0; SQUARE && alternates != null && !district && connectionByOks.size() <= EXACT_MULTI_MAX && i < trees.size(); i++) {
+        for (int i = 0; SQUARE && !district && connectionByOks.size() <= EXACT_MULTI_MAX && i < trees.size(); i++) {
             int size = trees.get(i).connected().size();
             if (size >= 3 && size <= EXACT_MAX
                     && (multi < 0 || size > trees.get(multi).connected().size())) {
                 multi = i;
             }
         }
+        return multi;
+    }
+
+    private List<ExactJob> exactJobs(Draft draft) {
+        List<Tree> trees = draft.trees;
+        int multi = exactMulti(trees);
+        List<ExactJob> jobs = new ArrayList<>();
         for (int i = 0; i < trees.size(); i++) {
             Tree tree = trees.get(i);
             List<ConnectionPoint> subset = tree.connected();
@@ -995,30 +1115,47 @@ public final class VariantEnumerator {
             Router router = region.router(blockDn, region.area);
             String label = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(","));
             Option before = option(tree, label, false, region.area, blockDn, region, tree.narrow);
-            double bound = before == null ? Double.POSITIVE_INFINITY : before.score;
             TreeBuilder.Graphs graphs = graphs(region, region.area);
-            List<Tree> others = new ArrayList<>(trees);
-            others.remove(i);
-            Option primary = null;
-            List<Option> extra = new ArrayList<>();
             List<Double> steps = new ArrayList<>(List.of(EXACT_STEP_M));
             for (double placeStep : i == multi ? EXACT_STEPS : new double[0]) {
                 if (!steps.contains(placeStep)) {
                     steps.add(placeStep);
                 }
             }
-            List<Option> built = new ArrayList<>();
-            for (int from = 0; from < steps.size(); from += EXACT_GRIDS_AT_ONCE) {
-                List<Double> batch = steps.subList(from, Math.min(steps.size(), from + EXACT_GRIDS_AT_ONCE));
-                built.addAll((PARALLEL ? batch.parallelStream() : batch.stream())
-                        .map(placeStep -> Optional.ofNullable(skeleton(tree, subset, region, blockDn, router, label,
-                                placeStep, bound, graphs)))
-                        .map(found -> found.orElse(null)).collect(Collectors.toList()));
-            }
-            for (int g = 0; g < steps.size(); g++) {
-                double placeStep = steps.get(g);
-                Option best = built.get(g);
-                log.info("exact: дерево {} сетка {} м score {} → {}", label, placeStep,
+            jobs.add(new ExactJob(i, tree, subset, region, blockDn, router, label, before, graphs, steps));
+        }
+        return jobs;
+    }
+
+    private void built(ExactJob job) {
+        List<Option> built = new ArrayList<>();
+        for (int from = 0; from < job.steps.size(); from += EXACT_GRIDS_AT_ONCE) {
+            List<Double> batch = job.steps.subList(from, Math.min(job.steps.size(), from + EXACT_GRIDS_AT_ONCE));
+            built.addAll((PARALLEL ? batch.parallelStream() : batch.stream())
+                    .map(placeStep -> Optional.ofNullable(skeleton(job.tree, job.subset, job.region, job.blockDn,
+                            job.router, job.label, placeStep, job.bound, job.graphs)))
+                    .map(found -> found.orElse(null)).collect(Collectors.toList()));
+        }
+        job.built = built;
+    }
+
+    private Draft exact(Draft draft, List<ExactJob> jobs, List<Draft> alternates) {
+        List<Tree> trees = new ArrayList<>(draft.trees);
+        boolean changed = false;
+        int altTree = -1;
+        List<Option> altOptions = List.of();
+        int multi = exactMulti(trees);
+        for (ExactJob job : jobs) {
+            int i = job.i;
+            Option before = job.before;
+            List<Tree> others = new ArrayList<>(trees);
+            others.remove(i);
+            Option primary = null;
+            List<Option> extra = new ArrayList<>();
+            for (int g = 0; g < job.steps.size(); g++) {
+                double placeStep = job.steps.get(g);
+                Option best = job.built.get(g);
+                log.info("exact: дерево {} сетка {} м score {} → {}", job.label, placeStep,
                         before == null ? Double.NaN : before.score, best == null ? Double.NaN : best.score);
                 boolean valid = best != null && (before == null || best.score < before.score) && compatible(best.tree, others);
                 if (placeStep == EXACT_STEP_M) {
@@ -1033,8 +1170,11 @@ public final class VariantEnumerator {
             if (primary != null) {
                 options.add(0, primary);
             }
+            Region region = job.region;
+            int blockDn = job.blockDn;
+            String label = job.label;
             for (Option option : options) {
-                shapings.put(option.tree, new Shaping(router, blockDn, graphs,
+                shapings.put(option.tree, new Shaping(job.router, blockDn, job.graphs,
                         shape -> option(shape, label, false, region.area, blockDn, region, option.tree.narrow || shape.narrow)));
             }
             if (i == multi && !extra.isEmpty()) {
@@ -1080,8 +1220,7 @@ public final class VariantEnumerator {
     private Option skeleton(Tree tree, List<ConnectionPoint> subset, Region region, int blockDn, Router router,
             String label, double placeStep, double bound, TreeBuilder.Graphs graphs) {
         TieCandidate tie = tree.tie;
-        List<Object> key = List.of(region, blockDn, tie, subset.stream().map(ConnectionPoint::getId)
-                .collect(Collectors.toList()), placeStep, bound);
+        List<Object> key = skeletonKey(region, blockDn, tie, subset, placeStep, bound);
         Optional<Object[]> found = skeletons.get(key);
         if (found == null) {
             found = Optional.ofNullable(skeletal(tie, subset, region, blockDn, router, label, placeStep, bound));
