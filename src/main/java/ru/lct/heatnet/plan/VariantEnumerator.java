@@ -1397,7 +1397,8 @@ public final class VariantEnumerator {
 
     /**
      * Второй проход города по точкам без сети: каждая группа таких точек считается районом вместе с точками ближайших
-     * (не дальше RETRY_NEAR_M, до RETRY_TREES) уже принятых деревьев — районов или прямых подключений. Районы считаются
+     * (не дальше RETRY_NEAR_M, до RETRY_TREES) уже принятых деревьев — районов или прямых подключений; близость, как и
+     * другие решения о подключении в городе, считается по форме до прохода по осям ({@link #basis}). Районы считаются
      * порознь, и точка у границы района остаётся без трассы, когда её маршрут есть только ветвлением от дерева
      * соседнего района, или её дерево задело дерево соседа и было отброшено в {@link #joined}. Новые деревья заменяют
      * соседние, если подключают больше точек и не задевают остальные принятые деревья варианта; врезки — только в
@@ -1425,7 +1426,7 @@ public final class VariantEnumerator {
                 continue;
             }
             STRtree index = new STRtree();
-            trees.forEach(tree -> index.insert(tree.envelope(), tree));
+            trees.forEach(tree -> index.insert(basis(tree).envelope(), tree));
             for (List<ConnectionPoint> group : districts(left)) {
                 Envelope around = new Envelope();
                 group.forEach(connection -> around.expandToInclude(connection.getGeometry().getCoordinate()));
@@ -1434,14 +1435,14 @@ public final class VariantEnumerator {
                 List<Tree> close = new ArrayList<>();
                 for (Object item : index.query(around)) {
                     Tree tree = (Tree) item;
-                    if (!tree.connected().isEmpty() && geometry(tree).distance(points) <= RETRY_NEAR_M) {
+                    if (!tree.connected().isEmpty() && geometry(basis(tree)).distance(points) <= RETRY_NEAR_M) {
                         close.add(tree);
                     }
                 }
                 if (close.isEmpty()) {
                     continue;
                 }
-                close.sort(Comparator.comparingDouble((Tree tree) -> geometry(tree).distance(points))
+                close.sort(Comparator.comparingDouble((Tree tree) -> geometry(basis(tree)).distance(points))
                         .thenComparing(tree -> tree.connected().get(0).getId()));
                 List<Tree> taken = new ArrayList<>(close.subList(0, Math.min(RETRY_TREES, close.size())));
                 List<ConnectionPoint> subset = new ArrayList<>(group);
