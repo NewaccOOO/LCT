@@ -1,0 +1,14 @@
+[
+ {
+  "name": "small-1",
+  "title": "Пример small-1 (2 варианта)",
+  "input": "small-1.in.geojson",
+  "output": "small-1.out.geojson"
+ },
+ {
+  "name": "spb-kupchino",
+  "title": "Санкт-Петербург, Купчино (глубина)",
+  "input": "spb-kupchino.in.geojson",
+  "output": "spb-kupchino.out.geojson"
+ }
+]

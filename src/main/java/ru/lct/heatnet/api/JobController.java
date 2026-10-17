@@ -33,6 +33,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -130,7 +131,11 @@ public class JobController {
                             content = @Content(schema = @Schema(implementation = ApiError.class)))
             })
     @PostMapping(consumes = {MediaType.APPLICATION_JSON_VALUE, GEO_JSON, MediaType.APPLICATION_OCTET_STREAM_VALUE}, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<JobCreated> create(HttpServletRequest request) throws IOException {
+    public ResponseEntity<JobCreated> create(
+            HttpServletRequest request,
+            @Parameter(description = "Режим с учётом глубины (§5 приложения 18.09): глубины участков, Kгл, свои варианты; "
+                    + "как --depth у CLI. По умолчанию 2D", example = "false")
+            @RequestParam(name = "depth", defaultValue = "false") boolean depth) throws IOException {
         UUID id = UUID.randomUUID();
         Path dir = dataDir.resolve("jobs").resolve(id.toString());
         Path input = dir.resolve("input.geojson");
@@ -147,6 +152,10 @@ public class JobController {
             }
             if (first != '{') {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Тело запроса должно быть JSON-объектом GeoJSON FeatureCollection");
+            }
+            if (depth) {
+                // флаг режима лежит рядом со входом: схема таблицы задач не меняется
+                Files.createFile(dir.resolve(JobWorker.DEPTH_FLAG));
             }
             job.setCreatedAt(Instant.now());
             // save() коммитит свою транзакцию до возврата, поэтому воркер получает уже видимую запись.
