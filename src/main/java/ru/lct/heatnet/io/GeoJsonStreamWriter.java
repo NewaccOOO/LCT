@@ -73,6 +73,14 @@ public class GeoJsonStreamWriter {
             start(json, chamber.getGeometry(), chamber.getId(), "heat_chamber", chamber.getVariantId(), scale);
             json.writeNumberField("diameter", chamber.getDiameter());
             decimal(json, "cost", chamber.getCost(), MONEY_SCALE);
+            if (chamber.getDepth() != null) {
+                // режим с глубиной: все трубы входят в камеру на этой глубине; не 3,0 м — сдвиг, без него профиль с
+                // уклоном 0,10 не помещается (эксперты 16.10: в камеру — на заданной глубине)
+                decimal(json, "depth_m", chamber.getDepth(), DEPTH_SCALE);
+                if (Math.abs(chamber.getDepth() - 3.0) > 0.0105) {
+                    json.writeBooleanField("depth_shifted", true);
+                }
+            }
             end(json);
         }
         for (NewSegment segment : variant.getSegments()) {

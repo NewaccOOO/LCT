@@ -597,7 +597,12 @@ public final class VariantEnumerator {
      */
     public Result depth(Result flat) {
         long started = System.nanoTime();
-        DepthProfiler profiler = new DepthProfiler(rules, specials);
+        Set<String> oks = new HashSet<>();
+        connectionByOks.values().forEach(c -> {
+            oks.add(c.getId());
+            oks.add(c.getOksId());
+        });
+        DepthProfiler profiler = new DepthProfiler(rules, specials, oks);
         List<Variant> profiled = flat.getVariants().stream().map(profiler::profile).collect(Collectors.toList());
         List<Integer> order = Scorer.rank(profiled.stream().map(Variant::getSummary).collect(Collectors.toList()));
         List<Variant> ranked = new ArrayList<>();

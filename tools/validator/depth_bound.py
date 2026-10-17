@@ -45,6 +45,9 @@ TOUCH = 0.05
 # показывает, точен ли алгоритм в своей модели; разница двух границ — цена запаса. Край зоны глубже 3,0 м сервис
 # держит точно (±2 м), край мелкой зоны дотягивает до конца участка ближе 0,1 м — там Kгл = 1 и цены нет.
 IMPL = "--impl" in sys.argv
+FREE_CHAMBERS = "--free-chambers" in sys.argv
+if FREE_CHAMBERS:
+    sys.argv.remove("--free-chambers")
 if IMPL:
     SLOPE = 0.10 * 0.998
     sys.argv.remove("--impl")
@@ -60,12 +63,14 @@ def lines_of(g):
 
 def load_input(path):
     data = json.load(open(path, encoding="utf-8"))
-    crossers, under = [], []  # (геометрия, верх, высота объекта, просвет, существующая сеть), (полигон, мин. верх)
+    crossers, under, oks = [], [], set()  # (геометрия, верх, высота, просвет, сеть), (полигон, мин. верх), id точек ОКС
     for f in data["features"]:
         p, g = f["properties"], f["geometry"]
         if g is None:
             continue
         t = p.get("object_type")
+        if t == "oks_connection_point":
+            oks.add(str(p.get("id")))
         if t == "heat_network":
             dn = int(p.get("diameter") or 0)
             h = HEIGHT.get(dn, HEIGHT[max(d for d in HEIGHT if d <= dn)] if dn >= 50 else HEIGHT[50])
@@ -78,7 +83,7 @@ def load_input(path):
                     crossers.append((line, *CROSS[rt], False))
             elif rt in UNDER_TOP and geom.geom_type in ("Polygon", "MultiPolygon"):
                 under.append((geom, UNDER_TOP[rt]))
-    return crossers, under
+    return crossers, under, oks
 
 
 def load_output(path):
@@ -188,7 +193,7 @@ def envelope(items, L, t):
         if own:
             d = max(0.0, own[0] - t - rl, t - own[1] - rr)
         else:
-            d = min(ds + t - (os_ or ZONE), de + L - t - (oe or ZONE))
+            d = min(ds + t - (ZONE if os_ is None else os_), de + L - t - (ZONE if oe is None else oe))
         e = max(e, u - SLOPE * max(0.0, d))
     return e
 
@@ -217,35 +222,68 @@ def zone_pieces(segs, adj, i, c0, c1, rl, rr):
     return pieces
 
 
-def propagate(segs, zones):
+def propagate(segs, zones, fixed=None):
     """
     Вынужденные зоны до неподвижной точки. Зона на постоянной глубине h должна быть не мельче огибающей E во всей зоне
     (уклон 0,10 от других вынужденных зон), значит h из допустимых зоны и h >= max E. Если такое h > 3,0 м — зона
-    вынужденная с u = наименьшее такое h. Каждый шаг — необходимое условие для любого профиля по правилам.
+    вынужденная с u = наименьшее такое h. Зоны, которые налегают друг на друга по сети (в том числе через узел), лежат
+    на одной глубине — у группы общие допустимые глубины. Каждый шаг — необходимое условие для любого профиля по правилам.
     """
-    forced = {}
-    for i, t0, t1, parts, rl, rr in zones:
-        if parts and not allowed(parts, MIN_H, NORMAL):
-            forced[(i, t0, t1, rl, rr)] = min(a for a, _ in parts)
     adj = defaultdict(list)
     for j, (p, line) in enumerate(segs):
         adj[str(p["start_node_id"])].append((j, 0))
         adj[str(p["end_node_id"])].append((j, 1))
+    pieces = [zone_pieces(segs, adj, i, t0, t1, rl, rr) for i, t0, t1, parts, rl, rr in zones]
+    # группы налегающих зон (объединение по общим кускам одного участка)
+    group = list(range(len(zones)))
+
+    def root(x):
+        while group[x] != x:
+            group[x] = group[group[x]]
+            x = group[x]
+        return x
+    by_seg = defaultdict(list)
+    for z, ps in enumerate(pieces):
+        for j, a, b in ps:
+            by_seg[j].append((a, b, z))
+    for items in by_seg.values():
+        items.sort()
+        for k in range(1, len(items)):
+            for m in range(k):
+                if items[m][1] > items[k][0] + 1e-9:
+                    group[root(items[k][2])] = root(items[m][2])
+    members = defaultdict(list)
+    for z in range(len(zones)):
+        members[root(z)].append(z)
+    gparts = {}
+    for g, zs in members.items():
+        parts = [(MIN_H, 1e9)]
+        for z in zs:
+            parts = [r for lo, hi in zones[z][3] for r in allowed(parts, lo, hi)]
+        gparts[g] = parts
+    key = lambda z: (zones[z][0], zones[z][1], zones[z][2], zones[z][4], zones[z][5])
+    forced = dict(fixed or {})
+    for g, zs in members.items():
+        if gparts[g] and not allowed(gparts[g], MIN_H, NORMAL):
+            for z in zs:
+                forced[key(z)] = min(a for a, _ in gparts[g])
     for _ in range(100):
         per_seg = cones(segs, forced)
         changed = False
-        for i, t0, t1, parts, rl, rr in zones:
+        for g, zs in members.items():
             emax = 0.0
-            for j, a, b in zone_pieces(segs, adj, i, t0, t1, rl, rr):
-                L = segs[j][1].length
-                n = max(2, int((b - a) / 0.02) + 1)
-                emax = max(emax, max(envelope(per_seg.get(j, []), L, a + (b - a) * m / (n - 1)) for m in range(n)))
-            rest = allowed(parts, emax, 1e9)
+            for z in zs:
+                for j, a, b in pieces[z]:
+                    L = segs[j][1].length
+                    n = max(2, int((b - a) / 0.02) + 1)
+                    emax = max(emax, max(envelope(per_seg.get(j, []), L, a + (b - a) * m / (n - 1)) for m in range(n)))
+            rest = allowed(gparts[g], emax, 1e9)
             if not rest:
                 continue  # профиля по правилам нет: выход обязан пометить ручную проработку
             u = min(a for a, _ in rest)
-            if u > NORMAL + 1e-9 and u > forced.get((i, t0, t1, rl, rr), 0) + 1e-9:
-                forced[(i, t0, t1, rl, rr)] = u
+            if u > NORMAL + 1e-9 and any(u > forced.get(key(z), 0) + 1e-9 for z in zs):
+                for z in zs:
+                    forced[key(z)] = max(u, forced.get(key(z), 0))
                 changed = True
         if not changed:
             return forced, per_seg
@@ -268,8 +306,24 @@ def bound(segs, per_seg):
     return extra
 
 
+def fixed_chambers(segs, tech, oks):
+    """
+    Камеры на заданной глубине 3,0 м (эксперты 16.10: трубы входят в камеру на заданной глубине): камера, которую выход
+    оставил на 3,0, — точка h = 3,0, её конус уклона ограничивает «над» у соседних зон. Сдвинутая выходом камера
+    (иначе профиль не помещался) — свободна. Это допущение сервиса, не правило ТП: --free-chambers его снимает.
+    """
+    fixed, seen = {}, set()
+    for i, (p, line) in enumerate(segs):
+        for key, t, h in ((str(p["start_node_id"]), 0.0, p["depth_start"]), (str(p["end_node_id"]), line.length, p["depth_end"])):
+            if key in tech or key in oks or key in seen or abs(h - NORMAL) > 1e-6:
+                continue
+            seen.add(key)
+            fixed[(i, t, t, 0.0, 0.0)] = NORMAL
+    return fixed
+
+
 def main(inp, out):
-    crossers, under = load_input(inp)
+    crossers, under, oks = load_input(inp)
     worst, low = 0.0, 0.0
     for vid, v in sorted(load_output(out).items(), key=lambda kv: kv[0]):
         segs, s = v["segs"], v["summary"]
@@ -281,7 +335,8 @@ def main(inp, out):
         cost = sum(p["cost"] for p, _ in segs)
         rest = s["calculated_cost"] - cost  # камеры, врезки, штраф: от глубины не зависят
         zones = crossing_zones(segs, v["tech"], crossers, under)
-        forced, per_seg = propagate(segs, zones)
+        fixed = {} if FREE_CHAMBERS else fixed_chambers(segs, v["tech"], oks)
+        forced, per_seg = propagate(segs, zones, fixed)
         extra = bound(segs, per_seg)
         lb = flat + rest + extra
         gap = s["calculated_cost"] - lb
@@ -292,7 +347,7 @@ def main(inp, out):
         if gap < -tol:
             low = min(low, gap)
         print(f"вариант {vid}: C={s['calculated_cost']:.2f} нижняя граница={lb:.2f} (C_2D той же трассы {flat + rest:.2f}"
-              f" + вынужденная глубина {extra:.2f}, вынужденных зон {len(forced)} из {len(zones)}) разрыв={gap:.2f} руб. "
+              f" + вынужденная глубина {extra:.2f}, вынужденных зон {len(forced) - len(fixed)} из {len(zones)}) разрыв={gap:.2f} руб. "
               f"(ΔS={0.7 * gap / 25e6:.6f}, {100 * gap / lb:.5f} %)")
     if low < 0:
         # граница выше стоимости решения: граница не нижняя или выход нарушает правила — это провал проверки
