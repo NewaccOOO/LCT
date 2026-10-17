@@ -1,6 +1,8 @@
+import math
 import os
 import sys
 
+import pytest
 from shapely.geometry import Point, Polygon
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -31,3 +33,13 @@ def test_entry_leaving_own_wall_once_is_allowed():
 
     assert why is None
     assert window[2] > 7.8
+
+
+def test_turn_with_same_side_turn_over_short_link_is_one_turn():
+    def path(link):
+        a = math.radians(80)
+        b = (link * math.cos(a), link * math.sin(a))
+        return [(-20.0, 0.0), (0.0, 0.0), b, (b[0] + 20 * math.cos(math.radians(120)), b[1] + 20 * math.sin(math.radians(120)))]
+
+    assert check18.path_turn(path(1.5), 1)[0] == pytest.approx(120)
+    assert check18.path_turn(path(2.5), 1)[0] == pytest.approx(80)
