@@ -365,7 +365,7 @@ final class ExactSteiner {
         for (int v = 0; v < n; v++) {
             order[v] = v;
         }
-        if (root >= 0 && Boolean.parseBoolean(System.getProperty("heatnet.exact.order", "true"))) {
+        if (root >= 0) {
             double[] dist = new double[n];
             boolean[] done = new boolean[n];
             Arrays.fill(dist, Double.POSITIVE_INFINITY);
@@ -393,14 +393,7 @@ final class ExactSteiner {
     }
 
     /** Первое и последнее место, где values не ровно INF. */
-    private static final boolean RANGES = Boolean.parseBoolean(System.getProperty("heatnet.exact.ranges", "true"));
-
     private void span(float[] values, int d, int[] lo, int[] hi) {
-        if (!RANGES) {
-            lo[d] = 0;
-            hi[d] = n - 1;
-            return;
-        }
         int first = 0;
         while (first < n && values[first] >= INF) {
             first++;
