@@ -29,6 +29,10 @@ final class ExactSteiner {
     final java.util.concurrent.atomic.AtomicLong extendNanos = new java.util.concurrent.atomic.AtomicLong();
     final java.util.concurrent.atomic.AtomicLong liveCount = new java.util.concurrent.atomic.AtomicLong();
     private final float[] rest;
+    // ponytail: нижняя оценка остатка дерева (MST/2 по метрическому замыканию на непокрытых точках и врезке);
+    // отсекает только состояния, которые дороже bound при любом достраивании, поэтому argmin не меняется
+    private static final boolean LOWER_BOUND = Boolean.parseBoolean(System.getProperty("heatnet.exact.lb", "true"));
+    private final float[] remaining;
 
     ExactSteiner(double[][] weight, int[] leaf, double[] leafCost, double[] flows, DoubleUnaryOperator rate,
             DoubleUnaryOperator chamber) {
@@ -64,6 +68,10 @@ final class ExactSteiner {
             }
             rest[d] = (float) (leaves - inside);
         }
+        remaining = new float[full];
+        if (LOWER_BOUND && root >= 0 && Double.isFinite(bound)) {
+            lowerBounds(leaf, flows, rate, root);
+        }
         double[] flow = new double[full];
         this.rate = new float[full];
         this.chamber = new float[full];
@@ -79,7 +87,7 @@ final class ExactSteiner {
             float[] tv = new float[n];
             Arrays.fill(tv, INF);
             tv[leaf[t]] = (float) leafCost[t];
-            e[1 << t] = extend(tv, this.rate[1 << t], root, bound - rest[1 << t]);
+            e[1 << t] = extend(tv, this.rate[1 << t], root, bound - rest[1 << t], remaining[1 << t]);
         }
         List<List<Integer>> bySize = new ArrayList<>();
         for (int s = 0; s <= k; s++) {
@@ -99,7 +107,7 @@ final class ExactSteiner {
                     tv[v] = Math.min(merged[0][v], merged[1][v]) + this.chamber[d];
                 }
                 long t1 = System.nanoTime();
-                e[d] = extend(tv, this.rate[d], root, bound - rest[d]);
+                e[d] = extend(tv, this.rate[d], root, bound - rest[d], remaining[d]);
                 extendNanos.addAndGet(System.nanoTime() - t1);
                 liveCount.addAndGet(live(e[d]));
             });
@@ -225,6 +233,78 @@ final class ExactSteiner {
         return new float[][] {two, three};
     }
 
+    private void lowerBounds(int[] leaf, double[] flows, DoubleUnaryOperator rate, int root) {
+        int m = k + 1;
+        int[] at = Arrays.copyOf(leaf, m);
+        at[k] = root;
+        double[][] closure = new double[m][];
+        for (int i = 0; i < m; i++) {
+            double[] dist = new double[n];
+            boolean[] done = new boolean[n];
+            Arrays.fill(dist, Double.POSITIVE_INFINITY);
+            dist[at[i]] = 0;
+            for (int step = 0; step < n; step++) {
+                int u = -1;
+                for (int v = 0; v < n; v++) {
+                    if (!done[v] && (u < 0 || dist[v] < dist[u])) {
+                        u = v;
+                    }
+                }
+                if (u < 0 || dist[u] == Double.POSITIVE_INFINITY) {
+                    break;
+                }
+                done[u] = true;
+                float[] row = weight[u];
+                for (int v = 0; v < n; v++) {
+                    if (row[v] < INF / 2 && dist[u] + row[v] < dist[v]) {
+                        dist[v] = dist[u] + row[v];
+                    }
+                }
+            }
+            closure[i] = new double[m];
+            for (int j = 0; j < m; j++) {
+                closure[i][j] = dist[at[j]];
+            }
+        }
+        double minRate = Double.POSITIVE_INFINITY;
+        for (double f : flows) {
+            minRate = Math.min(minRate, rate.applyAsDouble(f));
+        }
+        int full = 1 << k;
+        double[] key = new double[m];
+        boolean[] in = new boolean[m];
+        for (int d = 1; d < full; d++) {
+            int count = 0;
+            for (int i = 0; i < m; i++) {
+                in[i] = i == k || (d >> i & 1) == 0;
+                count += in[i] ? 1 : 0;
+                key[i] = Double.POSITIVE_INFINITY;
+            }
+            if (count < 2) {
+                continue;
+            }
+            double mst = 0;
+            key[k] = 0;
+            for (int step = 0; step < count; step++) {
+                int u = -1;
+                for (int i = 0; i < m; i++) {
+                    if (in[i] && (u < 0 || key[i] < key[u])) {
+                        u = i;
+                    }
+                }
+                in[u] = false;
+                mst += key[u];
+                for (int i = 0; i < m; i++) {
+                    if (in[i] && closure[u][i] < key[i]) {
+                        key[i] = closure[u][i];
+                    }
+                }
+            }
+            double steiner = mst / (2.0 * (1.0 - 1.0 / count));
+            remaining[d] = Double.isFinite(steiner) ? (float) (minRate * steiner * (1 - 1e-4)) : 0;
+        }
+    }
+
     private int live(float[] values) {
         int count = 0;
         for (float value : values) {
@@ -233,10 +313,10 @@ final class ExactSteiner {
         return count;
     }
 
-    private float[] extend(float[] tv, float r, int root, double bound) {
+    private float[] extend(float[] tv, float r, int root, double bound, float lower) {
         if (root >= 0) {
             for (int u = 0; u < n; u++) {
-                if (tv[u] + r * weight[u][root] > bound) {
+                if (tv[u] + Math.max(r * weight[u][root], lower) > bound) {
                     tv[u] = INF;
                 }
             }
@@ -280,7 +360,7 @@ final class ExactSteiner {
         }
         if (root >= 0) {
             for (int v = 0; v < n; v++) {
-                if (out[v] + r * weight[v][root] > bound) {
+                if (out[v] + Math.max(r * weight[v][root], lower) > bound) {
                     out[v] = INF;
                 }
             }
