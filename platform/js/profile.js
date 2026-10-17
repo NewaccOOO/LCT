@@ -263,7 +263,7 @@ export class Profile {
     }
     g.restore();
     g.fillStyle = this.win ? '#fde047' : muted;
-    g.fillText(this.win ? `показан участок ${pk(wa)} – ${pk(wb)} · двойной щелчок — вся трасса` : (matchMedia('(pointer: coarse)').matches ? 'два пальца — масштаб · палец — сдвиг · двойное касание — вся трасса' : 'колесо — масштаб по длине · тащить — сдвиг') + ' · жёлтым — уклон меньше 0,002 (СП 124.13330)', pl + 4, r.height - 5);
+    g.fillText(this.win ? `показан участок ${pk(wa)} – ${pk(wb)} · двойной щелчок — вся трасса` : (matchMedia('(pointer: coarse)').matches ? 'два пальца — масштаб · палец — сдвиг' : 'колесо — масштаб · тащить — сдвиг') + ' · жёлтым — уклон меньше 0,002', pl + 4, r.height - 5);
 
     // курсор: пролёт или мышь
     const cur = this.mouse ? this.atX(this.mouse[0]) : this.cursor;

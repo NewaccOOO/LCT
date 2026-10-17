@@ -42,6 +42,13 @@ header.top { display: flex; align-items: center; gap: 10px; padding: 0 12px; bac
 .sugg button.act, .sugg button:hover { background: var(--card2); }
 .sugg small { color: var(--muted); white-space: nowrap; }
 .variants { display: flex; gap: 6px; }
+.panebtns { display: flex; gap: 2px; margin-left: auto; }
+.panebtns + #helpBtn { margin-left: 0; }
+header .icon { background: none; border-color: transparent; color: var(--muted); }
+header .icon:hover { background: var(--card2); color: var(--text); }
+header .icon[aria-pressed=true] { color: var(--text); }
+#mapBtn[aria-pressed=true] { color: var(--accent); background: #0c3550; }
+header .icon:disabled { opacity: .3; }
 .variants button { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.1; padding: 4px 12px; min-height: 40px; }
 .variants small { color: var(--muted); font-size: 11.5px; }
 .variants .vs { display: none; }
@@ -54,7 +61,9 @@ body:not(.server) .srv { display: none !important; }
 
 /* ---------- раскладка ---------- */
 main { display: flex; min-height: 0; position: relative; }
-#left { width: var(--left); flex: none; background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; z-index: 10; }
+#left { width: var(--left); flex: none; background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; z-index: 10; transition: margin-left .2s ease, visibility 0s; }
+/* свёрнутая панель уезжает за край, 3D-окно занимает её место */
+body.leftHidden #left { margin-left: calc(-1 * var(--left)); visibility: hidden; transition: margin-left .2s ease, visibility 0s .2s; }
 .tabs { display: flex; gap: 4px; padding: 10px 10px 0; border-bottom: 1px solid var(--line); }
 .tabs button { flex: 1; background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 8px 4px 9px; color: var(--muted); font-weight: 600; white-space: nowrap; }
 .tabs button.on { color: var(--text); border-bottom-color: var(--accent); background: none; }
@@ -116,18 +125,23 @@ tr.cur td { color: var(--accent); }
 .note.prob { background: #2a0e17; border: 1px solid #7f1d1d; }
 .note.info { background: #0c2238; border: 1px solid #1e4b72; }
 .note.warn { background: #2a2208; border: 1px solid #854d0e; color: #fde68a; font-size: 12.5px; }
+details.note summary { cursor: pointer; font-size: 13px; }
+details.note[open] summary { margin-bottom: 6px; }
 .note button { min-height: 30px; padding: 3px 10px; font-size: 13px; }
 td.best { color: #86efac; font-weight: 600; }
 .verdict { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 8px 10px; font-size: 13px; margin-bottom: 8px; }
 
 /* ---------- правая панель свойств ---------- */
 /* карточка лежит поверх сцены: 3D-окно не меняет размер, навигация плавно отъезжает */
-#props { position: absolute; top: 0; right: 0; bottom: 0; width: var(--props); background: var(--panel); border-left: 1px solid var(--line); overflow: auto; padding: 12px 14px 16px; z-index: 12; box-shadow: -10px 0 30px rgba(0,0,0,.35); }
+#props { position: absolute; top: 0; right: 0; bottom: 0; width: var(--props); background: var(--panel); border-left: 1px solid var(--line); overflow: auto; padding: 12px 14px 16px; z-index: 12; box-shadow: -10px 0 30px rgba(0,0,0,.35); transition: transform .2s ease, visibility 0s; }
+body.propsMin #props { transform: translateX(100%); visibility: hidden; transition: transform .2s ease, visibility 0s .2s; }
 #navR { transition: right .2s ease; }
-body.propsOpen #navR { right: calc(var(--props) + 10px); }
-body.propsOpen #profile { margin-right: var(--props); }
+body.propsShown #navR { right: calc(var(--props) + 10px); }
+body.propsShown #profile { margin-right: var(--props); }
 #props .grab { display: none; }
-#props .h { display: flex; align-items: flex-start; gap: 8px; }
+#props .h { display: flex; align-items: flex-start; gap: 4px; }
+#props .h .icon { background: none; border-color: transparent; color: var(--muted); flex: none; }
+#props .h .icon:hover { background: var(--card2); color: var(--text); }
 #props .h b { font-size: 16px; line-height: 1.3; flex: 1; word-break: break-word; }
 #props .kind { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 #props .acts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 12px 0 4px; }
@@ -137,7 +151,10 @@ body.propsOpen #profile { margin-right: var(--props); }
 #props td:last-child { white-space: normal; word-break: break-word; text-align: right; }
 
 /* ---------- навигация на сцене ---------- */
-#navR { position: absolute; top: 10px; right: 10px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; z-index: 6; pointer-events: none; }
+#navR { position: absolute; top: 10px; right: 10px; bottom: 10px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; z-index: 6; pointer-events: none; }
+/* невысокое 3D-окно: панель инструментов прокручивается, а не уходит за край */
+#navR .toolbar { min-height: 0; overflow-y: auto; scrollbar-width: none; }
+#navR .cubewrap { flex: none; }
 #navR > * { pointer-events: auto; }
 .cubewrap { position: relative; width: 128px; height: 128px; }
 .viewcube-canvas { width: 128px !important; height: 128px !important; display: block; }
@@ -169,10 +186,9 @@ body.propsOpen #profile { margin-right: var(--props); }
 .exchip b { color: var(--sel); }
 #plEnd { flex: 1 1 100%; display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
 #plEnd button { min-height: 30px; padding: 3px 10px; font-size: 13px; }
-body.propsOpen #player, body.propsOpen #measure { left: calc(50% - var(--props) / 2); }
-body.propsOpen .exchip { right: calc(var(--props) + 12px); }
+body.propsShown #player, body.propsShown #measure { left: calc(50% - var(--props) / 2); }
+body.propsShown .exchip { right: calc(var(--props) + 12px); }
 #pc { touch-action: none; }
-body.leftHidden #left { display: none; }
 #errBody { margin: 8px 0; }
 #measure { left: 50%; transform: translateX(-50%); top: 12px; display: flex; gap: 12px; align-items: center; font-size: 13.5px; }
 #player { left: 50%; transform: translateX(-50%); bottom: 14px; display: flex; gap: 10px; align-items: center; width: min(640px, calc(100% - 24px)); }
@@ -208,16 +224,25 @@ body.leftHidden #left { display: none; }
 .lbl.clip { border-color: var(--sel); color: var(--sel); }
 
 /* ---------- профиль ---------- */
-#profile { position: relative; height: 320px; flex: none; border-top: 1px solid var(--line); background: var(--bg); display: flex; flex-direction: column; z-index: 4; }
+#profile { position: relative; height: clamp(200px, 34vh, 320px); flex: none; border-top: 1px solid var(--line); background: var(--bg); display: flex; flex-direction: column; z-index: 4; }
 #profile .grip { position: absolute; top: -5px; left: 0; right: 0; height: 10px; cursor: ns-resize; z-index: 2; }
 #profile .grip::after { content: ""; position: absolute; left: 50%; top: 3px; width: 44px; height: 4px; margin-left: -22px; border-radius: 2px; background: #475569; }
 #profile .grip:hover::after { background: var(--accent); }
-.phead { display: flex; align-items: center; gap: 12px; padding: 6px 10px 2px 14px; flex-wrap: wrap; }
-.phead b { font-size: 14px; }
-.phead .legend { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.phead { display: flex; align-items: center; gap: 10px; padding: 6px 8px 2px 14px; }
+.phead b { font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phead .legend { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; white-space: nowrap; flex: none; }
+.phead button { flex: none; }
 .phead .legend .sw { margin-left: 8px; }
 .phead button { min-height: 32px; }
 #pc { flex: 1; width: 100%; min-height: 0; cursor: crosshair; }
+#profile.min { height: auto !important; }
+#profile.min #pc, #profile.min .grip, #profile.min .legend { display: none; }
+#profile.min .phead { padding-bottom: 6px; }
+#pTitle { cursor: pointer; }
+#pMin svg { transition: transform .2s; }
+#profile.min #pMin svg { transform: rotate(180deg); }
+.phead .icon { background: none; border-color: transparent; color: var(--muted); }
+.phead .icon:hover { background: var(--card2); color: var(--text); }
 
 /* ---------- строка состояния ---------- */
 #status { display: flex; align-items: center; gap: 16px; padding: 0 12px; background: var(--panel); border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
@@ -266,7 +291,8 @@ table.cmp th, table.cmp td { font-size: 12px; white-space: nowrap; }
 
 .only-m { display: none; }
 .mact { display: none; }
-@media (max-width: 1180px) { :root { --left: 300px; --props: 300px; } .dataset { max-width: 190px; } .variants small { display: none; } }
+@media (max-width: 1180px) { :root { --left: 300px; --props: 300px; } .dataset { max-width: 190px; } .variants small { display: none; } .phead .legend { display: none; } }
+@media (max-width: 1400px) { .phead .legend { display: none; } }
 @media (max-width: 900px) {
   :root { --hdr: 52px; --st: 0px; }
   .only-m { display: inline-grid; }
@@ -284,8 +310,10 @@ table.cmp th, table.cmp td { font-size: 12px; white-space: nowrap; }
   #props.min { max-height: 128px; overflow: hidden; }
   #props .acts { margin-top: 8px; }
   #props .grab { display: block; width: 44px; height: 5px; border-radius: 3px; background: #475569; margin: 4px auto 8px; }
-  body.propsOpen #navR { right: 10px; }
-  body.propsOpen #profile { margin-right: 0; margin-bottom: 128px; }
+  body.propsShown #navR { right: 10px; }
+  body.propsShown #profile { margin-right: 0; margin-bottom: 128px; }
+  body.propsMin #props { transform: none; visibility: visible; }
+  .panebtns { display: none; }
   body.flying #props { max-height: 70px; overflow: hidden; }
   .acts .only-m { display: inline-flex; }
   #player { left: 8px; right: 8px; width: auto; transform: none; flex-wrap: wrap; bottom: 8px; }
@@ -306,15 +334,38 @@ table.cmp th, table.cmp td { font-size: 12px; white-space: nowrap; }
   .coach { left: 8px; right: 8px; width: auto; top: 8px; padding: 10px 12px; }
   .coach .cg { grid-template-columns: auto 1fr; font-size: 12.5px; gap: 4px 10px; margin: 6px 0 8px; }
   .exchip { right: 8px; bottom: 8px; }
-  body.propsOpen .exchip { right: 8px; }
+  body.propsShown .exchip { right: 8px; }
   .variants button { display: none; }
   #varSel { display: block; }
   body.flying #profile { display: none; }
-  body.propsOpen #player, body.propsOpen #measure { left: 8px; }
-  body.leftHidden #left { display: flex; }
+  body.propsShown #player, body.propsShown #measure { left: 8px; }
+  body.leftHidden #left { margin-left: 0; visibility: visible; }
   body.flying .toolbar, body.flying #legend { display: none; }
   .sugg { position: fixed; top: 56px; left: 8px; right: 8px; }
   .sugg button { flex-direction: column; gap: 0; }
   #legend { bottom: 30px; }
   .helpgrid { grid-template-columns: 1fr; }
+}
+
+/* ---------- сенсорный экран: цели под палец не меньше 44 px, как в рекомендациях Apple ---------- */
+@media (pointer: coarse) {
+  button, input, select { min-height: 44px; }
+  button.icon { width: 44px; }
+  .toolbar button { width: 54px; min-height: 50px; }
+  .tabs button { padding: 12px 4px 13px; }
+  .filters button { min-height: 38px; padding: 4px 14px; }
+  .seg button { min-height: 42px; }
+  .tog { min-height: 44px; }
+  .tog input { width: 22px; height: 22px; }
+  .item { padding: 12px 14px; }
+  .cubewrap .home { width: 42px; height: 42px; }
+  .cubewrap .back { top: 48px; }
+  #legend > button, .phead button, .note button, #plEnd button { min-height: 40px; }
+  #props .acts button { min-height: 44px; }
+  .menu button { min-height: 46px; }
+  /* подсказки про кнопки мыши на планшете не нужны — остаются координаты и высота камеры */
+  #stHint, #stHover { display: none; }
+  .search kbd { display: none; }
+  /* масштаб — щипком, как в Картах на iPad: кнопки + и − не нужны */
+  #zIn, #zOut, .toolbar hr { display: none; }
 }

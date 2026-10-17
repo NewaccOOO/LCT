@@ -247,7 +247,7 @@ function renderSummary() {
   const len = sm.new_network_length ?? v.segs.reduce((a, s) => a + s.len, 0);
   el.innerHTML = `<h2>Вариант ${esc(v.id)}${v.rank === 1 && M.variants.length > 1 ? ' · лучший' : v.rank && M.variants.length > 1 ? ` · ${v.rank}-й по показателю S` : ''}</h2>
     <div class="kpi">
-      <div title="${S_FORMULA}"><b>${fmt(sm.score, 2)}</b><span>показатель S: 0,7·стоимость + 0,3·длина, меньше — лучше <span class="q">?</span></span></div>
+      <div title="${S_FORMULA}"><b>${fmt(sm.score, 2)}</b><span>показатель S, меньше — лучше <span class="q">?</span></span></div>
       <div><b>${rub(sm.calculated_cost)}</b><span>полная стоимость</span></div>
       <div><b>${meters(len)}</b><span>новых труб</span></div>
       <div class="${unc ? 'bad' : 'ok'}"><b>${unc} из ${M.oks.length}</b><span>зданий не подключено</span></div>
@@ -265,7 +265,7 @@ function renderSummary() {
     ${M.variants.length > 1 ? `<h2>Сравнение вариантов</h2>${verdict(M)}<div class="tblwrap"><table class="cmp"><tr><th>Вар.</th><th title="${S_FORMULA}">S</th><th>ΔS</th><th>Стоимость</th><th>Длина</th><th title="зданий не подключено">Не подкл.</th><th title="проблем по высоте">Пробл.</th><th title="спецпереходов">Спецпер.</th></tr>
       ${M.variants.map(x => { const best = Math.min(...M.variants.map(q => q.score ?? Infinity)); return `<tr class="click ${x === v ? 'cur' : ''}" data-v="${esc(x.id)}" title="Щёлкните — открыть вариант ${esc(x.id)} (клавиша ${M.variants.indexOf(x) + 1})"><td>${esc(x.id)}</td><td>${fmt(x.score, 2)}</td>
       <td>${x.score === best ? 'лучший' : '+' + fmt(x.score - best, 2)}</td>${cmpCells(M, x).join('')}</tr>`; }).join('')}</table></div>
-      <div class="mut" style="font-size:12.5px;margin-top:6px">${S_FORMULA}. Клавиши 1–${M.variants.length} — переключить вариант.</div>
+      <div class="mut" style="font-size:12.5px;margin-top:6px">Клавиши 1–${M.variants.length} — переключить вариант.</div>
       <div class="filters" style="margin-top:8px">${M.variants.filter(x => x !== v).map(x => `<button data-ghost="${esc(x.id)}" class="${S.ghost === x.id ? 'on' : ''}" title="Трассы варианта ${esc(x.id)} белым пунктиром поверх текущего"><i class="sw" style="background:none;border-top:2px dashed #f1f5f9;height:0"></i> ${S.ghost === x.id ? `Скрыть вариант ${esc(x.id)}` : `Показать вариант ${esc(x.id)} поверх`}</button>`).join('')}</div>` : ''}
     <h2>С чего начать</h2>
     <div class="actions">
@@ -467,8 +467,10 @@ function clearSel() {
   viewer.opts.dim = false;
   viewer.applyOpts();
   $('#props').hidden = true;
-  document.body.classList.remove('propsOpen');
+  document.body.classList.remove('propsOpen', 'propsMin');
+  if (S.autoLeft) { document.body.classList.remove('leftHidden'); S.autoLeft = false; }
   closeProfile();
+  layout();
   $$('.item.sel').forEach(x => x.classList.remove('sel'));
   scheduleHash();
 }
@@ -486,8 +488,12 @@ function routeFor(sel) {
   if (sel.kind === 'crossing') return routeTo(v, branchEnd(v, sel.ref.seg));
   return null;
 }
-function select(sel, {fly = false} = {}) {
+function select(sel, {fly = false, room = false} = {}) {
   stopFly();
+  // планшет и узкий ноутбук: объект выбран на карте или поиском — левая панель уступает место карточке,
+  // после снятия выбора возвращается (как боковая панель в приложениях iPad)
+  const b = document.body;
+  if (room && !isMobile() && innerWidth <= 1280 && !b.classList.contains('leftHidden')) { b.classList.add('leftHidden'); S.autoLeft = true; }
   S.sel = sel;
   S.route = routeFor(sel);
   if (S.route) {
@@ -501,6 +507,8 @@ function select(sel, {fly = false} = {}) {
   viewer.setDetour(null);
   viewer.opts.dim = !!S.route;
   viewer.applyOpts();
+  document.body.classList.remove('propsMin');
+  mapOnly = null;
   showProps(sel);
   // на телефоне профиль — по кнопке «Профиль», чтобы не съедал половину экрана
   if (S.route && !isMobile()) openProfile(); else closeProfile();
@@ -646,7 +654,7 @@ function describe(sel) {
     case 'seg': {
       const s = r, bad = s.cx.filter(c => c.ok === false);
       const flat = Math.abs(s.d1 - s.d0) / s.len < 0.002;
-      return {kind: 'Новая труба', title: `${segName(s)}: ${nn(s.from)} → ${nn(s.to)}`, sub: s.id, info: flat ? SLOPE_NOTE : null, rows: [['Диаметр', `Ду ${s.p.diameter}`], ['Длина', meters(s.p.length ?? s.len)], ['Прокладка', s.special ? 'спецпереход в футляре' : 'обычная, в канале'],
+      return {kind: 'Новая труба', title: `${segName(s)}: ${nn(s.from)} → ${nn(s.to)}`, sub: s.id, info: flat ? {t: 'Уклон меньше 0,002', more: SLOPE_NOTE} : null, rows: [['Диаметр', `Ду ${s.p.diameter}`], ['Длина', meters(s.p.length ?? s.len)], ['Прокладка', s.special ? 'спецпереход в футляре' : 'обычная, в канале'],
         ['Глубина верха', s.d0 === s.d1 ? ND(s.d0) : `${ND(s.d0)} → ${ND(s.d1)}`], ['Уклон', fmt(Math.abs(s.d1 - s.d0) / s.len, 3) + slopeNote(s)], ['Расход теплоносителя', s.p.flow_tph != null ? fmt(s.p.flow_tph, 2) + ' т/ч' : '—'],
         ['Стоимость', rub(s.p.cost)], ['Пересечений с сетями', s.cx.length]],
         problem: s.issues.length || bad.length ? [...s.issues, ...bad.map(c => `${UTILITIES[c.type].name.toLowerCase()}: ${gapText(c)}${c.need != null ? `, нужен зазор ${fmt(c.need, 2)} м` : ''}`)].join('<br>') : null};
@@ -658,9 +666,8 @@ function describe(sel) {
       if (r.building) rows.push(['Этажей', r.building.p.levels ?? '—']);
       if (v) rows.push(['Подключено', conn ? 'да' : 'нет']);
       if (R) rows.push(['Трасса от врезки', meters(R.len)], ['Участков', R.segs.length], ['Стоимость трассы', rub(R.cost)], ['Ду на вводе', `Ду ${R.segs[R.segs.length - 1].p.diameter}`], ['Врезка', nn(R.start)]);
-      rows.push(['Номер в исходных данных', r.oksId || r.id], ['Точка подключения', r.id]);
       const flatN = R ? R.segs.filter(s => Math.abs(s.d1 - s.d0) / s.len < 0.002).length : 0;
-      return {kind: 'Здание к подключению', title: r.label, rows, info: flatN ? `${flatN} из ${R.segs.length} ${plural(R.segs.length, 'участка', 'участков', 'участков')} с уклоном меньше 0,002. ${SLOPE_NOTE}` : null,
+      return {kind: 'Здание к подключению', title: r.label, sub: [r.oksId, r.id].filter(Boolean).join(' · '), rows, info: flatN ? {t: `${flatN} из ${R.segs.length} ${plural(R.segs.length, 'участка', 'участков', 'участков')} с уклоном меньше 0,002`, more: SLOPE_NOTE} : null,
         problem: v && !conn ? `В этом варианте здание не подключено. Причину сервис не сообщает: проверьте запретные зоны и отступы рядом со зданием и предельную длину трассы для нужного Ду. За неподключённое здание начисляется штраф ${rub(500000 * (r.flow || 0) + 1e8)}.${M.variants.length > 1 ? ' Посмотрите, подключено ли оно в других вариантах.' : ''}` : R?.bad ? `На трассе ${R.bad} ${plural(R.bad, 'проблема', 'проблемы', 'проблем')} по высоте. Они отмечены малиновыми метками в 3D и на профиле внизу.` : null,
         ok: R && !R.bad ? 'Трасса без проблем по высоте' : null};
     }
@@ -717,7 +724,7 @@ function showProps(sel) {
   if (isMobile()) { document.body.classList.remove('leftOpen'); el.classList.toggle('min', !!S.route); }
   const hasRoute = !!S.route;
   el.innerHTML = `<div class="grab" id="pxGrab" title="Свернуть или развернуть"></div><div class="kind">${esc(d.kind)}</div>
-    <div class="h"><b>${esc(d.title)}</b><button class="icon" id="pxX" title="Закрыть (Esc)" aria-label="Закрыть">×</button></div>
+    <div class="h"><b>${esc(d.title)}</b><button class="icon" id="pxMin" aria-label="Свернуть карточку" title="Свернуть карточку">${isMobile() ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>' : '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M14.5 4v16"/></svg>'}</button><button class="icon" id="pxX" title="Закрыть (Esc)" aria-label="Закрыть">×</button></div>
     ${d.sub ? `<div class="sub">${esc(d.sub)}</div>` : ''}
     <div class="acts">
       <button id="pxGo" class="primary" title="Навести камеру на объект (F)">Показать</button>
@@ -725,9 +732,11 @@ function showProps(sel) {
       ${hasRoute ? '<button id="pxFly" title="Пролёт камерой вдоль трассы (P)">Пролёт</button><button id="pxProf" title="Продольный профиль трассы">Профиль</button>' : ''}
       <button id="pxLink" class="wide">Скопировать ссылку</button>
     </div>
-    <table>${d.rows.map(r => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`).join('')}</table>
-    ${d.problem ? `<div class="note prob">${d.problem}</div>` : ''}${d.info ? `<div class="note warn">${esc(d.info)}</div>` : ''}${d.fix ? `<div class="note fix"><b>Как исправить</b><br>${d.fix}</div>` : ''}${d.ok ? `<div class="note fix">${esc(d.ok)}</div>` : ''}`;
+    <table>${d.rows.filter(r => r[1] != null && r[1] !== '—').map(r => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`).join('')}</table>
+    ${d.problem ? `<div class="note prob">${d.problem}</div>` : ''}${d.info ? `<details class="note warn"><summary>${esc(d.info.t)}</summary>${esc(d.info.more)}</details>` : ''}${d.fix ? `<div class="note fix"><b>Как исправить</b><br>${d.fix}</div>` : ''}${d.ok ? `<div class="note fix">${esc(d.ok)}</div>` : ''}`;
   $('#pxX').onclick = () => clearSel();
+  $('#pxMin').onclick = () => toggleCard();
+  layout();
   // лист на телефоне: касание или смахивание заголовка — свернуть/развернуть
   const head = [$('#pxGrab'), el.querySelector('.kind'), el.querySelector('.h b')];
   let y0 = null;
@@ -790,7 +799,7 @@ function clickAt(x, y) {
   if (S.measure) return measureClick(x, y);
   const h = pickAt(x, y), sel = hitToSel(h);
   if (!sel) { clearSel(); return; }
-  select(sel);
+  select(sel, {room: true});
 }
 function dblAt(x, y) {
   const P = rig.pivotAt(x, y);
@@ -1152,7 +1161,7 @@ function goSugg(s) {
   $('#q').blur();
   if (s.coords) { const [x, y] = S.model.proj.xy(s.coords); rig.lookAtFrom(new THREE.Vector3(x, y, 0), rig.yaw, -55 * D, 220); return; }
   if (s.v && S.v?.id !== s.v) setVariant(s.v);
-  select(s.sel, {fly: true});
+  select(s.sel, {fly: true, room: true});
   $('#q').value = s.label;   // как в Картах: в поле — имя выбранного
   if (s.sel.kind === 'oks') openTab('oks');
 }
@@ -1351,6 +1360,7 @@ addEventListener('keydown', e => {
   const typing = /INPUT|SELECT|TEXTAREA/.test(e.target.tagName);
   if ((e.key === '/' && !typing) || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) { e.preventDefault(); $('#q').focus(); $('#q').select(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') { e.preventDefault(); openDlg('demo'); return; }
+  if ((e.ctrlKey || e.metaKey) && e.code === 'Backslash') { e.preventDefault(); setMapOnly(!mapOnly); return; }
   if (!typing && ((e.altKey && e.code === 'ArrowLeft') || ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ'))) { e.preventDefault(); backView(); return; }
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   if (document.querySelector('dialog[open]')) return;
@@ -1362,6 +1372,7 @@ addEventListener('keydown', e => {
     if (S.measure) return setMeasure(false);
     if (S.clip) return setClip(null);
     if (S.sel) return clearSel();
+    if (mapOnly) return setMapOnly(false);
     document.body.classList.remove('leftOpen');
     return;
   }
@@ -1402,17 +1413,66 @@ $('#helpBtn').onclick = () => $('#helpDlg').showModal();
 $('#errOpen').onclick = () => { $('#errDlg').close(); openDlg('files'); };
 // ссылка, вставленная в уже открытую вкладку, меняет только часть после # — откликаемся на неё
 addEventListener('hashchange', () => { if (S.model) applyHash(); });
-// кнопка меню на компьютере прячет и возвращает левую панель — больше места для 3D, как закрепление панелей в Navisworks
-$('#leftBtn').onclick = () => {
-  if (isMobile()) { document.body.classList.toggle('leftOpen'); return; }
-  document.body.classList.toggle('leftHidden');
-  store.set('leftHidden', document.body.classList.contains('leftHidden'));
-};
+// ---------- панели: свернуть и вернуть кнопкой, как боковые панели в Claude, Google Картах и Notes на iPad ----------
+// mapOnly — раскладка панелей до режима «только карта»; null — режим выключен
+let mapOnly = null;
+function layout() {
+  const b = document.body, mob = isMobile(), sel = !!S.sel && b.classList.contains('propsOpen');
+  const leftOn = mob ? b.classList.contains('leftOpen') : !b.classList.contains('leftHidden');
+  const cardOn = sel && !b.classList.contains('propsMin');
+  b.classList.toggle('propsShown', cardOn);
+  const lb = $('#leftBtn'); lb.setAttribute('aria-pressed', leftOn); lb.title = leftOn ? 'Свернуть панель слева' : 'Показать панель слева';
+  const rb = $('#rightBtn'); rb.disabled = !sel; rb.setAttribute('aria-pressed', cardOn);
+  rb.title = !sel ? 'Карточка справа появится, когда выберете объект' : cardOn ? 'Свернуть карточку справа' : 'Показать карточку справа';
+  const mb = $('#mapBtn'); mb.setAttribute('aria-pressed', !!mapOnly); mb.title = mapOnly ? 'Вернуть панели (Ctrl+\\)' : 'Только карта: свернуть все панели (Ctrl+\\)';
+  const pmin = $('#profile').classList.contains('min'), pm = $('#pMin');
+  pm.title = pmin ? 'Развернуть профиль' : 'Свернуть профиль'; pm.setAttribute('aria-label', pm.title); pm.setAttribute('aria-expanded', !pmin);
+  const px = $('#pxMin');
+  if (px) { const t = mob ? ($('#props').classList.contains('min') ? 'Развернуть карточку' : 'Свернуть карточку') : 'Свернуть карточку'; px.title = t; px.setAttribute('aria-label', t); }
+}
+// ручная правка любой панели выключает «только карта»: дальше панели раскладывает пользователь
+function toggleLeft() {
+  mapOnly = null;
+  S.autoLeft = false;
+  if (isMobile()) document.body.classList.toggle('leftOpen');
+  else { document.body.classList.toggle('leftHidden'); store.set('leftHidden', document.body.classList.contains('leftHidden')); }
+  layout();
+}
+function toggleCard() {
+  if (!S.sel) return;
+  mapOnly = null;
+  if (isMobile()) $('#props').classList.toggle('min'); else document.body.classList.toggle('propsMin');
+  layout();
+}
+function toggleProfileMin() {
+  const p = $('#profile'), min = !p.classList.contains('min');
+  mapOnly = null;
+  p.classList.toggle('min', min);
+  store.set('profMin', min);
+  layout();
+}
+function setMapOnly(on) {
+  const b = document.body, p = $('#profile'), sheet = $('#props');
+  if (on && !mapOnly) {
+    mapOnly = {left: b.classList.contains('leftHidden'), card: b.classList.contains('propsMin'), prof: p.classList.contains('min'), sheet: sheet.classList.contains('min')};
+    b.classList.add('leftHidden', 'propsMin'); b.classList.remove('leftOpen'); p.classList.add('min'); sheet.classList.add('min');
+  } else if (!on && mapOnly) {
+    const m = mapOnly;
+    mapOnly = null;
+    b.classList.toggle('leftHidden', m.left); b.classList.toggle('propsMin', m.card); p.classList.toggle('min', m.prof); sheet.classList.toggle('min', m.sheet);
+  }
+  layout();
+}
+$('#leftBtn').onclick = () => toggleLeft();
+$('#rightBtn').onclick = () => toggleCard();
+$('#mapBtn').onclick = () => setMapOnly(!mapOnly);
+$('#pMin').onclick = () => toggleProfileMin();
+$('#pTitle').onclick = () => toggleProfileMin();
 // отметка вертикального масштаба прямо на сцене: щелчок — ×1 «как есть» или обратно растянуть
 $('#exChip').onclick = () => { const last = store.get('exLast', 3); if (viewer.ex === 1) setEx(last > 1 ? last : 3); else { store.set('exLast', viewer.ex); setEx(1); } updateScale(); };
 // подсказка управления уходит сама после первого действия в сцене
 viewer.renderer.domElement.addEventListener('pointerdown', () => { if (!$('#coach').hidden) setTimeout(() => $('#coachOk').click(), 1500); }, {once: true});
-$('#coachOk').onclick = () => { $('#coach').hidden = true; store.set('coach', 1); if (store.get('legend', true) && !isMobile() && $('#legBody').hidden) $('#legBtn').click(); };
+$('#coachOk').onclick = () => { $('#coach').hidden = true; store.set('coach', 1); if (store.get('legend', false) && !isMobile() && $('#legBody').hidden) $('#legBtn').click(); };
 // ползунки и флажки не держат фокус после щелчка — иначе W A S D и стрелки двигают ползунок, а не камеру
 document.addEventListener('change', e => { if (e.target.matches?.('#left input[type=range], #left input[type=checkbox], #left select')) setTimeout(() => e.target.blur(), 0); });
 document.addEventListener('pointerup', e => { if (e.target.matches?.('#left input[type=range]')) setTimeout(() => e.target.blur(), 0); });
@@ -1428,6 +1488,8 @@ async function start() {
   updateModeUi();
   if (isMobile()) $('#q').placeholder = 'Поиск';
   if (store.get('leftHidden', false) && !isMobile()) document.body.classList.add('leftHidden');
+  if (store.get('profMin', false)) $('#profile').classList.add('min');
+  layout();
   if (matchMedia('(pointer: coarse)').matches) {
     // на телефоне и планшете — жесты, а не кнопки мыши
     $('#coach .cg').innerHTML = '<span class="k">Один палец</span><span>двигать</span><span class="k">Щипок</span><span>приблизить</span>' +
@@ -1435,7 +1497,7 @@ async function start() {
   }
   if (!store.get('coach', 0)) $('#coach').hidden = false;
   // легенда раскрыта при первом знакомстве (после подсказки управления), дальше — как оставил пользователь
-  if (store.get('legend', true) && !isMobile() && $('#coach').hidden) $('#legBtn').click();
+  if (store.get('legend', false) && !isMobile() && $('#coach').hidden) $('#legBtn').click();
   await detectServer();
   try { demos = await (await fetch('demo/index.json')).json(); } catch (e) { demos = []; }
   const q = new URLSearchParams(location.search);
