@@ -7,7 +7,6 @@ import java.util.function.DoubleUnaryOperator;
 
 final class ExactSteiner {
     private static final float INF = 1e30f;
-    private static final boolean VECTOR_MIN = Boolean.parseBoolean(System.getProperty("heatnet.exact.mathMin", "true"));
 
     static final class Skeleton {
         final List<Integer> junctions = new ArrayList<>();
@@ -25,6 +24,7 @@ final class ExactSteiner {
     private final float[] chamber;
     private float[][] e;
     private float[][] m2;
+    private float[] threeAll;
     final java.util.concurrent.atomic.AtomicLong mergeNanos = new java.util.concurrent.atomic.AtomicLong();
     final java.util.concurrent.atomic.AtomicLong extendNanos = new java.util.concurrent.atomic.AtomicLong();
     final java.util.concurrent.atomic.AtomicLong liveCount = new java.util.concurrent.atomic.AtomicLong();
@@ -102,6 +102,9 @@ final class ExactSteiner {
                 float[][] merged = merge(d);
                 mergeNanos.addAndGet(System.nanoTime() - t0);
                 m2[d] = merged[0];
+                if (d == full - 1) {
+                    threeAll = merged[1];
+                }
                 float[] tv = new float[n];
                 for (int v = 0; v < n; v++) {
                     tv[v] = Math.min(merged[0][v], merged[1][v]) + this.chamber[d];
@@ -118,7 +121,7 @@ final class ExactSteiner {
         int all = (1 << k) - 1;
         double one = e[all][root];
         double two = rootBranches >= 2 && k >= 2 ? m2[all][root] + extraBranch : Double.POSITIVE_INFINITY;
-        double three = rootBranches >= 3 && k >= 3 ? merge(all)[1][root] + 2 * extraBranch : Double.POSITIVE_INFINITY;
+        double three = rootBranches >= 3 && k >= 3 ? threeAll[root] + 2 * extraBranch : Double.POSITIVE_INFINITY;
         Skeleton skeleton = new Skeleton();
         skeleton.leafParent = new int[k];
         skeleton.cost = Math.min(one, Math.min(two, three));
@@ -138,7 +141,7 @@ final class ExactSteiner {
             skeleton.leafParent[Integer.numberOfTrailingZeros(d)] = parent;
             return;
         }
-        float[][] merged = merge(d);
+        float[][] merged = d == (1 << k) - 1 ? new float[][] {m2[d], threeAll} : merge(d);
         int best = -1;
         float bestValue = INF;
         for (int u = 0; u < n; u++) {
@@ -185,6 +188,8 @@ final class ExactSteiner {
         }
     }
 
+    // Math.min вместо тернарника: на Java 11 arm64 он векторизуется (в разы быстрее), а при неотрицательных
+    // значениях без NaN и -0.0 даёт тот же бит.
     private float[][] merge(int d) {
         float[] two = new float[n];
         float[] three = new float[n];
@@ -200,29 +205,14 @@ final class ExactSteiner {
                 float[] eb = e[b];
                 if (Integer.bitCount(b) >= 2) {
                     float[] mb = m2[b];
-                    if (VECTOR_MIN) {
-                        for (int v = 0; v < n; v++) {
-                            float x = ea[v];
-                            two[v] = Math.min(two[v], x + eb[v]);
-                            three[v] = Math.min(three[v], x + mb[v]);
-                        }
-                    } else {
-                        for (int v = 0; v < n; v++) {
-                            float x = ea[v];
-                            float y = x + eb[v];
-                            float z = x + mb[v];
-                            two[v] = y < two[v] ? y : two[v];
-                            three[v] = z < three[v] ? z : three[v];
-                        }
-                    }
-                } else if (VECTOR_MIN) {
                     for (int v = 0; v < n; v++) {
-                        two[v] = Math.min(two[v], ea[v] + eb[v]);
+                        float x = ea[v];
+                        two[v] = Math.min(two[v], x + eb[v]);
+                        three[v] = Math.min(three[v], x + mb[v]);
                     }
                 } else {
                     for (int v = 0; v < n; v++) {
-                        float y = ea[v] + eb[v];
-                        two[v] = y < two[v] ? y : two[v];
+                        two[v] = Math.min(two[v], ea[v] + eb[v]);
                     }
                 }
             }
@@ -337,24 +327,52 @@ final class ExactSteiner {
         }
         float[] out = new float[n];
         Arrays.fill(out, INF);
-        float worst = INF;
-        for (int q = 0; q < count && value[q] < worst; q++) {
+        // Строки идут по возрастанию t, а t + r·w ≥ t. Место v уже не изменится, если out[v] ≤ t, и обречено на
+        // финальное отсечение по корню, если t + r·w(v, root) > bound (итог ≥ t). Оба свойства с ростом t
+        // сохраняются, поэтому места вне [done, last] больше не трогаются; когда таковы все, остальные строки ничего не дают.
+        float[] toRoot = root >= 0 ? transposed[root] : null;
+        int done = 0;
+        int last = n - 1;
+        for (int q = 0; q < count; q += 8) {
             float t = value[q];
-            float[] row = transposed[live[q]];
-            if (VECTOR_MIN) {
-                for (int v = 0; v < n; v++) {
-                    out[v] = Math.min(out[v], t + r * row[v]);
+            while (done <= last && (out[done] <= t || toRoot != null && t + Math.max(r * toRoot[done], lower) > bound)) {
+                done++;
+            }
+            while (last >= done && (out[last] <= t || toRoot != null && t + Math.max(r * toRoot[last], lower) > bound)) {
+                last--;
+            }
+            if (done > last) {
+                break;
+            }
+            // Восемь строк за проход по out: минимум тех же сумм, а out читается и пишется в 8 раз реже.
+            if (q + 7 < count) {
+                float[] r0 = transposed[live[q]];
+                float[] r1 = transposed[live[q + 1]];
+                float[] r2 = transposed[live[q + 2]];
+                float[] r3 = transposed[live[q + 3]];
+                float[] r4 = transposed[live[q + 4]];
+                float[] r5 = transposed[live[q + 5]];
+                float[] r6 = transposed[live[q + 6]];
+                float[] r7 = transposed[live[q + 7]];
+                float t1 = value[q + 1];
+                float t2 = value[q + 2];
+                float t3 = value[q + 3];
+                float t4 = value[q + 4];
+                float t5 = value[q + 5];
+                float t6 = value[q + 6];
+                float t7 = value[q + 7];
+                for (int v = done; v <= last; v++) {
+                    float y = Math.min(Math.min(t + r * r0[v], t1 + r * r1[v]), Math.min(t2 + r * r2[v], t3 + r * r3[v]));
+                    float z = Math.min(Math.min(t4 + r * r4[v], t5 + r * r5[v]), Math.min(t6 + r * r6[v], t7 + r * r7[v]));
+                    out[v] = Math.min(out[v], Math.min(y, z));
                 }
             } else {
-                for (int v = 0; v < n; v++) {
-                    float y = t + r * row[v];
-                    out[v] = y < out[v] ? y : out[v];
-                }
-            }
-            if ((q & 7) == 7) {
-                worst = 0;
-                for (int v = 0; v < n; v++) {
-                    worst = Math.max(worst, out[v]);
+                for (int p = q; p < count; p++) {
+                    float tp = value[p];
+                    float[] row = transposed[live[p]];
+                    for (int v = done; v <= last; v++) {
+                        out[v] = Math.min(out[v], tp + r * row[v]);
+                    }
                 }
             }
         }
