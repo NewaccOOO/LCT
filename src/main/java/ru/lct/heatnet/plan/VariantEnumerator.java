@@ -982,7 +982,7 @@ public final class VariantEnumerator {
         for (NewSegment s : variant.getSegments()) {
             segments.add(new NewSegment(rename.apply(s.getId()), id, s.getGeometry(), rename.apply(s.getStartNodeId()),
                     rename.apply(s.getEndNodeId()), s.getFlowTph(), s.getDiameter(), s.getLength(), s.getLayingMethod(),
-                    s.getDepthStart(), s.getDepthEnd(), s.getCost()));
+                    s.getDepthStart(), s.getDepthEnd(), s.getCost(), s.getDepthCrossings(), s.isManualReview()));
         }
         List<NewChamber> chambers = new ArrayList<>();
         for (NewChamber c : variant.getChambers()) {
@@ -990,7 +990,7 @@ public final class VariantEnumerator {
         }
         List<TechnicalNode> nodes = new ArrayList<>();
         for (TechnicalNode n : variant.getNodes()) {
-            nodes.add(new TechnicalNode(rename.apply(n.getId()), id, n.getGeometry()));
+            nodes.add(new TechnicalNode(rename.apply(n.getId()), id, n.getGeometry(), n.getReason()));
         }
         VariantSummary s = variant.getSummary();
         VariantSummary summary = new VariantSummary(rename.apply(s.getId()).replace("summary_" + variant.getId(), "summary_" + id),

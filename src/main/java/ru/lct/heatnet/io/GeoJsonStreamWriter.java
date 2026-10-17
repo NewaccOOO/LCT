@@ -13,6 +13,7 @@ import java.util.Set;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.Point;
+import ru.lct.heatnet.model.DepthCrossing;
 import ru.lct.heatnet.model.NewChamber;
 import ru.lct.heatnet.model.NewSegment;
 import ru.lct.heatnet.model.Result;
@@ -30,7 +31,7 @@ public class GeoJsonStreamWriter {
     private static final int LENGTH_SCALE = 2;
     private static final int FLOW_SCALE = 3;
     /** Глубина до мм. */
-    private static final int DEPTH_SCALE = 3;
+    private static final int DEPTH_SCALE = 6;
     /** score с четырьмя знаками, как в примере п. 7.3 приложения 18.09 (0,6913). */
     private static final int SCORE_SCALE = 4;
 
@@ -79,10 +80,27 @@ public class GeoJsonStreamWriter {
             depth(json, "depth_start", segment.getDepthStart());
             depth(json, "depth_end", segment.getDepthEnd());
             decimal(json, "cost", segment.getCost(), MONEY_SCALE);
+            if (segment.getDepthCrossings() != null && !segment.getDepthCrossings().isEmpty()) {
+                json.writeArrayFieldStart("depth_crossings");
+                for (DepthCrossing crossing : segment.getDepthCrossings()) {
+                    json.writeStartObject();
+                    json.writeStringField("type", crossing.getType());
+                    json.writeStringField("position", crossing.getPosition());
+                    decimal(json, "vertical_clearance_m", crossing.getClearanceM(), DEPTH_SCALE);
+                    json.writeEndObject();
+                }
+                json.writeEndArray();
+            }
+            if (segment.isManualReview()) {
+                json.writeBooleanField("manual_review", true);
+            }
             end(json);
         }
         for (TechnicalNode node : variant.getNodes()) {
             start(json, node.getGeometry(), node.getId(), "technical_node", node.getVariantId());
+            if (node.getReason() != null) {
+                json.writeStringField("reason", node.getReason());
+            }
             end(json);
         }
         VariantSummary summary = variant.getSummary();

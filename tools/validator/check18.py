@@ -845,6 +845,9 @@ def plan_view(feats):
     стоимость частей с их Kгл, делённая на стоимость без него."""
     segs = [f for f in feats if f["properties"]["object_type"] == "heat_network"]
     tech = {str(f["properties"]["id"]) for f in feats if f["properties"]["object_type"] == "technical_node"}
+    # узлы, которые поставил профиль глубины (излом, переход через 3,0 м, §2.1 и §5): делят и спецучасток
+    profile_nodes = {str(f["properties"]["id"]) for f in feats if f["properties"]["object_type"] == "technical_node"
+                     and f["properties"].get("reason") == "depth_profile"}
     by_start = defaultdict(list)
     ins = Counter()
     for f in segs:
@@ -857,8 +860,10 @@ def plan_view(feats):
             return None
         b = nxt[0]["properties"]
         pa = a["properties"]
-        # профиль делит только обычные участки; спецучастки на стыке разных зон разделены уже в 2D
-        if not (b["laying_method"] == pa["laying_method"] == "base") or b["diameter"] != pa["diameter"]:
+        # профиль делит обычные участки, а спецучастки — только в узлах с reason depth_profile; спецучастки на стыке
+        # разных зон разделены уже в 2D
+        same = b["laying_method"] == pa["laying_method"] and (b["laying_method"] == "base" or node in profile_nodes)
+        if not same or b["diameter"] != pa["diameter"]:
             return None
         return nxt[0]
 
