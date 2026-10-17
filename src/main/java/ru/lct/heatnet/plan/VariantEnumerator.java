@@ -286,6 +286,7 @@ public final class VariantEnumerator {
     private static final int EXACT_REFINE_SWEEPS = Integer.getInteger("heatnet.exact.sweeps", 3);
     private static final long EXACT_MAX_BYTES = Long.getLong("heatnet.exact.maxBytes", 256L << 20);
     private static final double EXACT_MARGIN_M = 30;
+    private static final double EXACT_GUESS = Double.parseDouble(System.getProperty("heatnet.exact.guess", "1.03"));
     private static final int RIGHT_FREE_ROUNDS = 10;
     private static final int RELAY_TRIES = 3;
     private static final int RELAY_PASSES = 3;
@@ -380,6 +381,8 @@ public final class VariantEnumerator {
      * заново; результат тот же, что при повторном счёте.
      */
     private final Map<List<Object>, Optional<Object[]>> skeletons = new ConcurrentHashMap<>();
+    /** Наименьший оптимум динамики по дереву (точки, врезка, Ду) на уже посчитанных сетках: пробная граница. */
+    private final Map<String, Double> exactCosts = new ConcurrentHashMap<>();
 
     /** Работа проходов после поиска для лога: сборки одного дерева в {@link #option}, доводки формы, сборки черновика. */
     private final AtomicInteger optionCount = new AtomicInteger();
@@ -1157,8 +1160,21 @@ public final class VariantEnumerator {
         java.util.function.DoubleUnaryOperator rate = f -> rules.score(rules.diameterFor(f).getNewRubM(), 1);
         java.util.function.DoubleUnaryOperator chamber = f -> rules.score(rules.chamberCost(rules.diameterFor(f).getDn()), 0);
         double extra = tie.isChamber() ? rules.score(rules.tieInCost(), 0) : 0;
-        ExactSteiner steiner = new ExactSteiner(weights, leaf, leafCost, flows, rate, chamber, root, bound);
+        // пробная граница по оптимуму этого дерева на соседней сетке: отсечение сильнее; если оптимум выше неё,
+        // счёт повторяется с прежней границей. Оптимум и его выбор в обоих случаях те же
+        String guessKey = label + "|" + tie.nodeKey() + "|" + blockDn;
+        Double seen = exactCosts.get(guessKey);
+        double trial = seen == null ? bound : Math.min(bound, seen * EXACT_GUESS);
+        ExactSteiner steiner = new ExactSteiner(weights, leaf, leafCost, flows, rate, chamber, root, trial);
         ExactSteiner.Skeleton skeleton = steiner.tree(root, tie.getCapacity(), extra);
+        if (trial < bound && (skeleton == null || skeleton.cost > trial)) {
+            log.info("exact: дерево {} сетка {} м: оптимум выше пробной границы {}, счёт заново", label, placeStep, trial);
+            steiner = new ExactSteiner(weights, leaf, leafCost, flows, rate, chamber, root, bound);
+            skeleton = steiner.tree(root, tie.getCapacity(), extra);
+        }
+        if (skeleton != null) {
+            exactCosts.merge(guessKey, skeleton.cost, Math::min);
+        }
         log.info("exact: дерево {} мест {} веса {}ms динамика {}ms (слияния {}ms, продолжения {}ms по нитям, живых {}%) "
                 + "камер {} оценка {}", label, places.size(), (weighed - started) / 1_000_000,
                 (System.nanoTime() - weighed) / 1_000_000, steiner.mergeNanos.get() / 1_000_000,
