@@ -14,7 +14,7 @@ const YAX = new THREE.Vector3(0, 1, 0);
 const col = h => new THREE.Color(h);
 export const PALETTE = {
   // проблема — малиновая: красный уже занят существующей теплосетью, один цвет — одно значение
-  selection: '#fde047', problem: '#ff2fd1', ok: '#22c55e', special: '#fb923c',
+  selection: '#ff8a1f', problem: '#ff2fd1', ok: '#22c55e', special: '#fb923c',
   connected: '#22c55e', unconnected: '#f43f5e', future: '#e8dcc0', chamberOld: '#64748b', chamberNew: '#38bdf8',
 };
 // Новая сеть — свой бирюзовый цвет, которого нет ни у одной существующей сети (вода синяя, кабель фиолетовый,
@@ -239,7 +239,7 @@ export class Viewer {
       if (this.depthGrid) this.depthGrid.visible = under;
     }
     const net = this.g.netLines.getObjectByName('netLine');
-    if (net) net.material.linewidth = 3.4 + 1.8 * k;
+    if (net) net.material.linewidth = 3.4 + 3.6 * k;   // на обзоре района новая сеть толще, как маршрут в Картах
   }
   render() {
     this.lod();
@@ -717,7 +717,7 @@ export class Viewer {
     if (box) {
       const [x0, y0, z0, x1, y1, z1] = box;
       const g = new THREE.EdgesGeometry(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0));
-      box3 = new THREE.LineSegments(g, new THREE.LineBasicMaterial({color: 0xfde047, transparent: true, opacity: 0.7}));
+      box3 = new THREE.LineSegments(g, new THREE.LineBasicMaterial({color: 0xff8a1f, transparent: true, opacity: 0.7}));
       box3.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
       box3.name = 'clipBox';
       // размер рамки подписан, как у Section Box: в плане и по глубине (в настоящих метрах)

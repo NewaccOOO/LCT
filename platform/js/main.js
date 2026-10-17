@@ -128,7 +128,6 @@ async function load({input, output, outText = null, ds}) {
     if (!fromLink) { history.replaceState(null, '', location.pathname + location.search); home(0); }
     $('#loading').hidden = true;
     const v = S.v;
-    toast(`Открыт набор «${esc(ds.title)}»: ${fmt(model.stats.input)} объектов${v ? `, ${model.variants.length} ${plural(model.variants.length, 'вариант', 'варианта', 'вариантов')}` : ''}`, 'ok');
     if (!model.hasOutput) toast(`Результата трассировки нет, на сцене только исходные данные. Откройте файл результата${S.server ? ' или запустите расчёт: «Файл → Новый расчёт на сервере»' : ''}.`, 'info', 6000);
     if (!ds.local) store.set('ds', ds.name || null);
     // отчёт импорта: что из исходных данных не попало в сцену и почему
@@ -194,7 +193,7 @@ function renderVariants() {
     <span><span class="vl">Вариант </span><span class="vs">Вар. </span>${esc(v.id)}</span><small>${vs.length > 1 && v.score === best ? 'лучший · ' : ''}S ${fmt(v.score, 2)} · ${rub(v.summary.calculated_cost)}</small></button>`).join('') +
     // на телефоне — один выпадающий список, чтобы поиску хватало места
     `<select id="varSel" aria-label="Вариант решения">${vs.map(v => `<option value="${esc(v.id)}">Вар. ${esc(v.id)}${vs.length > 1 && v.score === best ? ', лучший' : ''}</option>`).join('')}</select>`;
-  $('#variants').hidden = !vs.length;
+  $('#variants').hidden = vs.length < 2;
   $('#varSel').onchange = e => setVariant(e.target.value);
 }
 $('#variants').onclick = e => { const b = e.target.closest('button'); if (b) setVariant(b.dataset.v); };
@@ -223,7 +222,15 @@ const CMP = [
   ['unc', (x, M) => M.oks.length - x.connected.size, v => fmt(v)], ['bad', x => x.crossings.filter(c => c.ok === false).length, v => fmt(v)],
   ['spec', x => x.segs.filter(s => s.special).length, v => fmt(v)],
 ];
-const cmpCells = (M, x) => CMP.map(([, f, t]) => { const v = f(x, M), best = Math.min(...M.variants.map(q => f(q, M))); return `<td class="${v === best && M.variants.some(q => f(q, M) !== best) ? 'best' : ''}">${t(v)}</td>`; });
+// сравнение: строки — показатели, столбцы — варианты; так таблица помещается в узкую панель и на планшет
+function cmpTable(M, v) {
+  const rows = [['Показатель S', x => x.score ?? Infinity, q => fmt(q, 2)], ['Стоимость', ...CMP[0].slice(1)], ['Новых труб', ...CMP[1].slice(1)],
+    ['Не подключено', ...CMP[2].slice(1)], ['Проблем по высоте', ...CMP[3].slice(1)], ['Спецпереходов', ...CMP[4].slice(1)]];
+  const bestS = Math.min(...M.variants.map(x => x.score ?? Infinity));
+  return `<table class="cmp"><tr><th></th>${M.variants.map(x => `<th class="click ${x === v ? 'cur' : ''}" data-v="${esc(x.id)}">Вар. ${esc(x.id)}${x.score === bestS ? '<small>лучший</small>' : ''}</th>`).join('')}</tr>
+    ${rows.map(([name, f, t]) => { const vals = M.variants.map(x => f(x, M)), best = Math.min(...vals), differ = vals.some(q => q !== best);
+      return `<tr><td${name === 'Показатель S' ? ` title="${S_FORMULA}"` : ''}>${name}</td>${vals.map((q, i) => `<td class="${q === best && differ ? 'best' : ''} ${M.variants[i] === v ? 'cur' : ''}">${t(q)}</td>`).join('')}</tr>`; }).join('')}</table>`;
+}
 // одна фраза: чем лучший вариант лучше следующего
 function verdict(M) {
   const vs = [...M.variants].sort((a, b) => (a.score ?? 1e9) - (b.score ?? 1e9)), [b, n] = vs;
@@ -262,10 +269,8 @@ function renderSummary() {
       <tr><td>Штраф за неподключённые</td><td>${rub(sm.unconnected_penalty)}</td></tr>
       <tr><th>Итого</th><th>${rub(sm.calculated_cost)}</th></tr>
     </table>
-    ${M.variants.length > 1 ? `<h2>Сравнение вариантов</h2>${verdict(M)}<div class="tblwrap"><table class="cmp"><tr><th>Вар.</th><th title="${S_FORMULA}">S</th><th>ΔS</th><th>Стоимость</th><th>Длина</th><th title="зданий не подключено">Не подкл.</th><th title="проблем по высоте">Пробл.</th><th title="спецпереходов">Спецпер.</th></tr>
-      ${M.variants.map(x => { const best = Math.min(...M.variants.map(q => q.score ?? Infinity)); return `<tr class="click ${x === v ? 'cur' : ''}" data-v="${esc(x.id)}" title="Щёлкните — открыть вариант ${esc(x.id)} (клавиша ${M.variants.indexOf(x) + 1})"><td>${esc(x.id)}</td><td>${fmt(x.score, 2)}</td>
-      <td>${x.score === best ? 'лучший' : '+' + fmt(x.score - best, 2)}</td>${cmpCells(M, x).join('')}</tr>`; }).join('')}</table></div>
-      <div class="mut" style="font-size:12.5px;margin-top:6px">Клавиши 1–${M.variants.length} — переключить вариант.</div>
+    ${M.variants.length > 1 ? `<h2>Сравнение вариантов</h2>${verdict(M)}${cmpTable(M, v)}
+      <div class="mut kbm" style="font-size:12.5px;margin-top:6px">Клавиши 1–${M.variants.length} — переключить вариант.</div>
       <div class="filters" style="margin-top:8px">${M.variants.filter(x => x !== v).map(x => `<button data-ghost="${esc(x.id)}" class="${S.ghost === x.id ? 'on' : ''}" title="Трассы варианта ${esc(x.id)} белым пунктиром поверх текущего"><i class="sw" style="background:none;border-top:2px dashed #f1f5f9;height:0"></i> ${S.ghost === x.id ? `Скрыть вариант ${esc(x.id)}` : `Показать вариант ${esc(x.id)} поверх`}</button>`).join('')}</div>` : ''}
     <h2>С чего начать</h2>
     <div class="actions">
@@ -276,7 +281,7 @@ function renderSummary() {
     </div>
     <h2>Данные</h2>${dataInfo()}`;
   el.onclick = e => {
-    const tr = e.target.closest('tr[data-v]');
+    const tr = e.target.closest('[data-v]');
     if (tr) return setVariant(tr.dataset.v);
     const gb = e.target.closest('button[data-ghost]');
     if (gb) { S.ghost = S.ghost === gb.dataset.ghost ? null : gb.dataset.ghost; viewer.setGhost(S.model.variants.find(x => x.id === S.ghost) || null);
@@ -290,7 +295,7 @@ function renderSummary() {
 }
 function dataInfo() {
   const M = S.model, u = Object.entries(M.utilities).map(([k, l]) => `${UTILITIES[k].name.toLowerCase()} ${fmt(l.length)}`).join(', ');
-  return `<table><tr><td>Объектов в исходных данных</td><td>${fmt(M.stats.input)}</td></tr>
+  return `<table class="wrap"><tr><td>Объектов в исходных данных</td><td>${fmt(M.stats.input)}</td></tr>
     <tr><td>Зданий к подключению</td><td>${fmt(M.oks.length)}</td></tr>
     <tr><td>Коммуникации</td><td style="white-space:normal">${u || '—'}</td></tr>
     <tr><td>Глубины новых труб</td><td>${M.hasDepth ? 'подобраны при трассировке' : M.hasOutput ? 'в результате нет, трубы показаны на глубине 3,0 м' : '—'}</td></tr>
@@ -326,8 +331,7 @@ function renderOks() {
       const r = conn ? routeTo(v, o.id) : null;
       return `<button class="item ${S.sel?.ref === o ? 'sel' : ''}" data-id="${esc(o.id)}"><div class="t"><span>${esc(o.label)}</span>
         ${v ? `<span class="badge ${conn ? 'b-ok' : 'b-bad'}">${conn ? 'подключено' : 'не подключено'}</span>` : ''}</div>
-        <div class="m">${o.flow != null ? `расход ${fmt(o.flow, 1)} т/ч` : ''}${r ? ` · трасса ${meters(r.len)}${r.bad ? ` · <span style="color:#fda4af">${r.bad} ${plural(r.bad, 'проблема', 'проблемы', 'проблем')} по высоте</span>` : ''}` : v ? ' · маршрут не найден' : ''}
-        <span class="id">${esc(o.oksId || o.id)}</span></div></button>`;
+        <div class="m">${o.flow != null ? `расход ${fmt(o.flow, 1)} т/ч` : ''}${r ? ` · трасса ${meters(r.len)}${r.bad ? ` · <span style="color:#fda4af">${r.bad} ${plural(r.bad, 'проблема', 'проблемы', 'проблем')} по высоте</span>` : ''}` : v ? ' · маршрут не найден' : ''}</div></button>`;
     }).join('') || '<div class="item m">Ничего не найдено</div>';
   };
   draw();
@@ -354,7 +358,6 @@ function renderCx() {
   const base = (S.cxAll ? all : bad).slice().sort((a, b) => deficit(b) - deficit(a));
   const types = [...new Set(base.map(c => c.type))];
   el.innerHTML = `<h2>${S.cxAll ? 'Все пересечения' : 'Проблемы по высоте'}</h2>
-    <div class="mut" style="font-size:13px">${S.cxAll ? 'Каждое место, где новая труба проходит над или под другой коммуникацией.' : 'Места, где новая труба проходит ближе нормы к другой коммуникации или нарушает требования к уклону и глубине. Щёлкните строку, чтобы увидеть место сбоку и вариант обхода.'}</div>
     <div class="filters" id="cxF"><button data-t="">Все ${base.length}</button>${types.map(t => `<button data-t="${t}">${t === 'segment' ? 'Уклон и глубина' : UTILITIES[t].name} ${base.filter(c => c.type === t).length}</button>`).join('')}</div>
     <label class="tog"><input type="checkbox" id="cxAll" ${S.cxAll ? 'checked' : ''}> Показать и пересечения без проблем (${all.length})</label>
     <div class="list" id="cxL" style="margin-top:8px"></div>`;
@@ -362,8 +365,8 @@ function renderCx() {
     $$('#cxF button').forEach(b => b.classList.toggle('on', b.dataset.t === S.cxType));
     const list = base.filter(c => !S.cxType || c.type === S.cxType);
     $('#cxL').innerHTML = list.slice(0, 2000).map(c => `<button class="item ${S.sel?.ref === c ? 'sel' : ''}" data-k="${all.indexOf(c)}"><div class="t"><span>${esc(cxTitle(c))}</span>
-      <span class="badge ${c.ok === false ? 'b-bad' : c.ok ? 'b-ok' : 'b-mut'}">${c.ok === false ? 'проблема' : c.ok ? 'норма' : 'не проверяется'}</span></div>
-      <div class="m">${c.type === 'segment' ? esc(c.issues.join('; ')) : `${segName(c.seg)}, ${fmt(c.s)} м от его начала · трасса к: ${esc(endLabel(c.seg))}`}</div></button>`).join('')
+      ${S.cxAll ? `<span class="badge ${c.ok === false ? 'b-bad' : c.ok ? 'b-ok' : 'b-mut'}">${c.ok === false ? 'проблема' : c.ok ? 'норма' : 'не проверяется'}</span>` : ''}</div>
+      <div class="m">${c.type === 'segment' ? esc(c.issues.join('; ')) : `${segName(c.seg)}, ${fmt(c.s)} м от начала → ${esc(endLabel(c.seg))}`}</div></button>`).join('')
       || `<div class="item m">${S.cxAll ? 'Пересечений нет' : 'Проблем нет'}</div>`;
   };
   draw();
@@ -383,8 +386,8 @@ function renderLayers() {
   el.innerHTML = `<h2>Отображение</h2>
     <div class="fld"><label for="ex">Глубина ×<b id="exV">${viewer.ex}</b></label><input type="range" id="ex" min="1" max="15" step="1" value="${viewer.ex}">
       <small>Растягивает только вертикаль — как вертикальный масштаб профиля в Civil 3D. Диаметры остаются настоящими.</small></div>
-    <div class="fld"><label for="gop">Земля непрозрачна на <b id="gopV">${Math.round(o.groundOpacity * 100)}%</b></label><input type="range" id="gop" min="0" max="95" value="${Math.round(o.groundOpacity * 100)}">
-      <small>Меньше — лучше видно трубы сквозь землю. Рентген (X) делает землю и здания прозрачными сразу.</small></div>
+    <div class="fld"><label for="gop">Прозрачность земли <b id="gopV">${100 - Math.round(o.groundOpacity * 100)} %</b></label><input type="range" id="gop" min="5" max="100" value="${100 - Math.round(o.groundOpacity * 100)}">
+      <small>Рентген (X) делает прозрачными и землю, и здания.</small></div>
     <div class="fld"><label>Здания</label><div class="seg" id="bld"><button data-b="solid">Объёмом</button><button data-b="flat">Контуром</button><button data-b="hidden">Скрыть</button></div></div>
     <div class="fld"><label>Цвет новой сети</label><div class="seg" id="cby"><button data-c="dn">По диаметру</button><button data-c="status">Проблемы</button><button data-c="depth">Глубина</button></div>
       <div id="cbyLeg" class="mut" style="font-size:12px;margin-top:6px"></div></div>
@@ -401,7 +404,7 @@ function renderLayers() {
     <h2>Глубины коммуникаций</h2>
     <table>${Object.entries(UTILITIES).filter(([k]) => M.utilities[k]).map(([k, u]) => `<tr><td><i class="sw" style="background:${u.color}"></i> ${u.name}</td><td>верх ${fmt(u.top, 1)} м${u.clear != null ? `, зазор ≥ ${fmt(u.clear, 1)}` : ' (условно)'}</td></tr>`).join('')}</table>`;
   const legend = () => {
-    $('#cbyLeg').innerHTML = o.colorBy === 'dn' ? `<div style="height:8px;border-radius:4px;background:linear-gradient(90deg,${grad.join(',')})"></div><div style="display:flex;justify-content:space-between"><span>Ду 50</span><span>Ду 400</span><span>Ду 1400</span></div><div>У новой сети свой бирюзовый цвет — его нет у существующих сетей.</div>`
+    $('#cbyLeg').innerHTML = o.colorBy === 'dn' ? `<div style="height:8px;border-radius:4px;background:linear-gradient(90deg,${grad.join(',')})"></div><div style="display:flex;justify-content:space-between"><span>Ду 50</span><span>Ду 400</span><span>Ду 1400</span></div>`
       : o.colorBy === 'status' ? '<i class="sw" style="background:#5eead4"></i> участки с проблемой — ярко <i class="sw" style="background:#335c5a;margin-left:10px"></i> без проблем — приглушённо'
         : `<div style="height:8px;border-radius:4px;background:linear-gradient(90deg,${DEPTH_GRAD})"></div><div style="display:flex;justify-content:space-between"><span>1 м</span><span>3 м</span><span>5 м и глубже</span></div>`;
   };
@@ -409,7 +412,7 @@ function renderLayers() {
   mark();
   $('#ex').oninput = e => { $('#exV').textContent = e.target.value; };
   $('#ex').onchange = e => setEx(+e.target.value);
-  $('#gop').oninput = e => { o.groundOpacity = e.target.value / 100; $('#gopV').textContent = e.target.value + '%'; viewer.applyOpts(); store.set('gop', o.groundOpacity); };
+  $('#gop').oninput = e => { o.groundOpacity = 1 - e.target.value / 100; $('#gopV').textContent = e.target.value + ' %'; viewer.applyOpts(); store.set('gop', o.groundOpacity); };
   $('#bld').onclick = e => { const b = e.target.closest('button'); if (!b) return; o.buildings = b.dataset.b; mark(); viewer.applyOpts(); store.set('bld', o.buildings); };
   $('#cby').onclick = e => { const b = e.target.closest('button'); if (!b) return; o.colorBy = b.dataset.c; mark(); viewer.buildNetwork(); refreshHighlight(); renderLegend(); };
   el.onchange = e => { const k = e.target.dataset?.k; if (!k) return; L[k] = e.target.checked; viewer.applyOpts(); store.set('layers', L); };
@@ -468,6 +471,7 @@ function clearSel() {
   viewer.applyOpts();
   $('#props').hidden = true;
   document.body.classList.remove('propsOpen', 'propsMin');
+  if (document.activeElement !== $('#q')) $('#q').value = '';
   if (S.autoLeft) { document.body.classList.remove('leftHidden'); S.autoLeft = false; }
   closeProfile();
   layout();
@@ -493,7 +497,7 @@ function select(sel, {fly = false, room = false} = {}) {
   // планшет и узкий ноутбук: объект выбран на карте или поиском — левая панель уступает место карточке,
   // после снятия выбора возвращается (как боковая панель в приложениях iPad)
   const b = document.body;
-  if (room && !isMobile() && innerWidth <= 1280 && !b.classList.contains('leftHidden')) { b.classList.add('leftHidden'); S.autoLeft = true; }
+  if ((room || matchMedia('(pointer: coarse)').matches) && !isMobile() && innerWidth <= 1280 && !b.classList.contains('leftHidden')) { b.classList.add('leftHidden'); S.autoLeft = true; }
   S.sel = sel;
   S.route = routeFor(sel);
   if (S.route) {
@@ -572,7 +576,7 @@ function showDetour(c, mode) {
   const label = mode === 'up' ? `обход сверху: верх на ${fmt(target, 2)} м` : `обход снизу: верх на ${fmt(target, 2)} м${c.kBelow > 1 ? `, стоимость +${fmt((c.kBelow - 1) * 100, 1)} %` : ''}`;
   profile.setDetour({pts: prof, h: c.H, label});
   if ($('#profile').hidden) openProfileKeep();
-  toast(`Обход ${mode === 'up' ? 'сверху' : 'снизу'} показан зелёным в 3D и пунктиром на профиле. Форма обхода примерная: точную трассу даст пересчёт на сервере с учётом глубины.`, 'info', 6000);
+  toast(`${label[0].toUpperCase()}${label.slice(1)}. Форма примерная.`, 'info', 4000);
 }
 function openProfileKeep() { const d = profile.detour; openProfile(); requestAnimationFrame(() => requestAnimationFrame(() => profile.setDetour(d))); }
 
@@ -654,7 +658,7 @@ function describe(sel) {
     case 'seg': {
       const s = r, bad = s.cx.filter(c => c.ok === false);
       const flat = Math.abs(s.d1 - s.d0) / s.len < 0.002;
-      return {kind: 'Новая труба', title: `${segName(s)}: ${nn(s.from)} → ${nn(s.to)}`, sub: s.id, info: flat ? {t: 'Уклон меньше 0,002', more: SLOPE_NOTE} : null, rows: [['Диаметр', `Ду ${s.p.diameter}`], ['Длина', meters(s.p.length ?? s.len)], ['Прокладка', s.special ? 'спецпереход в футляре' : 'обычная, в канале'],
+      return {kind: 'Новая труба', title: `${segName(s)}: ${nn(s.from)} → ${nn(s.to)}`, info: flat ? {t: 'Уклон меньше 0,002', more: SLOPE_NOTE} : null, rows: [['Диаметр', `Ду ${s.p.diameter}`], ['Длина', meters(s.p.length ?? s.len)], ['Прокладка', s.special ? 'спецпереход в футляре' : 'обычная, в канале'],
         ['Глубина верха', s.d0 === s.d1 ? ND(s.d0) : `${ND(s.d0)} → ${ND(s.d1)}`], ['Уклон', fmt(Math.abs(s.d1 - s.d0) / s.len, 3) + slopeNote(s)], ['Расход теплоносителя', s.p.flow_tph != null ? fmt(s.p.flow_tph, 2) + ' т/ч' : '—'],
         ['Стоимость', rub(s.p.cost)], ['Пересечений с сетями', s.cx.length]],
         problem: s.issues.length || bad.length ? [...s.issues, ...bad.map(c => `${UTILITIES[c.type].name.toLowerCase()}: ${gapText(c)}${c.need != null ? `, нужен зазор ${fmt(c.need, 2)} м` : ''}`)].join('<br>') : null};
@@ -667,8 +671,8 @@ function describe(sel) {
       if (v) rows.push(['Подключено', conn ? 'да' : 'нет']);
       if (R) rows.push(['Трасса от врезки', meters(R.len)], ['Участков', R.segs.length], ['Стоимость трассы', rub(R.cost)], ['Ду на вводе', `Ду ${R.segs[R.segs.length - 1].p.diameter}`], ['Врезка', nn(R.start)]);
       const flatN = R ? R.segs.filter(s => Math.abs(s.d1 - s.d0) / s.len < 0.002).length : 0;
-      return {kind: 'Здание к подключению', title: r.label, sub: [r.oksId, r.id].filter(Boolean).join(' · '), rows, info: flatN ? {t: `${flatN} из ${R.segs.length} ${plural(R.segs.length, 'участка', 'участков', 'участков')} с уклоном меньше 0,002`, more: SLOPE_NOTE} : null,
-        problem: v && !conn ? `В этом варианте здание не подключено. Причину сервис не сообщает: проверьте запретные зоны и отступы рядом со зданием и предельную длину трассы для нужного Ду. За неподключённое здание начисляется штраф ${rub(500000 * (r.flow || 0) + 1e8)}.${M.variants.length > 1 ? ' Посмотрите, подключено ли оно в других вариантах.' : ''}` : R?.bad ? `На трассе ${R.bad} ${plural(R.bad, 'проблема', 'проблемы', 'проблем')} по высоте. Они отмечены малиновыми метками в 3D и на профиле внизу.` : null,
+      return {kind: 'Здание к подключению', title: r.label, sub: r.oksId || null, rows, info: flatN ? {t: `${flatN} из ${R.segs.length} ${plural(R.segs.length, 'участка', 'участков', 'участков')} с уклоном меньше 0,002`, more: SLOPE_NOTE} : null,
+        problem: v && !conn ? `Не подключено в этом варианте, штраф ${rub(500000 * (r.flow || 0) + 1e8)}. Причину сервис не сообщает: проверьте запретные зоны и отступы рядом со зданием и предельную длину трассы для Ду.${M.variants.length > 1 ? ' Посмотрите другие варианты.' : ''}` : R?.bad ? `<div class="row between"><span>${R.bad} ${plural(R.bad, 'проблема', 'проблемы', 'проблем')} по высоте на трассе</span><button type="button" data-gocx>Показать</button></div>` : null,
         ok: R && !R.bad ? 'Трасса без проблем по высоте' : null};
     }
     case 'crossing': {
@@ -680,21 +684,19 @@ function describe(sel) {
       let problem = null, fix = null;
       if (c.ok === false) {
         problem = c.need == null
-          ? `Новая труба проходит сквозь коммуникацию «${u.name.toLowerCase()}»: трубы перекрываются по высоте на ${fmt(-c.gap, 2)} м. Норма зазора для этой сети не задана, а её глубина принята условно, ${fmt(c.top, 1)} м. Уточните глубину по изысканиям.`
-          : c.gap < 0 ? `Новая труба проходит сквозь коммуникацию «${u.name.toLowerCase()}»: трубы перекрываются по высоте на ${fmt(-c.gap, 2)} м. Нужен зазор не меньше ${fmt(c.need, 2)} м.`
-          : `Новая труба проходит слишком близко к коммуникации «${u.name.toLowerCase()}»: зазор ${fmt(c.gap, 2)} м, а нужно не меньше ${fmt(c.need, 2)} м.`;
+          ? 'Трубы перекрываются по высоте. Норма зазора для этой сети не задана, глубина сети условная: уточните её по изысканиям.'
+          : c.gap < 0 ? 'Трубы перекрываются по высоте.' : 'Зазор меньше нормы.';
         fix = [c.above != null ? `<b>Поднять</b> трубу так, чтобы верх был не глубже ${fmt(c.above, 2)} м. Стоимость не изменится.` : 'Поднять нельзя: труба окажется мельче 0,7 м.',
-          `<b>Опустить</b> трубу так, чтобы верх был не мельче ${fmt(c.below, 2)} м. ${c.kBelow > 1 ? `Стоимость вырастет на ${fmt((c.kBelow - 1) * 100, 1)} %.` : 'Стоимость не изменится.'}`,
-          c.kBelow > 1 ? `<small class="mut">Kгл ${fmt(c.kBelow, 3)} — коэффициент стоимости за глубину: +10 % за каждый метр глубже 3 м.</small>` : ''].filter(Boolean).join('<br>') +
+          `<b>Опустить</b> трубу так, чтобы верх был не мельче ${fmt(c.below, 2)} м. ${c.kBelow > 1 ? `Стоимость вырастет на ${fmt((c.kBelow - 1) * 100, 1)} % (Kгл ${fmt(c.kBelow, 3)}).` : 'Стоимость не изменится.'}`].join('<br>') +
           `<div class="row" style="margin-top:8px;flex-wrap:wrap">${c.above != null ? '<button type="button" data-detour="up">Показать обход сверху</button>' : ''}<button type="button" data-detour="down">Показать обход снизу</button></div>`;
       }
-      return {kind: 'Пересечение по высоте', title: `${u.name} × новая труба`, sub: `${u.name.toLowerCase()} № ${c.eid} · ${c.seg.id}`, rows, problem, fix, ok: c.ok === true ? 'Зазор достаточный' : c.ok == null ? 'Трубы не пересекаются. Норма зазора для этой сети не задана, а её глубина принята условно. Уточните глубину по изысканиям.' : null};
+      return {kind: 'Пересечение по высоте', title: `${u.name} × новая труба`, rows, problem, fix, ok: c.ok === true ? 'Зазор достаточный' : c.ok == null ? 'Трубы не пересекаются. Норма зазора для этой сети не задана, глубина условная.' : null};
     }
     case 'node': {
       const n = r, t = n.type === 'existing_chamber' ? 'Врезка в существующую камеру' : n.type === 'oks_entry' ? 'Ввод в здание' : (NODE_TYPES[n.type] || {name: n.type}).name;
       const segs = v ? v.segs.filter(s => s.from === n.id || s.to === n.id) : [];
       const nm = nodeName(n, M);
-      return {kind: t, title: nm[0].toUpperCase() + nm.slice(1), sub: n.id, rows: [['Глубина низа трубы', ND(n.depth)], ['Ду', n.dn || n.p.diameter || '—'], ['Участков в узле', segs.length], ...(n.p.cost ? [['Стоимость', rub(n.p.cost)]] : []),
+      return {kind: t, title: nm[0].toUpperCase() + nm.slice(1), rows: [['Глубина низа трубы', ND(n.depth)], ['Ду', n.dn || n.p.diameter || '—'], ['Участков в узле', segs.length], ...(n.p.cost ? [['Стоимость', rub(n.p.cost)]] : []),
         ...(n.p.existing_object_id ? [['На существующем объекте', n.p.existing_object_id]] : [])]};
     }
     case 'utility': {
@@ -711,7 +713,7 @@ function describe(sel) {
       if (b) rows.push(['Этажей', it.p.levels ?? '—'], ['Высота в 3D', meters(buildingHeight(it))]);
       if (it.p.name) rows.push(['Название', it.p.name]);
       if (sel.type === 'road' || sel.type === 'tram_tracks') rows.push(['Новая труба под ним', `верх не мельче ${sel.type === 'road' ? '1,0' : '1,2'} м, переход в футляре`]);
-      return {kind: b ? (it.isFuture ? 'Новое здание' : 'Здание') : 'Поверхность', title: b ? (it.p.address || (it.isFuture ? 'Новое здание' : 'Здание')) : name, sub: it.id, rows};
+      return {kind: b ? (it.isFuture ? 'Новое здание' : 'Здание') : 'Поверхность', title: b ? (it.p.address || (it.isFuture ? 'Новое здание' : 'Здание')) : name, rows};
     }
   }
   return {kind: '', title: '', rows: []};
@@ -753,6 +755,9 @@ function showProps(sel) {
   }
   // «Показать обход»: зелёная труба на рекомендуемой глубине в 3D и пунктир на профиле
   $$('#props [data-detour]').forEach(b => b.onclick = () => showDetour(sel.ref, b.dataset.detour));
+  // «Показать» у проблем трассы — к первому месту, как переход к результату поиска
+  const go = $('#props [data-gocx]');
+  if (go) go.onclick = () => { const R = S.route, c = R?.segs.flatMap(s => s.cx).find(c => c.ok === false) || S.v?.crossings.find(c => c.type === 'segment' && R?.segs.includes(c.seg)); if (c) selectCrossing(c); };
   $('#pxLink').onclick = e => copyLink(e.target);
 }
 
@@ -796,8 +801,10 @@ function hitToSel(h) {
 }
 function clickAt(x, y) {
   hideCtx();
+  if (isMobile() && document.body.classList.contains('leftOpen')) { document.body.classList.remove('leftOpen'); layout(); return; }
   if (S.measure) return measureClick(x, y);
   const h = pickAt(x, y), sel = hitToSel(h);
+  setXY(h?.point || rig.onPlane(x, y, 0, 1e6));
   if (!sel) { clearSel(); return; }
   select(sel, {room: true});
 }
@@ -815,7 +822,7 @@ function hoverAt(x, y, dragging) {
     if (!hoverXY || !S.model) return;
     const [hx, hy] = hoverXY, h = pickAt(hx, hy);
     const P = h?.point || rig.onPlane(hx, hy, 0, 1e6);
-    if (P) { const [lon, lat] = S.model.proj.ll(P.x, P.y); $('#stXY').textContent = `${lat.toFixed(6)}, ${lon.toFixed(6)} · X ${fmt(P.x)} Y ${fmt(P.y)} м от центра набора`; }
+    setXY(P);
     const t = h ? hoverText(h) : null;
     $('#stHover').innerHTML = t ? t.status : '';
     const tip = $('#tip'), r = $('#view').getBoundingClientRect();
@@ -828,6 +835,8 @@ function hoverAt(x, y, dragging) {
     viewer.renderer.domElement.style.cursor = 'pointer';
   });
 }
+// координаты в строке состояния: под курсором, а на планшете — точка последнего касания
+function setXY(P) { if (!P || !S.model) return; const [lon, lat] = S.model.proj.ll(P.x, P.y); $('#stXY').textContent = `${lat.toFixed(6)}, ${lon.toFixed(6)} · X ${fmt(P.x)} Y ${fmt(P.y)} м от центра набора`; }
 $('#view').addEventListener('pointerleave', () => { hoverXY = null; $('#tip').hidden = true; });
 function hoverText(h) {
   const r = h.ref;
@@ -839,7 +848,7 @@ function hoverText(h) {
   if (h.kind === 'utility') { const u = UTILITIES[h.type]; return {title: u.name, lines: [`верх ${fmt(r.top, 1)} м${u.assumed ? ' (условно)' : ''}${r.dn ? ` · Ду ${r.dn}` : ''}`], status: `<b>${u.name}</b> · верх ${fmt(r.top, 1)} м`}; }
   if (h.kind === 'oks') { const c = S.v ? S.v.connected.has(r.id) : null; return {title: esc(r.label), lines: [`расход ${fmt(r.flow, 1)} т/ч`, c == null ? '' : c ? '<span style="color:#86efac">подключено</span>' : '<span style="color:#fda4af">не подключено</span>'].filter(Boolean), status: `<b>${esc(r.label)}</b>`}; }
   if (h.kind === 'node') { const t = nodeName(r, S.model); return {title: t[0].toUpperCase() + t.slice(1), lines: [`низ трубы ${ND(r.depth)}`], status: `<b>${esc(t)}</b>`}; }
-  if (h.kind === 'chamber') return {title: 'Существующая камера', lines: [esc(r.id)], status: `<b>Камера</b> ${esc(r.id)}`};
+  if (h.kind === 'chamber') { const no = esc(String(r.id).replace(/^hc-/, '')); return {title: `Существующая камера ${no}`, lines: [], status: `<b>Камера ${no}</b>`}; }
   if (h.kind === 'source') return {title: 'Источник тепла', lines: [esc(r.p.name || r.id)], status: `<b>Источник</b> ${esc(r.p.name || r.id)}`};
   if (h.kind === 'surface') {
     const n = (SURFACES[h.type] || {name: h.type}).name;
@@ -944,9 +953,9 @@ function updateScale() {
   $('#scale span').textContent = meters(nice);
   // глубже 5 см — уже под землёй; на самой поверхности «под землёй, 0,0 м» только путает
   const above = cam.z > -0.05 * viewer.ex;
-  $('#stCam').textContent = above ? (cam.z < 0.5 ? 'камера у поверхности земли' : `вид с высоты ${meters(cam.z)}`) : `камера под землёй, ${fmt(-cam.z / viewer.ex, 1)} м · E — вверх, H — общий вид`;
+  $('#stCam').textContent = above ? (cam.z < 0.5 ? 'у поверхности земли' : `вид с высоты ${meters(cam.z)}`) : `под землёй, ${fmt(-cam.z / viewer.ex, 1)} м · E — вверх, H — общий вид`;
   $('#camChip').hidden = above;
-  $('#camChip').textContent = matchMedia('(max-width: 900px)').matches ? `под землёй, ${fmt(-cam.z / viewer.ex, 1)} м` : `камера под землёй, ${fmt(-cam.z / viewer.ex, 1)} м · домик — общий вид`;
+  $('#camChip').innerHTML = `Под землёй, ${fmt(-cam.z / viewer.ex, 1)} м <b>Наверх</b>`;
   if ($('#exChip')) $('#exChip').innerHTML = viewer.ex === 1 ? 'Глубина <b>×1</b> как есть' : `Глубина растянута <b>×${viewer.ex}</b>`;
   const top = rig.pitch < -80 * D;
   $('#v2d').classList.toggle('is2d', top);
@@ -978,7 +987,7 @@ function toggleClip(force) {
   setClip(b);
 }
 function setMeasure(on) {
-  if (on) { S.measure = {pts: []}; $('#measure').hidden = false; $('#measure').innerHTML = '<span>Линейка: щёлкните первую точку на трубе, здании или земле</span><button id="mX">Готово</button>'; $('#mX').onclick = () => setMeasure(false); }
+  if (on) { S.measure = {pts: []}; $('#measure').hidden = false; $('#measure').innerHTML = '<span>Линейка: укажите первую точку на трубе, здании или земле</span><button id="mX">Готово</button>'; $('#mX').onclick = () => setMeasure(false); }
   else { S.measure = null; $('#measure').hidden = true; viewer.marker('m0', null); viewer.marker('m1', null); const l = viewer.g.tools.getObjectByName('mline'); if (l) { viewer.g.tools.remove(l); l.traverse(x => { if (x.isCSS2DObject) x.element.remove(); }); } }
   $('#measureBtn').classList.toggle('on', on);
   status();
@@ -992,7 +1001,7 @@ function measureAdd(P) {
   viewer.marker('m' + (m.pts.length - 1), P, {color: '#22d3ee', r: 0.7});
   const old = viewer.g.tools.getObjectByName('mline');
   if (old) { viewer.g.tools.remove(old); old.traverse(x => { if (x.isCSS2DObject) x.element.remove(); }); }
-  if (m.pts.length === 1) { $('#measure').firstElementChild.textContent = 'Линейка: щёлкните вторую точку'; return; }
+  if (m.pts.length === 1) { $('#measure').firstElementChild.textContent = 'Линейка: укажите вторую точку'; return; }
   const [a, b] = m.pts, ex = viewer.ex;
   const plan = Math.hypot(b.x - a.x, b.y - a.y), dz = (b.z - a.z) / (b.z <= 0 && a.z <= 0 ? ex : 1), d3 = Math.hypot(plan, dz);
   const geo = new THREE.BufferGeometry().setFromPoints([a, b]);
@@ -1400,6 +1409,7 @@ addEventListener('keydown', e => {
 
 // ---------- кнопки на сцене ----------
 $('#homeBtn').onclick = () => home();
+$('#camChip').onclick = () => home();
 function zoomStep(k) { const P = rig.center(); rig.animateTo({pos: P.clone().add(rig.pos.clone().sub(P).multiplyScalar(k)), yaw: rig.yaw, pitch: rig.pitch, back: true}, 300); }
 $('#zIn').onclick = () => zoomStep(0.5);
 $('#zOut').onclick = () => zoomStep(2);
@@ -1488,12 +1498,12 @@ async function start() {
   updateModeUi();
   if (isMobile()) $('#q').placeholder = 'Поиск';
   if (store.get('leftHidden', false) && !isMobile()) document.body.classList.add('leftHidden');
-  if (store.get('profMin', false)) $('#profile').classList.add('min');
+  if (store.get('profMin', matchMedia('(pointer: coarse)').matches || innerWidth <= 1280)) $('#profile').classList.add('min');
   layout();
   if (matchMedia('(pointer: coarse)').matches) {
     // на телефоне и планшете — жесты, а не кнопки мыши
     $('#coach .cg').innerHTML = '<span class="k">Один палец</span><span>двигать</span><span class="k">Щипок</span><span>приблизить</span>' +
-      '<span class="k">Повернуть двумя</span><span>вращать</span><span class="k">Два пальца вверх-вниз</span><span>наклонить</span><span class="k">Двойное касание</span><span>приблизить сюда</span>';
+      '<span class="k">Повернуть двумя</span><span>вращать</span><span class="k">Два пальца вверх-вниз</span><span>наклонить</span><span class="k">Двойное касание</span><span>приблизить сюда</span><span class="k">Долгое нажатие</span><span>меню точки</span>';
   }
   if (!store.get('coach', 0)) $('#coach').hidden = false;
   // легенда раскрыта при первом знакомстве (после подсказки управления), дальше — как оставил пользователь

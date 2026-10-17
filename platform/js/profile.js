@@ -262,17 +262,17 @@ export class Profile {
       });
     }
     g.restore();
-    g.fillStyle = this.win ? '#fde047' : muted;
-    g.fillText(this.win ? `показан участок ${pk(wa)} – ${pk(wb)} · двойной щелчок — вся трасса` : (matchMedia('(pointer: coarse)').matches ? 'два пальца — масштаб · палец — сдвиг' : 'колесо — масштаб · тащить — сдвиг') + ' · жёлтым — уклон меньше 0,002', pl + 4, r.height - 5);
+    g.fillStyle = this.win ? '#ff8a1f' : muted;
+    g.fillText(this.win ? `показан участок ${pk(wa)} – ${pk(wb)} · ${matchMedia('(pointer: coarse)').matches ? 'двойное касание' : 'двойной щелчок'} — вся трасса` : (matchMedia('(pointer: coarse)').matches ? 'два пальца — масштаб · палец — сдвиг' : 'колесо — масштаб · тащить — сдвиг') + ' · жёлтым — уклон меньше 0,002', pl + 4, r.height - 5);
 
     // курсор: пролёт или мышь
     const cur = this.mouse ? this.atX(this.mouse[0]) : this.cursor;
     if (cur == null) return;
     const p = pointAt(R, cur), x = X(cur);
     if (x < pl - 1 || x > pl + W + 1) return;
-    g.strokeStyle = '#fde047'; g.lineWidth = 1.5;
+    g.strokeStyle = '#ff8a1f'; g.lineWidth = 1.5;
     g.beginPath(); g.moveTo(x, Y(-0.6)); g.lineTo(x, Y(maxD)); g.stroke(); g.lineWidth = 1;
-    g.fillStyle = '#fde047'; g.beginPath(); g.arc(x, Y(p.d), 4, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#ff8a1f'; g.beginPath(); g.arc(x, Y(p.d), 4, 0, Math.PI * 2); g.fill();
     const n = this.mouse && this.nearCx(this.mouse[0]);
     const lines = [`${pk(cur)} · ${fmt(cur)} м от врезки`, `верх трубы ${fmt(p.d, 2)} м · Ду ${p.seg.p.diameter}${p.seg.special ? ' · спецпереход' : ''}`];
     if (n) {

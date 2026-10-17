@@ -1,6 +1,6 @@
 :root {
   --bg: #0b1322; --panel: #101b2e; --card: #15233a; --card2: #1b2c48; --line: #253349; --text: #e6edf7; --muted: #94a3b8;
-  --accent: #22d3ee; --accent2: #0891b2; --blue: #38bdf8; --sel: #fde047; --bad: #f43f5e; --ok: #22c55e; --warn: #fb923c;
+  --accent: #22d3ee; --accent2: #0891b2; --blue: #38bdf8; --sel: #ff8a1f; --bad: #f43f5e; --ok: #22c55e; --warn: #fb923c;
   --r: 10px; --hdr: 54px; --st: 28px; --left: 344px; --props: 340px;
   --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   color-scheme: dark;
@@ -174,20 +174,23 @@ body.propsShown #profile { margin-right: var(--props); }
 #scale { position: absolute; left: 12px; bottom: 10px; z-index: 5; font-size: 12px; color: var(--muted); display: flex; align-items: flex-end; gap: 6px; pointer-events: none; text-shadow: 0 1px 2px #000; }
 #scale .bar { height: 6px; border: 2px solid #cbd5e1; border-top: 0; }
 .floatcard { position: absolute; z-index: 7; background: rgba(16,27,46,.95); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.4); padding: 8px 10px; }
-#legend { left: 12px; bottom: 34px; padding: 4px; max-width: 280px; font-size: 12px; max-height: calc(100% - 120px); overflow: auto; }
+#legend { left: 12px; bottom: 66px; padding: 4px; max-width: 280px; font-size: 12px; max-height: calc(100% - 120px); overflow: auto; }
 #legend > button { min-height: 30px; padding: 3px 10px; font-size: 13px; background: none; border: 0; }
 #legBody { display: grid; grid-template-columns: 22px 1fr; gap: 3px 8px; align-items: center; padding: 4px 10px 8px; color: var(--muted); }
 #legBody .h { grid-column: 1 / 3; color: var(--text); font-weight: 600; margin-top: 4px; }
 #legBody .sw { width: 22px; }
-.camchip { position: absolute; left: 12px; top: 12px; z-index: 5; padding: 4px 12px; border-radius: 999px; background: rgba(26,20,14,.9); border: 1px solid #a07850; color: #f5deb3; font-size: 12.5px; pointer-events: none; }
+.camchip { position: absolute; left: 12px; top: 12px; z-index: 5; min-height: 32px; padding: 4px 6px 4px 12px; border-radius: 999px; background: rgba(26,20,14,.92); border: 1px solid #a07850; color: #f5deb3; font-size: 13px; display: flex; align-items: center; gap: 10px; }
+.camchip:hover { background: rgba(48,36,24,.95); border-color: #c69a6a; }
+.camchip b { background: #a07850; color: #1a140e; border-radius: 999px; padding: 2px 10px; font-weight: 600; }
 #varSel { display: none; min-height: 36px; padding: 4px 8px; font-weight: 600; }
 .lbl.dim { font-weight: 600; } .lbl.dim.bad { border-color: var(--bad); color: #fbcfe8; } .lbl.dim.ok { border-color: #166534; color: #bbf7d0; }
-.exchip { position: absolute; right: 12px; bottom: 8px; z-index: 5; min-height: 26px; padding: 2px 10px; font-size: 12px; border-radius: 999px; background: rgba(16,27,46,.9); color: var(--muted); }
+/* слева внизу стопкой: масштабная линейка, вертикальный масштаб, условные обозначения — справа место инструментам */
+.exchip { position: absolute; left: 12px; bottom: 30px; z-index: 5; min-height: 28px; padding: 2px 12px; font-size: 12px; border-radius: 999px; background: rgba(16,27,46,.9); color: var(--muted); }
 .exchip b { color: var(--sel); }
 #plEnd { flex: 1 1 100%; display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
 #plEnd button { min-height: 30px; padding: 3px 10px; font-size: 13px; }
 body.propsShown #player, body.propsShown #measure { left: calc(50% - var(--props) / 2); }
-body.propsShown .exchip { right: calc(var(--props) + 12px); }
+body.flying #legend, body.flying .exchip { display: none; }
 #pc { touch-action: none; }
 #errBody { margin: 8px 0; }
 #measure { left: 50%; transform: translateX(-50%); top: 12px; display: flex; gap: 12px; align-items: center; font-size: 13.5px; }
@@ -215,7 +218,7 @@ body.propsShown .exchip { right: calc(var(--props) + 12px); }
 /* ---------- подписи в 3D ---------- */
 .lbl { font-size: 12px; padding: 2px 7px; border-radius: 6px; background: rgba(5,10,22,.85); border: 1px solid var(--line); color: var(--text); white-space: nowrap; transform-origin: bottom center; }
 .lbl small { color: var(--muted); margin-left: 4px; }
-.lbl.depth { color: #fef08a; border-color: rgba(253,224,71,.4); }
+.lbl.depth { color: #fed7aa; border-color: rgba(255,138,31,.5); }
 .lbl.cx.bad { border-color: var(--bad); color: #fecdd3; } .lbl.cx.ok { border-color: #166534; }
 .lbl.end { border-color: var(--sel); text-align: center; } .lbl.end small { display: block; margin: 0; }
 .lbl.src { border-color: var(--bad); }
@@ -282,7 +285,14 @@ details.fmt code { color: var(--text); font-size: 12px; }
 details.fmt a { color: var(--accent); }
 .q { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--muted); font-size: 10px; margin-left: 3px; cursor: help; }
 .tblwrap { overflow-x: auto; }
-table.cmp th, table.cmp td { font-size: 12px; white-space: nowrap; }
+table.cmp th, table.cmp td { font-size: 12.5px; white-space: nowrap; }
+table.cmp th { text-align: right; color: var(--text); font-weight: 600; }
+table.cmp th small { display: block; color: #86efac; font-weight: 500; font-size: 11px; }
+table.cmp .cur { background: rgba(34,211,238,.08); }
+table.cmp th.click:hover { color: var(--accent); }
+table.wrap td:last-child { white-space: normal; }
+.row.between { justify-content: space-between; align-items: center; gap: 10px; }
+.touch { display: none; }
 #props .sub, .item .id { color: var(--muted); font-size: 11.5px; opacity: .8; }
 .item .id { display: block; }
 #props .sub { margin-top: 2px; word-break: break-all; }
@@ -309,7 +319,10 @@ table.cmp th, table.cmp td { font-size: 12px; white-space: nowrap; }
   #props { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: 50%; border-left: 0; border-top: 1px solid var(--line); border-radius: 16px 16px 0 0; box-shadow: 0 -10px 30px rgba(0,0,0,.5); z-index: 24; padding-top: 4px; transition: max-height .2s ease; }
   #props.min { max-height: 128px; overflow: hidden; }
   #props .acts { margin-top: 8px; }
-  #props .grab { display: block; width: 44px; height: 5px; border-radius: 3px; background: #475569; margin: 4px auto 8px; }
+  /* ручка листа — полоса во всю ширину высотой 24 px: тянуть и касаться удобно пальцем */
+  #props .grab { display: block; height: 24px; margin: -4px -14px 0; position: relative; touch-action: none; }
+  #props .grab::after { content: ""; position: absolute; left: 50%; top: 9px; width: 44px; height: 5px; margin-left: -22px; border-radius: 3px; background: #475569; }
+  #props .kind, #props .h b { touch-action: none; }
   body.propsShown #navR { right: 10px; }
   body.propsShown #profile { margin-right: 0; margin-bottom: 128px; }
   body.propsMin #props { transform: none; visibility: visible; }
@@ -333,8 +346,7 @@ table.cmp th, table.cmp td { font-size: 12px; white-space: nowrap; }
   .phead button { min-height: 30px; padding: 3px 10px; font-size: 13px; }
   .coach { left: 8px; right: 8px; width: auto; top: 8px; padding: 10px 12px; }
   .coach .cg { grid-template-columns: auto 1fr; font-size: 12.5px; gap: 4px 10px; margin: 6px 0 8px; }
-  .exchip { right: 8px; bottom: 8px; }
-  body.propsShown .exchip { right: 8px; }
+  .exchip { left: 8px; bottom: 30px; }
   .variants button { display: none; }
   #varSel { display: block; }
   body.flying #profile { display: none; }
@@ -343,7 +355,7 @@ table.cmp th, table.cmp td { font-size: 12px; white-space: nowrap; }
   body.flying .toolbar, body.flying #legend { display: none; }
   .sugg { position: fixed; top: 56px; left: 8px; right: 8px; }
   .sugg button { flex-direction: column; gap: 0; }
-  #legend { bottom: 30px; }
+  #legend { bottom: 62px; }
   .helpgrid { grid-template-columns: 1fr; }
 }
 
@@ -368,4 +380,13 @@ table.cmp th, table.cmp td { font-size: 12px; white-space: nowrap; }
   .search kbd { display: none; }
   /* масштаб — щипком, как в Картах на iPad: кнопки + и − не нужны */
   #zIn, #zOut, .toolbar hr { display: none; }
+  /* режим мыши «Орбита/Полёт» нужен только с мышью и клавиатурой */
+  #modeBtn { display: none; }
+  .menu kbd { display: none; }
+  .touch { display: block; }
+  p.touch { display: block; }
+  .kbm { display: none !important; }
+  .exchip { min-height: 36px; }
+  #legend > button { min-height: 40px; }
+  #legend { bottom: 76px; }
 }
