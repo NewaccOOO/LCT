@@ -57,6 +57,11 @@ public final class Router {
     private static final double BEND_EPS_RAD = 1e-5;
     /** Предел поочерёдных поворотов лучей в {@link #bend}: они сходятся за несколько кругов. */
     private static final int BEND_ROUNDS = 20;
+    private static final int BEND_GRID = 20;
+    private static final double BEND_GRID_MIN_M = 0.02;
+    private static final double BEND_DESCENT_M = 0.002;
+    private static final int BEND_DIRECTIONS = 16;
+    private static final int BEND_SCAN_LIMIT = 400;
     /** Вершина ближе этого к границе специальной части стоит на ней, см. {@link #drop}. */
     private static final double SPAN_EPS_M = 1e-3;
     /**
@@ -1331,7 +1336,84 @@ public final class Router {
                 && bendFits(zones, shape, x, 1, kept, ends, base, room, turn, ignored, apart, before, after)
                 && turnAllowed(ends[0], shape.get(x), ends[1]);
         Coordinate at = shape.get(x);
-        return fits && ends[0].distance(at) + at.distance(ends[1]) <= length + SHARPEN_EPS;
+        if (fits && ends[0].distance(at) + at.distance(ends[1]) <= length + SHARPEN_EPS) {
+            return true;
+        }
+        return scanned(zones, shape, x, new LineSegment(p, q), kept, length, ignored, apart, before, after);
+    }
+
+    private boolean scanned(ObstacleSet zones, List<Coordinate> shape, int x, LineSegment pair, boolean[] kept,
+            double length, Set<String> ignored, List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
+        Coordinate a = shape.get(x - 1);
+        Coordinate b = shape.get(x + 1);
+        double d = a.distance(b);
+        double half = length / 2;
+        double minor = Math.sqrt(Math.max(0, half * half - d * d / 4));
+        if (d == 0 || minor == 0) {
+            return false;
+        }
+        double ex = (b.x - a.x) / d;
+        double ey = (b.y - a.y) / d;
+        double step = Math.max(minor / BEND_GRID, BEND_GRID_MIN_M);
+        List<Coordinate> grid = new ArrayList<>();
+        for (double u = -half; u < half; u += step) {
+            for (double v = -minor; v < minor; v += step) {
+                if ((u / half) * (u / half) + (v / minor) * (v / minor) <= 1) {
+                    grid.add(new Coordinate((a.x + b.x) / 2 + u * ex - v * ey, (a.y + b.y) / 2 + u * ey + v * ex));
+                }
+            }
+        }
+        grid.sort(Comparator.comparingDouble(pair::distance));
+        int tried = 0;
+        for (Coordinate c : grid) {
+            if (tried >= BEND_SCAN_LIMIT) {
+                break;
+            }
+            if (!(a.distance(c) + c.distance(b) <= length + SHARPEN_EPS) || !vertexFits(shape, x, c)) {
+                continue;
+            }
+            tried++;
+            if (!pointFits(zones, shape, x, c, kept, ignored, apart, before, after)) {
+                continue;
+            }
+            Coordinate best = c;
+            for (double h = step; h > BEND_DESCENT_M; ) {
+                Coordinate next = null;
+                double shortest = a.distance(best) + best.distance(b);
+                for (int k = 0; k < BEND_DIRECTIONS; k++) {
+                    double t = 2 * Math.PI * k / BEND_DIRECTIONS;
+                    Coordinate probe = new Coordinate(best.x + h * Math.cos(t), best.y + h * Math.sin(t));
+                    double len = a.distance(probe) + probe.distance(b);
+                    if (len < shortest && vertexFits(shape, x, probe)
+                            && pointFits(zones, shape, x, probe, kept, ignored, apart, before, after)) {
+                        next = probe;
+                        shortest = len;
+                    }
+                }
+                if (next == null) {
+                    h /= 2;
+                } else {
+                    best = next;
+                }
+            }
+            shape.set(x, best);
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean vertexFits(List<Coordinate> shape, int x, Coordinate c) {
+        Coordinate a = shape.get(x - 1);
+        Coordinate b = shape.get(x + 1);
+        return a.distance(c) >= CUT_PIECE_M && c.distance(b) >= CUT_PIECE_M && turnAllowed(a, c, b)
+                && deflectionDeg(a, c, b) >= MIN_TURN_DEG;
+    }
+
+    private boolean pointFits(ObstacleSet zones, List<Coordinate> shape, int x, Coordinate c, boolean[] kept,
+            Set<String> ignored, List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
+        shape.set(x, c);
+        return linkFits(zones, shape, x, 0, kept, ignored, apart, before, after)
+                && linkFits(zones, shape, x, 1, kept, ignored, apart, before, after);
     }
 
     /**
@@ -1357,6 +1439,11 @@ public final class Router {
             return false;
         }
         shape.set(x, new Coordinate(ends[0].x + s * ux, ends[0].y + s * uy));
+        return linkFits(zones, shape, x, side, kept, ignored, apart, before, after);
+    }
+
+    private boolean linkFits(ObstacleSet zones, List<Coordinate> shape, int x, int side, boolean[] kept,
+            Set<String> ignored, List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
         int join = x - 1 + side;
         // поворот в новой вершине убывает с поворотом лучей и проверяется в конце, см. bent
         boolean outer = side == 0 ? join < 1 || turnAllowed(shape.get(join - 1), shape.get(join), shape.get(x))

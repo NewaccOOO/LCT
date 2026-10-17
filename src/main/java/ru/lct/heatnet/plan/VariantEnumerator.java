@@ -3778,8 +3778,9 @@ public final class VariantEnumerator {
      * Деревья варианта, где два соседних поворота в одну сторону на ребре при звене любой длины заменяет одна вершина
      * в лучшей точке, если путь не длиннее (толкование п. 5, {@link Router#sharpen} шаг Г). Рёбра с такими парами
      * доводятся по зонам своего Ду с поворотами в камерах на пути точки ({@link #sharpened}), сначала все рёбра
-     * дерева, а если так не выходит, по одному. Замена берётся, если S узла врезки не растёт, Ду рёбер не растут, а
-     * дерево не касается других.
+     * дерева, а если так не выходит, по одному. Ребро, найденное повтором поиска на графе фактического Ду, у которого
+     * граф есть только в широкой области, доводится по ней. Замена берётся, если S узла врезки не растёт, Ду рёбер не
+     * растут, а дерево не касается других.
      */
     private List<Tree> bent(List<Tree> trees) {
         long started = System.nanoTime();
@@ -3839,13 +3840,14 @@ public final class VariantEnumerator {
         Map<Integer, Fresh> found = new HashMap<>();
         for (int e : change) {
             int dn = dnByEdge.get(tree.edges.get(e));
-            Router router = shaper(region, area, dn);
+            Envelope zone = shaper(region, area, dn) == null ? region.wideArea : area;
+            Router router = shaper(region, zone, dn);
             if (router == null) {
                 return null;
             }
             LineString line = tree.edges.get(e).line;
             lines.put(e, line);
-            found.put(e, new Fresh(line, router, region.obstacles(dn, area)));
+            found.put(e, new Fresh(line, router, region.obstacles(dn, zone)));
         }
         Map<Integer, LineString> sharp = sharpened(tree, lines, found, true, true);
         if (sharp == null || sharp.entrySet().stream().allMatch(entry -> entry.getValue() == lines.get(entry.getKey()))) {
