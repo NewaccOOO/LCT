@@ -401,6 +401,9 @@ public final class Router {
         return bestTarget == null ? null : new Choice(bestTarget, bestVia, bestWeight, bestExtra, tied, pred);
     }
 
+    private static final int SQUARE_PATHS_MAX = 100_000;
+    private final Map<SquareKey, Coordinate[]> squarePaths = new java.util.concurrent.ConcurrentHashMap<>();
+
     public double[][] weights(List<Coordinate> points, Set<String> ignored) {
         int m = points.size();
         double[][] result = weights(points, points, ignored);
@@ -419,8 +422,11 @@ public final class Router {
         int m = targets.size();
         int n = nodes.size();
         double[][] toNodes = new double[m][];
+        int[][] visible = new int[m][];
         for (int j = 0; j < m; j++) {
-            toNodes[j] = nodeWeights(targets.get(j), ignored);
+            double[] toNode = nodeWeights(targets.get(j), ignored);
+            toNodes[j] = toNode;
+            visible[j] = java.util.stream.IntStream.range(0, n).filter(v -> !Double.isNaN(toNode[v])).toArray();
         }
         double[][] result = new double[sources.size()][m];
         java.util.stream.IntStream.range(0, sources.size()).parallel().forEach(i -> {
@@ -437,8 +443,8 @@ public final class Router {
                 double direct = obstacles.edgeWeight(t, source, ignored, false, false, hint);
                 double weight = Double.isNaN(direct) ? Double.POSITIVE_INFINITY : direct;
                 double[] w = toNodes[j];
-                for (int v = 0; v < n; v++) {
-                    if (Double.isNaN(w[v]) || table.dist[v] + w[v] >= weight) {
+                for (int v : visible[j]) {
+                    if (table.dist[v] + w[v] >= weight) {
                         continue;
                     }
                     int p = table.pred[v];
@@ -2218,6 +2224,97 @@ public final class Router {
      * Coordinate, что в coords: keep сравнивается по ссылке.
      */
     private List<Coordinate> squarePath(ObstacleSet zones, List<Coordinate> coords, int i, int j, Set<String> ignored,
+            List<LineSegment> apart, Coordinate before, List<Coordinate> after, double axis, double turnM, boolean exit) {
+        Coordinate in = i > 0 ? coords.get(i - 1) : before;
+        List<Coordinate> outs = j + 1 < coords.size() ? List.of(coords.get(j + 1)) : after;
+        Envelope box = new Envelope();
+        for (int v = i; v <= j; v++) {
+            box.expandToInclude(coords.get(v));
+        }
+        Coordinate center = box.centre();
+        double reach = (Math.hypot(box.getWidth() / 2 + SQUARE_MARGIN_M, box.getHeight() / 2 + SQUARE_MARGIN_M) + SQUARE_MARGIN_M)
+                * Math.sqrt(2) + 2 * CUT_APART_M;
+        List<LineSegment> near = new ArrayList<>();
+        for (LineSegment segment : apart) {
+            if (segment.distance(center) <= reach) {
+                near.add(segment);
+            }
+        }
+        double[] values = new double[2 * (j - i + 2 + outs.size() + 2 * near.size()) + 3];
+        int k = 0;
+        for (int v = i; v <= j; v++) {
+            values[k++] = coords.get(v).x;
+            values[k++] = coords.get(v).y;
+        }
+        values[k++] = in == null ? Double.NaN : in.x;
+        values[k++] = in == null ? Double.NaN : in.y;
+        for (Coordinate out : outs) {
+            values[k++] = out.x;
+            values[k++] = out.y;
+        }
+        for (LineSegment segment : near) {
+            values[k++] = segment.p0.x;
+            values[k++] = segment.p0.y;
+            values[k++] = segment.p1.x;
+            values[k++] = segment.p1.y;
+        }
+        values[k++] = axis;
+        values[k++] = turnM;
+        values[k] = j - i;
+        SquareKey key = new SquareKey(zones, ignored, exit, values);
+        Coordinate[] known = squarePaths.get(key);
+        if (known == null) {
+            List<Coordinate> path = searchSquarePath(zones, coords, i, j, ignored, apart, before, after, axis, turnM, exit);
+            if (squarePaths.size() < SQUARE_PATHS_MAX) {
+                squarePaths.putIfAbsent(key, path == null ? new Coordinate[0]
+                        : path.stream().map(Coordinate::new).toArray(Coordinate[]::new));
+            }
+            return path;
+        }
+        if (known.length == 0) {
+            return null;
+        }
+        List<Coordinate> path = new ArrayList<>(known.length);
+        path.add(coords.get(i));
+        for (int v = 1; v + 1 < known.length; v++) {
+            path.add(new Coordinate(known[v]));
+        }
+        path.add(coords.get(j));
+        return path;
+    }
+
+    private static final class SquareKey {
+        final ObstacleSet zones;
+        final Set<String> ignored;
+        final boolean exit;
+        final double[] values;
+        final int hash;
+
+        SquareKey(ObstacleSet zones, Set<String> ignored, boolean exit, double[] values) {
+            this.zones = zones;
+            this.ignored = ignored;
+            this.exit = exit;
+            this.values = values;
+            this.hash = (System.identityHashCode(zones) * 31 + ignored.hashCode()) * 31 + Arrays.hashCode(values) + (exit ? 1 : 0);
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (!(other instanceof SquareKey)) {
+                return false;
+            }
+            SquareKey key = (SquareKey) other;
+            return zones == key.zones && exit == key.exit && hash == key.hash && Arrays.equals(values, key.values)
+                    && ignored.equals(key.ignored);
+        }
+
+        @Override
+        public int hashCode() {
+            return hash;
+        }
+    }
+
+    private List<Coordinate> searchSquarePath(ObstacleSet zones, List<Coordinate> coords, int i, int j, Set<String> ignored,
             List<LineSegment> apart, Coordinate before, List<Coordinate> after, double axis, double turnM, boolean exit) {
         Coordinate p = coords.get(i);
         Coordinate q = coords.get(j);
