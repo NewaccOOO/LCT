@@ -42,12 +42,10 @@ header.top { display: flex; align-items: center; gap: 10px; padding: 0 12px; bac
 .sugg button.act, .sugg button:hover { background: var(--card2); }
 .sugg small { color: var(--muted); white-space: nowrap; }
 .variants { display: flex; gap: 6px; }
-.panebtns { display: flex; gap: 2px; margin-left: auto; }
-.panebtns + #helpBtn { margin-left: 0; }
+#helpBtn { margin-left: auto; }
 header .icon { background: none; border-color: transparent; color: var(--muted); }
 header .icon:hover { background: var(--card2); color: var(--text); }
 header .icon[aria-pressed=true] { color: var(--text); }
-#mapBtn[aria-pressed=true] { color: var(--accent); background: #0c3550; }
 header .icon:disabled { opacity: .3; }
 .variants button { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.1; padding: 4px 12px; min-height: 40px; }
 .variants small { color: var(--muted); font-size: 11.5px; }
@@ -77,7 +75,7 @@ h3 { font-size: 14px; margin: 14px 0 6px; }
 #stage { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; }
 #view { position: relative; flex: 1; min-height: 0; overflow: hidden; touch-action: none; }
 #view > canvas { display: block; width: 100% !important; height: 100% !important; }
-.labels { position: absolute; inset: 0; pointer-events: none; }
+.labels { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
 
 /* ---------- обзор ---------- */
 .kpi { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -158,9 +156,6 @@ body.propsShown #profile { margin-right: var(--props); }
 #navR > * { pointer-events: auto; }
 .cubewrap { position: relative; width: 128px; height: 128px; }
 .viewcube-canvas { width: 128px !important; height: 128px !important; display: block; }
-.cubewrap .home { position: absolute; left: -2px; top: -2px; width: 32px; height: 32px; min-height: 0; padding: 0; display: grid; place-items: center; background: rgba(16,27,46,.9); z-index: 2; }
-.cubewrap .home svg { width: 17px; height: 17px; }
-.cubewrap .back { top: 34px; }
 #v2d { gap: 0; line-height: 1.05; font-size: 12px; font-weight: 700; }
 #v2d span { color: var(--muted); opacity: .55; }
 #v2d:not(.is2d) .v3, #v2d.is2d .v2 { color: var(--accent); opacity: 1; }
@@ -251,8 +246,6 @@ body.flying #legend, body.flying .exchip { display: none; }
 #status { display: flex; align-items: center; gap: 16px; padding: 0 12px; background: var(--panel); border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
 #stHint b { color: var(--text); font-weight: 600; }
 #stHover { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
-.chip { border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
-.chip.fly { border-color: var(--sel); color: var(--sel); }
 
 /* ---------- уведомления и диалоги ---------- */
 #toasts { position: fixed; left: 50%; transform: translateX(-50%); bottom: 40px; z-index: 80; display: grid; gap: 8px; justify-items: center; pointer-events: none; }
@@ -326,16 +319,12 @@ table.wrap td:last-child { white-space: normal; }
   body.propsShown #navR { right: 10px; }
   body.propsShown #profile { margin-right: 0; margin-bottom: 128px; }
   body.propsMin #props { transform: none; visibility: visible; }
-  .panebtns { display: none; }
   body.flying #props { max-height: 70px; overflow: hidden; }
   .acts .only-m { display: inline-flex; }
   #player { left: 8px; right: 8px; width: auto; transform: none; flex-wrap: wrap; bottom: 8px; }
   #player input[type=range] { flex: 1 1 100%; order: -1; }
   .mact { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 10px 10px 0; }
   .mact button { font-size: 13px; padding: 6px 8px; }
-  #modeBtn { display: none; }
-  .cubewrap .home { width: 40px; height: 40px; }
-  .cubewrap .back { top: 46px; }
   .cubewrap { transform: scale(.75); transform-origin: top right; margin-bottom: -32px; }
   .toolbar button { width: 46px; min-height: 38px; }
   #profile { height: 300px; }
@@ -371,8 +360,6 @@ table.wrap td:last-child { white-space: normal; }
   .tog { min-height: 44px; }
   .tog input { width: 22px; height: 22px; }
   .item { padding: 12px 14px; }
-  .cubewrap .home { width: 42px; height: 42px; }
-  .cubewrap .back { top: 48px; }
   #legend > button, .phead button, .note button, #plEnd button { min-height: 40px; }
   #props .acts button { min-height: 44px; }
   .menu button { min-height: 46px; }
@@ -380,9 +367,6 @@ table.wrap td:last-child { white-space: normal; }
   #stHint, #stHover { display: none; }
   .search kbd { display: none; }
   /* масштаб — щипком, как в Картах на iPad: кнопки + и − не нужны */
-  #zIn, #zOut, .toolbar hr { display: none; }
-  /* режим мыши «Орбита/Полёт» нужен только с мышью и клавиатурой */
-  #modeBtn { display: none; }
   .menu kbd { display: none; }
   .touch { display: block; }
   p.touch { display: block; }

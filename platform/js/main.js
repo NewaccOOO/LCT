@@ -463,6 +463,7 @@ function setEx(ex) {
 
 // ---------- выбор ----------
 function clearSel() {
+  stopFly();
   S.sel = null; S.route = null;
   viewer.highlight(null);
   viewer.marker('selpt', null);
@@ -726,18 +727,17 @@ function showProps(sel) {
   if (isMobile()) { document.body.classList.remove('leftOpen'); el.classList.toggle('min', !!S.route); }
   const hasRoute = !!S.route;
   el.innerHTML = `<div class="grab" id="pxGrab" title="Свернуть или развернуть"></div><div class="kind">${esc(d.kind)}</div>
-    <div class="h"><b>${esc(d.title)}</b><button class="icon" id="pxMin" aria-label="Свернуть карточку" title="Свернуть карточку">${isMobile() ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>' : '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M14.5 4v16"/></svg>'}</button><button class="icon" id="pxX" title="Закрыть (Esc)" aria-label="Закрыть">×</button></div>
+    <div class="h"><b>${esc(d.title)}</b>${isMobile() ? '<button class="icon" id="pxMin" aria-label="Свернуть карточку" title="Свернуть карточку"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>' : ''}<button class="icon" id="pxX" title="Закрыть (Esc)" aria-label="Закрыть">×</button></div>
     ${d.sub ? `<div class="sub">${esc(d.sub)}</div>` : ''}
     <div class="acts">
       <button id="pxGo" class="primary" title="Навести камеру на объект (F)">Показать</button>
-      <button id="pxClip" title="Оставить на сцене только куб вокруг объекта (B)">Срез вокруг</button>
+      <button id="pxClip" title="Оставить на сцене только куб вокруг объекта (B)">${S.clip ? 'Убрать срез' : 'Срез вокруг'}</button>
       ${hasRoute ? '<button id="pxFly" title="Пролёт камерой вдоль трассы (P)">Пролёт</button><button id="pxProf" title="Продольный профиль трассы">Профиль</button>' : ''}
-      <button id="pxLink" class="wide">Скопировать ссылку</button>
     </div>
     <table>${d.rows.filter(r => r[1] != null && r[1] !== '—').map(r => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`).join('')}</table>
     ${d.problem ? `<div class="note prob">${d.problem}</div>` : ''}${d.info ? `<details class="note warn"><summary>${esc(d.info.t)}</summary>${esc(d.info.more)}</details>` : ''}${d.fix ? `<div class="note fix"><b>Как исправить</b><br>${d.fix}</div>` : ''}${d.ok ? `<div class="note fix">${esc(d.ok)}</div>` : ''}`;
   $('#pxX').onclick = () => clearSel();
-  $('#pxMin').onclick = () => toggleCard();
+  if ($('#pxMin')) $('#pxMin').onclick = () => toggleCard();
   layout();
   // лист на телефоне: касание или смахивание заголовка — свернуть/развернуть
   const head = [$('#pxGrab'), el.querySelector('.kind'), el.querySelector('.h b')];
@@ -748,7 +748,7 @@ function showProps(sel) {
     h.onpointerup = e => { if (y0 == null || !isMobile()) return; const dy = e.clientY - y0; if (dy > 25) el.classList.add('min'); if (dy < -25) el.classList.remove('min'); y0 = null; };
   }
   $('#pxGo').onclick = () => frameSel();
-  $('#pxClip').onclick = () => toggleClip(true);
+  $('#pxClip').onclick = () => toggleClip();
   if (hasRoute) {
     $('#pxFly').onclick = () => startFly();
     $('#pxProf').onclick = () => { if ($('#profile').hidden) { openProfile(); if (isMobile()) el.classList.add('min'); } else closeProfile(); };
@@ -758,7 +758,6 @@ function showProps(sel) {
   // «Показать» у проблем трассы — к первому месту, как переход к результату поиска
   const go = $('#props [data-gocx]');
   if (go) go.onclick = () => { const R = S.route, c = R?.segs.flatMap(s => s.cx).find(c => c.ok === false) || S.v?.crossings.find(c => c.type === 'segment' && R?.segs.includes(c.seg)); if (c) selectCrossing(c); };
-  $('#pxLink').onclick = e => copyLink(e.target);
 }
 
 // ---------- профиль ----------
@@ -766,7 +765,7 @@ function openProfile() {
   const R = S.route;
   $('#profile').hidden = false;
   const o = S.model.oks.find(x => x.id === R.end);
-  $('#pTitle').innerHTML = `Профиль: ${esc(nodeLabel(R.start))} → ${esc(o ? o.label : R.end)} · ${meters(R.len)} · ${rub(R.cost)} · ` +
+  $('#pTitle').innerHTML = `Профиль: ${esc(nodeLabel(R.start))} → ${esc(o ? o.label : nodeLabel(R.end))} · ${meters(R.len)} · ${rub(R.cost)} · ` +
     (R.bad ? `<span style="color:#fda4af">${R.bad} ${plural(R.bad, 'проблема', 'проблемы', 'проблем')}</span>` : '<span style="color:#86efac">без проблем</span>');
   const at = S.focusAt;
   S.focusAt = null;
@@ -928,17 +927,14 @@ function toggle2d() {
 }
 function updateModeUi() {
   const fly = rig.mode === 'fly';
-  $('#modeBtn').classList.toggle('on', fly);
-  $('#modeT').textContent = fly ? 'Полёт' : 'Орбита';
-  $('#modeIco').innerHTML = fly ? '<path d="M2 12 22 3l-6 19-4-8z"/><path d="m12 14 4-4"/>' : '<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/>';
   status();
 }
 function setMode(m, quiet = false) { rig.mode = m; updateModeUi(); if (!quiet) toast(m === 'fly' ? 'Режим «Полёт»: мышь поворачивает взгляд, W A S D — лететь, Q и E — вниз и вверх, Esc — выйти' : 'Режим «Орбита»: левая кнопка двигает сцену, правая вращает', 'info', 2600); }
 function status(extra) {
   const fly = rig.mode === 'fly';
   $('#stHint').innerHTML = extra ? `<b>${esc(extra)}</b>` : S.measure ? '<b>Линейка:</b> щёлкните две точки · Esc — выйти'
-    : fly ? '<span class="chip fly">Полёт</span> <b>мышь</b> поворачивает взгляд · <b>WASD</b> лететь · <b>Q/E</b> вниз/вверх · <b>Shift</b> быстрее'
-      : '<span class="chip">Орбита</span> <b>левая</b> двигать · <b>правая</b> вращать · <b>колесо</b> масштаб · <b>WASD</b> лететь';
+    : fly ? '<b>Полёт:</b> <b>мышь</b> поворачивает взгляд · <b>WASD</b> лететь · <b>Q/E</b> вниз/вверх · <b>Shift</b> быстрее · <b>Esc</b> выйти'
+      : '<b>левая</b> двигать · <b>правая</b> вращать · <b>колесо</b> масштаб · <b>WASD</b> лететь';
   if (extra) { clearTimeout(status.t); status.t = setTimeout(() => status(), 2200); }
 }
 function updateScale() {
@@ -968,7 +964,7 @@ function boxAround(P, r) { return [P.x - r, P.y - r, Math.min(P.z, 0) - 12 * vie
 function setClip(box) {
   S.clip = box;
   viewer.setClipBox(box);
-  $('#clipBtn').classList.toggle('on', !!box);
+  if ($('#pxClip')) $('#pxClip').textContent = box ? 'Убрать срез' : 'Срез вокруг';
   if (box) status('Срез: видно только то, что внутри рамки · [ ] — меньше/больше · B — выключить');
 }
 function toggleClip(force) {
@@ -1409,15 +1405,10 @@ addEventListener('keydown', e => {
 
 // ---------- кнопки на сцене ----------
 $('#homeBtn').onclick = () => home();
-$('#camChip').onclick = () => home();
+$('#camChip').onclick = () => rig.lookAtFrom(new THREE.Vector3(rig.pos.x + Math.sin(rig.yaw) * 40, rig.pos.y + Math.cos(rig.yaw) * 40, 0), rig.yaw, -45 * D, 60);
 function zoomStep(k) { const P = rig.center(); rig.animateTo({pos: P.clone().add(rig.pos.clone().sub(P).multiplyScalar(k)), yaw: rig.yaw, pitch: rig.pitch, back: true}, 300); }
-$('#zIn').onclick = () => zoomStep(0.5);
-$('#zOut').onclick = () => zoomStep(2);
-$('#backBtn').onclick = () => backView();
 $('#v2d').onclick = () => toggle2d();
-$('#modeBtn').onclick = () => setMode(rig.mode === 'fly' ? 'orbit' : 'fly');
 $('#xrayBtn').onclick = () => setXray(!S.xray);
-$('#clipBtn').onclick = () => toggleClip();
 $('#measureBtn').onclick = () => setMeasure(!S.measure);
 $('#helpBtn').onclick = () => $('#helpDlg').showModal();
 $('#errOpen').onclick = () => { $('#errDlg').close(); openDlg('files'); };
@@ -1432,9 +1423,6 @@ function layout() {
   const cardOn = sel && !b.classList.contains('propsMin');
   b.classList.toggle('propsShown', cardOn);
   const lb = $('#leftBtn'); lb.setAttribute('aria-pressed', leftOn); lb.title = leftOn ? 'Свернуть панель слева' : 'Показать панель слева';
-  const rb = $('#rightBtn'); rb.disabled = !sel; rb.setAttribute('aria-pressed', cardOn);
-  rb.title = !sel ? 'Карточка справа появится, когда выберете объект' : cardOn ? 'Свернуть карточку справа' : 'Показать карточку справа';
-  const mb = $('#mapBtn'); mb.setAttribute('aria-pressed', !!mapOnly); mb.title = mapOnly ? 'Вернуть панели (Ctrl+\\)' : 'Только карта: свернуть все панели (Ctrl+\\)';
   const pmin = $('#profile').classList.contains('min'), pm = $('#pMin');
   pm.title = pmin ? 'Развернуть профиль' : 'Свернуть профиль'; pm.setAttribute('aria-label', pm.title); pm.setAttribute('aria-expanded', !pmin);
   const px = $('#pxMin');
@@ -1474,8 +1462,6 @@ function setMapOnly(on) {
   layout();
 }
 $('#leftBtn').onclick = () => toggleLeft();
-$('#rightBtn').onclick = () => toggleCard();
-$('#mapBtn').onclick = () => setMapOnly(!mapOnly);
 $('#pMin').onclick = () => toggleProfileMin();
 $('#pTitle').onclick = () => toggleProfileMin();
 // отметка вертикального масштаба прямо на сцене: щелчок — ×1 «как есть» или обратно растянуть

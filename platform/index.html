@@ -33,10 +33,6 @@
     <div id="sugg" class="sugg" role="listbox" hidden></div>
   </div>
   <div class="variants" id="variants" role="tablist" aria-label="Варианты решения"></div>
-  <div class="panebtns">
-    <button class="icon" id="mapBtn" aria-label="Только карта" title="Только карта: свернуть все панели (Ctrl+\)" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
-    <button class="icon" id="rightBtn" aria-label="Карточка справа" title="Карточка справа появится, когда выберете объект" aria-pressed="false" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M14.5 4v16"/></svg></button>
-  </div>
   <button class="icon" id="helpBtn" title="Справка и клавиши (?)" aria-label="Справка">?</button>
 </header>
 
@@ -62,18 +58,13 @@
     <div id="view">
       <div id="navR">
       <div class="cubewrap">
-        <button class="home" id="homeBtn" title="Исходный вид (Home)" aria-label="Исходный вид"><svg viewBox="0 0 24 24"><path d="M3 11 12 3l9 8"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg></button>
-        <button class="home back" id="backBtn" title="Предыдущий вид (Backspace, Alt+←)" aria-label="Предыдущий вид"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
         <div id="cube"></div>
       </div>
       <div class="toolbar" role="toolbar" aria-label="Навигация">
-        <button id="zIn" title="Приблизить (+)" aria-label="Приблизить"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
-        <button id="zOut" title="Отдалить (−)" aria-label="Отдалить"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+        <button id="homeBtn" title="Общий вид: вся новая сеть сверху, на север (H). Предыдущий вид — Backspace" aria-label="Общий вид"><svg viewBox="0 0 24 24"><path d="M3 11 12 3l9 8"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg><small>Общий вид</small></button>
         <button id="v2d" title="Вид сверху или 3D-наклон (T)" aria-label="2D или 3D"><span class="v2">2D</span><span class="v3">3D</span></button>
         <hr>
-        <button id="modeBtn" title="Режим мыши: орбита или полёт (V)" aria-label="Режим мыши"><svg id="modeIco" viewBox="0 0 24 24"></svg><small id="modeT">Орбита</small></button>
         <button id="xrayBtn" title="Рентген: земля и здания прозрачные (X)" aria-label="Рентген"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><small>Рентген</small></button>
-        <button id="clipBtn" title="Срез: оставить только то, что вокруг выбранного (B)" aria-label="Срез"><svg viewBox="0 0 24 24"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M12 12v9M12 12l9-4.5M12 12 3 7.5" opacity=".5"/></svg><small>Срез</small></button>
         <button id="measureBtn" title="Линейка: измерить расстояние (M)" aria-label="Линейка"><svg viewBox="0 0 24 24"><path d="m3 17 14-14 4 4L7 21z"/><path d="m7 9 2 2m1-5 2 2m1-5 2 2M4 12l2 2"/></svg><small>Линейка</small></button>
       </div>
       </div>
@@ -89,7 +80,7 @@
       </div>
       <div id="legend" class="floatcard"><button id="legBtn" aria-expanded="false">Условные обозначения <span class="caret">▸</span></button><div id="legBody" hidden></div></div>
       <div id="scale" aria-hidden="true"><div class="bar"></div><span></span></div>
-      <button id="camChip" class="camchip" hidden title="Вернуться к общему виду (H)"></button>
+      <button id="camChip" class="camchip" hidden title="Подняться над землёй над этим же местом"></button>
       <button id="exChip" class="exchip" title="Глубина растянута, чтобы трубы на 3 м было видно на фоне района. Диаметры не меняются. Щёлкните, чтобы переключить на настоящий масштаб и обратно"></button>
       <div id="measure" class="floatcard" hidden></div>
       <div id="player" class="floatcard" hidden>
@@ -141,18 +132,18 @@
         <dl><dt>Один палец</dt><dd>двигать карту</dd><dt>Щипок</dt><dd>приблизить или отдалить</dd><dt>Повернуть двумя</dt><dd>вращать</dd><dt>Два пальца вверх-вниз</dt><dd>наклонить</dd>
         <dt>Двойное касание</dt><dd>приблизить сюда</dd><dt>Долгое нажатие</dt><dd>меню точки: что здесь, измерить, координаты</dd><dt>Касание объекта</dt><dd>карточка, трасса и профиль</dd></dl></section>
       <section class="touch"><h3>Кнопки на карте</h3>
-        <dl><dt>Куб видов</dt><dd>грань — вид с этой стороны, ребро или угол — под 45°</dd><dt>Домик</dt><dd>общий вид</dd><dt>Стрелка под домиком</dt><dd>предыдущий вид</dd><dt>2D / 3D</dt><dd>вид сверху или наклон</dd>
-        <dt>Рентген</dt><dd>земля и здания прозрачные</dd><dt>Срез</dt><dd>только то, что вокруг выбранного</dd><dt>Линейка</dt><dd>расстояние между двумя точками</dd><dt>Кнопки в шапке справа</dt><dd>свернуть панели или оставить только карту</dd></dl></section>
+        <dl><dt>Куб видов</dt><dd>грань — вид с этой стороны, ребро или угол — под 45°</dd><dt>Общий вид</dt><dd>вся новая сеть сверху, на север</dd><dt>2D / 3D</dt><dd>вид сверху или наклон</dd>
+        <dt>Рентген</dt><dd>земля и здания прозрачные</dd><dt>Линейка</dt><dd>расстояние между двумя точками</dd><dt>Срез вокруг</dt><dd>в карточке выбранного объекта: оставить только то, что рядом с ним</dd></dl></section>
       <section class="kbm"><h3>Как в Картах</h3>
         <dl><dt>Левая кнопка, тащить</dt><dd>двигать сцену</dd><dt>Правая кнопка, тащить</dt><dd>вращать и наклонять вокруг точки под курсором</dd>
         <dt>Колесо</dt><dd>приблизить к курсору</dd><dt>Двойной щелчок</dt><dd>приблизить сюда</dd><dt>Правый щелчок</dt><dd>меню: что здесь, измерить, координаты</dd>
         <dt>Тачпад</dt><dd>два пальца — двигать, щипок — масштаб, Option (Alt) + два пальца — вращать</dd><dt>Телефон</dt><dd>палец — двигать, щипок — масштаб, повернуть двумя — вращать, два пальца вверх-вниз — наклон</dd></dl></section>
       <section class="kbm"><h3>Как в AutoCAD и Revit</h3>
         <dl><dt>Средняя кнопка</dt><dd>двигать</dd><dt>Shift + средняя / Shift + левая</dt><dd>вращать</dd><dt>Куб видов</dt><dd>грань — вид с этой стороны, ребро или угол — под 45°, тащить — вращать</dd>
-        <dt>Домик, Home или H</dt><dd>исходный вид</dd><dt>Стрелка под домиком, Backspace</dt><dd>предыдущий вид, как Zoom Previous</dd><dt>Двойной щелчок средней</dt><dd>показать всё</dd><dt>Срез (B)</dt><dd>секущий бокс вокруг выбранного; [ и ] — меньше и больше</dd></dl></section>
+        <dt>Общий вид, Home или H</dt><dd>исходный вид</dd><dt>Backspace</dt><dd>предыдущий вид, как Zoom Previous</dd><dt>Двойной щелчок средней</dt><dd>показать всё</dd><dt>B</dt><dd>срез: секущий бокс вокруг выбранного; [ и ] — меньше и больше</dd></dl></section>
       <section class="kbm"><h3>Как в играх и Unity</h3>
         <dl><dt>W A S D, стрелки</dt><dd>лететь вперёд, назад, вбок</dd><dt>Q / E</dt><dd>вниз / вверх</dd><dt>Shift</dt><dd>быстрее</dd>
-        <dt>Режим «Полёт» (V)</dt><dd>мышь поворачивает взгляд на месте; правая кнопка + колесо — скорость; Esc — выйти</dd><dt>F</dt><dd>показать выбранное</dd></dl></section>
+        <dt>V</dt><dd>режим полёта: мышь поворачивает взгляд на месте; правая кнопка + колесо — скорость; Esc — выйти</dd><dt>F</dt><dd>показать выбранное</dd></dl></section>
       <section class="kbm"><h3>Клавиши</h3>
         <dl><dt>/ или Ctrl K</dt><dd>поиск</dd><dt>Ctrl \</dt><dd>только карта: свернуть и вернуть панели</dd><dt>Щелчок по трубе</dt><dd>трасса до здания и профиль</dd><dt>P</dt><dd>пролёт по выбранной трассе</dd>
         <dt>X</dt><dd>рентген: земля и здания прозрачные</dd><dt>M</dt><dd>линейка</dd><dt>T</dt><dd>вид сверху или 3D</dd><dt>1–9</dt><dd>вариант решения</dd><dt>Esc</dt><dd>снять выбор, выйти из режима</dd></dl></section>

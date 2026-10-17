@@ -318,6 +318,8 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
         nodes.push(nd);
       }
       nd.depth = Math.max(nd.depth ?? 0, d + s.row.h);
+      nd.a0 = Math.min(nd.a0 ?? Infinity, d + s.row.h / 2);
+      nd.a1 = Math.max(nd.a1 ?? -Infinity, d + s.row.h / 2);
       nd.dn = Math.max(nd.dn || 0, s.p.diameter || 0);
     }
   }

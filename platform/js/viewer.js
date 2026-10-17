@@ -6,7 +6,7 @@ import {LineSegments2} from 'three/addons/lines/LineSegments2.js';
 import {LineSegmentsGeometry} from 'three/addons/lines/LineSegmentsGeometry.js';
 import {LineMaterial} from 'three/addons/lines/LineMaterial.js';
 import {CSS2DRenderer, CSS2DObject} from 'three/addons/renderers/CSS2DRenderer.js';
-import {UTILITIES, SURFACES, BUILDING_KEYS, NODE_TYPES, nodeName} from './model.js';
+import {UTILITIES, SURFACES, BUILDING_KEYS, NODE_TYPES, DIAMETERS, nodeName} from './model.js';
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
@@ -15,7 +15,7 @@ const col = h => new THREE.Color(h);
 export const PALETTE = {
   // проблема — малиновая: красный уже занят существующей теплосетью, один цвет — одно значение
   selection: '#ff8a1f', problem: '#ff2fd1', ok: '#22c55e', special: '#fb923c',
-  connected: '#22c55e', unconnected: '#f43f5e', future: '#e8dcc0', chamberOld: '#64748b', chamberNew: '#38bdf8',
+  connected: '#22c55e', unconnected: '#f43f5e', future: '#e8dcc0', chamberOld: '#94a3b8', chamberNew: '#38bdf8',
 };
 // Новая сеть — свой бирюзовый цвет, которого нет ни у одной существующей сети (вода синяя, кабель фиолетовый,
 // теплосеть красная). Ду меняет только светлоту: тонкие — светлее, магистрали — насыщеннее; толщина — настоящая
@@ -23,6 +23,8 @@ export function dnColor(dn) {
   const t = Math.min(1, Math.max(0, Math.log2((dn || 50) / 50) / Math.log2(28)));
   return new THREE.Color().setHSL(0.49, 0.95, 0.72 - 0.26 * t);
 }
+
+const EXISTING_AXIS = [UTILITIES.heat_network.top + DIAMETERS[0].h / 2, UTILITIES.heat_network.top + DIAMETERS[DIAMETERS.length - 1].h / 2];
 
 // ---------- геометрия ----------
 // Трубы: цилиндр на каждый прямой кусок полилинии, экземплярами. Ось цилиндра three — Y.
@@ -230,7 +232,7 @@ export class Viewer {
     for (const l of this.g.utilLines.children) l.material.opacity = 0.55 - 0.35 * k;
     // выше 600 м трубы существующих сетей тоньше пикселя — рисуем только линии (в разы меньше треугольников)
     this.g.utilities.visible = h < 600;
-    this.g.existing.visible = h < 1500 && this.opts.layers['n:heat_chamber'] !== false;
+    this.g.existing.visible = h < 600 && this.opts.layers['n:heat_chamber'] !== false;
     const under = this.camera.position.z < 0;
     if (under !== this._under) {
       this._under = under;
@@ -402,7 +404,7 @@ export class Viewer {
     }
     // существующие камеры: колодец от крышки до камеры у трубы
     const ch = M.points.heat_chamber || [];
-    if (ch.length) this.addWells(this.g.existing, ch.map(c => ({xy: c.xy, depth: UTILITIES.heat_network.top + 0.5, color: PALETTE.chamberOld, ref: c, kind: 'chamber'})));
+    if (ch.length) this.addWells(this.g.existing, ch.map(c => ({xy: c.xy, a0: EXISTING_AXIS[0], a1: EXISTING_AXIS[1], color: PALETTE.chamberOld, ref: c, kind: 'chamber'})));
     // источник: высокая труба ТЭЦ — ориентир, видно издалека
     for (const s of M.points.source || []) {
       const m = new THREE.Mesh(new THREE.CylinderGeometry(4, 7, 90, 20), this.material('lambert', {color: '#f43f5e'}));
@@ -423,16 +425,16 @@ export class Viewer {
   addWells(group, wells) {
     const ex = this.ex, boxes = [], shafts = [], lids = [];
     for (const w of wells) {
-      const top = Math.max(w.depth - 1.6, 0.6), bot = w.depth + 0.4;
-      boxes.push({p: [w.xy[0], w.xy[1], -(top + bot) / 2 * ex], s: [2.2, 2.2, (bot - top) * ex], color: w.color});
-      shafts.push({a: [w.xy[0], w.xy[1], 0], b: [w.xy[0], w.xy[1], -top * ex], r: 0.38, color: w.color});
+      const zTop = Math.min(-w.a0 * ex + 1.1, -0.4), zBot = -w.a1 * ex - 1.1;
+      boxes.push({p: [w.xy[0], w.xy[1], (zTop + zBot) / 2], s: [2.2, 2.2, zTop - zBot], color: w.color});
+      shafts.push({a: [w.xy[0], w.xy[1], 0], b: [w.xy[0], w.xy[1], zTop], r: 0.38, color: w.color});
       lids.push({a: [w.xy[0], w.xy[1], 0], b: [w.xy[0], w.xy[1], 0.12], r: 0.6, color: w.color});
-      this.pickItems.push({kind: w.kind, a: [w.xy[0], w.xy[1], 0.1], b: [w.xy[0], w.xy[1], -bot * ex], r: 1.4, ref: w.ref});
+      this.pickItems.push({kind: w.kind, a: [w.xy[0], w.xy[1], 0.1], b: [w.xy[0], w.xy[1], zBot], r: 1.4, ref: w.ref});
     }
     const mat = this.material('standard', {color: 0xffffff, roughness: 0.8, metalness: 0});
     // камеры полупрозрачные: трубы внутри и за ними видны
     const bm = this.material('standard', {color: 0xffffff, roughness: 0.8, metalness: 0, transparent: true, opacity: 0.45, depthWrite: false});
-    const b = boxMesh(boxes, bm); b.name = 'wells'; b.renderOrder = 12; group.add(b);
+    const b = boxMesh(boxes, bm); b.name = 'wells'; b.renderOrder = 19; group.add(b);
     const s = tubeMesh(shafts, {radial: 10, material: mat, overlap: false}); group.add(s);
     const l = tubeMesh(lids, {radial: 16, material: this.material('standard', {color: 0xffffff, roughness: 0.4, metalness: 0.6}), overlap: false}); group.add(l);
   }
@@ -509,7 +511,9 @@ export class Viewer {
         continue;
       }
       const color = nd.type === 'existing_chamber' ? PALETTE.ok : (NODE_TYPES[nd.type] || {}).color || PALETTE.chamberNew;
-      wells.push({xy: nd.xy, depth: nd.depth ?? 3.3, color, ref: nd, kind: 'node'});
+      const onExisting = nd.type === 'existing_chamber' || nd.p.existing_object_id != null;
+      const a0 = Math.min(nd.a0 ?? 3.1, onExisting ? EXISTING_AXIS[0] : Infinity), a1 = Math.max(nd.a1 ?? 3.1, onExisting ? EXISTING_AXIS[1] : -Infinity);
+      wells.push({xy: nd.xy, a0, a1, color, ref: nd, kind: 'node'});
     }
     if (wells.length) this.addWells(this.g.network, wells);
     // футляры спецпереходов — прозрачная труба побольше вокруг рабочей
@@ -697,7 +701,7 @@ export class Viewer {
     }
     if (flat) flat.visible = on('buildings') && o.buildings !== 'hidden';
     for (const m of [...this.g.utilities.children, ...this.g.utilLines.children]) m.visible = on(m.userData.key);
-    this.g.existing.visible = on('n:heat_chamber');
+    this._lodK = null;
     this.g.oks.visible = on('oks');
     this.g.netLines.getObjectByName('trace') && (this.g.netLines.getObjectByName('trace').visible = on('trace'));
     this.redraw();
