@@ -25,6 +25,12 @@ final class ExactSteiner {
     private float[][] e;
     private float[][] m2;
     private float[] threeAll;
+    private final int[] perm;
+    private final int[] inv;
+    private int[] eLo;
+    private int[] eHi;
+    private int[] mLo;
+    private int[] mHi;
     final java.util.concurrent.atomic.AtomicLong mergeNanos = new java.util.concurrent.atomic.AtomicLong();
     final java.util.concurrent.atomic.AtomicLong extendNanos = new java.util.concurrent.atomic.AtomicLong();
     final java.util.concurrent.atomic.AtomicLong liveCount = new java.util.concurrent.atomic.AtomicLong();
@@ -51,10 +57,19 @@ final class ExactSteiner {
             DoubleUnaryOperator chamber, int root, double bound, boolean prune) {
         this.k = leaf.length;
         this.n = weight.length;
+        // места по удалённости от врезки: живые места подмножества идут почти одним отрезком, и слияния идут только
+        // по пересечению отрезков частей; при восстановлении места перебираются в исходном порядке
+        perm = order(weight, root);
+        inv = new int[n];
+        for (int p = 0; p < n; p++) {
+            inv[perm[p]] = p;
+        }
+        leaf = Arrays.stream(leaf).map(t -> inv[t]).toArray();
+        root = root >= 0 ? inv[root] : root;
         this.weight = new float[n][n];
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < n; j++) {
-                double w = weight[i][j];
+                double w = weight[perm[i]][perm[j]];
                 this.weight[i][j] = Double.isFinite(w) ? (float) w : INF;
             }
         }
@@ -91,12 +106,18 @@ final class ExactSteiner {
         }
         e = new float[full][];
         m2 = new float[full][];
+        eLo = new int[full];
+        eHi = new int[full];
+        mLo = new int[full];
+        mHi = new int[full];
         for (int t = 0; t < k; t++) {
             float[] tv = new float[n];
             Arrays.fill(tv, INF);
             tv[leaf[t]] = (float) leafCost[t];
             e[1 << t] = extend(tv, 1 << t, this.rate[1 << t], root, bound - rest[1 << t], remaining[1 << t]);
+            span(e[1 << t], 1 << t, eLo, eHi);
         }
+        int rootAt = root;
         List<List<Integer>> bySize = new ArrayList<>();
         for (int s = 0; s <= k; s++) {
             bySize.add(new ArrayList<>());
@@ -110,6 +131,7 @@ final class ExactSteiner {
                 float[][] merged = merge(d);
                 mergeNanos.addAndGet(System.nanoTime() - t0);
                 m2[d] = merged[0];
+                span(m2[d], d, mLo, mHi);
                 if (d == full - 1) {
                     threeAll = merged[1];
                 }
@@ -118,7 +140,8 @@ final class ExactSteiner {
                     tv[v] = Math.min(merged[0][v], merged[1][v]) + this.chamber[d];
                 }
                 long t1 = System.nanoTime();
-                e[d] = extend(tv, d, this.rate[d], root, bound - rest[d], remaining[d]);
+                e[d] = extend(tv, d, this.rate[d], rootAt, bound - rest[d], remaining[d]);
+                span(e[d], d, eLo, eHi);
                 extendNanos.addAndGet(System.nanoTime() - t1);
                 liveCount.addAndGet(live(e[d]));
             });
@@ -126,6 +149,7 @@ final class ExactSteiner {
     }
 
     Skeleton tree(int root, int rootBranches, double extraBranch) {
+        root = inv[root];
         int all = (1 << k) - 1;
         double one = e[all][root];
         double two = rootBranches >= 2 && k >= 2 ? m2[all][root] + extraBranch : Double.POSITIVE_INFINITY;
@@ -152,7 +176,8 @@ final class ExactSteiner {
         float[][] merged = d == (1 << k) - 1 ? new float[][] {m2[d], threeAll} : merge(d);
         int best = -1;
         float bestValue = INF;
-        for (int u = 0; u < n; u++) {
+        for (int o = 0; o < n; o++) {
+            int u = inv[o];
             float tv = Math.min(merged[0][u], merged[1][u]) + chamber[d];
             float x = tv + rate[d] * weight[u][v];
             if (x < bestValue) {
@@ -160,7 +185,7 @@ final class ExactSteiner {
                 best = u;
             }
         }
-        skeleton.junctions.add(best);
+        skeleton.junctions.add(perm[best]);
         skeleton.parents.add(parent);
         skeleton.masks.add(d);
         int index = skeleton.junctions.size() - 1;
@@ -211,17 +236,12 @@ final class ExactSteiner {
                 int b = d ^ a;
                 float[] ea = e[a];
                 float[] eb = e[b];
+                // вне пересечения отрезков одна из частей ровно INF: сумма не меньше INF и минимум не меняет
                 if (Integer.bitCount(b) >= 2) {
-                    float[] mb = m2[b];
-                    for (int v = 0; v < n; v++) {
-                        float x = ea[v];
-                        two[v] = Math.min(two[v], x + eb[v]);
-                        three[v] = Math.min(three[v], x + mb[v]);
-                    }
+                    pairs(ea, eb, m2[b], two, three, Math.max(eLo[a], Math.min(eLo[b], mLo[b])),
+                            Math.min(eHi[a], Math.max(eHi[b], mHi[b])) + 1);
                 } else {
-                    for (int v = 0; v < n; v++) {
-                        two[v] = Math.min(two[v], ea[v] + eb[v]);
-                    }
+                    pair(ea, eb, two, Math.max(eLo[a], eLo[b]), Math.min(eHi[a], eHi[b]) + 1);
                 }
             }
             if (s == 0) {
@@ -321,6 +341,76 @@ final class ExactSteiner {
             double steiner = mst / (2.0 * (1.0 - 1.0 / count));
             remaining[d] = Double.isFinite(steiner) ? (float) (minRate * steiner * (1 - 1e-4)) : 0;
         }
+    }
+
+    // внутренние циклы слияния — отдельные маленькие методы: JIT векторизует каждый сам по себе, а в общем теле
+    // merge векторизация зависела от того, какая ветка попалась при компиляции (слияния 30 или 55 с CPU)
+    private static void pairs(float[] ea, float[] eb, float[] mb, float[] two, float[] three, int from, int to) {
+        for (int v = from; v < to; v++) {
+            float x = ea[v];
+            two[v] = Math.min(two[v], x + eb[v]);
+            three[v] = Math.min(three[v], x + mb[v]);
+        }
+    }
+
+    private static void pair(float[] ea, float[] eb, float[] two, int from, int to) {
+        for (int v = from; v < to; v++) {
+            two[v] = Math.min(two[v], ea[v] + eb[v]);
+        }
+    }
+
+    private static int[] order(double[][] weight, int root) {
+        int n = weight.length;
+        Integer[] order = new Integer[n];
+        for (int v = 0; v < n; v++) {
+            order[v] = v;
+        }
+        if (root >= 0 && Boolean.parseBoolean(System.getProperty("heatnet.exact.order", "true"))) {
+            double[] dist = new double[n];
+            boolean[] done = new boolean[n];
+            Arrays.fill(dist, Double.POSITIVE_INFINITY);
+            dist[root] = 0;
+            for (int step = 0; step < n; step++) {
+                int u = -1;
+                for (int v = 0; v < n; v++) {
+                    if (!done[v] && (u < 0 || dist[v] < dist[u])) {
+                        u = v;
+                    }
+                }
+                if (dist[u] == Double.POSITIVE_INFINITY) {
+                    break;
+                }
+                done[u] = true;
+                for (int v = 0; v < n; v++) {
+                    if (dist[u] + weight[u][v] < dist[v]) {
+                        dist[v] = dist[u] + weight[u][v];
+                    }
+                }
+            }
+            Arrays.sort(order, (x, y) -> dist[x] != dist[y] ? Double.compare(dist[x], dist[y]) : Integer.compare(x, y));
+        }
+        return Arrays.stream(order).mapToInt(Integer::intValue).toArray();
+    }
+
+    /** Первое и последнее место, где values не ровно INF. */
+    private static final boolean RANGES = Boolean.parseBoolean(System.getProperty("heatnet.exact.ranges", "true"));
+
+    private void span(float[] values, int d, int[] lo, int[] hi) {
+        if (!RANGES) {
+            lo[d] = 0;
+            hi[d] = n - 1;
+            return;
+        }
+        int first = 0;
+        while (first < n && values[first] >= INF) {
+            first++;
+        }
+        int last = n - 1;
+        while (last >= first && values[last] >= INF) {
+            last--;
+        }
+        lo[d] = first;
+        hi[d] = last;
     }
 
     private int live(float[] values) {
