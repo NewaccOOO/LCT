@@ -27,8 +27,7 @@ spring:
       on-profile: cli
   main:
     web-application-type: none
-  autoconfigure:
-    exclude:
-      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
-      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
-      - org.springframework.boot.autoconfigure.sql.init.SqlInitializationAutoConfiguration
+  # CLI нужны только свои бины (CliRunner, Pipeline): без автоконфигураций нет БД, JPA, actuator, метрик и Jackson —
+  # их условия и бины были половиной старта CLI
+  boot:
+    enableautoconfiguration: false
