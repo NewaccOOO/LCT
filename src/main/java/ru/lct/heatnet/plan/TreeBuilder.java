@@ -1948,15 +1948,21 @@ final class TreeBuilder {
                 Coordinate[] c = from[e];
                 sizes[e] = 0;
                 double cheapest = Double.POSITIVE_INFINITY;
-                for (int skip = 1; skip <= Math.min(2, c.length - 1); skip++) {
-                    int t = target(point, c, skip);
-                    if (point.distance(c[t]) < Router.CUT_PIECE_M
+                for (int skip = 1, last = -1; skip <= Math.min(2, c.length - 1); skip++) {
+                    // target с skip=2 при прошлой цели ≥ 2 — та же цель: её проверка уже сделана
+                    int t = last >= skip ? last : target(point, c, skip);
+                    if (t == last) {
+                        continue;
+                    }
+                    last = t;
+                    double reach = point.distance(c[t]);
+                    if (reach < Router.CUT_PIECE_M
                             || t + 1 < c.length && turn(point, c[t], c[t + 1]) > Router.MAX_TURN_DEG
                             || sizes[e] > 0 && targets[e][0] == t) {
                         continue;
                     }
                     targets[e][sizes[e]] = t;
-                    costs[e][sizes[e]] = rub[e] * (point.distance(c[t]) + rest[e][t] - rest[e][0]);
+                    costs[e][sizes[e]] = rub[e] * (reach + rest[e][t] - rest[e][0]);
                     verdicts[e][sizes[e]] = 0;
                     cheapest = Math.min(cheapest, costs[e][sizes[e]]);
                     sizes[e]++;
