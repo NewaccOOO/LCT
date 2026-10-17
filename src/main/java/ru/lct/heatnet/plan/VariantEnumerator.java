@@ -286,6 +286,7 @@ public final class VariantEnumerator {
     private static final int EXACT_REFINE_SWEEPS = Integer.getInteger("heatnet.exact.sweeps", 3);
     private static final long EXACT_MAX_BYTES = Long.getLong("heatnet.exact.maxBytes", 256L << 20);
     private static final double EXACT_MARGIN_M = 30;
+    private static final int RIGHT_FREE_ROUNDS = 10;
     private static final int RELAY_TRIES = 3;
     private static final int RELAY_PASSES = 3;
     /** Пул для деревьев подмножеств, см. {@link #prefetch}; нити демоны, как у пула чтения. */
@@ -711,29 +712,70 @@ public final class VariantEnumerator {
             thawed(outer);
         }
         Map<Integer, double[]> bases = new HashMap<>();
-        Map<Integer, double[]> best = new HashMap<>();
-        Map<Integer, Draft[]> chosen = new HashMap<>();
+        int[] baseOf = new int[results.size()];
+        double[][] forms = new double[results.size()][];
+        Map<Integer, Integer> loose = new HashMap<>();
         for (int a = 0; a < results.size(); a++) {
+            baseOf[a] = -1;
             if (results.get(a) == null) {
                 continue;
             }
             Set<String> layout = layout(candidates.get(a).trees);
-            int base = -1;
-            for (int i = 0; i < shaped.size() && base < 0; i++) {
-                base = layout(shaped.get(i).trees).equals(layout) ? i : -1;
+            for (int i = 0; i < shaped.size() && baseOf[a] < 0; i++) {
+                baseOf[a] = layout(shaped.get(i).trees).equals(layout) ? i : -1;
             }
-            if (base < 0) {
+            if (baseOf[a] < 0) {
                 continue;
             }
-            double[] form = form(results.get(a)[1]);
-            double[] was = bases.computeIfAbsent(base, i -> form(shaped.get(i)));
-            log.info("exact: скелет черновика {}: score {} → после формы {}, без сети, поворотов, пар, дефектов, переносов {}; "
-                    + "без скелета {}", base + 1, candidates.get(a).score(), form[0], Arrays.toString(form), Arrays.toString(was));
-            if (dominates(form, was) && (!best.containsKey(base) || form[0] < best.get(base)[0])) {
-                best.put(base, form);
-                chosen.put(base, results.get(a));
+            forms[a] = form(results.get(a)[1]);
+            double[] was = bases.computeIfAbsent(baseOf[a], i -> form(shaped.get(i)));
+            int compared = forms[a].length - 1;
+            if (forms[a][5] == 0 && dominates(Arrays.copyOf(forms[a], compared), Arrays.copyOf(was, compared))
+                    && (!loose.containsKey(baseOf[a]) || forms[a][0] < forms[loose.get(baseOf[a])][0])) {
+                loose.put(baseOf[a], a);
             }
         }
+        int first = -1;
+        double firstScore = Double.POSITIVE_INFINITY;
+        for (int i = 0; i < shaped.size(); i++) {
+            double score = loose.containsKey(i) ? forms[loose.get(i)][0] : shaped.get(i).variant.getSummary().getScore();
+            if (score < firstScore) {
+                firstScore = score;
+                first = i;
+            }
+        }
+        Map<Integer, Integer> strict = new HashMap<>();
+        for (int a = 0; a < results.size(); a++) {
+            int base = baseOf[a];
+            if (base < 0 || base == first) {
+                continue;
+            }
+            double[] form = forms[a];
+            if (form[5] > 0) {
+                Draft fixed = rightFreeFixed(results.get(a)[1]);
+                if (fixed != results.get(a)[1]) {
+                    results.get(a)[1] = fixed;
+                    form = form(fixed);
+                    forms[a] = form;
+                }
+            }
+            if (form[5] == 0 && dominates(form, bases.get(base))
+                    && (!strict.containsKey(base) || form[0] < forms[strict.get(base)][0])) {
+                strict.put(base, a);
+            }
+        }
+        for (int a = 0; a < results.size(); a++) {
+            if (baseOf[a] >= 0) {
+                log.info("exact: скелет черновика {}: score {} → после формы {}, без сети, поворотов, пар, дефектов, переносов, "
+                        + "острых, не по осям {}; без скелета {}", baseOf[a] + 1, candidates.get(a).score(), forms[a][0],
+                        Arrays.toString(forms[a]), Arrays.toString(bases.get(baseOf[a])));
+            }
+        }
+        Map<Integer, Draft[]> chosen = new HashMap<>();
+        if (first >= 0 && loose.containsKey(first)) {
+            chosen.put(first, results.get(loose.get(first)));
+        }
+        strict.forEach((base, a) -> chosen.put(base, results.get(a)));
         Set<Draft> replaced = Collections.newSetFromMap(new IdentityHashMap<>());
         chosen.forEach((base, done) -> {
             picked.set(base, done[0]);
@@ -749,7 +791,20 @@ public final class VariantEnumerator {
         int[] shape = shape(draft.trees);
         boolean sharp = draft.trees.stream().anyMatch(tree -> sharpPairs(tree, null) > 0);
         return new double[] {draft.variant.getSummary().getScore(), draft.variant.getSummary().getUnconnectedOksIds().size(),
-                shape[0], shape[1], formDefects(draft.trees), unkinkable(draft.trees), sharp ? 1 : 0};
+                shape[0], shape[1], formDefects(draft.trees), unkinkable(draft.trees), sharp ? 1 : 0, offAxis(draft.trees)};
+    }
+
+    private double offAxis(List<Tree> trees) {
+        double off = 0;
+        for (Tree tree : trees) {
+            for (int e = 0; e < tree.edges.size(); e++) {
+                double axis = axis(tree.edges.get(e).line.getEnvelopeInternal());
+                if (!Double.isNaN(axis)) {
+                    off += offAxis(tree, List.of(e), axis);
+                }
+            }
+        }
+        return Math.round(off * 10) / 10.0;
     }
 
     private static boolean dominates(double[] form, double[] was) {
@@ -765,58 +820,95 @@ public final class VariantEnumerator {
 
     private int unkinkable(List<Tree> trees) {
         int count = 0;
-        double maxGainRub = TURN_TOLERANCE_S / rules.score(1, 0);
         for (int t = 0; t < trees.size(); t++) {
-            Tree tree = trees.get(t);
-            if (tree.connected().isEmpty()) {
-                continue;
-            }
-            Region region = regionByConnection.get(tree.connected().get(0).getId());
-            Envelope area = region.area.contains(tree.envelope()) ? region.area : region.wideArea;
-            if (!area.contains(tree.envelope())) {
-                continue;
-            }
-            List<Tree> unit = new ArrayList<>();
-            for (Tree other : trees) {
-                if (other.root.key.equals(tree.root.key)) {
-                    unit.add(other);
-                }
-            }
-            Map<Tree.Edge, Integer> dnByEdge;
-            try {
-                dnByEdge = assembler.diameters(unit);
-            } catch (IllegalStateException | IllegalArgumentException e) {
-                continue;
-            }
-            Map<Tree.Edge, Double> priceRub = new IdentityHashMap<>();
-            dnByEdge.forEach((edge, dn) -> priceRub.put(edge, rules.diameter(dn).getNewRubM() + rules.lengthWorthRub()));
-            List<Tree> others = new ArrayList<>(trees);
-            others.remove(t);
-            double before = Double.NaN;
-            for (Tree.Node junction : JunctionMover.junctions(tree)) {
-                List<TreeBuilder.Slide> slides = new ArrayList<>();
-                for (boolean evensOnly : new boolean[] {false, true}) {
-                    slides.addAll(builder.rightFreeUnkinks(tree, junction, edge -> region.obstacles(dnByEdge.get(edge), area),
-                            dnByEdge, priceRub, maxGainRub, evensOnly));
-                }
-                for (TreeBuilder.Slide slide : slides) {
-                    Tree changed = unkinked(tree, slide, tree.tie, dnByEdge, region, area, true);
-                    if (changed == null || !compatible(changed, others)) {
-                        continue;
-                    }
-                    List<Tree> attempt = new ArrayList<>();
-                    for (Tree other : unit) {
-                        attempt.add(other == tree ? changed : other);
-                    }
-                    before = Double.isNaN(before) ? unitScore(unit) : before;
-                    if (unitScore(attempt) <= before + TURN_TOLERANCE_S && !worse(tree, unit, changed, attempt)) {
-                        count++;
-                        break;
-                    }
-                }
-            }
+            count += rightFreeMoves(trees, t, false).size();
         }
         return count;
+    }
+
+    private Draft rightFreeFixed(Draft draft) {
+        List<Tree> trees = new ArrayList<>(draft.trees);
+        boolean changed = false;
+        for (int round = 0; round < RIGHT_FREE_ROUNDS; round++) {
+            boolean moved = false;
+            for (int t = 0; t < trees.size() && !moved; t++) {
+                List<Tree> moves = rightFreeMoves(trees, t, true);
+                if (!moves.isEmpty()) {
+                    trees.set(t, moves.get(0));
+                    moved = true;
+                }
+            }
+            if (!moved) {
+                break;
+            }
+            changed = true;
+        }
+        if (!changed) {
+            return draft;
+        }
+        try {
+            return new Draft(trees, draft.unconnected, assembler.assemble(draft.variant.getId(), 0, trees, draft.unconnected));
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            log.info("exact: черновик после переноса камер не собрался: {}", e.getMessage());
+            return draft;
+        }
+    }
+
+    private List<Tree> rightFreeMoves(List<Tree> trees, int t, boolean first) {
+        List<Tree> moves = new ArrayList<>();
+        Tree tree = trees.get(t);
+        if (tree.connected().isEmpty()) {
+            return moves;
+        }
+        Region region = regionByConnection.get(tree.connected().get(0).getId());
+        Envelope area = region.area.contains(tree.envelope()) ? region.area : region.wideArea;
+        if (!area.contains(tree.envelope())) {
+            return moves;
+        }
+        List<Tree> unit = new ArrayList<>();
+        for (Tree other : trees) {
+            if (other.root.key.equals(tree.root.key)) {
+                unit.add(other);
+            }
+        }
+        Map<Tree.Edge, Integer> dnByEdge;
+        try {
+            dnByEdge = assembler.diameters(unit);
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            return moves;
+        }
+        Map<Tree.Edge, Double> priceRub = new IdentityHashMap<>();
+        dnByEdge.forEach((edge, dn) -> priceRub.put(edge, rules.diameter(dn).getNewRubM() + rules.lengthWorthRub()));
+        double maxGainRub = TURN_TOLERANCE_S / rules.score(1, 0);
+        List<Tree> others = new ArrayList<>(trees);
+        others.remove(t);
+        double before = Double.NaN;
+        for (Tree.Node junction : JunctionMover.junctions(tree)) {
+            List<TreeBuilder.Slide> slides = new ArrayList<>();
+            for (boolean evensOnly : new boolean[] {false, true}) {
+                slides.addAll(builder.rightFreeUnkinks(tree, junction, edge -> region.obstacles(dnByEdge.get(edge), area),
+                        dnByEdge, priceRub, maxGainRub, evensOnly));
+            }
+            for (TreeBuilder.Slide slide : slides) {
+                Tree changed = unkinked(tree, slide, tree.tie, dnByEdge, region, area, true);
+                if (changed == null || !compatible(changed, others)) {
+                    continue;
+                }
+                List<Tree> attempt = new ArrayList<>();
+                for (Tree other : unit) {
+                    attempt.add(other == tree ? changed : other);
+                }
+                before = Double.isNaN(before) ? unitScore(unit) : before;
+                if (unitScore(attempt) <= before + TURN_TOLERANCE_S && !worse(tree, unit, changed, attempt)) {
+                    moves.add(changed);
+                    break;
+                }
+            }
+            if (first && !moves.isEmpty()) {
+                break;
+            }
+        }
+        return moves;
     }
 
     private int formDefects(List<Tree> trees) {
@@ -854,7 +946,7 @@ public final class VariantEnumerator {
         long started = System.nanoTime();
         List<Draft> candidates = new ArrayList<>();
         for (Draft draft : found) {
-            List<Draft> others = draft == found.get(0) ? new ArrayList<>() : null;
+            List<Draft> others = new ArrayList<>();
             Draft exact = exact(draft, others);
             if (exact != draft) {
                 candidates.add(exact);
@@ -876,7 +968,7 @@ public final class VariantEnumerator {
         int multi = -1;
         for (int i = 0; SQUARE && alternates != null && !district && connectionByOks.size() <= EXACT_MULTI_MAX && i < trees.size(); i++) {
             int size = trees.get(i).connected().size();
-            if (size >= 3 && size <= EXACT_MAX && trees.get(i).unconnected.isEmpty()
+            if (size >= 3 && size <= EXACT_MAX
                     && (multi < 0 || size > trees.get(multi).connected().size())) {
                 multi = i;
             }
@@ -884,7 +976,7 @@ public final class VariantEnumerator {
         for (int i = 0; i < trees.size(); i++) {
             Tree tree = trees.get(i);
             List<ConnectionPoint> subset = tree.connected();
-            if (subset.size() < 3 || subset.size() > EXACT_MAX || !tree.unconnected.isEmpty()) {
+            if (subset.size() < 3 || subset.size() > EXACT_MAX) {
                 continue;
             }
             Region region = regionByConnection.get(subset.get(0).getId());
