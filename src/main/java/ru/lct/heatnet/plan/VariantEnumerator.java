@@ -4963,41 +4963,16 @@ public final class VariantEnumerator {
         Tree best = null;
         double bestOff = Math.min(off - 1, JUNCTION_GAIN * off);
         double bestLength = SQUARE_RATIO * length;
-        for (Coordinate spot : spots.subList(0, Math.min(JUNCTION_SPOTS, spots.size()))) {
-            Tree work = moved(tree, junction, spot);
-            Tree.Node node = work.edges.get(incident.get(0)).from.key.equals(Tree.Node.junction(spot).key)
-                    ? work.edges.get(incident.get(0)).from : work.edges.get(incident.get(0)).to;
-            try {
-                // ветки камеры, затем ребро к ней: приход выбирается по уже переложенным веткам
-                for (int k = incident.size() - 1; k >= 0; k--) {
-                    int e = incident.get(k);
-                    Tree squared = squaredEdge(work, e, diameters(swapped(unit, tree, work)), axis);
-                    work = squared != null ? squared : work;
-                }
-                work = straightenedExits(work, incident, diameters(swapped(unit, tree, work)));
-                work = droppedAtJunction(work, node.key, incident, diameters(swapped(unit, tree, work)), axis);
-                // перенос ради осей не множит диагонали у камеры: иначе у неё выходит звезда из коротких отрезков
-                String why = diagonals(work, node.key, incident, axis) > diagonals(tree, junction.key, incident, axis)
-                        ? "диагоналей у камеры больше" : keptExitDiagonal(tree, work, junction, node.key, incident, axis)
-                        ? "галочка к прежнему месту" : !junctionFits(work, node.key, incident, diameters(swapped(unit, tree, work)))
-                        ? "отрезок у камеры не годится" : null;
-                if (why != null) {
-                    if (JUNCTION_DEBUG) {
-                        StringBuilder h = new StringBuilder();
-                        for (int e : incident) {
-                            Coordinate[] cc = work.edges.get(e).line.getCoordinates();
-                            boolean o = work.edges.get(e).from.key.equals(node.key);
-                            Coordinate a = o ? cc[0] : cc[cc.length - 2];
-                            Coordinate b = o ? cc[1] : cc[cc.length - 1];
-                            h.append(String.format(Locale.ROOT, " %s:%.1f°/%d", work.edges.get(e).to.key,
-                                    Math.toDegrees(Math.atan2(b.y - a.y, b.x - a.x)), cc.length));
-                        }
-                        why += h;
-                    }
-                    junctionDebug(spot, junction, why);
-                    continue;
-                }
-            } catch (IllegalStateException | IllegalArgumentException ex) {
+        List<Coordinate> tried = spots.subList(0, Math.min(JUNCTION_SPOTS, spots.size()));
+        // места независимы и считаются параллельно, выбор лучшего — по порядку мест, как раньше
+        Tree[] works = new Tree[tried.size()];
+        IntStream range = IntStream.range(0, tried.size());
+        (PARALLEL && !JUNCTION_DEBUG ? range.parallel() : range)
+                .forEach(i -> works[i] = squaredAt(tree, junction, tried.get(i), incident, unit, axis));
+        for (int i = 0; i < tried.size(); i++) {
+            Coordinate spot = tried.get(i);
+            Tree work = works[i];
+            if (work == null) {
                 continue;
             }
             double workOff = offAxis(work, incident, axis);
@@ -5020,6 +4995,47 @@ public final class VariantEnumerator {
             }
         }
         return best;
+    }
+
+    /** Дерево с камерой junction в месте spot и её рёбрами по осям axis, см. {@link #squaredJunction}; null — место не годится. */
+    private Tree squaredAt(Tree tree, Tree.Node junction, Coordinate spot, List<Integer> incident, List<Tree> unit, double axis) {
+        Tree work = moved(tree, junction, spot);
+        Tree.Node node = work.edges.get(incident.get(0)).from.key.equals(Tree.Node.junction(spot).key)
+                ? work.edges.get(incident.get(0)).from : work.edges.get(incident.get(0)).to;
+        try {
+            // ветки камеры, затем ребро к ней: приход выбирается по уже переложенным веткам
+            for (int k = incident.size() - 1; k >= 0; k--) {
+                int e = incident.get(k);
+                Tree squared = squaredEdge(work, e, diameters(swapped(unit, tree, work)), axis);
+                work = squared != null ? squared : work;
+            }
+            work = straightenedExits(work, incident, diameters(swapped(unit, tree, work)));
+            work = droppedAtJunction(work, node.key, incident, diameters(swapped(unit, tree, work)), axis);
+            // перенос ради осей не множит диагонали у камеры: иначе у неё выходит звезда из коротких отрезков
+            String why = diagonals(work, node.key, incident, axis) > diagonals(tree, junction.key, incident, axis)
+                    ? "диагоналей у камеры больше" : keptExitDiagonal(tree, work, junction, node.key, incident, axis)
+                    ? "галочка к прежнему месту" : !junctionFits(work, node.key, incident, diameters(swapped(unit, tree, work)))
+                    ? "отрезок у камеры не годится" : null;
+            if (why != null) {
+                if (JUNCTION_DEBUG) {
+                    StringBuilder h = new StringBuilder();
+                    for (int e : incident) {
+                        Coordinate[] cc = work.edges.get(e).line.getCoordinates();
+                        boolean o = work.edges.get(e).from.key.equals(node.key);
+                        Coordinate a = o ? cc[0] : cc[cc.length - 2];
+                        Coordinate b = o ? cc[1] : cc[cc.length - 1];
+                        h.append(String.format(Locale.ROOT, " %s:%.1f°/%d", work.edges.get(e).to.key,
+                                Math.toDegrees(Math.atan2(b.y - a.y, b.x - a.x)), cc.length));
+                    }
+                    why += h;
+                }
+                junctionDebug(spot, junction, why);
+                return null;
+            }
+        } catch (IllegalStateException | IllegalArgumentException ex) {
+            return null;
+        }
+        return work;
     }
 
     /**
