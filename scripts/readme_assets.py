@@ -23,6 +23,7 @@ FILL = {"oks": "#334155", "park": "#14532d", "social_area": "#4c1d95", "prohibit
 LINE = {"gas_pipeline": "#eab308", "power_cable": "#a855f7"}
 # первая версия по техническому приложению от 18.09.2026: на графике только она и следующие
 FIRST_1809 = (0, 5, 0)
+MEETING = (0, 10, 0)
 
 
 def coords(geom):
@@ -165,12 +166,18 @@ def versions():
         val = top_s * (1 - i / 4)
         parts.append(f'<line x1="{left}" y1="{y:.1f}" x2="{w - right}" y2="{y:.1f}" stroke="#1e293b"/>')
         parts.append(f'<text x="{left - 8}" y="{y + 4:.1f}" class="a" text-anchor="end">{val:g}</text>')
-    best = min(v[1] for v in vals)
+    after = [tuple(int(x) for x in v[0][1:].split(".")) >= MEETING for v in vals]
+    best = {side: min((v[1] for v, a in zip(vals, after) if a == side), default=None) for side in (False, True)}
+    if any(after) and not all(after):
+        mx = left + after.index(True) * bw
+        parts.append(f'<line x1="{mx:.1f}" y1="{top - 6}" x2="{mx:.1f}" y2="{h - bottom + 30}" stroke="#f59e0b" stroke-width="2" stroke-dasharray="6 4"/>')
+        parts.append(f'<text x="{mx - 8:.1f}" y="{top + 6}" class="m" text-anchor="end">после встречи</text>')
+        parts.append(f'<text x="{mx - 8:.1f}" y="{top + 21}" class="m" text-anchor="end">с организаторами 16.10 →</text>')
     for i, (ver, s, cost, sec) in enumerate(vals):
         bh = (h - top - bottom) * s / top_s
         x = left + i * bw + bw * 0.1
         y = h - bottom - bh
-        color, ink = ("#38bdf8", "#0b1220") if s == best else ("#334155", "#cbd5e1")
+        color, ink = ("#38bdf8", "#0b1220") if s == best[after[i]] else ("#334155", "#cbd5e1")
         cx = x + bw * 0.4
         parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bw * 0.8:.1f}" height="{bh:.1f}" rx="6" fill="{color}"/>')
         parts.append(f'<text x="{cx:.1f}" y="{y - 8:.1f}" class="v" text-anchor="middle">{s:.2f}</text>')
@@ -178,7 +185,7 @@ def versions():
         parts.append(f'<text x="{cx:.1f}" y="{h - bottom - 12:.1f}" class="i" fill="{ink}" text-anchor="middle">{sec} с</text>')
         parts.append(f'<text x="{cx:.1f}" y="{h - bottom + 22:.1f}" class="l" text-anchor="middle">{ver}</text>')
     svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}" role="img" aria-label="S варианта 1 на датасете организаторов по версиям с правил 18.09.2026">
-<style>.a{{font:12px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#94a3b8}}.l{{font:600 13px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}.v{{font:600 13px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}.i{{font:600 11px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}}.h{{font:600 15px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}</style>
+<style>.a{{font:12px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#94a3b8}}.l{{font:600 13px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}.v{{font:600 13px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}.i{{font:600 11px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}}.h{{font:600 15px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#e2e8f0}}.m{{font:600 12px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;fill:#f59e0b}}</style>
 <rect width="{w}" height="{h}" rx="16" fill="{BG}"/>
 <text x="{left}" y="28" class="h">S варианта 1 на датасете организаторов по правилам 18.09.2026, меньше — лучше</text>
 {''.join(parts)}

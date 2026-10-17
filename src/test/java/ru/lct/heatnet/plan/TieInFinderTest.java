@@ -1,6 +1,7 @@
 package ru.lct.heatnet.plan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static ru.lct.heatnet.plan.PlanFixture.point;
 
@@ -65,6 +66,34 @@ class TieInFinderTest {
         assertEquals(0, pipe.getPoint().getY(), 1e-6);
         assertEquals(2, pipe.getCapacity());
         assertEquals(List.of("hn-2"), List.copyOf(pipe.getIgnored()));
+    }
+
+    @Test
+    void uncutPipeThroughChamberTakesTwoLinks() {
+        TieInFinder finder = new TieInFinder(new PlanFixture().pipe("hn-1", 0, 0, 400, 0, 200, 60, "src")
+                .chamber("hc-1", 200, 0, 200, "hn-1").input(), rules);
+
+        TieCandidate chamber = finder.find(List.of(point(205, 40)), DN).stream().filter(TieCandidate::isChamber)
+                .findFirst().orElseThrow();
+
+        assertEquals(2, finder.links("hc-1"));
+        assertEquals(rules.chamberRule().getMaxSegments() - 2, chamber.getCapacity());
+    }
+
+    @Test
+    void pipeTieNextToFullChamberIsCrowded() {
+        PlanFixture fixture = new PlanFixture().pipe("hn-1", 0, 0, 400, 0, 200, 60, "src")
+                .chamber("hc-1", 200, 0, 200, "hn-1")
+                .pipe("hn-2", 200, 0, 200, -150, DN, 10, "hc-1").pipe("hn-3", 200, 0, 200, 150, DN, 10, "hc-1");
+        TieInFinder finder = new TieInFinder(fixture.input(), rules);
+
+        List<TieCandidate> pipes = finder.find(List.of(point(204, 40)), DN).stream().filter(c -> !c.isChamber())
+                .collect(java.util.stream.Collectors.toList());
+        TieCandidate near = pipes.stream().filter(c -> c.getPoint().distance(point(200, 0)) <= 10).findFirst().orElseThrow();
+        TieCandidate far = pipes.stream().filter(c -> c.getPoint().distance(point(200, 0)) > 10).findFirst().orElseThrow();
+
+        assertTrue(finder.crowded(near));
+        assertFalse(finder.crowded(far));
     }
 
     @Test

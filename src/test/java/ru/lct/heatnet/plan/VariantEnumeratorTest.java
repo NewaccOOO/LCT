@@ -6,18 +6,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static ru.lct.heatnet.plan.PlanFixture.GEOMETRY;
 import static ru.lct.heatnet.plan.PlanFixture.point;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
+import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.LinearRing;
 import org.locationtech.jts.geom.Polygon;
 import ru.lct.heatnet.calc.CostCalculator;
 import ru.lct.heatnet.model.ConnectionPoint;
 import ru.lct.heatnet.model.ExistingOks;
+import ru.lct.heatnet.model.FutureOks;
+import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.NewSegment;
 import ru.lct.heatnet.model.Result;
 import ru.lct.heatnet.model.Variant;
@@ -79,6 +83,71 @@ class VariantEnumeratorTest {
     }
 
     @Test
+    void cityTieShiftedAlongSamePipeIsNotSecondVariant() {
+        PlanFixture fixture = new PlanFixture().pipe("hn-1", 0, 0, 400, 0, 200, 100, "src").oks("o-1", 200, 60, 30);
+        fixture.existing.add(new ExistingOks("wall", PlanFixture.rect(170, 25, 230, 35)));
+
+        List<Variant> variants = new VariantEnumerator(fixture.input(), rules).city().getVariants();
+
+        assertEquals(1, variants.size(), "вариантов " + variants.size());
+        assertEquals("1", variants.get(0).getId());
+        assertTrue(variants.get(0).getSummary().getUnconnectedOksIds().isEmpty());
+    }
+
+    @Test
+    void variantWithMoreUnconnectedThanBestIsNotIssued() {
+        InputData input = VariantEnumerator.read(Path.of("data/samples/expert/e4-combined.geojson"), rules);
+
+        List<Variant> variants = new VariantEnumerator(input, rules).run().getVariants();
+
+        int best = variants.get(0).getSummary().getUnconnectedOksIds().size();
+        for (Variant variant : variants) {
+            assertEquals(best, variant.getSummary().getUnconnectedOksIds().size(), "вариант " + variant.getId());
+        }
+    }
+
+    @Test
+    void bestVariantTakesCheaperTreeOfAnotherVariant() {
+        PlanFixture fixture = PlanFixture.trunk().oks("o-1", 100, 60, 5).oks("o-2", 500, 60, 5);
+        InputData input = fixture.input();
+        TieInFinder finder = new TieInFinder(input, rules);
+        Tree near = tree(finder, fixture, "o-1", 0, 0);
+        Tree far = tree(finder, fixture, "o-1", -60, 50);
+        Tree bent = tree(finder, fixture, "o-2", 40, 30);
+        Tree straight = tree(finder, fixture, "o-2", 0, 0);
+        VariantEnumerator enumerator = new VariantEnumerator(input, rules);
+        enumerator.run();
+        NetworkAssembler assembler = new NetworkAssembler(input, rules, new SpecialObjects(input, rules),
+                input.getFutureOks().stream().collect(Collectors.toMap(FutureOks::getId, oks -> oks)));
+        java.util.function.Function<List<Tree>, Variant> assemble = trees -> assembler.assemble("0", 0, trees, List.of());
+        List<List<Tree>> variants = List.of(List.of(near, bent), List.of(far, straight));
+        double[] scores = variants.stream().map(assemble).mapToDouble(v -> rules.score(v.getSummary().getCalculatedCost(),
+                v.getSummary().getNewNetworkLength())).toArray();
+
+        List<List<Tree>> result = enumerator.recombined(variants, scores, assemble);
+
+        assertTrue(result.get(0).contains(near) && result.get(0).contains(straight) && result.get(0).size() == 2,
+                "вариант 1: " + result.get(0));
+        assertTrue(result.get(1) == variants.get(1), "вариант 2 не меняется");
+    }
+
+    private static Tree tree(TieInFinder finder, PlanFixture fixture, String oksId, double dx, double dy) {
+        ConnectionPoint connection = fixture.connection(oksId);
+        Coordinate at = connection.getGeometry().getCoordinate();
+        TieCandidate tie = finder.find(List.of(connection.getGeometry()), 100).get(0);
+        Coordinate root = tie.getPoint().getCoordinate();
+        Tree tree = new Tree(tie);
+        List<Coordinate> line = new ArrayList<>(List.of(root));
+        if (dx != 0 || dy != 0) {
+            line.add(new Coordinate(at.x + dx, root.y + dy / 2));
+            line.add(new Coordinate(at.x + dx, at.y - 10));
+        }
+        line.add(at);
+        tree.edges.add(new Tree.Edge(tree.root, Tree.Node.connection(connection), GEOMETRY.createLineString(line.toArray(new Coordinate[0]))));
+        return tree;
+    }
+
+    @Test
     void chamberAtPipeEndAndPipeGiveTwoDifferentVariants() {
         // у ОКС одна ближайшая врезка — камера на конце трубы; врезка в саму трубу — другой объект врезки
         PlanFixture fixture = new PlanFixture().pipe("hn-1", 0, 0, 300, 0, 150, 50, "src")
@@ -104,6 +173,22 @@ class VariantEnumeratorTest {
         assertTrue(variants.size() >= 2, "вариантов " + variants.size());
         assertTrue(differ(variants.get(0), variants.get(1)), "варианты 1 и 2 не различаются");
         assertTrue(variants.stream().allMatch(v -> v.getSummary().getUnconnectedOksIds().isEmpty()));
+    }
+
+    @Test
+    void uncutPipeThroughChamberLeavesRoomForTwoNewSegments() {
+        PlanFixture fixture = new PlanFixture().pipe("hn-1", 190, 0, 210, 0, 200, 60, "src")
+                .chamber("hc-1", 200, 0, 200, "hn-1")
+                .oks("o-1", 200, 200, 5).oks("o-2", -150, 150, 5).oks("o-3", 550, 150, 5);
+
+        List<Variant> variants = new VariantEnumerator(fixture.input(), rules).run().getVariants();
+
+        assertFalse(variants.isEmpty());
+        for (Variant variant : variants) {
+            long atChamber = variant.getSegments().stream()
+                    .filter(s -> s.getStartNodeId().equals("hc-1") || s.getEndNodeId().equals("hc-1")).count();
+            assertTrue(atChamber <= 2, "новых участков у hc-1 в варианте " + variant.getId() + ": " + atChamber);
+        }
     }
 
     @Test
@@ -189,6 +274,24 @@ class VariantEnumeratorTest {
             ids.add(set);
         }
         assertEquals(Set.of(Set.of("a", "b"), Set.of("c", "d", "e")), ids);
+    }
+
+    @Test
+    void pointLeavesByNextSideWhenNearSideLeadsNowhere() {
+        Geometry building = PlanFixture.rect(140, 40, 180, 80);
+        PlanFixture fixture = PlanFixture.trunk();
+        fixture.oks.add(new FutureOks("o-1", building, 5, 1.0));
+        fixture.connections.add(new ConnectionPoint("cp-o-1", point(160, 78), "o-1"));
+        fixture.existing.add(new ExistingOks("b-1", building));
+        fixture.restriction("rw-1", GEOMETRY.createMultiPolygon(new Polygon[] {(Polygon) PlanFixture.rect(130, 50, 142, 110),
+                (Polygon) PlanFixture.rect(130, 100, 190, 110), (Polygon) PlanFixture.rect(178, 50, 190, 110)}), "railway");
+
+        Variant best = new VariantEnumerator(fixture.input(), rules).run().getVariants().get(0);
+
+        assertTrue(best.getSummary().getUnconnectedOksIds().isEmpty(), "без сети: " + best.getSummary().getUnconnectedOksIds());
+        NewSegment last = best.getSegments().stream().filter(s -> s.getEndNodeId().equals("cp-o-1")).findFirst().orElseThrow();
+        Coordinate[] c = last.getGeometry().getCoordinates();
+        assertTrue(c[c.length - 2].y < 40, "финальный участок через южную сторону: " + last.getGeometry());
     }
 
     /** Как у сервиса и check18 (разд. 6): у одного из двух не больше 90 % длины меньшего в полосе 10 м от другого. */

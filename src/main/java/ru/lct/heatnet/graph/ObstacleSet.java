@@ -105,6 +105,7 @@ public final class ObstacleSet {
     private final ZoneGrid forbidGrid;
     private final RouteCache cache;
     private final STRtree specials = new STRtree();
+    private final STRtree margins = new STRtree();
     /**
      * Объекты specials в порядке обхода STRtree: запрос по рамке отдаёт тех же, чья рамка её задевает, в том же
      * порядке. Ребро графа проверяется против них миллионы раз, а объектов в области десятки, и перебор с проверкой
@@ -957,7 +958,6 @@ public final class ObstacleSet {
         }
         // полосы по рамкам в индексе: на городе их тысячи, а каждый узел-кандидат и шаг пары через линию проверялся
         // перебором всех (четверть построения графа на СПб)
-        STRtree margins = new STRtree();
         for (Geometry marginZone : marginZones) {
             margins.insert(marginZone.getEnvelopeInternal(), PreparedGeometryFactory.prepare(marginZone));
         }
@@ -1109,6 +1109,10 @@ public final class ObstacleSet {
      */
     public boolean insideForbid(Coordinate c) {
         return insideForbid(c, true);
+    }
+
+    public boolean insideMargin(Coordinate c) {
+        return insideAny(margins, c);
     }
 
     /** Точка в зоне запрета: точной (там не ставится камера ветвления) или, если {@code mitre}, прежней. */

@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
@@ -98,11 +99,17 @@ public final class VariantEnumerator {
     /** Дерево ОКС идёт в обход, если оно длиннее прямой до ближайшего кандидата врезки больше чем во столько раз. */
     private static final double DETOUR_RATIO = 1.1;
     static final double TREES_APART_M = 0.5;
+    private static final double SWAP_GAIN = 1e-6;
+    private static final double PAIR_MIN_DEG = 60;
+    private static final double PAIR_MAX_DEG = 120;
+    private static final double PAIR_LINK_M = 30;
     /** Сдвиг врезки к стволу берётся, если ствол короче хотя бы на столько, см. slid. */
     private static final double SLIDE_MIN_M = 1.0;
     static final double SHARED_ROOT_CLIP_M = 0.15;
     static final double SHARED_ROOT_APART_M = 0.01;
     private static final int MAX_VARIANTS = 3;
+    private static final double FORM_RIGHT_DEG = 87;
+    private static final double FORM_STEP_M = 20;
     /** Сдвиги врезки вдоль трубы от проекции камеры ветвления, м, см. {@link #absorbed}. */
     private static final double[] ABSORB_SHIFTS_M = {0, -2, 2, -4, 4, -8, 8, -16, 16};
     /** Деревья кандидатов врезки считаются параллельно (heatnet.search.parallel); false — в одну нить, тот же выход. */
@@ -149,7 +156,10 @@ public final class VariantEnumerator {
      * меняется, а районы считаются на 10 % дольше, поэтому здесь прежние 50.
      */
     private static final int CITY_STALL = Integer.getInteger("heatnet.city.stall", 50);
-    /** Деревья подмножества строятся не на всех кандидатах врезки, а на лучших по грубой оценке стоимости. */
+    /**
+     * Деревья подмножества строятся не на всех кандидатах врезки, а на лучших по грубой оценке стоимости; место врезки
+     * на трубе у занятой камеры, от которого дерево не строится, заменяется следующим кандидатом.
+     */
     private static final int CANDIDATE_LIMIT = 6;
     /** Запас к прямой до ближайшей врезки при выборе диаметра графа по предельной длине: трасса длиннее прямой. */
     private static final double LENGTH_DN_MARGIN = 1.2;
@@ -175,8 +185,8 @@ public final class VariantEnumerator {
     private static final double EVEN_EPS_RUB = 1e-3;
     /** Ортогональная форма рёбер готового варианта, см. {@link #squared}. */
     private static final boolean SQUARE = Boolean.parseBoolean(System.getProperty("heatnet.square", "true"));
-    /** Во сколько раз ортогональный участок может быть длиннее прежнего: диагональ под 45° к застройке даёт √2. */
-    private static final double SQUARE_RATIO = Double.parseDouble(System.getProperty("heatnet.square.ratio", "1.5"));
+    /** Во сколько раз ортогональный участок может быть длиннее прежнего. */
+    private static final double SQUARE_RATIO = Double.parseDouble(System.getProperty("heatnet.square.ratio", "1.3"));
     /** Штраф за поворот при поиске ортогонального участка, м: из двух равных по длине берётся с меньшим числом стыков. */
     private static final double SQUARE_TURN_M = Double.parseDouble(System.getProperty("heatnet.square.turnM", "10"));
     /** Стены и стороны ограничений не дальше этого от ребра задают его оси, см. {@link #axis}. */
@@ -195,6 +205,7 @@ public final class VariantEnumerator {
     private static final double JUNCTION_STEP_M = 2;
     /** Отрезок отходит от оси больше этого — не по оси, см. {@link #offAxis}. */
     private static final double OFF_AXIS_RAD = Math.toRadians(1);
+    private static final double RIGHT_TOL_DEG = 2;
     /** Стороны короче этого (зубцы детального контура) на оси не влияют. */
     private static final double AXIS_SIDE_M = 8;
     /** Сколько раз повторяется проход {@link #squared}: ребро, переложенное по осям, открывает повороты соседям. */
@@ -262,6 +273,19 @@ public final class VariantEnumerator {
      * Перенос в лучших деревьях подмножеств внутри поиска давал датасет хуже, а сборок деревьев на 7 % больше.
      */
     private static final boolean RELAY = Boolean.parseBoolean(System.getProperty("heatnet.relay", "true"));
+    private static final boolean EXACT = Boolean.parseBoolean(System.getProperty("heatnet.exact", "true"));
+    private static final int EXACT_MAX = Integer.getInteger("heatnet.exact.max", 16);
+    private static final double EXACT_STEP_M = Double.parseDouble(System.getProperty("heatnet.exact.step", "20"));
+    private static final double[] EXACT_STEPS = java.util.Arrays.stream(
+            System.getProperty("heatnet.exact.steps", "20,21,22,23,24,25,26,27,28,29,30").split(","))
+            .mapToDouble(x -> Double.parseDouble(x.trim())).toArray();
+    private static final int EXACT_MULTI_MAX = Integer.getInteger("heatnet.exact.multiMax", 40);
+    private static final int EXACT_GRIDS_AT_ONCE = Integer.getInteger("heatnet.exact.gridsAtOnce",
+            Runtime.getRuntime().maxMemory() >= 3L << 30 ? 2 : 1);
+    private static final double EXACT_REFINE_M = 10;
+    private static final int EXACT_REFINE_SWEEPS = Integer.getInteger("heatnet.exact.sweeps", 3);
+    private static final long EXACT_MAX_BYTES = Long.getLong("heatnet.exact.maxBytes", 256L << 20);
+    private static final double EXACT_MARGIN_M = 30;
     private static final int RELAY_TRIES = 3;
     private static final int RELAY_PASSES = 3;
     /** Пул для деревьев подмножеств, см. {@link #prefetch}; нити демоны, как у пула чтения. */
@@ -348,6 +372,7 @@ public final class VariantEnumerator {
 
     /** Как построено каждое дерево из {@link #options}: по нему сдвигаются камеры в деревьях вариантов. */
     private final Map<Tree, Shaping> shapings = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, Integer> rejectedDn = new ConcurrentHashMap<>();
 
     /** Работа проходов после поиска для лога: сборки одного дерева в {@link #option}, доводки формы, сборки черновика. */
     private final AtomicInteger optionCount = new AtomicInteger();
@@ -361,6 +386,12 @@ public final class VariantEnumerator {
         final Envelope wideArea;
         final Map<String, List<Option>> options = new HashMap<>();
         final Map<String, Router> routers = new java.util.concurrent.ConcurrentHashMap<>();
+        volatile Set<String> visible;
+
+        Router built(String key) {
+            Set<String> keys = visible;
+            return keys == null || keys.contains(key) ? routers.get(key) : null;
+        }
         final Map<String, ObstacleSet> obstacleSets = new java.util.concurrent.ConcurrentHashMap<>();
         private final List<Point> points;
         private final List<TieCandidate> candidates;
@@ -426,7 +457,7 @@ public final class VariantEnumerator {
 
         /** Зоны для проверки отступов при фактическом Ду: буферы зон дороже самой проверки, поэтому по одному на Ду и область. */
         ObstacleSet obstacles(int obstaclesDn, Envelope obstaclesArea) {
-            Router router = routers.get(obstaclesDn + "@" + obstaclesArea);
+            Router router = built(obstaclesDn + "@" + obstaclesArea);
             if (router != null) {
                 return router.obstacles();
             }
@@ -622,15 +653,478 @@ public final class VariantEnumerator {
             return city();
         }
         List<Draft> shaped = new ArrayList<>();
-        List<Draft> picked = shaped(picked(), shaped);
+        List<Draft> found = picked();
+        List<Draft> candidates = EXACT ? exact(found) : List.of();
+        List<Draft> picked = shaped(found, shaped);
+        if (!candidates.isEmpty()) {
+            Set<Draft> shown = shown(picked, shaped);
+            Set<Draft> replaced = exacted(picked, shaped, candidates);
+            for (int i = shaped.size() - 1; !replaced.isEmpty() && i >= 0; i--) {
+                if (!replaced.contains(picked.get(i)) && !shown.contains(picked.get(i))) {
+                    picked.remove(i);
+                    shaped.remove(i);
+                }
+            }
+        }
         if (TURN_DETACH) {
             reattached(picked, shaped);
+        }
+        List<List<Tree>> recombined = recombined(shaped.stream().map(draft -> draft.trees).collect(Collectors.toList()),
+                shaped.stream().mapToDouble(draft -> exact(draft.variant)).toArray(),
+                trees -> assembler.assemble("0", 0, trees, missing(trees)));
+        for (int i = 0; i < shaped.size(); i++) {
+            List<Tree> trees = recombined.get(i);
+            if (trees != shaped.get(i).trees) {
+                List<FutureOks> unconnected = missing(trees);
+                try {
+                    Variant variant = assembler.assemble(shaped.get(i).variant.getId(), i + 1, trees, unconnected);
+                    shaped.set(i, new Draft(trees, unconnected, variant));
+                    picked.set(i, shaped.get(i));
+                } catch (IllegalStateException | IllegalArgumentException e) {
+                    log.info("recombined: вариант {} не собран: {}", i + 1, e.getMessage());
+                }
+            }
         }
         List<Variant> variants = shaped.stream().map(draft -> draft.variant).collect(Collectors.toList());
         // ранг 1 — наименьший score (п. 7.2): доводка после поиска меняет S, и порядок черновиков мог разойтись с ним
         List<Integer> order = Scorer.rank(variants.stream().map(Variant::getSummary).collect(Collectors.toList()));
         return new Result(distinct(order.stream().map(variants::get).collect(Collectors.toList()),
-                order.stream().map(picked::get).collect(Collectors.toList())), input.getNumericIds());
+                order.stream().map(i -> picked.get(i).trees).collect(Collectors.toList())), input.getNumericIds());
+    }
+
+    private Set<Draft> exacted(List<Draft> picked, List<Draft> shaped, List<Draft> candidates) {
+        long started = System.nanoTime();
+        boolean outer = frozen();
+        List<Draft[]> results;
+        try {
+            results = (PARALLEL ? candidates.parallelStream() : candidates.stream()).map(candidate -> {
+                List<Draft> candidateShaped = new ArrayList<>();
+                try {
+                    List<Draft> candidatePicked = shaped(new ArrayList<>(List.of(candidate)), candidateShaped);
+                    return candidateShaped.isEmpty() ? null : new Draft[] {candidatePicked.get(0), candidateShaped.get(0)};
+                } catch (IllegalStateException | IllegalArgumentException e) {
+                    log.info("exact: черновик со скелетом не доведён: {}", e.getMessage());
+                    return null;
+                }
+            }).collect(Collectors.toList());
+        } finally {
+            thawed(outer);
+        }
+        Map<Integer, double[]> bases = new HashMap<>();
+        Map<Integer, double[]> best = new HashMap<>();
+        Map<Integer, Draft[]> chosen = new HashMap<>();
+        for (int a = 0; a < results.size(); a++) {
+            if (results.get(a) == null) {
+                continue;
+            }
+            Set<String> layout = layout(candidates.get(a).trees);
+            int base = -1;
+            for (int i = 0; i < shaped.size() && base < 0; i++) {
+                base = layout(shaped.get(i).trees).equals(layout) ? i : -1;
+            }
+            if (base < 0) {
+                continue;
+            }
+            double[] form = form(results.get(a)[1]);
+            double[] was = bases.computeIfAbsent(base, i -> form(shaped.get(i)));
+            log.info("exact: скелет черновика {}: score {} → после формы {}, без сети, поворотов, пар, дефектов, переносов {}; "
+                    + "без скелета {}", base + 1, candidates.get(a).score(), form[0], Arrays.toString(form), Arrays.toString(was));
+            if (dominates(form, was) && (!best.containsKey(base) || form[0] < best.get(base)[0])) {
+                best.put(base, form);
+                chosen.put(base, results.get(a));
+            }
+        }
+        Set<Draft> replaced = Collections.newSetFromMap(new IdentityHashMap<>());
+        chosen.forEach((base, done) -> {
+            picked.set(base, done[0]);
+            shaped.set(base, done[1]);
+            replaced.add(done[0]);
+        });
+        log.info("exact: черновиков со скелетом {}, взято {} elapsed={}ms", candidates.size(), replaced.size(),
+                (System.nanoTime() - started) / 1_000_000);
+        return replaced;
+    }
+
+    private double[] form(Draft draft) {
+        int[] shape = shape(draft.trees);
+        boolean sharp = draft.trees.stream().anyMatch(tree -> sharpPairs(tree, null) > 0);
+        return new double[] {draft.variant.getSummary().getScore(), draft.variant.getSummary().getUnconnectedOksIds().size(),
+                shape[0], shape[1], formDefects(draft.trees), unkinkable(draft.trees), sharp ? 1 : 0};
+    }
+
+    private static boolean dominates(double[] form, double[] was) {
+        boolean better = false;
+        for (int k = 0; k < form.length; k++) {
+            if (form[k] > was[k]) {
+                return false;
+            }
+            better |= form[k] < was[k];
+        }
+        return better;
+    }
+
+    private int unkinkable(List<Tree> trees) {
+        int count = 0;
+        double maxGainRub = TURN_TOLERANCE_S / rules.score(1, 0);
+        for (int t = 0; t < trees.size(); t++) {
+            Tree tree = trees.get(t);
+            if (tree.connected().isEmpty()) {
+                continue;
+            }
+            Region region = regionByConnection.get(tree.connected().get(0).getId());
+            Envelope area = region.area.contains(tree.envelope()) ? region.area : region.wideArea;
+            if (!area.contains(tree.envelope())) {
+                continue;
+            }
+            List<Tree> unit = new ArrayList<>();
+            for (Tree other : trees) {
+                if (other.root.key.equals(tree.root.key)) {
+                    unit.add(other);
+                }
+            }
+            Map<Tree.Edge, Integer> dnByEdge;
+            try {
+                dnByEdge = assembler.diameters(unit);
+            } catch (IllegalStateException | IllegalArgumentException e) {
+                continue;
+            }
+            Map<Tree.Edge, Double> priceRub = new IdentityHashMap<>();
+            dnByEdge.forEach((edge, dn) -> priceRub.put(edge, rules.diameter(dn).getNewRubM() + rules.lengthWorthRub()));
+            List<Tree> others = new ArrayList<>(trees);
+            others.remove(t);
+            double before = Double.NaN;
+            for (Tree.Node junction : JunctionMover.junctions(tree)) {
+                List<TreeBuilder.Slide> slides = new ArrayList<>();
+                for (boolean evensOnly : new boolean[] {false, true}) {
+                    slides.addAll(builder.rightFreeUnkinks(tree, junction, edge -> region.obstacles(dnByEdge.get(edge), area),
+                            dnByEdge, priceRub, maxGainRub, evensOnly));
+                }
+                for (TreeBuilder.Slide slide : slides) {
+                    Tree changed = unkinked(tree, slide, tree.tie, dnByEdge, region, area, true);
+                    if (changed == null || !compatible(changed, others)) {
+                        continue;
+                    }
+                    List<Tree> attempt = new ArrayList<>();
+                    for (Tree other : unit) {
+                        attempt.add(other == tree ? changed : other);
+                    }
+                    before = Double.isNaN(before) ? unitScore(unit) : before;
+                    if (unitScore(attempt) <= before + TURN_TOLERANCE_S && !worse(tree, unit, changed, attempt)) {
+                        count++;
+                        break;
+                    }
+                }
+            }
+        }
+        return count;
+    }
+
+    private int formDefects(List<Tree> trees) {
+        int count = 0;
+        for (Tree tree : trees) {
+            for (Tree.Edge edge : tree.edges) {
+                Coordinate[] c = edge.line.getCoordinates();
+                int exit = edge.to.kind == Tree.Kind.CONNECTION && buildingByConnection.containsKey(edge.to.connection.getId())
+                        ? c.length - 2 : -1;
+                double[] turn = new double[c.length];
+                for (int i = 1; i + 1 < c.length; i++) {
+                    double deg = Router.deflectionDeg(c[i - 1], c[i], c[i + 1]);
+                    double side = (c[i].x - c[i - 1].x) * (c[i + 1].y - c[i].y) - (c[i].y - c[i - 1].y) * (c[i + 1].x - c[i].x);
+                    turn[i] = deg >= TreeBuilder.MIN_TURN_DEG ? Math.copySign(deg, side) : 0;
+                }
+                for (int i = 1; i + 2 < c.length; i++) {
+                    double a = turn[i];
+                    double b = turn[i + 1];
+                    if (a == 0 || b == 0) {
+                        continue;
+                    }
+                    if (a * b > 0 && Math.abs(a) < FORM_RIGHT_DEG && Math.abs(b) < FORM_RIGHT_DEG
+                            && Math.abs(a + b) <= Router.MAX_TURN_DEG + 1e-6) {
+                        count++;
+                    } else if (a * b < 0 && c[i].distance(c[i + 1]) < FORM_STEP_M && i + 1 != exit) {
+                        count++;
+                    }
+                }
+            }
+        }
+        return count;
+    }
+
+    private List<Draft> exact(List<Draft> found) {
+        long started = System.nanoTime();
+        List<Draft> candidates = new ArrayList<>();
+        for (Draft draft : found) {
+            List<Draft> others = draft == found.get(0) ? new ArrayList<>() : null;
+            Draft exact = exact(draft, others);
+            if (exact != draft) {
+                candidates.add(exact);
+            }
+            if (others != null) {
+                candidates.addAll(others);
+            }
+        }
+        log.info("exact: черновиков со скелетом {} у {} черновиков elapsed={}ms", candidates.size(), found.size(),
+                (System.nanoTime() - started) / 1_000_000);
+        return candidates;
+    }
+
+    private Draft exact(Draft draft, List<Draft> alternates) {
+        List<Tree> trees = new ArrayList<>(draft.trees);
+        boolean changed = false;
+        int altTree = -1;
+        List<Option> altOptions = List.of();
+        int multi = -1;
+        for (int i = 0; SQUARE && alternates != null && !district && connectionByOks.size() <= EXACT_MULTI_MAX && i < trees.size(); i++) {
+            int size = trees.get(i).connected().size();
+            if (size >= 3 && size <= EXACT_MAX && trees.get(i).unconnected.isEmpty()
+                    && (multi < 0 || size > trees.get(multi).connected().size())) {
+                multi = i;
+            }
+        }
+        for (int i = 0; i < trees.size(); i++) {
+            Tree tree = trees.get(i);
+            List<ConnectionPoint> subset = tree.connected();
+            if (subset.size() < 3 || subset.size() > EXACT_MAX || !tree.unconnected.isEmpty()) {
+                continue;
+            }
+            Region region = regionByConnection.get(subset.get(0).getId());
+            Diameter byFlow = rules.diameterFor(flow(subset));
+            Diameter step = rules.nextDiameter(byFlow.getDn());
+            int blockDn = Math.min(region.dn, step != null ? step.getDn() : byFlow.getDn());
+            Router router = region.router(blockDn, region.area);
+            String label = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(","));
+            Option before = option(tree, label, false, region.area, blockDn, region, tree.narrow);
+            double bound = before == null ? Double.POSITIVE_INFINITY : before.score;
+            TreeBuilder.Graphs graphs = graphs(region, region.area);
+            List<Tree> others = new ArrayList<>(trees);
+            others.remove(i);
+            Option primary = null;
+            List<Option> extra = new ArrayList<>();
+            List<Double> steps = new ArrayList<>(List.of(EXACT_STEP_M));
+            for (double placeStep : i == multi ? EXACT_STEPS : new double[0]) {
+                if (!steps.contains(placeStep)) {
+                    steps.add(placeStep);
+                }
+            }
+            List<Option> built = new ArrayList<>();
+            for (int from = 0; from < steps.size(); from += EXACT_GRIDS_AT_ONCE) {
+                List<Double> batch = steps.subList(from, Math.min(steps.size(), from + EXACT_GRIDS_AT_ONCE));
+                built.addAll((PARALLEL ? batch.parallelStream() : batch.stream())
+                        .map(placeStep -> Optional.ofNullable(skeleton(tree, subset, region, blockDn, router, label,
+                                placeStep, bound, graphs)))
+                        .map(found -> found.orElse(null)).collect(Collectors.toList()));
+            }
+            for (int g = 0; g < steps.size(); g++) {
+                double placeStep = steps.get(g);
+                Option best = built.get(g);
+                log.info("exact: дерево {} сетка {} м score {} → {}", label, placeStep,
+                        before == null ? Double.NaN : before.score, best == null ? Double.NaN : best.score);
+                boolean valid = best != null && (before == null || best.score < before.score) && compatible(best.tree, others);
+                if (placeStep == EXACT_STEP_M) {
+                    primary = valid ? best : null;
+                } else if (valid && (primary == null || Math.abs(primary.exact - best.exact) >= 1e-9)
+                        && extra.stream().noneMatch(o -> Math.abs(o.exact - best.exact) < 1e-9)) {
+                    extra.add(best);
+                }
+            }
+            extra.sort(Comparator.comparingDouble(o -> o.score));
+            List<Option> options = new ArrayList<>(extra);
+            if (primary != null) {
+                options.add(0, primary);
+            }
+            for (Option option : options) {
+                shapings.put(option.tree, new Shaping(router, blockDn, graphs,
+                        shape -> option(shape, label, false, region.area, blockDn, region, option.tree.narrow || shape.narrow)));
+            }
+            if (i == multi && !extra.isEmpty()) {
+                altTree = i;
+                altOptions = extra;
+            }
+            if (primary == null) {
+                continue;
+            }
+            trees.set(i, primary.tree);
+            changed = true;
+        }
+        Draft exact = draft;
+        if (changed) {
+            try {
+                exact = new Draft(trees, draft.unconnected, assembler.assemble("0", 0, trees, draft.unconnected));
+            } catch (IllegalStateException | IllegalArgumentException e) {
+                log.info("exact: черновик не собрался: {}", e.getMessage());
+                exact = draft;
+            }
+            if (exact.score() >= draft.score()) {
+                exact = draft;
+            }
+        }
+        if (exact == draft) {
+            trees = new ArrayList<>(draft.trees);
+        }
+        for (Option option : alternates == null ? List.<Option>of() : altOptions) {
+            List<Tree> alt = new ArrayList<>(trees);
+            alt.set(altTree, option.tree);
+            try {
+                Draft other = new Draft(alt, draft.unconnected, assembler.assemble("0", 0, alt, draft.unconnected));
+                if (other.score() < draft.score()) {
+                    alternates.add(other);
+                }
+            } catch (IllegalStateException | IllegalArgumentException e) {
+                log.info("exact: другой скелет не собрался: {}", e.getMessage());
+            }
+        }
+        return exact;
+    }
+
+    private Option skeleton(Tree tree, List<ConnectionPoint> subset, Region region, int blockDn, Router router,
+            String label, double placeStep, double bound, TreeBuilder.Graphs graphs) {
+        TieCandidate tie = tree.tie;
+        List<Coordinate> places = new ArrayList<>();
+        int k = subset.size();
+        int[] leaf = new int[k];
+        double[] leafCost = new double[k];
+        double[] flows = new double[k];
+        Envelope frame = new Envelope(tie.getPoint().getCoordinate());
+        for (int t = 0; t < k; t++) {
+            ConnectionPoint connection = subset.get(t);
+            Coordinate at = connection.getGeometry().getCoordinate();
+            Coordinate exit = builder.exit(router, blockDn, region.area, tie, connection);
+            exit = exit != null ? exit : at;
+            flows[t] = oksById.get(connection.getOksId()).getFlowTph();
+            double length = exit.distance(at);
+            leafCost[t] = rules.score(rules.diameterFor(flows[t]).getNewRubM() * length, length);
+            leaf[t] = places.size();
+            places.add(exit);
+            frame.expandToInclude(exit);
+        }
+        int root = places.size();
+        places.add(tie.getPoint().getCoordinate());
+        frame.expandBy(EXACT_MARGIN_M);
+        ObstacleSet zones = router.obstacles();
+        long ix0 = (long) Math.floor(frame.getMinX() / placeStep);
+        long iy0 = (long) Math.floor(frame.getMinY() / placeStep);
+        for (long ix = ix0; ix * placeStep <= frame.getMaxX(); ix++) {
+            for (long iy = iy0; iy * placeStep <= frame.getMaxY(); iy++) {
+                Coordinate c = new Coordinate(ix * placeStep, iy * placeStep);
+                if (region.area.contains(c) && !zones.insideForbid(c) && !zones.insideMargin(c)) {
+                    places.add(c);
+                }
+            }
+        }
+        if ((1L << k) * places.size() * 8 > EXACT_MAX_BYTES) {
+            log.info("exact: дерево {} пропущено: таблицы {} МБ", label, (1L << k) * places.size() * 8 >> 20);
+            return null;
+        }
+        long started = System.nanoTime();
+        double[][] weights = router.weights(places, tie.getIgnored());
+        long weighed = System.nanoTime();
+        java.util.function.DoubleUnaryOperator rate = f -> rules.score(rules.diameterFor(f).getNewRubM(), 1);
+        java.util.function.DoubleUnaryOperator chamber = f -> rules.score(rules.chamberCost(rules.diameterFor(f).getDn()), 0);
+        double extra = tie.isChamber() ? rules.score(rules.tieInCost(), 0) : 0;
+        ExactSteiner steiner = new ExactSteiner(weights, leaf, leafCost, flows, rate, chamber, root, bound);
+        ExactSteiner.Skeleton skeleton = steiner.tree(root, tie.getCapacity(), extra);
+        log.info("exact: дерево {} мест {} веса {}ms динамика {}ms (слияния {}ms, продолжения {}ms по нитям, живых {}%) "
+                + "камер {} оценка {}", label, places.size(), (weighed - started) / 1_000_000,
+                (System.nanoTime() - weighed) / 1_000_000, steiner.mergeNanos.get() / 1_000_000,
+                steiner.extendNanos.get() / 1_000_000, steiner.liveCount.get() * 100 / ((1L << k) * places.size()),
+                skeleton == null ? 0 : skeleton.junctions.size(), skeleton == null ? Double.NaN : skeleton.cost);
+        if (skeleton == null) {
+            return null;
+        }
+        List<Coordinate> junctions = skeleton.junctions.stream().map(places::get).collect(Collectors.toList());
+        int[] parents = skeleton.parents.stream().mapToInt(Integer::intValue).toArray();
+        long refining = System.nanoTime();
+        double moved = refined(router, tie, region.area, places, root, subset, flows, skeleton, junctions, rate);
+        log.info("exact: доводка камер скелета {} м за {}ms", String.format(Locale.ROOT, "%.1f", moved),
+                (System.nanoTime() - refining) / 1_000_000);
+        double metreRub = rules.diameter(blockDn).getNewRubM() + rules.lengthWorthRub();
+        Tree built = builder.buildOnSkeleton(router, blockDn, region.area, tie, subset, junctions, parents,
+                rules.chamberCost(blockDn) / metreRub, rules.tieInCost() / metreRub, graphs);
+        if (built == null || !built.unconnected.isEmpty()) {
+            log.info("exact: дерево {} на скелете не построено", label);
+            return null;
+        }
+        Option best = null;
+        for (Tree shape : List.of(builder.cut(built, router, blockDn, graphs, TreeBuilder.CUT_PASSES),
+                builder.cut(built, router, blockDn, graphs, 0), built)) {
+            Option option = option(shape, label, false, region.area, blockDn, region, built.narrow || shape.narrow);
+            if (option != null && (best == null || option.score < best.score)) {
+                best = option;
+            }
+        }
+        return best;
+    }
+
+    private double refined(Router router, TieCandidate tie, Envelope area, List<Coordinate> places, int root,
+            List<ConnectionPoint> subset, double[] flows, ExactSteiner.Skeleton skeleton, List<Coordinate> junctions,
+            java.util.function.DoubleUnaryOperator rate) {
+        int count = junctions.size();
+        double[] flowOf = new double[count];
+        for (int j = 0; j < count; j++) {
+            int mask = skeleton.masks.get(j);
+            for (int t = 0; t < flows.length; t++) {
+                if ((mask >> t & 1) == 1) {
+                    flowOf[j] += flows[t];
+                }
+            }
+        }
+        ObstacleSet zones = router.obstacles();
+        double moved = 0;
+        for (int sweep = 0; sweep < EXACT_REFINE_SWEEPS; sweep++) {
+            double sweepMoved = 0;
+            for (int j = 0; j < count; j++) {
+                List<Coordinate> neighbours = new ArrayList<>();
+                List<Double> rates = new ArrayList<>();
+                int parent = skeleton.parents.get(j);
+                neighbours.add(parent < 0 ? places.get(root) : junctions.get(parent));
+                rates.add(rate.applyAsDouble(flowOf[j]));
+                for (int c = 0; c < count; c++) {
+                    if (skeleton.parents.get(c) == j) {
+                        neighbours.add(junctions.get(c));
+                        rates.add(rate.applyAsDouble(flowOf[c]));
+                    }
+                }
+                for (int t = 0; t < flows.length; t++) {
+                    if (skeleton.leafParent[t] == j) {
+                        neighbours.add(places.get(t));
+                        rates.add(rate.applyAsDouble(flows[t]));
+                    }
+                }
+                for (double[] grid : new double[][] {{EXACT_REFINE_M, 2}, {2, 0.5}}) {
+                    Coordinate at = junctions.get(j);
+                    List<Coordinate> candidates = new ArrayList<>();
+                    candidates.add(at);
+                    for (double dx = -grid[0]; dx <= grid[0] + 1e-9; dx += grid[1]) {
+                        for (double dy = -grid[0]; dy <= grid[0] + 1e-9; dy += grid[1]) {
+                            Coordinate c = new Coordinate(at.x + dx, at.y + dy);
+                            if ((dx != 0 || dy != 0) && area.contains(c) && !zones.insideForbid(c) && !zones.insideMargin(c)) {
+                                candidates.add(c);
+                            }
+                        }
+                    }
+                    double[][] w = router.weights(neighbours, candidates, tie.getIgnored());
+                    int best = 0;
+                    double bestCost = Double.POSITIVE_INFINITY;
+                    for (int q = 0; q < candidates.size(); q++) {
+                        double cost = 0;
+                        for (int b = 0; b < neighbours.size(); b++) {
+                            cost += rates.get(b) * w[b][q];
+                        }
+                        if (cost < bestCost - 1e-9) {
+                            bestCost = cost;
+                            best = q;
+                        }
+                    }
+                    sweepMoved += candidates.get(best).distance(at);
+                    junctions.set(j, candidates.get(best));
+                }
+            }
+            moved += sweepMoved;
+            if (sweepMoved < 0.1) {
+                break;
+            }
+        }
+        return moved;
     }
 
     /**
@@ -654,33 +1148,18 @@ public final class VariantEnumerator {
             log.info("slide: {} elapsed={}ms", work(), (System.nanoTime() - started) / 1_000_000);
         }
         List<Boolean> sharp = new ArrayList<>();
-        for (int i = 0; i < picked.size(); i++) {
-            Draft draft = picked.get(i);
-            Variant variant = null;
-            List<Tree> trees = draft.trees;
-            if (REROUTE) {
-                try {
-                    trees = polished(rerouted(draft));
-                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, ranked(trees), unconnected(draft, trees));
-                } catch (IllegalStateException | IllegalArgumentException e) {
-                    // узлы врезки собирались по отдельности, а вместе нет: вариант как найден поиском
-                    log.info("rerouted: вариант {} не собран: {}", i + 1, e.getMessage());
-                }
-            }
-            if (variant == null) {
-                try {
-                    trees = polished(draft.trees);
-                    variant = assembler.assemble(String.valueOf(i + 1), i + 1, ranked(trees), unconnected(draft, trees));
-                } catch (IllegalStateException | IllegalArgumentException e) {
-                    log.info("unkinked: вариант {} не собран: {}", i + 1, e.getMessage());
-                }
-            }
-            if (variant == null) {
-                trees = draft.trees;
-                variant = assembler.assemble(String.valueOf(i + 1), i + 1, trees, draft.unconnected);
-            }
-            shaped.add(new Draft(trees, unconnected(draft, trees), variant));
-            sharp.add(trees.stream().anyMatch(tree -> sharpPairs(tree) > 0));
+        List<Draft> drafts = picked;
+        boolean outer = frozen();
+        List<Draft> done;
+        try {
+            done = (PARALLEL ? IntStream.range(0, drafts.size()).parallel() : IntStream.range(0, drafts.size()))
+                    .mapToObj(i -> polishedDraft(drafts.get(i), i)).collect(Collectors.toList());
+        } finally {
+            thawed(outer);
+        }
+        for (Draft draft : done) {
+            shaped.add(draft);
+            sharp.add(draft.trees.stream().anyMatch(tree -> sharpPairs(tree, null) > 0));
         }
         // поворот круче 90° в камере, который правки не сняли, правило не допускает: вариант уступает место следующему
         // черновику, если хоть один вариант без таких поворотов есть
@@ -696,6 +1175,51 @@ public final class VariantEnumerator {
         return picked;
     }
 
+    private boolean frozen() {
+        boolean outer = false;
+        for (Region region : new HashSet<>(regionByConnection.values())) {
+            synchronized (region) {
+                if (region.visible == null) {
+                    region.visible = new HashSet<>(region.routers.keySet());
+                    outer = true;
+                }
+            }
+        }
+        return outer;
+    }
+
+    private void thawed(boolean outer) {
+        for (Region region : outer ? new HashSet<>(regionByConnection.values()) : Set.<Region>of()) {
+            region.visible = null;
+        }
+    }
+
+    private Draft polishedDraft(Draft draft, int i) {
+        Variant variant = null;
+        List<Tree> trees = draft.trees;
+        if (REROUTE) {
+            try {
+                trees = polished(rerouted(draft));
+                variant = assembler.assemble(String.valueOf(i + 1), i + 1, ranked(trees), unconnected(draft, trees));
+            } catch (IllegalStateException | IllegalArgumentException e) {
+                log.info("rerouted: вариант {} не собран: {}", i + 1, e.getMessage());
+            }
+        }
+        if (variant == null) {
+            try {
+                trees = polished(draft.trees);
+                variant = assembler.assemble(String.valueOf(i + 1), i + 1, ranked(trees), unconnected(draft, trees));
+            } catch (IllegalStateException | IllegalArgumentException e) {
+                log.info("unkinked: вариант {} не собран: {}", i + 1, e.getMessage());
+            }
+        }
+        if (variant == null) {
+            trees = draft.trees;
+            variant = assembler.assemble(String.valueOf(i + 1), i + 1, trees, draft.unconnected);
+        }
+        return new Draft(trees, unconnected(draft, trees), variant);
+    }
+
     /**
      * Деревья черновика после правок готового варианта: повороты в камерах ({@link #turned}), изломы у камер
      * ({@link #unkinked(List)}), два поворота одной вершиной ({@link #bent}), вход в здание ({@link #entered}), изломы
@@ -706,33 +1230,69 @@ public final class VariantEnumerator {
         List<Tree> unkinked = unkinked(turned(trees));
         Set<Tree> same = Collections.newSetFromMap(new IdentityHashMap<>());
         same.addAll(unkinked);
-        return entered(squared(unkinked(unkinked(evened(entered(bent(unkinked))), false, same), true)));
+        List<Tree> squared = squared(unkinked(unkinked(evened(entered(bent(unkinked))), false, same), true));
+        List<Tree> result = entered(unkinked(unkinked(evened(entered(unkinked(squared))), true), false, Set.of(), true));
+        for (int t = 0; t < result.size(); t++) {
+            Tree tree = result.get(t);
+            if (tree != squared.get(t) && tree.unsquared == null && squared.get(t).unsquared != null) {
+                tree.unsquared = squared.get(t).unsquared;
+            }
+        }
+        return result;
     }
 
     /**
-     * Варианты без совпавших с лучшими по устройству ({@link #layout}) или трассе (полоса SAME_ROUTE_M), с номерами
-     * подряд. Перенос и сдвиг камер и прокладка заново двигают трассу после отбора черновиков, поэтому трасса берётся
-     * по участкам варианта, а устройство — по его черновику из drafts.
+     * Варианты без совпавших с лучшими по устройству ({@link #layout}) или трассе (полоса SAME_ROUTE_M) и без тех, где
+     * точек без сети больше наименьшего среди вариантов (п. 2.5), с номерами подряд. Перенос и сдвиг камер и прокладка
+     * заново двигают трассу после отбора черновиков, поэтому трасса берётся по участкам варианта, а устройство — по
+     * деревьям варианта из trees.
      */
-    private List<Variant> distinct(List<Variant> variants, List<Draft> drafts) {
+    private List<Variant> distinct(List<Variant> variants, List<List<Tree>> trees) {
         List<Variant> kept = new ArrayList<>();
+        for (int i : distinctIndices(variants, trees)) {
+            Variant variant = variants.get(i);
+            String id = String.valueOf(kept.size() + 1);
+            kept.add(variant.getId().equals(id) ? variant : renumbered(variant, id, kept.size() + 1));
+        }
+        return kept;
+    }
+
+    private List<Integer> distinctIndices(List<Variant> variants, List<List<Tree>> trees) {
+        List<Integer> kept = new ArrayList<>();
         List<RouteBand> bands = new ArrayList<>();
         List<Set<String>> layouts = new ArrayList<>();
+        int fewest = variants.stream().mapToInt(v -> v.getSummary().getUnconnectedOksIds().size()).min().orElse(0);
         for (int i = 0; i < variants.size(); i++) {
             Variant variant = variants.get(i);
+            int unconnected = variant.getSummary().getUnconnectedOksIds().size();
+            if (unconnected > fewest) {
+                log.info("variants: вариант {} оставляет без сети {} точек при наименьших {} и не выдаётся", variant.getId(),
+                        unconnected, fewest);
+                continue;
+            }
             List<LineString> lines = variant.getSegments().stream().map(NewSegment::getGeometry).collect(Collectors.toList());
             RouteBand band = new RouteBand(lines, lines.size(), SAME_ROUTE_M, factory);
-            Set<String> layout = layout(drafts.get(i).trees);
+            Set<String> layout = layout(trees.get(i));
             if (layouts.contains(layout) || bands.stream().anyMatch(other -> RouteBand.same(other, band, SAME_ROUTE_SHARE))) {
                 log.info("variants: вариант {} совпал с лучшим по устройству или трассе и не выдаётся", variant.getId());
                 continue;
             }
-            String id = String.valueOf(kept.size() + 1);
-            kept.add(variant.getId().equals(id) ? variant : renumbered(variant, id, kept.size() + 1));
+            kept.add(i);
             bands.add(band);
             layouts.add(layout);
         }
         return kept;
+    }
+
+    private Set<Draft> shown(List<Draft> picked, List<Draft> shaped) {
+        List<Variant> variants = shaped.stream().map(draft -> draft.variant).collect(Collectors.toList());
+        List<Integer> order = Scorer.rank(variants.stream().map(Variant::getSummary).collect(Collectors.toList()));
+        Set<Draft> shown = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (int k : distinctIndices(order.stream().map(variants::get).collect(Collectors.toList()),
+                order.stream().map(i -> picked.get(i).trees).collect(Collectors.toList()))) {
+            shown.add(picked.get(order.get(k)));
+        }
+        return shown;
     }
 
     /**
@@ -819,24 +1379,33 @@ public final class VariantEnumerator {
         List<Variant> variants = new ArrayList<>();
         for (int k = 0; k < candidates.size(); k++) {
             List<Tree> trees = candidates.get(k);
-            Variant variant = assembleParts(String.valueOf(k + 1), k + 1, trees, missing(trees));
-            variants.add(variant);
+            variants.add(assembleParts(String.valueOf(k + 1), k + 1, trees, missing(trees)));
+        }
+        List<List<Tree>> recombined = recombined(candidates, variants.stream().mapToDouble(this::exact).toArray(),
+                trees -> assembleParts("0", 0, trees, missing(trees)));
+        for (int k = 0; k < candidates.size(); k++) {
+            List<Tree> trees = recombined.get(k);
+            if (trees != candidates.get(k)) {
+                candidates.set(k, trees);
+                variants.set(k, assembleParts(String.valueOf(k + 1), k + 1, trees, missing(trees)));
+            }
+            Variant variant = variants.get(k);
             log.info("city: candidate {} trees={} score={} unconnected={} elapsed={}s", k + 1, trees.size(),
                     variant.getSummary().getScore(), variant.getSummary().getUnconnectedOksIds().size(),
                     (System.nanoTime() - started) / 1_000_000_000L);
         }
         List<Integer> order = Scorer.rank(variants.stream().map(Variant::getSummary).collect(Collectors.toList()));
-        List<Variant> ranked = new ArrayList<>();
-        for (int i = 0; i < order.size(); i++) {
-            Variant variant = variants.get(order.get(i));
-            String id = String.valueOf(i + 1);
-            if (variant.getId().equals(id)) {
-                ranked.add(variant);
-            } else {
-                ranked.add(renumbered(variant, id, i + 1));
-            }
+        long distinctStarted = System.nanoTime();
+        List<Variant> sorted = new ArrayList<>();
+        List<List<Tree>> layouts = new ArrayList<>();
+        for (int k : order) {
+            sorted.add(variants.get(k));
+            layouts.add(assembled(candidates.get(k), variants.get(k)));
         }
-        return new Result(ranked, input.getNumericIds());
+        List<Variant> kept = distinct(sorted, layouts);
+        log.info("city: distinct variants={} of {} elapsed={}ms", kept.size(), variants.size(),
+                (System.nanoTime() - distinctStarted) / 1_000_000);
+        return new Result(kept, input.getNumericIds());
     }
 
     /**
@@ -919,6 +1488,176 @@ public final class VariantEnumerator {
             }
         }
         log.info("city: squared trees kept unsquared (touching others) {}", kept);
+    }
+
+    private static List<Tree> assembled(List<Tree> trees, Variant variant) {
+        Set<String> left = new HashSet<>(variant.getSummary().getUnconnectedOksIds());
+        return trees.stream().filter(tree -> tree.connected().stream().noneMatch(c -> left.contains(c.getOksId())))
+                .collect(Collectors.toList());
+    }
+
+    List<List<Tree>> recombined(List<List<Tree>> variants, double[] scores,
+            java.util.function.Function<List<Tree>, Variant> assemble) {
+        long started = System.nanoTime();
+        int best = IntStream.range(0, scores.length).reduce((a, b) -> scores[b] < scores[a] ? b : a).orElse(0);
+        List<List<Tree>> result = new ArrayList<>();
+        for (int k = 0; k < variants.size(); k++) {
+            List<Tree> trees = new ArrayList<>(variants.get(k));
+            Quadtree index = new Quadtree();
+            Map<String, List<Tree>> byUnit = new HashMap<>();
+            for (Tree tree : trees) {
+                index.insert(tree.envelope(), tree);
+                byUnit.computeIfAbsent(tree.root.key, any -> new ArrayList<>()).add(tree);
+            }
+            int swaps = 0;
+            for (int j = 0; j < variants.size(); j++) {
+                if (j == k) {
+                    continue;
+                }
+                for (List<List<Tree>> part : parts(trees, variants.get(j))) {
+                    List<Tree> replaced = part.get(0);
+                    List<Tree> offer = part.get(1);
+                    if (offer.isEmpty() || k != best && !replaced.isEmpty()) {
+                        continue;
+                    }
+                    Set<String> covered = new HashSet<>();
+                    offer.forEach(tree -> tree.connected().forEach(c -> covered.add(c.getOksId())));
+                    Set<String> had = new HashSet<>();
+                    replaced.forEach(tree -> tree.connected().forEach(c -> had.add(c.getOksId())));
+                    if (!covered.containsAll(had)) {
+                        continue;
+                    }
+                    double penalties = 0;
+                    for (String id : covered) {
+                        if (!had.contains(id)) {
+                            penalties += rules.score(rules.penalty(oksById.get(id).getFlowTph()), 0);
+                        }
+                    }
+                    Set<String> units = new HashSet<>();
+                    replaced.forEach(tree -> units.add(tree.root.key));
+                    offer.forEach(tree -> units.add(tree.root.key));
+                    Set<Tree> gone = Collections.newSetFromMap(new IdentityHashMap<>());
+                    gone.addAll(replaced);
+                    List<Tree> added = new ArrayList<>();
+                    for (Tree tree : offer) {
+                        Envelope around = new Envelope(tree.envelope());
+                        around.expandBy(TREES_APART_M + 1);
+                        List<Tree> close = new ArrayList<>();
+                        for (Object item : index.query(around)) {
+                            Tree t = (Tree) item;
+                            if (!gone.contains(t) && t.envelope().intersects(around)) {
+                                close.add(t);
+                            }
+                        }
+                        added.stream().filter(t -> t.envelope().intersects(around)).forEach(close::add);
+                        if (!compatible(tree, close)) {
+                            added = null;
+                            break;
+                        }
+                        added.add(tree);
+                    }
+                    if (added == null) {
+                        continue;
+                    }
+                    List<Tree> before = units.stream().flatMap(unit -> byUnit.getOrDefault(unit, List.of()).stream())
+                            .collect(Collectors.toList());
+                    List<Tree> after = before.stream().filter(tree -> !gone.contains(tree)).collect(Collectors.toList());
+                    after.addAll(added);
+                    if (shape(after)[0] > shape(before)[0] || shape(after)[1] > shape(before)[1]
+                            || !((before.isEmpty() ? 0 : unitScore(before)) - unitScore(after) + penalties > SWAP_GAIN)) {
+                        continue;
+                    }
+                    trees.removeIf(gone::contains);
+                    trees.addAll(added);
+                    for (Tree tree : replaced) {
+                        index.remove(tree.envelope(), tree);
+                        byUnit.get(tree.root.key).remove(tree);
+                    }
+                    for (Tree tree : added) {
+                        index.insert(tree.envelope(), tree);
+                        byUnit.computeIfAbsent(tree.root.key, any -> new ArrayList<>()).add(tree);
+                    }
+                    swaps++;
+                }
+            }
+            if (swaps > 0) {
+                double after;
+                try {
+                    after = exact(assemble.apply(trees));
+                } catch (IllegalStateException | IllegalArgumentException e) {
+                    after = Double.NaN;
+                }
+                if (after < scores[k]) {
+                    log.info("recombined: вариант {} заменил {} групп деревьев деревьями других вариантов, S {} вместо {}",
+                            k + 1, swaps, after, scores[k]);
+                } else {
+                    log.info("recombined: вариант {}: деревья других вариантов не снижают S ({} против {})", k + 1, after,
+                            scores[k]);
+                    swaps = 0;
+                }
+            }
+            result.add(swaps > 0 ? trees : variants.get(k));
+        }
+        log.info("recombined: elapsed={}ms", (System.nanoTime() - started) / 1_000_000);
+        return result;
+    }
+
+    private static int[] shape(List<Tree> trees) {
+        int turns = 0;
+        int count = 0;
+        for (Tree tree : trees) {
+            for (Tree.Edge edge : tree.edges) {
+                Coordinate[] c = edge.line.getCoordinates();
+                double last = 0;
+                Coordinate at = null;
+                for (int i = 1; i + 1 < c.length; i++) {
+                    double turn = Math.toDegrees(org.locationtech.jts.algorithm.Angle.normalize(
+                            Math.atan2(c[i + 1].y - c[i].y, c[i + 1].x - c[i].x) - Math.atan2(c[i].y - c[i - 1].y, c[i].x - c[i - 1].x)));
+                    if (Math.abs(turn) < TreeBuilder.MIN_TURN_DEG) {
+                        continue;
+                    }
+                    turns++;
+                    double sum = Math.abs(turn + last);
+                    if (at != null && turn * last > 0 && sum >= PAIR_MIN_DEG && sum <= PAIR_MAX_DEG && at.distance(c[i]) < PAIR_LINK_M) {
+                        count++;
+                    }
+                    last = turn;
+                    at = c[i];
+                }
+            }
+        }
+        return new int[] {turns, count};
+    }
+
+    private static List<List<List<Tree>>> parts(List<Tree> own, List<Tree> other) {
+        List<Tree> all = new ArrayList<>(own);
+        Set<Tree> mine = Collections.newSetFromMap(new IdentityHashMap<>());
+        mine.addAll(own);
+        other.stream().filter(tree -> !mine.contains(tree) && !tree.connected().isEmpty()).forEach(all::add);
+        int[] parent = IntStream.range(0, all.size()).toArray();
+        Map<String, Integer> first = new HashMap<>();
+        for (int i = 0; i < all.size(); i++) {
+            for (ConnectionPoint c : all.get(i).connected()) {
+                Integer seen = first.putIfAbsent(c.getOksId(), i);
+                if (seen != null) {
+                    parent[root(parent, i)] = root(parent, seen);
+                }
+            }
+        }
+        Map<Integer, List<List<Tree>>> byRoot = new LinkedHashMap<>();
+        for (int i = 0; i < all.size(); i++) {
+            List<List<Tree>> part = byRoot.computeIfAbsent(root(parent, i), any -> List.of(new ArrayList<>(), new ArrayList<>()));
+            part.get(i < own.size() ? 0 : 1).add(all.get(i));
+        }
+        return new ArrayList<>(byRoot.values());
+    }
+
+    private static int root(int[] parent, int i) {
+        while (parent[i] != i) {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        return i;
     }
 
     /** Точки деревьев before, которых нет в деревьях after, добавляются в lost. */
@@ -1060,7 +1799,12 @@ public final class VariantEnumerator {
                     // те же проходы формы, что в обычном режиме: деревья района проверяются на прямые подключения
                     // (compatible по direct), с соседними районами — при склейке (joined)
                     List<Draft> drafts = new ArrayList<>();
-                    List<Draft> picked = district.shaped(district.picked(), drafts);
+                    List<Draft> found = district.picked();
+                    List<Draft> candidates = EXACT ? district.exact(found) : List.of();
+                    List<Draft> picked = district.shaped(found, drafts);
+                    if (!candidates.isEmpty()) {
+                        district.exacted(picked, drafts, candidates);
+                    }
                     for (int d = 0; detached != null && d < drafts.size(); d++) {
                         lost(picked.get(d).trees, drafts.get(d).trees, detached);
                     }
@@ -1177,7 +1921,8 @@ public final class VariantEnumerator {
 
     /**
      * Второй проход города по точкам без сети: каждая группа таких точек считается районом вместе с точками ближайших
-     * (не дальше RETRY_NEAR_M, до RETRY_TREES) уже принятых деревьев — районов или прямых подключений. Районы считаются
+     * (не дальше RETRY_NEAR_M, до RETRY_TREES) уже принятых деревьев — районов или прямых подключений; близость, как и
+     * другие решения о подключении в городе, считается по форме до прохода по осям ({@link #basis}). Районы считаются
      * порознь, и точка у границы района остаётся без трассы, когда её маршрут есть только ветвлением от дерева
      * соседнего района, или её дерево задело дерево соседа и было отброшено в {@link #joined}. Новые деревья заменяют
      * соседние, если подключают больше точек и не задевают остальные принятые деревья варианта; врезки — только в
@@ -1205,7 +1950,7 @@ public final class VariantEnumerator {
                 continue;
             }
             STRtree index = new STRtree();
-            trees.forEach(tree -> index.insert(tree.envelope(), tree));
+            trees.forEach(tree -> index.insert(basis(tree).envelope(), tree));
             for (List<ConnectionPoint> group : districts(left)) {
                 Envelope around = new Envelope();
                 group.forEach(connection -> around.expandToInclude(connection.getGeometry().getCoordinate()));
@@ -1214,14 +1959,14 @@ public final class VariantEnumerator {
                 List<Tree> close = new ArrayList<>();
                 for (Object item : index.query(around)) {
                     Tree tree = (Tree) item;
-                    if (!tree.connected().isEmpty() && geometry(tree).distance(points) <= RETRY_NEAR_M) {
+                    if (!tree.connected().isEmpty() && geometry(basis(tree)).distance(points) <= RETRY_NEAR_M) {
                         close.add(tree);
                     }
                 }
                 if (close.isEmpty()) {
                     continue;
                 }
-                close.sort(Comparator.comparingDouble((Tree tree) -> geometry(tree).distance(points))
+                close.sort(Comparator.comparingDouble((Tree tree) -> geometry(basis(tree)).distance(points))
                         .thenComparing(tree -> tree.connected().get(0).getId()));
                 List<Tree> taken = new ArrayList<>(close.subList(0, Math.min(RETRY_TREES, close.size())));
                 List<ConnectionPoint> subset = new ArrayList<>(group);
@@ -1840,6 +2585,11 @@ public final class VariantEnumerator {
                 Envelope wide = district ? region.area : region.wideArea;
                 options.addAll(options(region, blockDn, wide, subset, false, candidates(points, flow, blockDn), true, slide));
             }
+            String label = subset.get(0).getId();
+            for (int tried = blockDn; !district && incomplete(plain(options)) && rejectedDn.getOrDefault(label, 0) > tried; ) {
+                tried = rejectedDn.get(label);
+                options.addAll(options(region, tried, region.wideArea, subset, false, candidates(points, flow, tried), false, slide));
+            }
             if (SCAN && incomplete(plain(options))) {
                 // сеть в коридоре коммуникаций: проекции точки на три ближайшие трубы лежат в отступах идущих вдоль них
                 // линий, в зоне здания или в полосе дороги, и из них не выйти. Врезка ищется по всем трубам вокруг,
@@ -1849,6 +2599,11 @@ public final class VariantEnumerator {
                 if (!scanned.isEmpty()) {
                     options.addAll(options(region, blockDn, wide, subset, false, scanned, false, slide));
                 }
+            }
+            if (incomplete(options)) {
+                Envelope wide = district ? region.area : region.wideArea;
+                options.addAll(options(region, blockDn, wide, subset, false, candidates(points, flow, blockDn), false,
+                        slide, true));
             }
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
@@ -1963,23 +2718,28 @@ public final class VariantEnumerator {
     /** {@code slide} — переносить врезку к стволу, см. {@link #slid} и {@link #rerooted}. */
     private List<Option> options(Region region, int dn, Envelope area, List<ConnectionPoint> subset, boolean verify,
             List<TieCandidate> candidates, boolean fromPortalDirection, boolean slide) {
+        return options(region, dn, area, subset, verify, candidates, fromPortalDirection, slide, false);
+    }
+
+    private List<Option> options(Region region, int dn, Envelope area, List<ConnectionPoint> subset, boolean verify,
+            List<TieCandidate> candidates, boolean fromPortalDirection, boolean slide, boolean anySide) {
         String label = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(","));
         // метр ветки стоит в S и как стоимость трубы, и как длина: разовый расход переводится в метры по обоим
         double metreRub = rules.diameter(dn).getNewRubM() + rules.lengthWorthRub();
         Router router = region.router(dn, area);
-        List<TieCandidate> cheapest = cheapestCandidates(subset, candidates);
+        List<TieCandidate> ranked = cheapestCandidates(subset, candidates);
+        List<TieCandidate> cheapest = new ArrayList<>(ranked.subList(0, Math.min(CANDIDATE_LIMIT, ranked.size())));
+        Set<TieCandidate> treeless = ConcurrentHashMap.newKeySet();
         TreeBuilder.Graphs graphs = graphs(region, area);
-        // деревья кандидатов независимы, граф и кэш общие и потокобезопасны; порядок результатов — порядок
-        // кандидатов, поэтому итог не зависит от расписания нитей. В районе города нити заняты районами.
-        java.util.stream.Stream<TieCandidate> stream = district || !PARALLEL ? cheapest.stream() : cheapest.parallelStream();
         java.util.function.BiFunction<TieCandidate, Boolean, Option> shaped = (candidate, link) -> {
             // ветки к точкам, у которых по графу дерева закрыта ближняя сторона здания, идут по графу Ду своего
             // участка. Если сборка такое дерево отвергла, заново по графу дерева оно не строится: там выход ушёл бы
             // на дальнюю сторону при открытой ближней (п. 2.2)
             Tree tree = builder.build(router, dn, area, candidate, subset, rules.chamberCost(dn) / metreRub,
-                    rules.tieInCost() / metreRub, fromPortalDirection, graphs, link);
+                    rules.tieInCost() / metreRub, fromPortalDirection, graphs, link, anySide);
             if (tree.edges.isEmpty()) {
                 log.debug("options: subset={} tie={} нет дерева", label, candidate.nodeKey());
+                treeless.add(candidate);
                 return null;
             }
             // углы трассы срезаются по точному отступу, врезка переносится к стволу или ствол прокладывается к
@@ -2036,13 +2796,20 @@ public final class VariantEnumerator {
         // звено после выхода сразу — только у одиночной точки: в дереве нескольких точек оно присоединяло точки, которые
         // дешевле подключить отдельно, и поиск по разбиениям уходил от лучших черновиков («густо-200» хуже на 1,2)
         boolean link = subset.size() == 1;
-        List<Option> options = stream.map(candidate -> {
-            Option best = shaped.apply(candidate, link);
-            if (best != null && best.turnStuck) {
-                best.withLinks = () -> shaped.apply(candidate, true);
-            }
-            return best;
-        }).filter(Objects::nonNull).collect(Collectors.toList());
+        List<Option> options = new ArrayList<>();
+        for (int next = cheapest.size(); !cheapest.isEmpty(); ) {
+            java.util.stream.Stream<TieCandidate> stream = district || !PARALLEL ? cheapest.stream() : cheapest.parallelStream();
+            options.addAll(stream.map(candidate -> {
+                Option best = shaped.apply(candidate, link);
+                if (best != null && best.turnStuck) {
+                    best.withLinks = () -> shaped.apply(candidate, true);
+                }
+                return best;
+            }).filter(Objects::nonNull).collect(Collectors.toList()));
+            int crowded = (int) cheapest.stream().filter(candidate -> treeless.contains(candidate) && finder.crowded(candidate)).count();
+            cheapest = new ArrayList<>(ranked.subList(next, Math.min(next + crowded, ranked.size())));
+            next += cheapest.size();
+        }
         options.sort(Comparator.comparingDouble(option -> option.score));
         return options;
     }
@@ -2566,6 +3333,9 @@ public final class VariantEnumerator {
             int maxDn = alone.getSegments().stream().mapToInt(NewSegment::getDiameter).max().orElse(graphDn);
             boolean check = verify || maxDn > graphDn;
             boolean holds = narrow ? forbidClear(tree, alone, area, region) : !check || clearanceHolds(tree, alone, area, region);
+            if (!holds && maxDn > graphDn && !district) {
+                rejectedDn.merge(label, maxDn, Math::max);
+            }
             return holds && raysClear(tree, alone) ? new Option(tree, searchScore(alone), exact(alone)) : null;
         } catch (IllegalStateException | IllegalArgumentException e) {
             // дерево нарушает правила при сборке (предельная длина, отступ участка, число поворотов): кандидат отбрасывается
@@ -2684,8 +3454,8 @@ public final class VariantEnumerator {
     }
 
     /**
-     * До CANDIDATE_LIMIT кандидатов с наименьшей грубой оценкой: прямые от точек подключения по цене трубы диаметра
-     * блока, камера, если врезка в трубу, врезка — если в существующую камеру.
+     * Кандидаты по возрастанию грубой оценки: прямые от точек подключения по цене трубы диаметра блока, камера, если
+     * врезка в трубу, врезка — если в существующую камеру.
      */
     private List<TieCandidate> cheapestCandidates(List<ConnectionPoint> subset, List<TieCandidate> candidates) {
         double flow = flow(subset);
@@ -2701,7 +3471,7 @@ public final class VariantEnumerator {
         }
         List<TieCandidate> sorted = new ArrayList<>(candidates);
         sorted.sort(Comparator.comparingDouble(estimate::get));
-        return new ArrayList<>(sorted.subList(0, Math.min(CANDIDATE_LIMIT, sorted.size())));
+        return sorted;
     }
 
     /**
@@ -2828,6 +3598,10 @@ public final class VariantEnumerator {
         }
     }
 
+    private boolean worse(Tree tree, List<Tree> before, Tree changed, List<Tree> after) {
+        return thicker(tree, before, changed, after) || sharpPairs(changed, Set.of()) > sharpPairs(tree, Set.of());
+    }
+
     /** Ду какого-то ребра дерева {@code changed} в узле {@code after} выше, чем у {@code tree} в узле {@code before}. */
     private boolean thicker(Tree tree, List<Tree> before, Tree changed, List<Tree> after) {
         Map<Tree.Edge, Integer> dnBefore = assembler.diameters(before);
@@ -2856,7 +3630,7 @@ public final class VariantEnumerator {
         Router router = null;
         for (Diameter graph = rules.diameter(dn); router == null && graph != null;
                 graph = rules.nextDiameter(graph.getDn())) {
-            router = region.routers.get(graph.getDn() + "@" + area);
+            router = region.built(graph.getDn() + "@" + area);
         }
         if (router == null) {
             return null;
@@ -3009,6 +3783,10 @@ public final class VariantEnumerator {
 
     /** {@link #unkinked(List, boolean)} без деревьев из skip. */
     private List<Tree> unkinked(List<Tree> trees, boolean evensOnly, Set<Tree> skip) {
+        return unkinked(trees, evensOnly, skip, false);
+    }
+
+    private List<Tree> unkinked(List<Tree> trees, boolean evensOnly, Set<Tree> skip, boolean axes) {
         long started = System.nanoTime();
         List<Tree> result = new ArrayList<>(trees);
         int taken = 0;
@@ -3050,14 +3828,15 @@ public final class VariantEnumerator {
                         continue;
                     }
                     for (TreeBuilder.Slide slide : builder.unkinks(tree, junction,
-                            edge -> region.obstacles(dnByEdge.get(edge), area), dnByEdge, priceRub, maxGainRub, evensOnly)) {
+                            edge -> region.obstacles(dnByEdge.get(edge), area), dnByEdge, priceRub, maxGainRub, evensOnly,
+                            axes ? this::keepsAxes : null)) {
                         if (!tried.add(List.of(junction.point.x, junction.point.y, slide.point.x, slide.point.y))) {
                             continue;
                         }
                         Tree changed = unkinked(tree, slide, tree.tie, dnByEdge, region, area, true);
                         List<Tree> others = new ArrayList<>(result);
                         others.remove(t);
-                        if (changed == null || !compatible(changed, others)) {
+                        if (changed == null || axes && !keepsAxes(tree, changed) || !compatible(changed, others)) {
                             continue;
                         }
                         List<Tree> attempt = new ArrayList<>();
@@ -3065,7 +3844,7 @@ public final class VariantEnumerator {
                             attempt.add(other == tree ? changed : other);
                         }
                         before = Double.isNaN(before) ? unitScore(unit) : before;
-                        if (!(unitScore(attempt) <= before + TURN_TOLERANCE_S) || thicker(tree, unit, changed, attempt)) {
+                        if (!(unitScore(attempt) <= before + TURN_TOLERANCE_S) || worse(tree, unit, changed, attempt)) {
                             continue;
                         }
                         result.set(t, changed);
@@ -3079,7 +3858,7 @@ public final class VariantEnumerator {
                     settled.add(key);
                 }
                 // врезка сдвигается, когда у камер ветвления сдвигов больше нет: одна попытка на дерево
-                if (!moved && !retieTried && unit.size() == 1 && !evensOnly) {
+                if (!moved && !retieTried && unit.size() == 1 && !evensOnly && !axes) {
                     retieTried = true;
                     List<Tree> others = new ArrayList<>(result);
                     others.remove(t);
@@ -3092,7 +3871,8 @@ public final class VariantEnumerator {
                 }
             }
         }
-        log.info("unkinked: {}moves={} elapsed={}ms", evensOnly ? "evens " : "", taken, (System.nanoTime() - started) / 1_000_000);
+        log.info("unkinked: {}moves={} elapsed={}ms", evensOnly ? "evens " : axes ? "axes " : "", taken,
+                (System.nanoTime() - started) / 1_000_000);
         return result;
     }
 
@@ -3133,12 +3913,11 @@ public final class VariantEnumerator {
     /**
      * Деревья варианта без поворотов круче MAX_TURN_DEG в камерах ветвления на пути точки к врезке (п. 2.1, разъяснение
      * 5), которые снимает правка у камеры: сдвиг камеры вдоль первого звена одного из её рёбер
-     * ({@link TreeBuilder#turnSlides}) или излом звена ребра у камеры ({@link TreeBuilder#bends}); правки пробуются по
-     * возрастанию цены рёбер. Поиск таких поворотов не проверяет, проход правит готовые варианты. Рёбра камеры
-     * доводятся до строгой формы, где убранная вершина не делает поворот в камере круче ({@link #sharpened}). Правка
-     * берётся, если таких поворотов в дереве стало меньше, S узла врезки вырос не больше TURN_TOLERANCE_S, Ду рёбер не
-     * выросли, а дерево не касается других; дальше повороты ищутся на новом дереве. Поворот, который так не снят,
-     * правит {@link #unsharpened} при любом росте S: правило его не допускает.
+     * ({@link TreeBuilder#turnSlides}); правки пробуются по возрастанию цены рёбер. Поиск таких поворотов не проверяет,
+     * проход правит готовые варианты. Рёбра камеры доводятся до строгой формы, где убранная вершина не делает поворот в
+     * камере круче ({@link #sharpened}). Правка берётся, если таких поворотов в дереве стало меньше, S узла врезки вырос
+     * не больше TURN_TOLERANCE_S, Ду рёбер не выросли, а дерево не касается других; дальше повороты ищутся на новом
+     * дереве. Поворот, который так не снят, правит {@link #unsharpened} при любом росте S: правило его не допускает.
      */
     private List<Tree> turned(List<Tree> trees) {
         long started = System.nanoTime();
@@ -3150,7 +3929,8 @@ public final class VariantEnumerator {
             Tree first = result.get(t);
             Region region = regionByConnection.get(first.connected().get(0).getId());
             Envelope area = region.area.contains(first.envelope()) ? region.area : region.wideArea;
-            for (int sharp = sharpTurns(first).size(); sharp > 0 && area.contains(first.envelope()); ) {
+            Set<String> kneed = new HashSet<>();
+            for (int sharp = sharpTurns(first, kneed).size(); sharp > 0 && area.contains(first.envelope()); ) {
                 Tree tree = result.get(t);
                 List<Tree> unit = new ArrayList<>();
                 for (Tree other : result) {
@@ -3170,25 +3950,24 @@ public final class VariantEnumerator {
                 List<Tree> others = new ArrayList<>(result);
                 others.remove(t);
                 Tree changed = null;
-                for (Tree.Node junction : sharpTurns(tree)) {
+                for (Tree.Node junction : sharpTurns(tree, kneed)) {
                     java.util.function.Function<Tree.Edge, ObstacleSet> zones = edge -> region.obstacles(dnByEdge.get(edge), area);
                     List<TreeBuilder.Slide> slides = new ArrayList<>(builder.turnSlides(tree, junction, zones, dnByEdge,
                             priceRub, maxGainRub, TURN_STEP_M, TURN_MAX_M));
-                    slides.addAll(builder.bends(tree, junction, zones, priceRub, maxGainRub));
                     if (TURN_GRID) {
                         slides.addAll(builder.turnMoves(tree, junction, zones, dnByEdge, priceRub, maxGainRub));
                     }
                     slides.sort(Comparator.comparingDouble(slide -> slide.gain));
                     for (TreeBuilder.Slide slide : slides) {
                         Tree attempt = unkinked(tree, slide, tree.tie, dnByEdge, region, area, true);
-                        if (attempt == null || sharpTurns(attempt).size() >= sharp || !compatible(attempt, others)) {
+                        if (attempt == null || sharpTurns(attempt, kneed).size() >= sharp || !compatible(attempt, others)) {
                             continue;
                         }
                         List<Tree> after = new ArrayList<>();
                         for (Tree other : unit) {
                             after.add(other == tree ? attempt : other);
                         }
-                        if (unitScore(after) <= before + TURN_TOLERANCE_S && !thicker(tree, unit, attempt, after)) {
+                        if (unitScore(after) <= before + TURN_TOLERANCE_S && !worse(tree, unit, attempt, after)) {
                             changed = attempt;
                             break;
                         }
@@ -3198,23 +3977,34 @@ public final class VariantEnumerator {
                     }
                 }
                 if (changed == null) {
-                    changed = unsharpened(tree, unit, others, dnByEdge, priceRub, region, area);
-                    if (changed == null && TURN_DETACH) {
-                        changed = detached(tree, dnByEdge, region, area);
+                    changed = unsharpened(tree, unit, others, dnByEdge, priceRub, region, area, kneed, false);
+                    for (Tree.Node junction : changed == null ? sharpTurns(tree, kneed) : List.<Tree.Node>of()) {
+                        Set<String> knee = new HashSet<>(kneed);
+                        knee.add(junction.key);
+                        changed = sharpTurns(tree, knee).size() < sharp ? tree
+                                : unsharpened(tree, unit, others, dnByEdge, priceRub, region, area, knee, true);
                         if (changed != null) {
-                            log.warn("turned: поворот в камере {} не снят, без сети остаются {}", sharpTurns(tree).get(0).key,
+                            kneed = knee;
+                            log.info("turned: у камеры {} оставлено колено, без него точки остались бы без сети", junction.key);
+                            break;
+                        }
+                    }
+                    if (changed == null && TURN_DETACH) {
+                        changed = detached(tree, kneed, dnByEdge, region, area);
+                        if (changed != null) {
+                            log.warn("turned: поворот в камере {} не снят, без сети остаются {}", sharpTurns(tree, kneed).get(0).key,
                                     changed.unconnected.subList(tree.unconnected.size(), changed.unconnected.size()).stream().map(ConnectionPoint::getId).collect(Collectors.toList()));
                         }
                     }
                     if (changed == null) {
-                        sharpTurns(tree).forEach(junction -> log.info("turned: поворот в камере {} не снят", junction.key));
+                        sharpTurns(tree, kneed).forEach(junction -> log.info("turned: поворот в камере {} не снят", junction.key));
                         break;
                     }
                     forced++;
                 }
                 result.set(t, changed);
                 taken++;
-                sharp = sharpTurns(changed).size();
+                sharp = sharpTurns(changed, kneed).size();
             }
         }
         log.info("turned: moves={} forced={} elapsed={}ms", taken, forced, (System.nanoTime() - started) / 1_000_000);
@@ -3224,20 +4014,22 @@ public final class VariantEnumerator {
     /**
      * Дерево tree с меньшим числом поворотов круче MAX_TURN_DEG на пути точки в камерах ветвления, чем у него, при
      * любом росте S (п. 2.1, разъяснение 5: поворот до 90° включительно в любой точке); null — правки нет. Правки: те же,
-     * что у {@link #turned}, изломы нескольких рёбер камеры ({@link TreeBuilder#fans}) и обход камеры
-     * ({@link #bypasses}). Из годных правок, как у {@link #turned}, берётся та, после которой S узла врезки меньше;
+     * что у {@link #turned}, и обход камеры ({@link #bypasses}), при knees — ещё изломы рёбер у камеры
+     * ({@link TreeBuilder#bends}, {@link TreeBuilder#fans}). Из годных правок, как у {@link #turned}, берётся та, после которой S узла врезки меньше;
      * проверяются первые TURN_FIXES по оценке цены рёбер. unit — деревья узла врезки, others — деревья других.
      */
     private Tree unsharpened(Tree tree, List<Tree> unit, List<Tree> others, Map<Tree.Edge, Integer> dnByEdge,
-            Map<Tree.Edge, Double> priceRub, Region region, Envelope area) {
+            Map<Tree.Edge, Double> priceRub, Region region, Envelope area, Set<String> kneed, boolean knees) {
         java.util.function.Function<Tree.Edge, ObstacleSet> zones = edge -> region.obstacles(dnByEdge.get(edge), area);
-        int sharp = sharpPairs(tree);
+        int sharp = sharpPairs(tree, kneed);
         List<TreeBuilder.Slide> slides = new ArrayList<>();
-        for (Tree.Node junction : sharpTurns(tree)) {
+        for (Tree.Node junction : sharpTurns(tree, kneed)) {
             slides.addAll(builder.turnSlides(tree, junction, zones, dnByEdge, priceRub, Double.POSITIVE_INFINITY,
                     TURN_STEP_M, TURN_MAX_M));
-            slides.addAll(builder.bends(tree, junction, zones, priceRub, Double.POSITIVE_INFINITY));
-            slides.addAll(builder.fans(tree, junction, zones, priceRub));
+            if (knees) {
+                slides.addAll(builder.bends(tree, junction, zones, priceRub, Double.POSITIVE_INFINITY));
+                slides.addAll(builder.fans(tree, junction, zones, priceRub));
+            }
             if (TURN_GRID) {
                 slides.addAll(builder.turnMoves(tree, junction, zones, dnByEdge, priceRub, Double.POSITIVE_INFINITY));
             }
@@ -3245,8 +4037,8 @@ public final class VariantEnumerator {
         slides.sort(Comparator.comparingDouble(slide -> slide.gain));
         // обходов по одному на ветку, они первыми: камера и спецпроход уходят, S часто ниже
         List<java.util.function.Supplier<Tree>> attempts = new ArrayList<>();
-        for (Tree.Node junction : sharpTurns(tree)) {
-            bypasses(tree, junction, dnByEdge, region, area, sharp).forEach(bypass -> attempts.add(() -> bypass));
+        for (Tree.Node junction : sharpTurns(tree, kneed)) {
+            bypasses(tree, junction, dnByEdge, region, area, sharp, kneed).forEach(bypass -> attempts.add(() -> bypass));
         }
         slides.forEach(slide -> attempts.add(() -> unkinked(tree, slide, tree.tie, dnByEdge, region, area, true)));
         Tree best = null;
@@ -3254,7 +4046,7 @@ public final class VariantEnumerator {
         int checked = 0;
         for (int k = 0; k < attempts.size() && checked < TURN_FIXES; k++) {
             Tree attempt = attempts.get(k).get();
-            if (attempt == null || sharpPairs(attempt) >= sharp || !compatible(attempt, others)) {
+            if (attempt == null || sharpPairs(attempt, kneed) >= sharp || !compatible(attempt, others)) {
                 continue;
             }
             List<Tree> after = new ArrayList<>();
@@ -3280,8 +4072,8 @@ public final class VariantEnumerator {
      * деревом под ними, а их точки остаются без сети. Камера с одной оставшейся веткой сливается с ребром к родителю
      * в строгой форме, как у {@link #bypassed}; null — веток у камеры не осталось или форма не собралась.
      */
-    private Tree detached(Tree tree, Map<Tree.Edge, Integer> dnByEdge, Region region, Envelope area) {
-        Tree.Node junction = sharpTurns(tree).get(0);
+    private Tree detached(Tree tree, Set<String> kneed, Map<Tree.Edge, Integer> dnByEdge, Region region, Envelope area) {
+        Tree.Node junction = sharpTurns(tree, kneed).get(0);
         Tree.Edge up = tree.edges.stream().filter(edge -> edge.to == junction).findFirst().orElseThrow();
         Coordinate before = up.line.getCoordinateN(up.line.getNumPoints() - 2);
         Set<Tree.Node> gone = new HashSet<>();
@@ -3358,7 +4150,7 @@ public final class VariantEnumerator {
      * ({@link #sharpened}); берутся деревья, где таких поворотов меньше, чем sharp.
      */
     private List<Tree> bypasses(Tree tree, Tree.Node junction, Map<Tree.Edge, Integer> dnByEdge, Region region,
-            Envelope area, int sharp) {
+            Envelope area, int sharp, Set<String> kneed) {
         Tree.Edge up = tree.edges.stream().filter(edge -> edge.to == junction).findFirst().orElse(null);
         if (up == null) {
             return List.of();
@@ -3418,7 +4210,7 @@ public final class VariantEnumerator {
             lines.sort(Comparator.comparingDouble(VariantEnumerator::length));
             for (Coordinate[] line : lines) {
                 Tree changed = bypassed(tree, junction, up, child, line, dnByEdge, region, area);
-                if (changed != null && sharpPairs(changed) < sharp) {
+                if (changed != null && sharpPairs(changed, kneed) < sharp) {
                     result.add(changed);
                     break;
                 }
@@ -3523,16 +4315,14 @@ public final class VariantEnumerator {
     }
 
     /** Пары рёбер в камерах ветвления дерева, где путь точки к врезке поворачивает круче MAX_TURN_DEG. */
-    private static int sharpPairs(Tree tree) {
+    private static int sharpPairs(Tree tree, Set<String> kneed) {
         int count = 0;
         for (Tree.Edge in : tree.edges) {
             if (in.to.kind != Tree.Kind.JUNCTION) {
                 continue;
             }
-            Coordinate[] c = in.line.getCoordinates();
             for (Tree.Edge out : tree.edges) {
-                if (out.from == in.to && Router.deflectionDeg(c[c.length - 2], in.to.point,
-                        out.line.getCoordinateN(1)) > Router.MAX_TURN_DEG) {
+                if (out.from == in.to && sharp(in, out, kneed)) {
                     count++;
                 }
             }
@@ -3540,12 +4330,22 @@ public final class VariantEnumerator {
         return count;
     }
 
+    private static boolean sharp(Tree.Edge in, Tree.Edge out, Set<String> kneed) {
+        Coordinate[] c = in.line.getCoordinates();
+        double turn = kneed == null || kneed.contains(in.to.key)
+                ? Router.deflectionDeg(c[c.length - 2], in.to.point, out.line.getCoordinateN(1))
+                : TreeBuilder.pathTurnDeg(c, out.line.getCoordinates());
+        return turn > Router.MAX_TURN_DEG;
+    }
+
     /**
      * Деревья варианта, где два соседних поворота в одну сторону на ребре при звене любой длины заменяет одна вершина
-     * в лучшей точке, если путь не длиннее (толкование п. 5, {@link Router#sharpen} шаг Г). Рёбра с такими парами
+     * в лучшей точке, если путь не длиннее, а у пары от 60° до 120° со звеном короче 30 м — длиннее не больше чем на
+     * 5 м (толкование п. 5, {@link Router#sharpen} шаг Г). Рёбра с такими парами
      * доводятся по зонам своего Ду с поворотами в камерах на пути точки ({@link #sharpened}), сначала все рёбра
-     * дерева, а если так не выходит, по одному. Замена берётся, если S узла врезки не растёт, Ду рёбер не растут, а
-     * дерево не касается других.
+     * дерева, а если так не выходит, по одному. Ребро, найденное повтором поиска на графе фактического Ду, у которого
+     * граф есть только в широкой области, доводится по ней. Замена берётся, если S узла врезки растёт не больше, чем
+     * стоит добавленная длина рёбер по их Ду, Ду рёбер не растут, а дерево не касается других.
      */
     private List<Tree> bent(List<Tree> trees) {
         long started = System.nanoTime();
@@ -3605,13 +4405,14 @@ public final class VariantEnumerator {
         Map<Integer, Fresh> found = new HashMap<>();
         for (int e : change) {
             int dn = dnByEdge.get(tree.edges.get(e));
-            Router router = shaper(region, area, dn);
+            Envelope zone = shaper(region, area, dn) == null ? region.wideArea : area;
+            Router router = shaper(region, zone, dn);
             if (router == null) {
                 return null;
             }
             LineString line = tree.edges.get(e).line;
             lines.put(e, line);
-            found.put(e, new Fresh(line, router, region.obstacles(dn, area)));
+            found.put(e, new Fresh(line, router, region.obstacles(dn, zone)));
         }
         Map<Integer, LineString> sharp = sharpened(tree, lines, found, true, true);
         if (sharp == null || sharp.entrySet().stream().allMatch(entry -> entry.getValue() == lines.get(entry.getKey()))) {
@@ -3622,8 +4423,16 @@ public final class VariantEnumerator {
         for (Tree other : unit) {
             attempt.add(other == tree ? changed : other);
         }
-        return compatible(changed, others) && unitScore(attempt) <= unitScore(unit) + UNKINK_EPS
-                && !thicker(tree, unit, changed, attempt) ? changed : null;
+        double addedRub = 0;
+        double addedM = 0;
+        for (Map.Entry<Integer, LineString> entry : sharp.entrySet()) {
+            double added = Math.max(0, entry.getValue().getLength() - tree.edges.get(entry.getKey()).line.getLength());
+            addedRub += added * rules.diameter(dnByEdge.get(tree.edges.get(entry.getKey()))).getNewRubM();
+            addedM += added;
+        }
+        return compatible(changed, others)
+                && unitScore(attempt) <= unitScore(unit) + rules.score(addedRub, addedM) + UNKINK_EPS
+                && !worse(tree, unit, changed, attempt) ? changed : null;
     }
 
     /**
@@ -3693,7 +4502,7 @@ public final class VariantEnumerator {
                 LineString fresh = factory.createLineString(line);
                 Router router = null;
                 for (Diameter graph = rules.diameter(dn); router == null && graph != null; graph = rules.nextDiameter(graph.getDn())) {
-                    router = region.routers.get(graph.getDn() + "@" + area);
+                    router = region.built(graph.getDn() + "@" + area);
                 }
                 Map<Integer, LineString> sharp = router == null ? Map.of(e, fresh)
                         : sharpened(tree, Map.of(e, fresh), Map.of(e, new Fresh(fresh, router, zones)), true);
@@ -3705,7 +4514,7 @@ public final class VariantEnumerator {
                     attempt.add(other == tree ? changed : other);
                 }
                 if (changed == null || !apart(sharp.values(), result, tree) || !compatible(changed, others)
-                        || Double.isNaN(unitScore(attempt)) || thicker(tree, unit, changed, attempt)) {
+                        || Double.isNaN(unitScore(attempt)) || worse(tree, unit, changed, attempt)) {
                     log.info("entered: вход точки {} не перенесён", edge.to.connection.getId());
                     continue;
                 }
@@ -3803,7 +4612,7 @@ public final class VariantEnumerator {
                     attempt.add(other == tree ? changed : other);
                 }
                 if (rub > EVEN_EPS_RUB || !compatible(changed, others) || Double.isNaN(unitScore(attempt))
-                        || thicker(tree, unit, changed, attempt)) {
+                        || worse(tree, unit, changed, attempt)) {
                     log.info("evened: излом у технического узла на ребре к {} не снят, {} руб.", edge.to.key, Math.round(rub));
                     continue;
                 }
@@ -3896,6 +4705,23 @@ public final class VariantEnumerator {
             }
         }
         return moved;
+    }
+
+    private static int bends(Tree tree, List<Integer> incident) {
+        int count = 0;
+        for (int e : incident) {
+            Coordinate[] c = tree.edges.get(e).line.getCoordinates();
+            for (int v = 1; v + 1 < c.length; v++) {
+                if (Router.deflectionDeg(c[v - 1], c[v], c[v + 1]) >= TreeBuilder.MIN_TURN_DEG) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    private static int pairs(Tree tree, List<Integer> incident) {
+        return incident.stream().mapToInt(e -> Router.pairs(tree.edges.get(e).line.getCoordinates())).sum();
     }
 
     /** Дерево result[t] с камерой junction на новом месте и её рёбрами по осям, см. {@link #junctionPass}, или null. */
@@ -4015,7 +4841,9 @@ public final class VariantEnumerator {
                 junctionDebug(spot, junction, String.format(Locale.ROOT, "не по оси %.1f м (нужно < %.1f), длина %.1f из %.1f, лучше=%b",
                         workOff, bestOff, workLength, SQUARE_RATIO * length, better));
             }
-            if (better && workLength <= SQUARE_RATIO * length && sharpPairs(work) <= sharpPairs(tree)
+            if (better && workLength <= SQUARE_RATIO * length && sharpPairs(work, Set.of()) <= sharpPairs(tree, Set.of())
+                    && bends(work, incident) <= bends(tree, incident)
+                    && pairs(work, incident) <= pairs(tree, incident)
                     && accepted(result, t, unit, work)) {
                 best = work;
                 bestOff = workOff;
@@ -4236,6 +5064,46 @@ public final class VariantEnumerator {
         return off;
     }
 
+    private boolean keepsAxes(Tree before, Tree after) {
+        for (int e = 0; e < before.edges.size(); e++) {
+            if (!keepsAxes(before.edges.get(e).line.getCoordinates(), after.edges.get(e).line.getCoordinates())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean keepsAxes(Coordinate[] was, Coordinate[] now) {
+        if (Arrays.equals(was, now)) {
+            return true;
+        }
+        double axis = axis(factory.createLineString(was).getEnvelopeInternal());
+        for (int i = 0; i + 1 < was.length; i++) {
+            if ((onAxis(was[i], was[i + 1], axis) || right(was, i) || right(was, i + 1)) && !kept(was[i], was[i + 1], now)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean right(Coordinate[] line, int v) {
+        return v > 0 && v + 1 < line.length && Math.abs(Router.deflectionDeg(line[v - 1], line[v], line[v + 1]) - 90) <= RIGHT_TOL_DEG;
+    }
+
+    private static boolean kept(Coordinate a, Coordinate b, Coordinate[] line) {
+        double heading = Math.atan2(b.y - a.y, b.x - a.x);
+        for (int j = 0; j + 1 < line.length; j++) {
+            if (along(a, b, line[j]) && along(a, b, line[j + 1]) && onAxis(line[j], line[j + 1], heading)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean onAxis(Coordinate a, Coordinate b, double axis) {
+        return Math.abs(Math.IEEEremainder(Math.atan2(b.y - a.y, b.x - a.x) - axis, Math.PI / 2)) <= Router.SQUARE_TOL_RAD;
+    }
+
     /** Деревья result с тем же узлом врезки, что у tree. */
     private static List<Tree> unit(List<Tree> result, Tree tree) {
         List<Tree> unit = new ArrayList<>();
@@ -4256,7 +5124,7 @@ public final class VariantEnumerator {
         for (Tree other : unit) {
             attempt.add(other == tree ? changed : other);
         }
-        return compatible(changed, others) && !Double.isNaN(unitScore(attempt)) && !thicker(tree, unit, changed, attempt);
+        return compatible(changed, others) && !Double.isNaN(unitScore(attempt)) && !worse(tree, unit, changed, attempt);
     }
 
     /** Окружение ребра для {@link Router#square}: маршрутизатор и зоны по Ду ребра, соседние вершины, выход. */
@@ -4366,16 +5234,14 @@ public final class VariantEnumerator {
     }
 
     /** Камеры ветвления дерева, где путь точки к врезке поворачивает круче MAX_TURN_DEG. */
-    private static List<Tree.Node> sharpTurns(Tree tree) {
+    private static List<Tree.Node> sharpTurns(Tree tree, Set<String> kneed) {
         List<Tree.Node> result = new ArrayList<>();
         for (Tree.Edge in : tree.edges) {
             if (in.to.kind != Tree.Kind.JUNCTION) {
                 continue;
             }
-            Coordinate[] c = in.line.getCoordinates();
             for (Tree.Edge out : tree.edges) {
-                if (out.from == in.to && Router.deflectionDeg(c[c.length - 2], in.to.point,
-                        out.line.getCoordinateN(1)) > Router.MAX_TURN_DEG) {
+                if (out.from == in.to && sharp(in, out, kneed)) {
                     result.add(in.to);
                     break;
                 }
@@ -4446,7 +5312,7 @@ public final class VariantEnumerator {
                 continue;
             }
             before = Double.isNaN(before) ? unitScore(List.of(tree)) : before;
-            if (unitScore(List.of(changed)) <= before + UNKINK_EPS && !thicker(tree, List.of(tree), changed, List.of(changed))) {
+            if (unitScore(List.of(changed)) <= before + UNKINK_EPS && !worse(tree, List.of(tree), changed, List.of(changed))) {
                 return changed;
             }
         }
@@ -4486,7 +5352,7 @@ public final class VariantEnumerator {
     private Router shaper(Region region, Envelope area, int dn) {
         Router router = null;
         for (Diameter graph = rules.diameter(dn); router == null && graph != null; graph = rules.nextDiameter(graph.getDn())) {
-            router = region.routers.get(graph.getDn() + "@" + area);
+            router = region.built(graph.getDn() + "@" + area);
         }
         return router;
     }
