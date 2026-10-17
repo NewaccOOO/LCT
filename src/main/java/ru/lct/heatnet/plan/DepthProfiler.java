@@ -26,13 +26,15 @@ import ru.lct.heatnet.rules.Rules;
  * меняется (§5 разрешает не перестраивать маршрут), меняются только глубины, деление участков и стоимость.
  * <p>
  * Цепочка — участки от камеры или точки подключения до следующей камеры или точки подключения через технические
- * узлы. В камерах, точках подключения и врезках глубина обычная, 3,0 м (толкование: §5 о глубине в узлах молчит);
- * если пересечение ближе к узлу, чем нужно на спуск, глубина узла сдвигается (см. free).
+ * узлы. В камерах, точках подключения и врезках сначала обычная глубина, 3,0 м (§5 о глубине в узлах молчит); если
+ * пересечение ближе к узлу, чем нужно на спуск, глубина узла сдвигается (см. free), а затем узлы получают глубину, при
+ * которой их цепочки дешевле всего (см. cheaperNodes): «над» объектом у самого узла вместо «под» с Kгл > 1.
  * Специальный участок у газа, кабеля или существующей теплосети лежит на постоянной глубине выше или ниже объекта с
  * просветом табл. 2, у дороги и трамвая — не мельче 1,0 и 1,2 м; спуск и подъём — в соседних участках с уклоном не
  * круче max_slope, ближе к 3,0 м при первой возможности (глубже 3,0 м дороже, Kгл). Глубина каждого специального
  * участка выбирается перебором по цепочке (динамика по участкам): самый дешёвый профиль, в котором все уклоны
- * выполнимы. Излом профиля и переход через 3,0 м делят участок техническим узлом.
+ * выполнимы. Между отрезками не глубже 3,0 м — прямая без возврата к обычной глубине (§5 разрешает сохранять
+ * изменённую глубину между близкими препятствиями). Излом профиля и переход через 3,0 м делят участок техническим узлом.
  */
 final class DepthProfiler {
     /** Уклон с запасом: глубины пишутся до мм, узел ближе SNAP_M к концу участка переносится в конец. */
@@ -45,6 +47,8 @@ final class DepthProfiler {
     private static final double EPS = 1e-9;
     /** Рублей за метр участка на метр отклонения от обычной глубины: только выбор из равных по стоимости. */
     private static final double TIE_RUB_M = 1;
+    /** Между двумя отрезками не глубже обычной — прямая без возврата к 3,0 м (меньше изломов профиля). */
+    private static final boolean STRAIGHT = Boolean.parseBoolean(System.getProperty("heatnet.depth.straight", "true"));
 
     private final Rules rules;
     private final DepthRules depth;
@@ -174,23 +178,6 @@ final class DepthProfiler {
                 chain.chosen = closest(chain.pins(nodeDepth));
             }
             List<Pin> pins = chain.pins(nodeDepth);
-            if (Boolean.getBoolean("heatnet.depth.debug")) {
-                for (int k = 1; k + 1 < pins.size(); k++) {
-                    if (chain.chosen[k] > depth.getNormalM() + EPS) {
-                        boolean over = pins.get(k).range.parts.stream().anyMatch(p -> p[0] <= depth.getNormalM());
-                        int seg = 0;
-                        while (chain.start[seg + 1] <= pins.get(k).from + EPS) {
-                            seg++;
-                        }
-                        System.err.printf("DEPTHDBG %s under h=%.3f over=%s pinLen=%.1f toA=%.1f toB=%.1f chainLen=%.1f pins=%d nodeA=%.2f nodeB=%.2f dn=%d parts=%s%n",
-                                variant.getId(), chain.chosen[k], over, pins.get(k).to - pins.get(k).from,
-                                pins.get(k).from, chain.start[chain.segments.size()] - pins.get(k).to,
-                                chain.start[chain.segments.size()], pins.size() - 2, chain.chosen[0],
-                                chain.chosen[pins.size() - 1], chain.segments.get(seg).getDiameter(),
-                                pins.get(k).range.parts.stream().map(p -> String.format("[%.2f,%.2f]", p[0], Math.min(p[1], 99))).collect(java.util.stream.Collectors.joining()));
-                    }
-                }
-            }
             List<double[]> profile = new ArrayList<>();
             for (int k = 0; k < pins.size(); k++) {
                 Pin pin = pins.get(k);
@@ -228,75 +215,116 @@ final class DepthProfiler {
      * Глубины узлов по стоимости. Узел на 3,0 м заставляет спецучасток у самого узла уходить «под» (спуск на 0,4 м
      * короче подъёма на 1 м и больше), хотя «над» Kгл = 1: выше обычной глубины прокладка не дороже. Узел (камера,
      * точка подключения) получает глубину, при которой его цепочки в сумме дешевле всего; кандидаты — глубины
-     * ближайших спецучастков и глубины, с которых до них ровно хватает уклона. Камера врезки — только при
-     * heatnet.depth.tieFree (существующая сеть на 3,0 м). Покоординатный спуск по узлам, пока стоимость падает.
+     * ближайших спецучастков и глубины, с которых до них ровно хватает уклона. Камера врезки тоже (как и в free;
+     * -Dheatnet.depth.tieFree=false — только на 3,0 м). Покоординатный спуск по узлам и парам концов цепочки, пока
+     * стоимость падает.
      */
     private void cheaperNodes(List<Chain> chains, Map<String, List<Chain>> byNode, Map<String, Double> nodeDepth,
             Set<String> ends) {
         if (!Boolean.parseBoolean(System.getProperty("heatnet.depth.cheaperNodes", "true"))) {
             return;
         }
-        boolean tieFree = Boolean.getBoolean("heatnet.depth.tieFree");
-        double slope = depth.getMaxSlope() * SLOPE_SLACK;
+        boolean tieFree = Boolean.parseBoolean(System.getProperty("heatnet.depth.tieFree", "true"));
+        boolean pairs = Boolean.parseBoolean(System.getProperty("heatnet.depth.pairs", "true"));
         for (int pass = 0; pass < 10; pass++) {
             boolean changed = false;
             Set<String> seen = new HashSet<>();
             for (Chain chain : chains) {
+                List<List<String>> groups = new ArrayList<>();
                 for (String node : List.of(chain.from(), chain.to())) {
-                    if (!seen.add(node) || !tieFree && !ends.contains(node)) {
-                        continue;
+                    if (seen.add(node) && (tieFree || ends.contains(node))) {
+                        groups.add(List.of(node));
                     }
-                    List<Chain> incident = new ArrayList<>(new java.util.LinkedHashSet<>(byNode.get(node)));
-                    if (incident.stream().noneMatch(this::deep)) {
-                        continue;
-                    }
-                    double current = 0;
-                    for (Chain other : incident) {
-                        current += other.cost;
-                    }
-                    TreeSet<Double> candidates = new TreeSet<>();
-                    candidates.add(depth.getNormalM());
-                    for (Chain other : incident) {
-                        Pin pin = other.nearest(node);
-                        if (pin == null) {
-                            continue;
-                        }
-                        double d = other.distance(node, pin);
-                        for (double h : values(pin, other.inner)) {
-                            candidates.add(h);
-                            candidates.add(h + slope * d);
-                            candidates.add(Math.max(depth.getMinM(), h - slope * d));
-                        }
-                    }
-                    Double before = nodeDepth.get(node);
-                    double best = current - 1;
-                    Double bestH = null;
-                    for (double h : candidates) {
-                        nodeDepth.put(node, h);
-                        double sum = 0;
-                        for (Chain other : incident) {
-                            sum += other.solve(nodeDepth) == null ? Double.POSITIVE_INFINITY : other.cost;
-                        }
-                        if (sum < best) {
-                            best = sum;
-                            bestH = h;
-                        }
-                    }
-                    if (bestH != null) {
-                        nodeDepth.put(node, bestH);
-                        changed = true;
-                    } else if (before != null) {
-                        nodeDepth.put(node, before);
-                    } else {
-                        nodeDepth.remove(node);
-                    }
-                    incident.forEach(other -> other.solve(nodeDepth));
+                }
+                // короткая цепочка между двумя узлами у спецпрохода: поодиночке узел не поднять, уклон до соседа
+                // не помещается, — оба конца сразу, каждому своя глубина
+                if (pairs && deep(chain) && (tieFree || ends.contains(chain.from()) && ends.contains(chain.to()))) {
+                    groups.add(List.of(chain.from(), chain.to()));
+                }
+                for (List<String> group : groups) {
+                    changed |= move(group, byNode, nodeDepth);
                 }
             }
             if (!changed) {
                 return;
             }
         }
+    }
+
+    /**
+     * Глубины узлов group (каждому своя, перебор сочетаний кандидатов), при которых их цепочки в сумме дешевле
+     * текущего; true — глубины сменились.
+     */
+    private boolean move(List<String> group, Map<String, List<Chain>> byNode, Map<String, Double> nodeDepth) {
+        Set<Chain> set = new java.util.LinkedHashSet<>();
+        group.forEach(node -> set.addAll(byNode.get(node)));
+        List<Chain> incident = new ArrayList<>(set);
+        if (incident.stream().noneMatch(this::deep)) {
+            return false;
+        }
+        double slope = depth.getMaxSlope() * SLOPE_SLACK;
+        double current = 0;
+        for (Chain other : incident) {
+            current += other.cost;
+        }
+        // кандидаты всех узлов группы общие: в переборе есть и «оба на одной глубине»
+        TreeSet<Double> own = new TreeSet<>();
+        own.add(depth.getNormalM());
+        for (String node : group) {
+            for (Chain other : byNode.get(node)) {
+                Pin pin = other.nearest(node);
+                if (pin == null) {
+                    continue;
+                }
+                double d = other.distance(node, pin);
+                for (double h : values(pin, other.inner)) {
+                    own.add(h);
+                    own.add(h + slope * d);
+                    own.add(Math.max(depth.getMinM(), h - slope * d));
+                }
+            }
+        }
+        List<double[]> candidates = new ArrayList<>();
+        group.forEach(node -> candidates.add(own.stream().mapToDouble(Double::doubleValue).toArray()));
+        Map<String, Double> before = new HashMap<>();
+        group.forEach(node -> before.put(node, nodeDepth.get(node)));
+        double best = current - 1;
+        double[] bestH = null;
+        int[] at = new int[group.size()];
+        while (true) {
+            double[] h = new double[group.size()];
+            for (int i = 0; i < group.size(); i++) {
+                h[i] = candidates.get(i)[at[i]];
+                nodeDepth.put(group.get(i), h[i]);
+            }
+            double sum = 0;
+            for (Chain other : incident) {
+                sum += other.solve(nodeDepth) == null ? Double.POSITIVE_INFINITY : other.cost;
+            }
+            if (sum < best) {
+                best = sum;
+                bestH = h;
+            }
+            int i = 0;
+            while (i < at.length && ++at[i] == candidates.get(i).length) {
+                at[i++] = 0;
+            }
+            if (i == at.length) {
+                break;
+            }
+        }
+        for (int i = 0; i < group.size(); i++) {
+            String node = group.get(i);
+            if (bestH != null) {
+                nodeDepth.put(node, bestH[i]);
+            } else if (before.get(node) != null) {
+                nodeDepth.put(node, before.get(node));
+            } else {
+                nodeDepth.remove(node);
+            }
+        }
+        incident.forEach(other -> other.solve(nodeDepth));
+        return bestH != null;
     }
 
     /** Цепочка с участком глубже обычной (Kгл > 1) или без профиля. */
@@ -564,6 +592,9 @@ final class DepthProfiler {
         double da = Math.abs(ha - normal) / slope;
         double db = Math.abs(hb - normal) / slope;
         List<double[]> result = new ArrayList<>();
+        if (STRAIGHT && ha <= normal + EPS && hb <= normal + EPS && Math.abs(ha - hb) <= slope * g + EPS) {
+            return result; // §5: между близкими препятствиями изменённая глубина сохраняется, выше 3,0 м Kгл = 1
+        }
         if (da + db <= g + EPS) {
             if (da > EPS) {
                 result.add(new double[] {a + da, normal});

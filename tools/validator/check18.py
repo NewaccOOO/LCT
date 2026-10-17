@@ -764,7 +764,7 @@ def check_variant(inp, trees, vid, feats, rep):
             k *= p.get("_kgl", 1.0)
         cost = line.length * DN[p["diameter"]]["new_rub_m"] * k
         seg_cost_new += cost
-        if abs(cost - p["cost"]) > max(1.0, 0.01 * DN[p["diameter"]]["new_rub_m"] * k):
+        if abs(cost - p["cost"]) > max(1.0, 0.01 * p.get("_parts", 1) * DN[p["diameter"]]["new_rub_m"] * k):
             rep.count["E1 cost участка не равен L·c·Kспец (без надбавки за поворот)"] += 1
             if len(rep.sample["E1 cost участка не равен L·c·Kспец (без надбавки за поворот)"]) < 3:
                 rep.sample["E1 cost участка не равен L·c·Kспец (без надбавки за поворот)"].append(f"{p['id']} {p['cost']:.0f} vs {cost:.0f} (x{p['cost'] / cost:.3f})")
@@ -894,6 +894,7 @@ def plan_view(feats):
         flat = sum(q["properties"]["cost"] / ((k_depth(q["properties"]["depth_start"]) + k_depth(q["properties"]["depth_end"])) / 2)
                    if q["properties"].get("depth_start") is not None else q["properties"]["cost"] for q in parts)
         props["_kgl"] = props["cost"] / flat if flat else 1.0
+        props["_parts"] = len(parts)  # длина каждого куска округлена до см: допуск E1 — по 1 см на кусок
         props["depth_start"] = props["depth_end"] = None
         merged.append({"type": "Feature", "geometry": {"type": "LineString", "coordinates": coords}, "properties": props})
     rest = [f for f in feats if f["properties"]["object_type"] != "heat_network"

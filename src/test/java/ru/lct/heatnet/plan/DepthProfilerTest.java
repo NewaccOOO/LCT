@@ -36,6 +36,9 @@ class DepthProfilerTest {
         Variant variant = depth(PlanFixture.trunk().restriction("gas-1", PlanFixture.line(0, 5, 600, 5), "gas_pipeline")
                 .oks("1", 300, 80, 20));
         checkProfile(variant);
+        // узел поднимается к «над»: Kгл > 1 нет, стоимость как в 2D
+        assertTrue(variant.getSegments().stream().allMatch(s -> s.getDepthStart() <= 3 + 1e-9 && s.getDepthEnd() <= 3 + 1e-9),
+                "участок глубже 3,0 м");
     }
 
     private Variant depth(PlanFixture fixture) {
