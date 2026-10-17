@@ -401,6 +401,57 @@ public final class Router {
         return bestTarget == null ? null : new Choice(bestTarget, bestVia, bestWeight, bestExtra, tied, pred);
     }
 
+    public double[][] weights(List<Coordinate> points, Set<String> ignored) {
+        int m = points.size();
+        double[][] result = weights(points, points, ignored);
+        for (int i = 0; i < m; i++) {
+            result[i][i] = 0;
+            for (int j = 0; j < i; j++) {
+                double w = Math.min(result[i][j], result[j][i]);
+                result[i][j] = w;
+                result[j][i] = w;
+            }
+        }
+        return result;
+    }
+
+    public double[][] weights(List<Coordinate> sources, List<Coordinate> targets, Set<String> ignored) {
+        int m = targets.size();
+        int n = nodes.size();
+        double[][] toNodes = new double[m][];
+        for (int j = 0; j < m; j++) {
+            toNodes[j] = nodeWeights(targets.get(j), ignored);
+        }
+        double[][] result = new double[sources.size()][m];
+        java.util.stream.IntStream.range(0, sources.size()).parallel().forEach(i -> {
+            Coordinate source = sources.get(i);
+            Table table = table(source, ignored);
+            table.settle(n);
+            ObstacleSet.Hint hint = ObstacleSet.hint();
+            for (int j = 0; j < m; j++) {
+                Coordinate t = targets.get(j);
+                if (t.equals2D(source)) {
+                    result[i][j] = 0;
+                    continue;
+                }
+                double direct = obstacles.edgeWeight(t, source, ignored, false, false, hint);
+                double weight = Double.isNaN(direct) ? Double.POSITIVE_INFINITY : direct;
+                double[] w = toNodes[j];
+                for (int v = 0; v < n; v++) {
+                    if (Double.isNaN(w[v]) || table.dist[v] + w[v] >= weight) {
+                        continue;
+                    }
+                    int p = table.pred[v];
+                    if (turnAllowed(p < 0 ? source : nodes.get(p), nodes.get(v), t)) {
+                        weight = table.dist[v] + w[v];
+                    }
+                }
+                result[i][j] = weight;
+            }
+        });
+        return result;
+    }
+
     /** Маршрут до цели choice, выбранной {@link #choose} из точки from. */
     public Route route(Point from, Choice choice, Set<String> ignored, boolean cut) {
         List<Coordinate> path = new ArrayList<>();

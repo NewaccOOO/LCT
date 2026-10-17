@@ -60,6 +60,7 @@ final class TreeBuilder {
     private static final double[] SLIDE_STEPS_M = {1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50};
     /** Сетка мест переноса камеры ветвления вокруг прежнего, см. {@link #unkinks}; у проверщика B21 та же. */
     private static final double SHIFT_M = 6;
+    private static final double RIGHT_TOL_DEG = 2;
     private static final double SHIFT_STEP_M = 0.5;
     /** Точка на прямой звена — ближе LINE_TOL_M. */
     private static final double LINE_TOL_M = 1e-6;
@@ -254,6 +255,91 @@ final class TreeBuilder {
         run.fromPortalDirection = fromPortalDirection;
         run.graphs = graphs;
         return run.build(connections);
+    }
+
+    Tree buildOnSkeleton(Router router, int dn, Envelope area, TieCandidate tie, List<ConnectionPoint> connections,
+            List<Coordinate> junctions, int[] junctionParent, double chamberPenaltyM, double tieInPenaltyM, Graphs graphs) {
+        Run run = new Run(router, dn, area, tie, chamberPenaltyM, tieInPenaltyM);
+        run.graphs = graphs;
+        run.link = true;
+        Tree tree = run.tree;
+        List<Tree.Node> nodes = new ArrayList<>();
+        for (int j = 0; j < junctions.size(); j++) {
+            Tree.Node parent = junctionParent[j] < 0 ? tree.root : nodes.get(junctionParent[j]);
+            Tree.Node node = Tree.Node.junction(junctions.get(j));
+            Coordinate[] line = upward(router, junctions.get(j), parent.point, run.ignored);
+            if (line == null) {
+                log.warn("skeleton: нет маршрута от камеры {} к {}", junctions.get(j), parent.point);
+                nodes.add(parent);
+                continue;
+            }
+            tree.edges.add(new Tree.Edge(parent, node, factory.createLineString(line)));
+            nodes.add(node);
+        }
+        run.build(connections);
+        pruned(tree);
+        return tree;
+    }
+
+    private void pruned(Tree tree) {
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (int i = tree.edges.size() - 1; i >= 0; i--) {
+                Tree.Edge edge = tree.edges.get(i);
+                if (edge.to.kind == Tree.Kind.JUNCTION && tree.edges.stream().noneMatch(e -> e.from == edge.to)) {
+                    tree.edges.remove(i);
+                    changed = true;
+                }
+            }
+            for (Tree.Edge up : new ArrayList<>(tree.edges)) {
+                Tree.Node middle = up.to;
+                if (middle.kind != Tree.Kind.JUNCTION) {
+                    continue;
+                }
+                List<Tree.Edge> down = new ArrayList<>();
+                for (Tree.Edge e : tree.edges) {
+                    if (e.from == middle) {
+                        down.add(e);
+                    }
+                }
+                if (down.size() == 1) {
+                    Coordinate[] a = up.line.getCoordinates();
+                    Coordinate[] b = down.get(0).line.getCoordinates();
+                    Coordinate[] joined = new Coordinate[a.length + b.length - 1];
+                    System.arraycopy(a, 0, joined, 0, a.length);
+                    System.arraycopy(b, 1, joined, a.length, b.length - 1);
+                    int index = tree.edges.indexOf(up);
+                    tree.edges.set(index, new Tree.Edge(up.from, down.get(0).to, factory.createLineString(joined)));
+                    tree.edges.remove(down.get(0));
+                    changed = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    private Coordinate[] upward(Router router, Coordinate from, Coordinate to, Set<String> ignored) {
+        Route route = router.routeToAny(factory.createPoint(from), List.of(factory.createPoint(to)), ignored, true);
+        if (route == null) {
+            return null;
+        }
+        Coordinate[] coords = route.getGeometry().getCoordinates();
+        Coordinate[] reversed = new Coordinate[coords.length];
+        for (int i = 0; i < coords.length; i++) {
+            reversed[i] = coords[coords.length - 1 - i];
+        }
+        reversed[0] = to;
+        reversed[reversed.length - 1] = from;
+        List<Coordinate> kept = new ArrayList<>(Arrays.asList(reversed));
+        for (int i = 1; i + 1 < kept.size(); ) {
+            if (kept.get(i).distance(kept.get(i - 1)) < Router.CUT_PIECE_M || kept.get(i).distance(kept.get(i + 1)) < Router.CUT_PIECE_M) {
+                kept.remove(i);
+            } else {
+                i++;
+            }
+        }
+        return kept.toArray(new Coordinate[0]);
     }
 
     /**
@@ -1787,7 +1873,12 @@ final class TreeBuilder {
     List<Slide> unkinks(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
             Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub, boolean evensOnly,
             java.util.function.BiPredicate<Coordinate[], Coordinate[]> keeps) {
-        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, evensOnly, false, keeps);
+        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, evensOnly, false, keeps, false);
+    }
+
+    List<Slide> rightFreeUnkinks(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
+            Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub, boolean evensOnly) {
+        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, evensOnly, false, null, true);
     }
 
     /**
@@ -1797,15 +1888,19 @@ final class TreeBuilder {
      */
     List<Slide> turnMoves(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
             Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub) {
-        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, false, true, null);
+        return unkinks(tree, junction, zones, dnByEdge, priceRub, maxGainRub, false, true, null, false);
     }
 
     private List<Slide> unkinks(Tree tree, Tree.Node junction, java.util.function.Function<Tree.Edge, ObstacleSet> zones,
             Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub, boolean evensOnly,
-            boolean turnsOnly, java.util.function.BiPredicate<Coordinate[], Coordinate[]> keeps) {
+            boolean turnsOnly, java.util.function.BiPredicate<Coordinate[], Coordinate[]> keeps, boolean rights) {
         Ends ends = ends(tree, junction, zones);
         int[] paths = ends == null ? null : paths(ends, ends.heads);
-        if (ends == null || !turnsOnly && (evensOnly ? paths[2] == 0 : ends.vertices == 0 && paths[1] == 0)) {
+        int vertices = 0;
+        for (int e = 0; ends != null && e < ends.heads.length; e++) {
+            vertices += rights ? bent(ends.heads[e]) : ends.heads[e].length - 2;
+        }
+        if (ends == null || !turnsOnly && (evensOnly ? paths[2] == 0 : vertices == 0 && paths[1] == 0)) {
             return List.of();
         }
         int count = ends.heads.length;
@@ -1877,7 +1972,7 @@ final class TreeBuilder {
                     }
                 }
             }
-            if (!shorter && paths[1] == 0 && !evensOnly && !turnsOnly) {
+            if (!shorter && paths[1] == 0 && !evensOnly && !turnsOnly && !rights) {
                 continue;
             }
             Coordinate[][][] lines = new Coordinate[count][2][];
@@ -1898,12 +1993,12 @@ final class TreeBuilder {
                     int option = digits % sizes[e];
                     digits /= sizes[e];
                     layout[e] = lines[e][option];
-                    left += layout[e].length - 2;
+                    left += rights ? bent(layout[e]) : layout[e].length - 2;
                     gain += costs[e][option];
                     bad |= verdicts[e][option] < 0;
                 }
-                boolean fits = turnsOnly || (evensOnly ? left == ends.vertices && gain <= 0 && evens(ends, layout, paths)
-                        : left < ends.vertices || left == ends.vertices && straightens(ends, layout, paths));
+                boolean fits = turnsOnly || (evensOnly ? left == vertices && gain <= 0 && evens(ends, layout, paths)
+                        : left < vertices || left == vertices && straightens(ends, layout, paths));
                 if (!bad && fits && gain <= maxGainRub && turnsAllowed(layout, ends.up, point) && kept(from, layout, keeps)) {
                     gains.add(gain);
                     layouts.add(layout);
@@ -2832,6 +2927,14 @@ final class TreeBuilder {
     }
 
     /** {@link #deflectionDeg} одним atan2, как у проверщика: у звена нулевой длины поворота нет. */
+    private static int bent(Coordinate[] c) {
+        int count = 0;
+        for (int i = 1; i + 1 < c.length; i++) {
+            count += Math.abs(turn(c[i - 1], c[i], c[i + 1]) - 90) > RIGHT_TOL_DEG ? 1 : 0;
+        }
+        return count;
+    }
+
     private static double turn(Coordinate a, Coordinate b, Coordinate c) {
         double ux = b.x - a.x;
         double uy = b.y - a.y;
