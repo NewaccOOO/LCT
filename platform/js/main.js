@@ -671,7 +671,7 @@ function describe(sel) {
       if (v) rows.push(['Подключено', conn ? 'да' : 'нет']);
       if (R) rows.push(['Трасса от врезки', meters(R.len)], ['Участков', R.segs.length], ['Стоимость трассы', rub(R.cost)], ['Ду на вводе', `Ду ${R.segs[R.segs.length - 1].p.diameter}`], ['Врезка', nn(R.start)]);
       const flatN = R ? R.segs.filter(s => Math.abs(s.d1 - s.d0) / s.len < 0.002).length : 0;
-      return {kind: 'Здание к подключению', title: r.label, sub: r.oksId || null, rows, info: flatN ? {t: `${flatN} из ${R.segs.length} ${plural(R.segs.length, 'участка', 'участков', 'участков')} с уклоном меньше 0,002`, more: SLOPE_NOTE} : null,
+      return {kind: 'Здание к подключению', title: r.label, rows, info: flatN ? {t: `${flatN} из ${R.segs.length} ${plural(R.segs.length, 'участка', 'участков', 'участков')} с уклоном меньше 0,002`, more: SLOPE_NOTE} : null,
         problem: v && !conn ? `Не подключено в этом варианте, штраф ${rub(500000 * (r.flow || 0) + 1e8)}. Причину сервис не сообщает: проверьте запретные зоны и отступы рядом со зданием и предельную длину трассы для Ду.${M.variants.length > 1 ? ' Посмотрите другие варианты.' : ''}` : R?.bad ? `<div class="row between"><span>${R.bad} ${plural(R.bad, 'проблема', 'проблемы', 'проблем')} по высоте на трассе</span><button type="button" data-gocx>Показать</button></div>` : null,
         ok: R && !R.bad ? 'Трасса без проблем по высоте' : null};
     }
@@ -1502,6 +1502,7 @@ async function start() {
   layout();
   if (matchMedia('(pointer: coarse)').matches) {
     // на телефоне и планшете — жесты, а не кнопки мыши
+    $('#coachAll').textContent = 'Справка';
     $('#coach .cg').innerHTML = '<span class="k">Один палец</span><span>двигать</span><span class="k">Щипок</span><span>приблизить</span>' +
       '<span class="k">Повернуть двумя</span><span>вращать</span><span class="k">Два пальца вверх-вниз</span><span>наклонить</span><span class="k">Двойное касание</span><span>приблизить сюда</span><span class="k">Долгое нажатие</span><span>меню точки</span>';
   }

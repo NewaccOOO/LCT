@@ -364,7 +364,8 @@ table.wrap td:last-child { white-space: normal; }
   button, input, select { min-height: 44px; }
   button.icon { width: 44px; }
   .toolbar button { width: 54px; min-height: 50px; }
-  .tabs button { padding: 12px 4px 13px; }
+  .tabs { gap: 0; padding: 6px 4px 0; }
+  .tabs button { padding: 12px 5px 13px; font-size: 13.5px; }
   .filters button { min-height: 38px; padding: 4px 14px; }
   .seg button { min-height: 42px; }
   .tog { min-height: 44px; }
