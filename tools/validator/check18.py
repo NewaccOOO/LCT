@@ -163,10 +163,10 @@ def entry_window(cg, q, own, zone, dn, trees):
     """Где на луче от точки через точку контура q может кончиться финальный участок ДУ dn: (причина, None) или
     (None, (ux, uy, от, до)) в метрах от точки.
 
-    Луч выходит из здания один раз и в зоне отступа своего здания не подходит к нему снова (к другой стене, больше
-    чем на APPROACH_ENTRY_M), конец участка лежит за зоной отступа сервиса (норма + ZONE_WIDER_M) до нового входа луча
-    в зону. Участок до конца не задевает зон чужих зданий и запретных объектов и не идёт ближе отступа вдоль объекта
-    специального прохода (B10): это проверяет nearer_entry у каждого конца."""
+    Луч выходит из здания один раз и в зоне отступа своего здания, считая от выхода из здания, как у B19, не подходит
+    к нему снова (к другой стене, больше чем на APPROACH_ENTRY_M), конец участка лежит за зоной отступа сервиса (норма
+    + ZONE_WIDER_M) до нового входа луча в зону. Участок до конца не задевает зон чужих зданий и запретных объектов
+    и не идёт ближе отступа вдоль объекта специального прохода (B10): это проверяет nearer_entry у каждого конца."""
     r = q.distance(cg)
     if r < 1e-6:
         return "точка на границе", None
@@ -186,7 +186,8 @@ def entry_window(cg, q, own, zone, dn, trees):
     inside = ray.intersection(own) if t1 == math.inf else LineString([(cg.x, cg.y), along(t1)]).intersection(own)
     if len([g for g in getattr(inside, "geoms", [inside]) if g.length > 0.05]) != 1:
         return "луч снова входит в своё здание", None
-    ts = np.arange(r, t1, ENTRY_STEP_M)
+    start = next((g.length for g in getattr(inside, "geoms", [inside]) if g.distance(cg) < 0.05), 0.0)
+    ts = np.arange(start, t1, ENTRY_STEP_M)
     d = shapely.distance(shapely.points(cg.x + ux * ts, cg.y + uy * ts), own)
     if len(d) and (np.maximum.accumulate(d) - d).max() > APPROACH_ENTRY_M:
         return "луч в зоне отступа подходит к другой стене своего здания", None
