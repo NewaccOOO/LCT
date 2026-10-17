@@ -3728,10 +3728,10 @@ public final class VariantEnumerator {
     private final Map<List<Tree>, Double> unitScores = memo();
     private final Map<List<Tree>, Map<Tree.Edge, Integer>> unitDiameters = memo();
     // ponytail: глобальная блокировка на get/put, сам расчёт вне неё; LRU на 4096 узлов
-    private static <V> Map<List<Tree>, V> memo() {
-        return Collections.synchronizedMap(new LinkedHashMap<List<Tree>, V>(256, 0.75f, true) {
+    private static <K, V> Map<K, V> memo() {
+        return Collections.synchronizedMap(new LinkedHashMap<K, V>(256, 0.75f, true) {
             @Override
-            protected boolean removeEldestEntry(Map.Entry<List<Tree>, V> eldest) {
+            protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
                 return size() > 4096;
             }
         });
@@ -3996,9 +3996,8 @@ public final class VariantEnumerator {
                     if (settled.contains(key)) {
                         continue;
                     }
-                    for (TreeBuilder.Slide slide : builder.unkinks(tree, junction,
-                            edge -> region.obstacles(dnByEdge.get(edge), area), dnByEdge, priceRub, maxGainRub, evensOnly,
-                            axes ? this::keepsAxes : null)) {
+                    for (TreeBuilder.Slide slide : unkinks(tree, junction, unit, region, area, dnByEdge, priceRub, maxGainRub,
+                            evensOnly, axes)) {
                         if (!tried.add(List.of(junction.point.x, junction.point.y, slide.point.x, slide.point.y))) {
                             continue;
                         }
@@ -4042,6 +4041,58 @@ public final class VariantEnumerator {
         }
         log.info("unkinked: {}moves={} elapsed={}ms", evensOnly ? "evens " : axes ? "axes " : "", taken,
                 (System.nanoTime() - started) / 1_000_000);
+        return result;
+    }
+
+    /** Переносы {@link TreeBuilder#unkinks} по геометрии узла unit: [дерево, переносы]; те же узлы в разных черновиках собраны заново. */
+    private final Map<List<Object>, Object[]> unkinksMemo = memo();
+
+    /**
+     * {@link TreeBuilder#unkinks} камеры junction дерева tree из памяти: вход — геометрия, ключи узлов и врезки деревьев
+     * узла unit (по ним Ду, цена и зоны) и флаги. Переносы с другого дерева той же геометрии переводятся на рёбра tree
+     * по номеру.
+     */
+    @SuppressWarnings("unchecked")
+    private List<TreeBuilder.Slide> unkinks(Tree tree, Tree.Node junction, List<Tree> unit, Region region, Envelope area,
+            Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, double maxGainRub, boolean evensOnly,
+            boolean axes) {
+        List<Object> key = new ArrayList<>(List.of(junction.key, evensOnly, axes, unit.indexOf(tree)));
+        for (Tree other : unit) {
+            key.add(other.tie);
+            for (Tree.Edge edge : other.edges) {
+                key.add(edge.from.key);
+                key.add(edge.to.key);
+                for (Coordinate c : edge.line.getCoordinates()) {
+                    key.add(c.x);
+                    key.add(c.y);
+                }
+            }
+        }
+        Object[] hit = unkinksMemo.get(key);
+        if (hit == null) {
+            List<TreeBuilder.Slide> slides = builder.unkinks(tree, junction, edge -> region.obstacles(dnByEdge.get(edge), area),
+                    dnByEdge, priceRub, maxGainRub, evensOnly, axes ? this::keepsAxes : null);
+            unkinksMemo.put(key, new Object[] {tree, slides});
+            return slides;
+        }
+        Tree was = (Tree) hit[0];
+        List<TreeBuilder.Slide> slides = (List<TreeBuilder.Slide>) hit[1];
+        if (was == tree) {
+            return slides;
+        }
+        Map<Tree.Edge, Tree.Edge> edgeOf = new IdentityHashMap<>();
+        Map<Tree.Node, Tree.Node> nodeOf = new IdentityHashMap<>();
+        for (int e = 0; e < tree.edges.size(); e++) {
+            edgeOf.put(was.edges.get(e), tree.edges.get(e));
+            nodeOf.put(was.edges.get(e).from, tree.edges.get(e).from);
+            nodeOf.put(was.edges.get(e).to, tree.edges.get(e).to);
+        }
+        List<TreeBuilder.Slide> result = new ArrayList<>();
+        for (TreeBuilder.Slide slide : slides) {
+            Map<Tree.Edge, Coordinate[]> lines = new IdentityHashMap<>();
+            slide.lines.forEach((edge, line) -> lines.put(edgeOf.get(edge), line));
+            result.add(new TreeBuilder.Slide(slide.gain, nodeOf.get(slide.junction), slide.point, lines));
+        }
         return result;
     }
 
