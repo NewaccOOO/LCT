@@ -36,11 +36,12 @@ import ru.lct.heatnet.rules.Rules;
  * рёбра по осям застройки, поворот 90° вместо двух по 45°, длина трассы растёт, S тоже; 13.434 до переноса камер
  * ветвления под оси: ствол v1_ch_6–v1_ch_10 одной прямой; 13.5176 до сдвига камер вдоль своих рёбер и оси по отрезку, из
  * которого выходит ребро; 13.6408 до запрета перекладки по осям, которая добавляет вершины или пары поворотов,
- * даёт двойной поворот, заменимый одной вершиной, или удлиняет участок больше чем в 1,3 раза).
+ * даёт двойной поворот, заменимый одной вершиной, или удлиняет участок больше чем в 1,3 раза; 13.1574 до точного
+ * скелета дерева врезки, который берётся, только если после проходов формы не хуже ни по одному показателю).
  * Менять константу только при намеренной смене качества.
  */
 class OrganizerDatasetRegressionTest {
-    private static final double ORGANIZER_RANK1_SCORE = 13.1574;
+    private static final double ORGANIZER_RANK1_SCORE = 12.7841;
     private static final int TURNS_BEFORE_AXES = 26;
 
     @Test
@@ -55,7 +56,7 @@ class OrganizerDatasetRegressionTest {
         // с общим правилом выхода из здания (B19, 28.09.2026) черновик с точкой 4 отдельной частью проходит проверки и
         // отличается от первого по устройству: второй вариант (S 13,1835 до ортогональной формы); первый прежний
         assertEquals(3, result.getVariants().size());
-        assertEquals(13.4462, result.getVariants().get(1).getSummary().getScore(), 1e-6);
+        assertEquals(13.4458, result.getVariants().get(1).getSummary().getScore(), 1e-6);
         assertTrue(turns(best) <= TURNS_BEFORE_AXES, "поворотов " + turns(best));
     }
 
