@@ -6,7 +6,7 @@ import {ViewCube} from './viewcube.js';
 import {Profile} from './profile.js';
 import {buildScene, routeTo, branchEnd, pointAt, segName, nodeName, UTILITIES, SURFACES, NODE_TYPES, BUILDING_KEYS} from './model.js';
 import {$, $$, fmt, rub, meters, esc, clamp, store, toast, plural} from './util.js';
-import {relen, planIssues, jointIssue, snapOrtho, patchOutput, score as editScore} from './edit.js';
+import {relen, planIssues, jointIssue, snapOrtho, patchOutput, surroundings, turnAngle, score as editScore} from './edit.js';
 
 const D = Math.PI / 180;
 const S = {
@@ -561,12 +561,13 @@ function select(sel, {fly = false, room = false} = {}) {
   viewer.setDetour(null);
   viewer.opts.dim = !!S.route;
   viewer.applyOpts();
-  document.body.classList.remove('propsMin');
-  mapOnly = null;
+  // в правке панели убраны: карточка и профиль не выезжают, трасса встаёт в кадр сверху
+  if (!E.on) { document.body.classList.remove('propsMin'); mapOnly = null; }
   showProps(sel);
   // на телефоне профиль — по кнопке «Профиль», чтобы не съедал половину экрана
-  if (S.route && !isMobile()) openProfile(); else closeProfile();
-  if (fly) frameSel();
+  if (E.on) { if (!S.route) closeProfile(); }
+  else if (S.route && !isMobile()) openProfile(); else closeProfile();
+  if (E.on && S.route) editFrame(); else if (fly) frameSel();
   $$('.item.sel').forEach(x => x.classList.remove('sel'));
   if (E.on) { E.sel = null; editGhost(); editHandles(true); editPanel(); }
   scheduleHash();
@@ -1590,7 +1591,9 @@ function afterGeom(v, changed, {light = false} = {}) {
 }
 const editedCount = v => v?.edit ? v.segs.filter(s => s.edited).length : 0;
 function editRedraw({light = false} = {}) {
-  viewer.buildNetwork();
+  // кадр перетаскивания: остальная сеть уже собрана без тащимых участков, перерисовываются только они
+  if (light && E.drag?.skip) viewer.dragNet(E.drag.skip);
+  else viewer.buildNetwork();
   if (S.sel) {
     S.route = routeFor(S.sel);
     if (S.route) { const o = S.model.oks.find(x => x.id === S.route.end); S.route.endName = o ? o.label : null; }
@@ -1620,13 +1623,24 @@ function editIssues() {
   for (const a of segs) { const nx = byStart.get(a.to); const n = v.nodes.find(q => q.id === a.to); if (nx?.length === 1 && n?.type === 'technical_node') { const j = jointIssue(a, nx[0]); if (j) out.push(j); } }
   for (const s of segs) for (const c of s.cx) if (c.ok === false) out.push({level: 'bad', text: `${UTILITIES[c.type].name.toLowerCase()}: ${c.gap < 0 ? 'трубы пересекаются по высоте' : `зазор ${fmt(c.gap, 2)} м, нужно ${fmt(c.need, 2)}`}`, x: c.x, y: c.y, seg: s, cx: c});
   for (const s of segs) for (const t of s.issues) out.push({level: 'bad', text: t, x: s.pts[0][0], y: s.pts[0][1], seg: s});
+  // сближение с существующей сетью: в её зоне новая труба кладётся спецпереходом — после ручной правки его ставит пересчёт
+  // только новые сближения: если исходная трасса шла так же близко, спецпереход сервис уже учёл
+  const utilNear = (pts, s) => surroundings(S.model, pts.slice(1).map((q, i) => [pts[i], q]), s.p.diameter || 50, ownOf(s), 3, S.model.tiedOf(s)).filter(it => it.key.startsWith('u:') && it.level === 'near');
+  for (const s of segs) {
+    if (!s.edited) continue;
+    const was = new Map(utilNear(v.edit.orig.get(s.id).pts, s).map(it => [it.key, it.d]));
+    for (const it of utilNear(s.pts, s)) {
+      if (was.has(it.key) && was.get(it.key) <= it.d + 0.1) continue;
+      out.push({level: 'warn', text: `${it.name} в ${dfmt(it.d)} м — ближе ${fmt(it.zone, 1)} м: нужен спецпереход, его ставит пересчёт на сервере`, x: it.p[0], y: it.p[1], seg: s});
+    }
+  }
   // предельная длина пути от врезки до здания по Ду ввода (табл. 1)
   if (S.route) { const last = S.route.segs[S.route.segs.length - 1]; if (S.route.len > last.row.maxLen + 0.5) out.push({level: 'bad', text: `трасса ${meters(S.route.len)} длиннее предельной ${meters(last.row.maxLen)} для Ду ${last.p.diameter}`, x: last.pts[last.pts.length - 1][0], y: last.pts[last.pts.length - 1][1], seg: last}); }
   return out;
 }
 function editPanel() {
   const el = $('#editBar');
-  if (!E.on) { el.hidden = true; return; }
+  if (!E.on) { el.hidden = true; E.panelHtml = null; return; }
   el.hidden = false;
   const v = S.v, st = v?.edit, n = editedCount(v), R = S.route;
   const d = (a, b, f) => { const x = a - b; return Math.abs(x) < 1e-6 ? '' : ` <i class="${x > 0 ? 'up' : 'down'}">${x > 0 ? '+' : '−'}${f(Math.abs(x))}</i>`; };
@@ -1635,7 +1649,7 @@ function editPanel() {
   const bad = E.issues.filter(i => i.level === 'bad'), warn = E.issues.filter(i => i.level === 'warn');
   const touch = matchMedia('(pointer: coarse)').matches, all = [...bad, ...warn];
   const open = E.listOpen ?? bad.length > 0;
-  el.innerHTML = `<div class="eb-h"><b>Правка трассы</b><span class="mut">${R ? esc(R.endName || nodeLabel(R.end)) : 'выберите здание или трубу'}</span><span class="sp"></span>
+  const html = `<div class="eb-h"><b>Правка трассы</b><span class="mut">${R ? esc(R.endName || nodeLabel(R.end)) : 'выберите здание или трубу'}</span><span class="sp"></span>
       <button id="ebUndo" class="icon" ${E.undo.length ? '' : 'disabled'} title="Отменить (Ctrl Z)" aria-label="Отменить"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
       <button id="ebRedo" class="icon" ${E.redo.length ? '' : 'disabled'} title="Вернуть (Ctrl Shift Z)" aria-label="Вернуть"><svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
       <button id="ebDone" class="primary" title="Закончить правку (Esc). Правки сохраняются в браузере">Готово</button></div>
@@ -1648,6 +1662,11 @@ function editPanel() {
       <button id="ebSave" ${n ? '' : 'disabled'} title="GeoJSON в формате сервиса с вашими правками">Скачать с правками</button></div>
     <div class="eb-hint">${touch ? 'Тяните точку — сдвинуть поворот · тяните «+» — новый поворот · коснитесь точки — выбрать' : 'Тяните точку — сдвинуть поворот · тяните «+» — новый поворот · двойной щелчок — удалить'}<button id="ebHelp" class="link" aria-expanded="${!!E.help}">${E.help ? 'скрыть' : 'подробнее'}</button>
       ${E.help ? `<div class="more">Круги — повороты на трубе. Квадраты — камеры и узлы: двигаются вместе со всеми трубами, которые в них сходятся. Серые закреплены: ввод в здание и врезка в существующую сеть. Звенья липнут к прямым углам — пунктир показывает, к чему; ${touch ? '' : 'Alt — без привязки. '}Длина, стоимость и S пересчитываются сразу, проверки правил — ниже заголовка. Правки хранятся в этом браузере; «Скачать с правками» — файл в формате сервиса.</div>` : ''}</div>`;
+  // в кадре перетаскивания панель пересобирается, только если что-то в ней поменялось
+  E.issAll = all;
+  if (html === E.panelHtml) return;
+  E.panelHtml = html;
+  el.innerHTML = html;
   $('#ebDone').onclick = () => setEdit(false);
   $('#ebHelp').onclick = () => { E.help = !E.help; editPanel(); };
   $('#ebUndo').onclick = () => editUndo();
@@ -1656,7 +1675,7 @@ function editPanel() {
   if ($('#ebList')) $('#ebList').onclick = () => { E.listOpen = !open; editPanel(); };
   $('#ebReset').onclick = () => editReset();
   $('#ebSave').onclick = () => editDownload();
-  el.querySelectorAll('.iss[data-i]').forEach(b => b.onclick = () => { const i = all[+b.dataset.i]; rig.lookAtFrom(new THREE.Vector3(i.x, i.y, 0), rig.yaw, -90 * D, Math.max(40, Math.min(rig.pos.z, 120))); viewer.marker('selpt', new THREE.Vector3(i.x, i.y, 0.5), {r: 1.2, color: PALETTE.problem}); });
+  el.querySelectorAll('.iss[data-i]').forEach(b => b.onclick = () => { const i = E.issAll[+b.dataset.i]; rig.lookAtFrom(new THREE.Vector3(i.x, i.y, 0), rig.yaw, -90 * D, Math.max(40, Math.min(rig.pos.z, 120))); viewer.marker('selpt', new THREE.Vector3(i.x, i.y, 0.5), {r: 1.2, color: PALETTE.problem}); });
   $('#editBtn').classList.toggle('on', E.on);
 }
 function setEdit(on) {
@@ -1669,22 +1688,29 @@ function setEdit(on) {
     E.help = false;
     E.listOpen = null;
     stopFly(); setMeasure(false);
-  } else viewer.marker('selpt', null);
+    // править удобнее на всю сцену: панели уходят, как в «только карта», на выходе возвращаются
+    E.auto = !mapOnly;
+    if (E.auto) setMapOnly(true);
+  } else {
+    viewer.marker('selpt', null);
+    if (E.auto && mapOnly) setMapOnly(false);
+    E.auto = false;
+  }
   editGhost();
   editPanel();
   editHandles(true);
-  if (on) { if (!S.route) toast('Выберите здание или трубу: на её трассе появятся точки, которые можно тянуть', 'info', 4000); else editFrame(); }
+  if (on) { if (!S.route) toast('Выберите здание или трубу: на её трассе появятся точки, которые можно тянуть', 'info', 4000); else setTimeout(editFrame, 260); }
   status();
 }
 // вид сверху на трассу — править удобнее в плане, как в AutoCAD
 function editFrame() {
   const R = S.route; if (!R) return;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const s of R.segs) for (const q of s.pts) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); }
-  // свободное окно сцены: правее панели правки, левее инструментов и карточки
-  const r = $('#view').getBoundingClientRect(), bar = $('#editBar').getBoundingClientRect(), tb = $('#navR .toolbar').getBoundingClientRect();
+  for (const q of R.segs.flatMap(s => s.pts)) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); }
+  // свободное окно сцены: правее панели правки, левее инструментов, компаса и карточки
+  const r = $('#view').getBoundingClientRect(), bar = $('#editBar').getBoundingClientRect(), tb = $('#navR .toolbar').getBoundingClientRect(), cb = $('#cube').getBoundingClientRect();
   const pr = !$('#props').hidden && !isMobile() && document.body.classList.contains('propsShown') ? $('#props').getBoundingClientRect().left : Infinity;
-  const left = isMobile() ? 0 : bar.right - r.left + 12, right = Math.min(tb.left, pr) - r.left - 12;
+  const left = isMobile() ? 0 : bar.right - r.left + 12, right = Math.min(tb.left, cb.width ? cb.left : Infinity, pr) - r.left - 12;
   const top = isMobile() ? bar.bottom - r.top + 8 : 16, bottom = r.height - 50;
   const fw = Math.max(160, right - left), fh = Math.max(160, bottom - top);
   const half = Math.tan(viewer.camera.fov * D / 2);
@@ -1729,8 +1755,21 @@ function editHandles(rebuild) {
       el.title = t.kind === 'm' ? 'Потяните, чтобы добавить поворот' : t.lock ? t.lock : t.kind === 'n' ? `${t.title[0].toUpperCase() + t.title.slice(1)}: потяните, чтобы сдвинуть вместе с трубами` : 'Поворот: потяните, чтобы сдвинуть; двойной щелчок — удалить';
     }
     layer.hidden = !E.on || !E.targets.length;
+    if (!E.on) $('#editGuide').hidden = true;
+    editPlan();
+    editNear();
   }
   editPlace();
+}
+// трасса в плане по земле — там же, где точки: трубы лежат на глубине и в перспективе сверху видны со сдвигом к центру
+function editPlan() {
+  const old = viewer.g.overlay.getObjectByName('editPlan');
+  if (old) { viewer.g.overlay.remove(old); old.geometry?.dispose(); viewer.lineMats.delete(old.material); old.material?.dispose(); }
+  if (!E.on || !S.route) { viewer.redraw(); return; }
+  const seg = [];
+  for (const s of S.route.segs) for (let i = 0; i + 1 < s.pts.length; i++) seg.push(s.pts[i][0], s.pts[i][1], 0.3, s.pts[i + 1][0], s.pts[i + 1][1], 0.3);
+  viewer.overlayLines(seg, {width: 3});
+  viewer.g.overlay.children[viewer.g.overlay.children.length - 1].name = 'editPlan';
 }
 // положение точек на экране — каждый кадр, после отрисовки сцены
 function editPlace() {
@@ -1750,12 +1789,139 @@ function editPlace() {
     el.style.display = show ? '' : 'none';
     if (show) { placed.push(c); el.style.transform = `translate(${c[0].toFixed(1)}px, ${c[1].toFixed(1)}px)`; }
   }
-  const g = $('#editGuide');
-  if (E.drag?.guide?.length) {
-    g.hidden = false;
-    const pt = q => { V.set(q[0], q[1], 0.15).project(viewer.camera); return `${((V.x + 1) / 2 * r.width).toFixed(1)},${((1 - V.y) / 2 * r.height).toFixed(1)}`; };
-    g.innerHTML = E.drag.guide.map(([a, b]) => `<polyline points="${pt(a)} ${pt(b)}"/>`).join('');
-  } else g.hidden = true;
+  editDraw(r, V);
+}
+// ---------- размеры и выноски у активной точки ----------
+// Как размеры в CAD: длины соседних звеньев, угол поворота, пунктирные выноски до ближайших зданий, зон, дорог и сетей
+// с нормой; цвет — зелёный (норма соблюдена), оранжевый (запас меньше 1 м или зона спецперехода), красный (нарушение).
+// Считается при каждой перестройке точек (каждый кадр перетаскивания), рисуется каждый кадр камеры.
+const LV = {bad: 0, near: 1, warn: 1, info: 2, ok: 3};
+function editActive() {
+  if (E.drag) return E.drag.moved ? E.drag.t : null;
+  return E.sel && E.sel.kind !== 'm' ? E.sel : null;
+}
+// звенья у активной точки: [{seg, pts}] — цепочка вершин участка, которую она двигает
+function activeChains(t) {
+  if (t.kind === 'v') { const s = t.seg; return s.pts[t.i] ? [{seg: s, pts: s.pts.slice(Math.max(0, t.i - 1), t.i + 2)}] : []; }
+  const out = [];
+  for (const s of S.v.segs) {
+    if (s.from === t.node.id && s.pts.length > 1) out.push({seg: s, pts: [s.pts[0], s.pts[1]]});
+    if (s.to === t.node.id && s.pts.length > 1) out.push({seg: s, pts: [s.pts[s.pts.length - 2], s.pts[s.pts.length - 1]]});
+  }
+  return out;
+}
+function editNear() {
+  const t = E.on && S.v ? editActive() : null;
+  E.near = null;
+  const notes = $('#editNotes');
+  if (!t) { notes.hidden = true; notes.innerHTML = ''; $('#editTip').hidden = true; return; }
+  const chains = activeChains(t), ownOf = s => S.model.oks.find(x => x.id === s.to)?.building || null;
+  const P = t.kind === 'v' ? t.seg.pts[t.i] : t.node.xy;
+  // выноски: самое близкое каждого вида по всем звеньям у точки
+  const best = new Map();
+  for (const c of chains) {
+    const links = c.pts.slice(1).map((q, i) => [c.pts[i], q]);
+    for (const it of surroundings(S.model, links, c.seg.p.diameter || 50, ownOf(c.seg), 15, S.model.tiedOf(c.seg))) {
+      const o = best.get(it.key);
+      if (!o || LV[it.level] < LV[o.level] || (LV[it.level] === LV[o.level] && it.d < o.d)) best.set(it.key, it);
+    }
+  }
+  const items = [...best.values()].sort((x, y) => LV[x.level] - LV[y.level] || x.d - y.d).slice(0, 4);
+  // размеры: длины звеньев и угол поворота
+  const dims = [];
+  for (const c of chains) for (let i = 0; i + 1 < c.pts.length; i++) dims.push({a: c.pts[i], b: c.pts[i + 1]});
+  let ang = null;
+  if (t.kind === 'v' && chains[0]?.pts.length === 3) ang = turnAngle(...chains[0].pts);
+  else if (t.kind === 'n' && chains.length === 2 && t.node.type === 'technical_node') {
+    const [x, y] = chains, other = q => q[0] === P || (q[0][0] === P[0] && q[0][1] === P[1]) ? q[1] : q[0];
+    ang = turnAngle(other(x.pts), P, other(y.pts));
+  }
+  // проверки правил у точки — для плашки у курсора: самое серьёзное
+  const iss = [];
+  for (const c of chains) iss.push(...planIssues(S.model, {pts: c.pts, p: c.seg.p, special: c.seg.special}, ownOf(c.seg)));
+  if (S.route) { const last = S.route.segs[S.route.segs.length - 1]; if (S.route.len > last.row.maxLen + 0.5) iss.push({level: 'bad', text: `трасса ${meters(S.route.len)} длиннее предельной ${meters(last.row.maxLen)}`}); }
+  const near = items.filter(i => i.level === 'near');
+  const top = iss.find(i => i.level === 'bad') || iss.find(i => i.level === 'warn') || (near[0] && {level: 'warn', text: noteText(near[0], true)});
+  E.near = {P, items, dims, ang, top, n: iss.filter(i => i.level === 'bad').length};
+  notes.hidden = false;
+  notes.innerHTML = items.map(i => `<div class="en ${i.level}">${noteText(i)}</div>`).join('') +
+    dims.map(d => `<div class="en dim">${m1(Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]))}</div>`).join('') +
+    (ang != null && ang > 0.5 ? `<div class="en ang ${ang > 90.5 ? 'bad' : ''}">поворот ${Math.round(ang)}°</div>` : '');
+  const tip = $('#editTip');
+  if (E.drag?.moved) {
+    tip.hidden = false;
+    tip.className = 'edittip ' + (top ? (top.level === 'bad' ? 'bad' : 'warn') : 'ok');
+    tip.innerHTML = top ? `<span class="dot"></span>${esc(top.text[0].toUpperCase() + top.text.slice(1))}${E.near.n > 1 ? ` <span class="mut">и ещё ${E.near.n - 1}</span>` : ''}`
+      : `<span class="dot"></span>Нормы соблюдены${dims.length ? ' · ' + dims.map(d => m1(Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]))).join(' + ') : ''}`;
+  } else tip.hidden = true;
+}
+const m1 = x => `${fmt(x, 1)} м`;
+// расстояние до объекта — с округлением вниз: 4,97 м при норме 5 м показываем 4,9, а не 5,0
+const dfmt = x => x < 1 ? fmt(Math.floor(x * 100 + 1e-6) / 100, 2) : fmt(Math.floor(x * 10 + 1e-6) / 10, 1);
+function noteText(i, plain = false) {
+  const cross = i.key.startsWith('u:') || i.key === 'road' || i.key === 'tram_tracks';
+  const d = i.d < 0.05 ? (cross ? 'пересекает' : 'заходит внутрь') : `${dfmt(i.d)} м`;
+  const norm = i.need != null ? ` · норма ≥ ${fmt(i.need, 0)} м` : i.zone != null && i.d >= 0.05 ? ` · зона ${fmt(i.zone, 1)} м` : '';
+  const tail = i.level === 'near' && i.zone != null ? ' · спецпереход' : i.key === 'road' || i.key === 'tram_tracks' ? (i.d < 0.05 ? ' · под углом ≥ 45°' : '') : i.d < 0.05 && i.key.startsWith('u:') ? ' · зазор по высоте' : '';
+  const name = i.name[0].toUpperCase() + i.name.slice(1);
+  return plain ? `${name} ${d}${norm}${tail}` : `${esc(name)} <b>${d}</b>${norm}${tail}`;
+}
+// раскладка подписей: выноска — у объекта, размер — у середины звена, угол — у вершины; подписи не наползают друг на друга
+function editDraw(r, V) {
+  const g = $('#editGuide'), notes = $('#editNotes'), N = E.near;
+  const scr = q => { V.set(q[0], q[1], 0.15).project(viewer.camera); return V.z > 1 ? null : [(V.x + 1) / 2 * r.width, (1 - V.y) / 2 * r.height]; };
+  const f = c => `${c[0].toFixed(1)},${c[1].toFixed(1)}`;
+  let svg = '';
+  if (E.drag?.guide?.length) svg += E.drag.guide.map(([a, b]) => { const A = scr(a), B = scr(b); return A && B ? `<polyline class="snap" points="${f(A)} ${f(B)}"/>` : ''; }).join('');
+  if (N && !notes.hidden) {
+    const els = [...notes.children], placed = [];
+    // занятые места: точки правки
+    for (const el of E.handles.values()) if (el.style.display !== 'none') { const m = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(el.style.transform); if (m) placed.push([+m[1] - 12, +m[2] - 12, 24, 24]); }
+    const hit = (x, y, w, h) => placed.some(([px, py, pw, ph]) => x < px + pw && px < x + w && y < py + ph && py < y + h);
+    // подпись встаёт у своей точки: сначала в сторону dir, потом по кругу и чуть дальше — первое свободное место
+    const DIRS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+    const put = (el, c, dir) => {
+      if (!c) { el.style.display = 'none'; return; }
+      const w = el.offsetWidth || 120, h = el.offsetHeight || 20;
+      const at = (d, k) => { const x = c[0] + d[0] * k - (d[0] < 0 ? w : d[0] === 0 ? w / 2 : 0), y = c[1] + d[1] * k - (d[1] < 0 ? h : d[1] === 0 ? h / 2 : 0); return [Math.max(4, Math.min(r.width - w - 4, x)), Math.max(4, Math.min(r.height - h - 4, y))]; };
+      let x, y;
+      search: for (const k of [8, 22, 40]) for (const d of [dir, ...DIRS]) { [x, y] = at(d, k); if (!hit(x, y, w, h)) break search; [x, y] = at(dir, 8); }
+      placed.push([x, y, w, h]);
+      el.style.display = ''; el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+    };
+    const Pc = scr(N.P);
+    let k = 0;
+    for (const i of N.items) {
+      const el = els[k++], A = scr(i.p), B = scr(i.q);
+      if (!A || !B) { if (el) el.style.display = 'none'; continue; }
+      svg += `<polyline class="cl ${i.level}" points="${f(A)} ${f(B)}"/><circle class="ce ${i.level}" cx="${B[0].toFixed(1)}" cy="${B[1].toFixed(1)}" r="3"/>`;
+      // подпись — по ту сторону объекта, куда смотрит выноска
+      const dx = B[0] - A[0], dy = B[1] - A[1], l = Math.hypot(dx, dy);
+      put(el, B, l > 4 ? [Math.sign(Math.round(dx / l * 2)), Math.sign(Math.round(dy / l * 2))] : [1, 1]);
+    }
+    for (const d of N.dims) {
+      const el = els[k++], A = scr(d.a), B = scr(d.b);
+      if (!A || !B || Math.hypot(B[0] - A[0], B[1] - A[1]) < 36) { if (el) el.style.display = 'none'; continue; }
+      const m = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2], l = Math.hypot(B[0] - A[0], B[1] - A[1]);
+      const nx = -(B[1] - A[1]) / l, ny = (B[0] - A[0]) / l;
+      // размер — сбоку от звена, с той стороны, где нет активной точки и ближе к верху экрана
+      const sgn = ny > 0 ? -1 : 1;
+      put(el, [m[0] + nx * sgn * 6, m[1] + ny * sgn * 6], [Math.sign(Math.round(nx * sgn * 2)), Math.sign(Math.round(ny * sgn * 2))]);
+    }
+    const ae = els[k];
+    if (ae) put(ae, Pc, [0, 1]);
+  }
+  g.innerHTML = svg;
+  g.hidden = !svg;
+  const tip = $('#editTip');
+  if (!tip.hidden && E.drag) {
+    const vr = $('#view').getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+    // палец закрывает место под собой — плашка над ним; мышь — справа снизу от курсора
+    let x = E.drag.cx - vr.left + 18, y = E.drag.touch ? E.drag.cy - vr.top - h - 48 : E.drag.cy - vr.top + 22;
+    if (x + w > vr.width - 8) x = E.drag.cx - vr.left - w - 18;
+    y = Math.max(8, Math.min(vr.height - h - 8, y));
+    tip.style.transform = `translate(${Math.max(8, x).toFixed(0)}px, ${y.toFixed(0)}px)`;
+  }
 }
 function planAt(e) { const r = $('#view').getBoundingClientRect(); return rig.onPlane(e.clientX - r.left, e.clientY - r.top, 0, 1e6); }
 function metersPerPx(e) { const a = planAt(e), r = $('#view').getBoundingClientRect(), b = rig.onPlane(e.clientX - r.left + 10, e.clientY - r.top, 0, 1e6); return a && b ? Math.hypot(a.x - b.x, a.y - b.y) / 10 : 0.2; }
@@ -1775,9 +1941,13 @@ function editMove(e) {
   const t = D0.t;
   if (!D0.moved) {
     D0.moved = true;
+    document.body.classList.add('dragging');
     beginChange();
     $('#tip').hidden = true;
-    remember(S.v, t.kind === 'n' ? S.v.segs.filter(s => s.from === t.node.id || s.to === t.node.id) : [t.seg]);
+    const moving = t.kind === 'n' ? S.v.segs.filter(s => s.from === t.node.id || s.to === t.node.id) : [t.seg];
+    remember(S.v, moving);
+    D0.skip = moving;
+    viewer.buildNetwork({skip: new Set(moving)});
     if (t.kind === 'n' && !editState(S.v).nodes.has(t.node.id)) editState(S.v).nodes.set(t.node.id, t.node.xy.slice());
     if (t.kind === 'm') { t.seg.pts.splice(t.i + 1, 0, [P.x, P.y]); D0.t = {kind: 'v', seg: t.seg, i: t.i + 1, key: `v:${t.seg.id}:${t.i + 1}`}; }
   }
@@ -1809,15 +1979,18 @@ function editMove(e) {
     }
   }
   D0.changed = new Set([...(D0.changed || []), ...changed]);
+  D0.cx = e.clientX; D0.cy = e.clientY; D0.touch = e.pointerType === 'touch';
   afterGeom(S.v, changed, {light: true});
   if (!E.raf) E.raf = requestAnimationFrame(() => { E.raf = 0; editRedraw({light: true}); });
 }
 function editUp(e, el) {
   el.onpointermove = el.onpointerup = el.onpointercancel = null;
+  document.body.classList.remove('dragging');
   const D0 = E.drag; E.drag = null;
   if (!D0) return;
   if (!D0.moved) { E.sel = D0.t.kind === 'm' ? null : D0.t; editHandles(true); editPanel(); return; }
-  E.sel = D0.t.kind === 'v' ? D0.t : null;
+  E.sel = D0.t;
+  $('#editTip').hidden = true;
   afterGeom(S.v, [...D0.changed]);
   editRedraw();
 }
@@ -1936,4 +2109,4 @@ booted = true;
 start();
 // для автотестов и записи видео: точка сцены → пиксель окна
 const toScreen = (x, y, z = 0) => { const v = new THREE.Vector3(x, y, z).project(viewer.camera), r = $('#view').getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; };
-window.__app = {S, viewer, rig, select, selectCrossing, setVariant, home, startFly, stopFly, setEx, setMode, toScreen};
+window.__app = {S, E, editNear, editRedraw, editPanel, viewer, rig, select, selectCrossing, setVariant, home, startFly, stopFly, setEx, setMode, toScreen};

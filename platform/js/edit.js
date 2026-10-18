@@ -38,7 +38,8 @@ function segRing(a, b, ring) {
   }
   return best;
 }
-const turnAngle = (p, q, r) => {
+/** Угол поворота трассы в вершине q, градусы: 0 — прямо, 90 — под прямым углом. */
+export const turnAngle = (p, q, r) => {
   const u = [q[0] - p[0], q[1] - p[1]], v = [r[0] - q[0], r[1] - q[1]];
   const c = (u[0] * v[0] + u[1] * v[1]) / (Math.hypot(...u) * Math.hypot(...v) || 1);
   return Math.acos(Math.max(-1, Math.min(1, c))) * 180 / Math.PI;
@@ -62,9 +63,10 @@ const OBJ_NAME = {park: 'парк', social_area: 'школа, больница',
 
 /**
  * Размеры вокруг правки, как в CAD: от звеньев pieces ([[a, b], …]) до ближайших объектов в радиусе R —
- * [{name, d, need, level: 'ok'|'near'|'bad'|'info', p (на трубе), q (на объекте), note}]. Самое близкое из каждого вида.
+ * [{key, name, d, need, level: 'ok'|'near'|'bad'|'info', p (на трубе), q (на объекте), note}]. Самое близкое из каждого вида.
+ * tied — id существующих труб, в которые участок врезается: рядом с ними он и должен быть.
  */
-export function surroundings(scene, pieces, dn, own = null, R = 15) {
+export function surroundings(scene, pieces, dn, own = null, R = 15, tied = null) {
   const best = new Map();
   const keep = (key, item) => { const o = best.get(key); if (!o || item.d < o.d) best.set(key, item); };
   const lvl = (d, need) => need == null ? 'info' : d < need - 0.05 ? 'bad' : d < need + 1 ? 'near' : 'ok';
@@ -82,14 +84,15 @@ export function surroundings(scene, pieces, dn, own = null, R = 15) {
       if (c.d > R) continue;
       const need = bld ? buildingGap(dn) : FORBID[z.type] ?? null;
       const road = !!ROAD[z.type];
-      keep(bld ? 'здание' : z.type, {name: bld ? 'здание' : OBJ_NAME[z.type], d: c.d, need, p: c.p, q: c.q,
+      const key = bld ? 'здание' : z.type;
+      keep(key, {key, name: bld ? 'здание' : OBJ_NAME[z.type], d: c.d, need, p: c.p, q: c.q,
         level: road ? 'info' : lvl(c.d, need), note: road ? (c.d === 0 ? 'переход — спецпереход под углом ≥ 45°' : null) : null});
     }
     for (const e of scene.utilsNear(a, b, R)) {
-      const u = UTIL_ZONE[e.type]; if (!u) continue;
+      const u = UTIL_ZONE[e.type]; if (!u || (e.type === 'heat_network' && tied?.has(e.id))) continue;
       const c = closestSeg(a, b, e.a, e.b);
       if (c.d > R) continue;
-      keep('u:' + e.type, {name: u[1], d: c.d, need: null, zone: u[0], p: c.p, q: c.q,
+      keep('u:' + e.type, {key: 'u:' + e.type, name: u[1], d: c.d, need: null, zone: u[0], p: c.p, q: c.q,
         level: c.d === 0 ? 'info' : c.d < u[0] ? 'near' : 'info', note: c.d === 0 ? 'пересечение — проверьте зазор по высоте' : c.d < u[0] ? `в зоне ${String(u[0]).replace('.', ',')} м — прокладка как спецпереход` : null});
     }
   }

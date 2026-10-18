@@ -93,8 +93,10 @@ document.documentElement.dataset.theme = t === 'system' ? (matchMedia('(prefers-
       <button id="camChip" class="camchip" hidden title="Подняться над землёй над этим же местом"></button>
       <button id="exChip" class="exchip" title="Глубина растянута, чтобы трубы на 3 м было видно на фоне района. Диаметры не меняются. Щёлкните, чтобы переключить на настоящий масштаб и обратно"></button>
       <div id="measure" class="floatcard" hidden></div>
-      <div id="editLayer" class="editlayer" hidden></div>
       <svg id="editGuide" class="editguide" hidden></svg>
+      <div id="editNotes" class="editnotes" aria-live="polite" hidden></div>
+      <div id="editLayer" class="editlayer" hidden></div>
+      <div id="editTip" class="edittip" role="status" hidden></div>
       <div id="editBar" class="floatcard editbar" role="region" aria-label="Правка трассы" hidden></div>
       <div id="player" class="floatcard" hidden>
       <button id="plPlay" class="icon" aria-label="Пауза" title="Пауза (пробел)"></button>

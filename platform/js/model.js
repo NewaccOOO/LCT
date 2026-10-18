@@ -355,7 +355,7 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
   const count = o => Object.values(o).reduce((a, l) => a + l.length, 0);
   return {
     proj, bbox: Number.isFinite(x0) ? [x0, y0, x1, y1] : [-100, -100, 100, 100],
-    utilities, surfaces, points, oks, variants, segs, nodes, crossings, recon, byInputId, zonesAt, zonesNear, utilsNear, checkSeg,
+    utilities, surfaces, points, oks, variants, segs, nodes, crossings, recon, byInputId, zonesAt, zonesNear, utilsNear, checkSeg, tiedOf,
     hasOutput: fout.length > 0,
     hasAddresses: oks.some(o => o.name) || [...BUILDING_KEYS].some(k => (surfaces[k] || []).some(it => it.p.address)),
     skipped: [...skipped.entries()].sort((a, b) => b[1] - a[1]),

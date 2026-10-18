@@ -265,7 +265,25 @@ body.flying #legend, body.flying .exchip { display: none; }
 /* ---------- ручная правка трассы ---------- */
 /* точки поверх сцены: круг — поворот, квадрат — камера или узел, серые закреплены, «+» — добавить поворот */
 .editlayer { position: absolute; inset: 0; pointer-events: none; z-index: 5; overflow: hidden; }
-.editguide { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.editguide { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4; fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 5 4; }
+/* выноски до объектов: пунктир от трубы, точка на объекте; цвет — смысл: норма, на грани, нарушение, справочно */
+.editguide .cl { stroke-width: 1.5; stroke-dasharray: 4 3; }
+.editguide .cl.ok { stroke: var(--ok); } .editguide .cl.near { stroke: var(--warn); } .editguide .cl.bad { stroke: var(--bad); stroke-width: 2; } .editguide .cl.info { stroke: var(--muted); }
+.editguide .ce { stroke: var(--float); stroke-width: 1.5; stroke-dasharray: none; }
+.editguide .ce.ok { fill: var(--ok); } .editguide .ce.near { fill: var(--warn); } .editguide .ce.bad { fill: var(--bad); } .editguide .ce.info { fill: var(--muted); }
+.editnotes { position: absolute; inset: 0; pointer-events: none; z-index: 4; overflow: hidden; }
+.en { position: absolute; left: 0; top: 0; white-space: nowrap; font-size: 12px; line-height: 16px; padding: 2px 7px; border-radius: var(--r-s); background: var(--float); color: var(--text2); box-shadow: var(--shadow); font-variant-numeric: tabular-nums; }
+.en b { font-weight: 500; color: var(--text); }
+.en.ok { box-shadow: inset 3px 0 0 var(--ok), var(--shadow); } .en.near { box-shadow: inset 3px 0 0 var(--warn), var(--shadow); }
+.en.bad { box-shadow: inset 0 0 0 1.5px var(--bad), var(--shadow); color: var(--bad-t); } .en.bad b { color: var(--bad-t); }
+.en.info { box-shadow: inset 3px 0 0 var(--muted), var(--shadow); }
+.en.dim { color: var(--text); font-weight: 500; padding: 1px 6px; background: color-mix(in srgb, var(--float) 88%, transparent); }
+.en.ang { color: var(--text); padding: 1px 6px; } .en.ang.bad { color: var(--bad-t); }
+/* плашка у курсора при перетаскивании: самое серьёзное у точки */
+.edittip { position: absolute; left: 0; top: 0; z-index: 9; pointer-events: none; display: flex; align-items: center; gap: 8px; max-width: 360px; padding: 6px 10px; border-radius: var(--r-s); background: var(--tip); color: #fff; font-size: 13px; line-height: 1.35; box-shadow: var(--shadow-pop); }
+.edittip .dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--ok); }
+.edittip.bad .dot { background: var(--bad); } .edittip.warn .dot { background: var(--warn); }
+.edittip .mut { color: #bdbdbd; }
 .eh { position: absolute; left: 0; top: 0; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: var(--float); box-shadow: 0 0 0 2px var(--accent), 0 1px 4px rgba(0,0,0,.35); pointer-events: auto; cursor: grab; touch-action: none; transition: box-shadow .1s ease-out, background-color .1s ease-out; }
 .eh::before { content: ""; position: absolute; inset: -9px; border-radius: 50%; }
 .eh:hover { box-shadow: 0 0 0 3px var(--accent), 0 2px 8px rgba(0,0,0,.35); }
@@ -301,6 +319,8 @@ body.editing .labels .lbl.depth { display: none; }
 .editbar .eb-hint .link { background: none; box-shadow: none; min-height: 0; padding: 0 0 0 6px; color: var(--accent); font-size: 12.5px; }
 .editbar .eb-hint .more { margin-top: 6px; color: var(--text2); background: var(--card); border-radius: var(--r-s); padding: 8px 10px; }
 body.editing .coach, body.editing .camchip { display: none !important; }
+body.dragging .editbar *, body.dragging .eh { animation: none !important; }
+body.dragging .eh { cursor: grabbing; }
 
 /* ---------- подписи в 3D ---------- */
 /* подписи на сцене — маленькие таблетки, как подписи организаций на карте; цветная обводка — смысл подписи */

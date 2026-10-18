@@ -196,7 +196,7 @@ export class Viewer {
     this.scene.add(low);
 
     this.g = {};
-    for (const k of ['surface', 'buildings', 'utilities', 'utilLines', 'existing', 'oks', 'network', 'netLines', 'overlay', 'tools', 'ghost']) {
+    for (const k of ['surface', 'buildings', 'utilities', 'utilLines', 'existing', 'oks', 'network', 'netLines', 'overlay', 'tools', 'ghost', 'drag']) {
       this.g[k] = new THREE.Group();
       this.g[k].name = k;
       this.scene.add(this.g[k]);
@@ -501,13 +501,16 @@ export class Viewer {
     if (this.opts.colorBy === 'depth') { const t = Math.min(1, Math.max(0, (Math.max(s.d0, s.d1) - 1) / 4)); return new THREE.Color().setHSL(0.5 - 0.08 * t, 0.9, 0.78 - 0.4 * t).getStyle(); }
     return '#' + dnColor(s.p.diameter).getHexString();
   }
-  buildNetwork() {
+  // skip — участки, которые сейчас тянут: их рисует dragNet поверх, чтобы не пересобирать всю сеть на каждый кадр
+  buildNetwork({skip = null} = {}) {
     this.clear(this.g.network); this.clear(this.g.netLines);
+    if (!skip) this.clear(this.g.drag);
     this.pickItems = this.pickItems.filter(p => p.kind !== 'seg' && p.kind !== 'node');
     const v = this.variant;
     if (!v) { this.rebuildPickGrid(); return; }
     const ex = this.ex, pieces = [], joints = [], seg = [], colors = [], trace = [];
     for (const s of v.segs) {
+      if (skip?.has(s)) continue;
       const r = s.row.h / 2, color = this.segColor(s), c = new THREE.Color(color);
       const P = s.pts.map((p, i) => [p[0], p[1], -(s.depth[i] + s.row.h / 2) * ex]);
       for (let i = 0; i + 1 < P.length; i++) {
@@ -551,7 +554,7 @@ export class Viewer {
     if (wells.length) this.addWells(this.g.network, wells);
     // футляры спецпереходов — прозрачная труба побольше вокруг рабочей
     const casings = [];
-    for (const s of v.segs) if (s.special) {
+    for (const s of v.segs) if (s.special && !skip?.has(s)) {
       const P = s.pts.map((p, i) => [p[0], p[1], -(s.depth[i] + s.row.h / 2) * ex]);
       for (let i = 0; i + 1 < P.length; i++) casings.push({a: P[i], b: P[i + 1], r: s.row.h * 0.95 + 0.12, color: this.th.casing});
     }
@@ -583,6 +586,24 @@ export class Viewer {
     }
     this.rebuildPickGrid();
     this.applyOpts();
+  }
+
+  // участки, которые тянут при ручной правке: только труба и линия, без пересборки остальной сети
+  dragNet(segs) {
+    this.clear(this.g.drag);
+    const ex = this.ex, pieces = [], seg = [], colors = [];
+    for (const s of segs) {
+      const r = s.row.h / 2, color = this.segColor(s), c = new THREE.Color(color);
+      const P = s.pts.map((p, i) => [p[0], p[1], -(s.depth[i] + s.row.h / 2) * ex]);
+      for (let i = 0; i + 1 < P.length; i++) { pieces.push({a: P[i], b: P[i + 1], r, color}); seg.push(...P[i], ...P[i + 1]); colors.push(c.r, c.g, c.b, c.r, c.g, c.b); }
+    }
+    if (pieces.length) {
+      const m = tubeMesh(pieces, {radial: 14, material: this.material('standard', {color: 0xffffff, roughness: 0.35, metalness: 0.3, emissive: 0x0b2235, transparent: true, opacity: 1}), overlap: false});
+      m.renderOrder = 15; this.g.drag.add(m);
+      const ln = fatLines(seg, {width: 3.4, colors, opacity: 0.999}); ln.renderOrder = 16;
+      this.g.drag.add(this.trackLines(ln));
+    }
+    this.redraw();
   }
 
   // «Что если»: обход пересечения — полупрозрачная зелёная труба на рекомендуемой глубине
