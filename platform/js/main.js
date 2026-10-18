@@ -6,7 +6,7 @@ import {ViewCube} from './viewcube.js';
 import {Profile} from './profile.js';
 import {buildScene, routeTo, branchEnd, pointAt, segName, nodeName, UTILITIES, SURFACES, NODE_TYPES, BUILDING_KEYS} from './model.js';
 import {$, $$, fmt, rub, meters, esc, clamp, store, toast, plural} from './util.js';
-import {relen, planIssues, jointIssue, snapOrtho, patchOutput, surroundings, turnAngle, score as editScore} from './edit.js';
+import {relen, planIssues, jointIssue, extraBends, snapOrtho, patchOutput, surroundings, turnAngle, score as editScore} from './edit.js';
 
 const D = Math.PI / 180;
 const S = {
@@ -1575,7 +1575,7 @@ function afterGeom(v, changed, {light = false} = {}) {
     const same = o.pts.length === s.pts.length && o.pts.every((q, i) => Math.hypot(q[0] - s.pts[i][0], q[1] - s.pts[i][1]) < 1e-3);
     s.edited = !same;
     s.p.cost = same ? o.cost : o.cost * s.len / o.len;
-    s.p.length = same ? o.length : +s.len.toFixed(2);
+    s.p.length = same ? o.length : +(s.len * scaleOf(o)).toFixed(2);
     if (!light) s._cx = S.model.checkSeg(s);
   }
   for (const n of v.nodes) { const o = st.nodes.get(n.id); if (o) n.edited = Math.hypot(o[0] - n.xy[0], o[1] - n.xy[1]) > 1e-3; }
@@ -1584,11 +1584,13 @@ function afterGeom(v, changed, {light = false} = {}) {
     v.crossings = v.crossings.filter(c => !ch.has(c.seg)).concat(changed.flatMap(s => s._cx || []));
   }
   let dc = 0, dl = 0;
-  for (const s of v.segs) { const o = st.orig.get(s.id); if (o) { dc += s.p.cost - o.cost; dl += s.len - o.len; } }
+  for (const s of v.segs) { const o = st.orig.get(s.id); if (o) { dc += s.p.cost - o.cost; dl += (s.len - o.len) * scaleOf(o); } }
   const sm = v.summary;
   sm.construction_cost = st.sum.construction_cost + dc; sm.calculated_cost = st.sum.calculated_cost + dc; sm.new_network_length = st.sum.new_network_length + dl;
   v.score = sm.score = Math.abs(dc) + Math.abs(dl) < 1e-6 ? st.score : +editScore(sm.calculated_cost, sm.new_network_length).toFixed(4);
 }
+// длины в выходе — в метрах проекции сервиса; их отношение к длине на плане платформы берём у исходного участка
+const scaleOf = o => o.length && o.len > 0.01 ? o.length / o.len : 1;
 const editedCount = v => v?.edit ? v.segs.filter(s => s.edited).length : 0;
 function editRedraw({light = false} = {}) {
   // кадр перетаскивания: остальная сеть уже собрана без тащимых участков, перерисовываются только они
@@ -1618,24 +1620,37 @@ function editIssues() {
   if (!v) return out;
   const segs = new Set([...(S.route?.segs || []), ...v.segs.filter(s => s.edited)]);
   const ownOf = s => { const o = S.model.oks.find(x => x.id === s.to); return o?.building || null; };
-  for (const s of segs) out.push(...planIssues(S.model, s, ownOf(s)));
-  const byStart = new Map(); for (const s of v.segs) { const l = byStart.get(s.from); if (l) l.push(s); else byStart.set(s.from, [s]); }
-  for (const a of segs) { const nx = byStart.get(a.to); const n = v.nodes.find(q => q.id === a.to); if (nx?.length === 1 && n?.type === 'technical_node') { const j = jointIssue(a, nx[0]); if (j) out.push(j); } }
+  // у изменённых участков — и отступы от дорог и сетей; показываем только то, что появилось от правки
+  for (const s of segs) {
+    if (!s.edited) { out.push(...planIssues(S.model, s, ownOf(s))); continue; }
+    const opt = {lines: true, ...lineOpts(s)}, now = planIssues(S.model, s, ownOf(s), opt);
+    const was = planIssues(S.model, {pts: v.edit.orig.get(s.id).pts, p: s.p, special: s.special}, ownOf(s), opt);
+    out.push(...now.filter(i => !was.some(w => w.text === i.text || (i.obj && w.obj === i.obj && w.d <= i.d + 0.05))));
+  }
+  out.push(...jointsAt(new Set([...segs].flatMap(s => [s.from, s.to]))));
+  // лишние повороты, которые появились от правки
+  for (const s of segs) if (s.edited) out.push(...extraBends(S.model, s, ownOf(s), v.edit.orig.get(s.id).pts, lineOpts(s)));
   for (const s of segs) for (const c of s.cx) if (c.ok === false) out.push({level: 'bad', text: `${UTILITIES[c.type].name.toLowerCase()}: ${c.gap < 0 ? 'трубы пересекаются по высоте' : `зазор ${fmt(c.gap, 2)} м, нужно ${fmt(c.need, 2)}`}`, x: c.x, y: c.y, seg: s, cx: c});
   for (const s of segs) for (const t of s.issues) out.push({level: 'bad', text: t, x: s.pts[0][0], y: s.pts[0][1], seg: s});
-  // сближение с существующей сетью: в её зоне новая труба кладётся спецпереходом — после ручной правки его ставит пересчёт
-  // только новые сближения: если исходная трасса шла так же близко, спецпереход сервис уже учёл
-  const utilNear = (pts, s) => surroundings(S.model, pts.slice(1).map((q, i) => [pts[i], q]), s.p.diameter || 50, ownOf(s), 3, S.model.tiedOf(s)).filter(it => it.key.startsWith('u:') && it.level === 'near');
-  for (const s of segs) {
-    if (!s.edited) continue;
-    const was = new Map(utilNear(v.edit.orig.get(s.id).pts, s).map(it => [it.key, it.d]));
-    for (const it of utilNear(s.pts, s)) {
-      if (was.has(it.key) && was.get(it.key) <= it.d + 0.1) continue;
-      out.push({level: 'warn', text: `${it.name} в ${dfmt(it.d)} м — ближе ${fmt(it.zone, 1)} м: нужен спецпереход, его ставит пересчёт на сервере`, x: it.p[0], y: it.p[1], seg: s});
-    }
-  }
   // предельная длина пути от врезки до здания по Ду ввода (табл. 1)
   if (S.route) { const last = S.route.segs[S.route.segs.length - 1]; if (S.route.len > last.row.maxLen + 0.5) out.push({level: 'bad', text: `трасса ${meters(S.route.len)} длиннее предельной ${meters(last.row.maxLen)} для Ду ${last.p.diameter}`, x: last.pts[last.pts.length - 1][0], y: last.pts[last.pts.length - 1][1], seg: last}); }
+  return out;
+}
+// для проверок отступов от дорог и сетей: труба, в которую участок врезается, и его концы у спецпереходов
+function lineOpts(s) {
+  const ends = [];
+  for (const [id, p] of [[s.from, s.pts[0]], [s.to, s.pts[s.pts.length - 1]]]) if (S.v.segs.some(x => x !== s && x.special && (x.from === id || x.to === id))) ends.push(p);
+  return {tied: S.model.tiedOf(s), ends};
+}
+// повороты на пути точки через узлы и камеры ids: каждый входящий участок с каждым выходящим
+function jointsAt(ids) {
+  const v = S.v, out = [];
+  for (const id of ids) {
+    const n = v.nodes.find(q => q.id === id); if (!n) continue;
+    const ins = v.segs.filter(s => s.to === id), outs = v.segs.filter(s => s.from === id);
+    const m = /_ch_(\d+)$/.exec(id), where = m ? `камере ${m[1]}` : 'узле';
+    for (const a of ins) for (const b of outs) { const j = jointIssue(a, b, where); if (j) out.push(j); }
+  }
   return out;
 }
 function editPanel() {
@@ -1825,7 +1840,7 @@ function editNear() {
   const best = new Map();
   for (const c of chains) {
     const links = c.pts.slice(1).map((q, i) => [c.pts[i], q]);
-    for (const it of surroundings(S.model, links, c.seg.p.diameter || 50, ownOf(c.seg), 15, S.model.tiedOf(c.seg))) {
+    for (const it of surroundings(S.model, links, c.seg.p.diameter || 50, {own: ownOf(c.seg), special: c.seg.special, ...lineOpts(c.seg)})) {
       const o = best.get(it.key);
       if (!o || LV[it.level] < LV[o.level] || (LV[it.level] === LV[o.level] && it.d < o.d)) best.set(it.key, it);
     }
@@ -1842,7 +1857,14 @@ function editNear() {
   }
   // проверки правил у точки — для плашки у курсора: самое серьёзное
   const iss = [];
-  for (const c of chains) iss.push(...planIssues(S.model, {pts: c.pts, p: c.seg.p, special: c.seg.special}, ownOf(c.seg)));
+  for (const c of chains) iss.push(...planIssues(S.model, {pts: c.pts, p: c.seg.p, special: c.seg.special}, ownOf(c.seg), {lines: true, ...lineOpts(c.seg)}));
+  const ends = new Set();
+  for (const c of chains) {
+    const s = c.seg, k = c.pts.length;
+    if (t.kind === 'n') { ends.add(t.node.id); if (s.pts.length === 2) { ends.add(s.from); ends.add(s.to); } }
+    else { if (t.i === 1) ends.add(s.from); if (t.i === s.pts.length - 2) ends.add(s.to); }
+  }
+  iss.push(...jointsAt(ends));
   if (S.route) { const last = S.route.segs[S.route.segs.length - 1]; if (S.route.len > last.row.maxLen + 0.5) iss.push({level: 'bad', text: `трасса ${meters(S.route.len)} длиннее предельной ${meters(last.row.maxLen)}`}); }
   const near = items.filter(i => i.level === 'near');
   const top = iss.find(i => i.level === 'bad') || iss.find(i => i.level === 'warn') || (near[0] && {level: 'warn', text: noteText(near[0], true)});
@@ -1863,12 +1885,9 @@ const m1 = x => `${fmt(x, 1)} м`;
 // расстояние до объекта — с округлением вниз: 4,97 м при норме 5 м показываем 4,9, а не 5,0
 const dfmt = x => x < 1 ? fmt(Math.floor(x * 100 + 1e-6) / 100, 2) : fmt(Math.floor(x * 10 + 1e-6) / 10, 1);
 function noteText(i, plain = false) {
-  const cross = i.key.startsWith('u:') || i.key === 'road' || i.key === 'tram_tracks';
-  const d = i.d < 0.05 ? (cross ? 'пересекает' : 'заходит внутрь') : `${dfmt(i.d)} м`;
-  const norm = i.need != null ? ` · норма ≥ ${fmt(i.need, 0)} м` : i.zone != null && i.d >= 0.05 ? ` · зона ${fmt(i.zone, 1)} м` : '';
-  const tail = i.level === 'near' && i.zone != null ? ' · спецпереход' : i.key === 'road' || i.key === 'tram_tracks' ? (i.d < 0.05 ? ' · под углом ≥ 45°' : '') : i.d < 0.05 && i.key.startsWith('u:') ? ' · зазор по высоте' : '';
-  const name = i.name[0].toUpperCase() + i.name.slice(1);
-  return plain ? `${name} ${d}${norm}${tail}` : `${esc(name)} <b>${d}</b>${norm}${tail}`;
+  const d = i.cross ? (i.line ? 'пересекает' : 'заходит внутрь') : `${dfmt(i.d)} м`;
+  const name = i.name[0].toUpperCase() + i.name.slice(1), tail = `${i.need != null ? ` · норма ≥ ${fmt(i.need, i.need % 1 ? 1 : 0)} м` : ''}${i.note ? ' · ' + i.note : ''}`;
+  return plain ? `${name} ${d}${tail}` : `${esc(name)} <b>${d}</b>${tail}`;
 }
 // раскладка подписей: выноска — у объекта, размер — у середины звена, угол — у вершины; подписи не наползают друг на друга
 function editDraw(r, V) {

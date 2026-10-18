@@ -1,19 +1,24 @@
 // Ручная правка трассы: геометрия участков меняется в браузере, длина, стоимость и S пересчитываются сразу,
-// правила плана (зоны запрета и отступы, повороты, переход дороги) и пересечения по высоте проверяются на лету.
+// правила плана (зоны запрета и отступы, повороты, переход дороги и сетей) и пересечения по высоте проверяются на лету.
 // Источник истины — по-прежнему сервис и check18: выход с правками скачивается в его же формате.
 // Без three.js, чтобы проверялось в node.
-import {segX, inRing, BUILDING_KEYS} from './model.js';
+import {segX, inRing, BUILDING_KEYS, dnRow} from './model.js';
 
-// Отступы от зон запрета, м (rules/rules.json, раздел restrictions); у зданий — по Ду
-const FORBID = {park: 1, social_area: 1, prohibited_site: 1, water: 1, metro: 10, railway: 1};
-const ZONE_NAME = {park: 'парк', social_area: 'территорию школы или больницы', prohibited_site: 'запретную зону', water: 'водоём',
-  metro: 'охранную зону метро', railway: 'железную дорогу', oks_existing: 'здание', oks_future: 'здание', oks: 'здание'};
-const NEAR_NAME = {park: 'парку', social_area: 'территории школы или больницы', prohibited_site: 'запретной зоне', water: 'водоёму',
-  metro: 'охранной зоне метро', railway: 'железной дороге'};
-const ROAD = {road: 'дорогу', tram_tracks: 'трамвайные пути'};
+// Отступы, м, — от стенки канала, как в check18: от оси трубы это отступ плюс полширины канала по Ду (табл. 1),
+// у линий — ещё полширины самой линии (rules/rules.json, раздел restrictions: clearance_m, half_width_m).
+// Здания — по Ду; зоны запрета — не заходить ближе; дороги и сети — ближе отступа только спецпереходом.
 export const buildingGap = dn => dn <= 400 ? 5 : dn <= 800 ? 7 : 9;
+const FORBID = {park: 1, social_area: 1, prohibited_site: 1, water: 1, metro: 10, railway: 1};
+const SPECIAL = {road: [1.5, 0], tram_tracks: [1.5, 0], gas_pipeline: [2.0, 0.2], power_cable: [2.0, 0.1], heat_network: [1.0, null], water_supply: [1.5, 0], sewer: [1.0, 0]};
+// названия: кто/что, к чему, через что
+const NAME = {bld: ['здание', 'зданию', 'здание'], park: ['парк', 'парку', 'парк'], social_area: ['школа, больница', 'территории школы или больницы', 'территорию школы или больницы'],
+  prohibited_site: ['запретная зона', 'запретной зоне', 'запретную зону'], water: ['водоём', 'водоёму', 'водоём'], metro: ['метро', 'охранной зоне метро', 'охранную зону метро'],
+  railway: ['ж/д', 'железной дороге', 'железную дорогу'], road: ['дорога', 'дороге', 'дорогу'], tram_tracks: ['трамвай', 'трамвайным путям', 'трамвайные пути'],
+  gas_pipeline: ['газопровод', 'газопроводу', 'газопровод'], power_cable: ['электрокабель', 'электрокабелю', 'электрокабель'],
+  heat_network: ['существующая теплосеть', 'существующей теплосети', 'существующую теплосеть'], water_supply: ['водопровод', 'водопроводу', 'водопровод'], sewer: ['канализация', 'канализации', 'канализацию']};
 // S по п. 7.2 ТЗ (rules.json, раздел score)
 export const score = (cost, len) => 0.7 * cost / 25e6 + 0.3 * len / 100;
+const m1 = d => (d < 1 ? Math.floor(d * 100 + 1e-6) / 100 : Math.floor(d * 10 + 1e-6) / 10).toString().replace('.', ',');
 
 const dist = (a, b) => Math.hypot(b[0] - a[0], b[1] - a[1]);
 function ptSeg(p, a, b) {
@@ -57,46 +62,68 @@ export function closestSeg(a, b, c, d) {
   }
   return best;
 }
-// существующие сети: зона, в которой новая труба кладётся как спецпереход (rules.json, restrictions … clearance_m)
-const UTIL_ZONE = {gas_pipeline: [2.0, 'газопровод'], power_cable: [2.0, 'электрокабель'], heat_network: [1.0, 'существующая теплосеть'], water_supply: [1.5, 'водопровод'], sewer: [1.0, 'канализация']};
-const OBJ_NAME = {park: 'парк', social_area: 'школа, больница', prohibited_site: 'запретная зона', water: 'водоём', metro: 'метро', railway: 'ж/д', road: 'дорога', tram_tracks: 'трамвай'};
+/**
+ * Объекты у звена ab в радиусе R: [{key, obj, type, kind: 'bld'|'forbid'|'line', d (от стенки канала, ≥ 0), axis (от оси),
+ * need (норма), cross (звено пересекает объект), ang (угол перехода дороги к её краю), p (на трубе), q (на объекте)}].
+ * own — своё здание (в него участок входит), tied — id существующих труб, в которые участок врезается.
+ */
+export function objectsNear(scene, a, b, dn, {own = null, tied = null, R = 15} = {}) {
+  const out = [], w2 = dnRow(dn).w / 2;
+  if (dist(a, b) < 0.01) return out;
+  for (const z of scene.zonesNear(a, b, R)) {
+    const bld = BUILDING_KEYS.has(z.type);
+    if (bld && z.item === own) continue;
+    const need = bld ? buildingGap(dn) : FORBID[z.type] ?? SPECIAL[z.type]?.[0];
+    if (need == null) continue;
+    const ring = z.ring;
+    let c = null, ang = null;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const r = closestSeg(a, b, ring[j], ring[i]);
+      if (!c || r.d < c.d) c = r;
+      if (r.d === 0 && SPECIAL[z.type]) {
+        // угол перехода — между звеном и краем дороги, острый
+        const e = [ring[i][0] - ring[j][0], ring[i][1] - ring[j][1]], u = [b[0] - a[0], b[1] - a[1]];
+        const t = Math.acos(Math.min(1, Math.abs(u[0] * e[0] + u[1] * e[1]) / (Math.hypot(...u) * Math.hypot(...e) || 1))) * 180 / Math.PI;
+        if (ang == null || t < ang) ang = t;
+      }
+    }
+    if (!c) continue;
+    const inside = inRing(a[0], a[1], ring) || inRing(b[0], b[1], ring);
+    const axis = inside ? 0 : c.d;
+    if (axis > R) continue;
+    out.push({key: bld ? 'bld' : z.type, obj: z, type: z.type, kind: bld ? 'bld' : FORBID[z.type] ? 'forbid' : 'line', axis, d: Math.max(0, axis - w2), need,
+      cross: axis === 0, ang, p: c.p, q: c.q});
+  }
+  for (const e of scene.utilsNear(a, b, R)) {
+    const sp = SPECIAL[e.type]; if (!sp || (e.type === 'heat_network' && tied?.has(e.id))) continue;
+    const c = closestSeg(a, b, e.a, e.b);
+    if (c.d > R) continue;
+    const extra = sp[1] ?? dnRow(e.dn).w / 2;
+    out.push({key: e.type, obj: e, type: e.type, kind: 'line', axis: c.d, d: Math.max(0, c.d - w2 - extra), need: sp[0], cross: c.d === 0, ang: null, p: c.p, q: c.q});
+  }
+  return out;
+}
+// часть трассы у спецперехода может подойти к его объекту ближе нормы — в круге «норма + 0,1 м» у его конца (check18, B10)
+const nearSpecial = (o, ends, dn) => ends?.some(e => dist(e, o.p) < o.need + dnRow(dn).w / 2 + 0.1 + 0.5);
 
 /**
  * Размеры вокруг правки, как в CAD: от звеньев pieces ([[a, b], …]) до ближайших объектов в радиусе R —
  * [{key, name, d, need, level: 'ok'|'near'|'bad'|'info', p (на трубе), q (на объекте), note}]. Самое близкое из каждого вида.
- * tied — id существующих труб, в которые участок врезается: рядом с ними он и должен быть.
+ * d и need — от стенки канала. special — участок уже спецпереход; ends — его концы у спецпереходов (см. nearSpecial).
  */
-export function surroundings(scene, pieces, dn, own = null, R = 15, tied = null) {
-  const best = new Map();
-  const keep = (key, item) => { const o = best.get(key); if (!o || item.d < o.d) best.set(key, item); };
-  const lvl = (d, need) => need == null ? 'info' : d < need - 0.05 ? 'bad' : d < need + 1 ? 'near' : 'ok';
-  for (const [a, b] of pieces) {
-    if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 0.01) continue;
-    for (const z of scene.zonesNear(a, b, R)) {
-      const bld = BUILDING_KEYS.has(z.type);
-      if (bld && z.item === own) continue;
-      if (!bld && !FORBID[z.type] && !ROAD[z.type]) continue;
-      let c = null;
-      const ring = z.ring;
-      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) { const r = closestSeg(a, b, ring[j], ring[i]); if (!c || r.d < c.d) c = r; }
-      if (!c) continue;
-      if (inRing(a[0], a[1], ring) || inRing(b[0], b[1], ring)) c = {d: 0, p: c.p, q: c.q};
-      if (c.d > R) continue;
-      const need = bld ? buildingGap(dn) : FORBID[z.type] ?? null;
-      const road = !!ROAD[z.type];
-      const key = bld ? 'здание' : z.type;
-      keep(key, {key, name: bld ? 'здание' : OBJ_NAME[z.type], d: c.d, need, p: c.p, q: c.q,
-        level: road ? 'info' : lvl(c.d, need), note: road ? (c.d === 0 ? 'переход — спецпереход под углом ≥ 45°' : null) : null});
-    }
-    for (const e of scene.utilsNear(a, b, R)) {
-      const u = UTIL_ZONE[e.type]; if (!u || (e.type === 'heat_network' && tied?.has(e.id))) continue;
-      const c = closestSeg(a, b, e.a, e.b);
-      if (c.d > R) continue;
-      keep('u:' + e.type, {key: 'u:' + e.type, name: u[1], d: c.d, need: null, zone: u[0], p: c.p, q: c.q,
-        level: c.d === 0 ? 'info' : c.d < u[0] ? 'near' : 'info', note: c.d === 0 ? 'пересечение — проверьте зазор по высоте' : c.d < u[0] ? `в зоне ${String(u[0]).replace('.', ',')} м — прокладка как спецпереход` : null});
-    }
+export function surroundings(scene, pieces, dn, {own = null, R = 15, tied = null, special = false, ends = null} = {}) {
+  const best = new Map(), rank = {bad: 0, near: 1, info: 2, ok: 3};
+  for (const [a, b] of pieces) for (const o of objectsNear(scene, a, b, dn, {own, tied, R})) {
+    let level, note = null;
+    if (o.kind !== 'line') level = o.d < o.need - 0.05 ? 'bad' : o.d < o.need + 1 ? 'near' : 'ok';
+    else if (special) { level = 'info'; note = 'спецпереход'; }
+    else if (o.cross) { level = 'bad'; note = 'нужен спецпереход'; }
+    else if (o.d < o.need - 0.05) { if (nearSpecial(o, ends, dn)) { level = 'info'; note = 'у спецперехода'; } else { level = 'bad'; note = 'нужен спецпереход'; } }
+    else level = o.d < o.need + 0.5 ? 'near' : 'ok';
+    const it = {key: o.key, name: NAME[o.key]?.[0] || o.key, d: o.d, need: o.need, cross: o.cross, line: o.kind === 'line', p: o.p, q: o.q, level, note};
+    const was = best.get(o.key);
+    if (!was || rank[level] < rank[was.level] || (rank[level] === rank[was.level] && o.d < was.d)) best.set(o.key, it);
   }
-  const rank = {bad: 0, near: 1, info: 2, ok: 3};
   return [...best.values()].sort((x, y) => rank[x.level] - rank[y.level] || x.d - y.d).slice(0, 6);
 }
 
@@ -109,35 +136,26 @@ export function relen(s) {
 }
 
 /**
- * Проблемы плана у участка s: [{level: 'bad'|'warn', text, x, y, seg}].
- * own — здание, в которое входит участок: финальный участок заходит в свой контур.
+ * Проблемы плана у участка s: [{level: 'bad'|'warn', text, x, y, seg, obj, d}].
+ * own — здание, в которое входит участок; lines — проверять отступы от дорог и сетей вне спецперехода (у участков,
+ * которые правил человек: исходную трассу сервис уже проложил спецпереходами); tied, ends — как у surroundings.
  */
-export function planIssues(scene, s, own = null) {
+export function planIssues(scene, s, own = null, {lines = false, tied = null, ends = null} = {}) {
   const out = [], dn = s.p.diameter || 50, seen = new Set();
-  const add = (level, text, p) => { if (seen.has(text)) return; seen.add(text); out.push({level, text, x: p[0], y: p[1], seg: s}); };
+  const add = (level, text, p, o) => { if (seen.has(text)) return; seen.add(text); out.push({level, text, x: p[0], y: p[1], seg: s, obj: o?.obj, d: o?.d}); };
   for (let i = 0; i + 1 < s.pts.length; i++) {
     const a = s.pts[i], b = s.pts[i + 1];
-    if (dist(a, b) < 0.01) continue;
-    for (const z of scene.zonesNear(a, b, 12)) {
-      const bld = BUILDING_KEYS.has(z.type);
-      if (bld && z.item === own) continue;
-      const need = bld ? buildingGap(dn) : FORBID[z.type];
-      if (need != null) {
-        const r = segRing(a, b, z.ring);
-        if (r.d < need - 0.05) add('bad', r.d === 0 ? `проходит через ${ZONE_NAME[z.type]}` : `ближе ${need} м к ${bld ? 'зданию' : NEAR_NAME[z.type]}: ${r.d.toFixed(1).replace('.', ',')} м`, r.at);
+    for (const o of objectsNear(scene, a, b, dn, {own, tied, R: 12})) {
+      const [name, to, thr] = NAME[o.key] || [o.key, o.key, o.key];
+      if (o.kind !== 'line') {
+        if (o.d < o.need - 0.05) add('bad', o.cross ? `проходит через ${thr}` : `ближе ${o.need} м к ${to}: ${m1(o.d)} м`, o.p, o);
+        continue;
       }
-      if (ROAD[z.type]) {
-        // переход дороги — одним прямым участком под углом не меньше 45° к её краю
-        const ring = z.ring;
-        for (let k = 0, j = ring.length - 1; k < ring.length; j = k++) {
-          const x = segX(a, b, ring[j], ring[k]);
-          if (!x) continue;
-          const e = [ring[k][0] - ring[j][0], ring[k][1] - ring[j][1]], u = [b[0] - a[0], b[1] - a[1]];
-          let ang = Math.acos(Math.min(1, Math.abs(u[0] * e[0] + u[1] * e[1]) / (Math.hypot(...u) * Math.hypot(...e) || 1))) * 180 / Math.PI;
-          if (ang < 45 - 0.5) add('bad', `пересекает ${ROAD[z.type]} под углом ${Math.round(ang)}°, нужно не меньше 45°`, [x[1], x[2]]);
-          else if (!s.special) add('warn', `пересекает ${ROAD[z.type]} обычной прокладкой: нужен спецпереход в футляре, его ставит пересчёт на сервере`, [x[1], x[2]]);
-        }
-      }
+      // переход дороги — одним прямым участком под углом не меньше 45° к её краю
+      if (o.cross && o.ang != null && o.ang < 45 - 0.5) add('bad', `пересекает ${thr} под углом ${Math.round(o.ang)}°, нужно не меньше 45°`, o.p, o);
+      if (s.special || !lines) continue;
+      if (o.cross) add('bad', `пересекает ${thr} обычной прокладкой: нужен спецпереход, его ставит пересчёт на сервере`, o.p, o);
+      else if (o.d < o.need - 0.05 && !nearSpecial(o, ends, dn)) add('bad', `ближе ${String(o.need).replace('.', ',')} м к ${to} вне спецперехода: ${m1(o.d)} м`, o.p, o);
     }
   }
   for (let i = 1; i + 1 < s.pts.length; i++) {
@@ -147,12 +165,29 @@ export function planIssues(scene, s, own = null) {
   return out;
 }
 
-/** Поворот на стыке двух участков подряд (технический узел): не круче 90°. */
-export function jointIssue(a, b) {
+/** Поворот на пути точки через узел или камеру (участок a входит, b выходит): не круче 90°. */
+export function jointIssue(a, b, where = 'узле') {
   const p = a.pts[a.pts.length - 2], q = a.pts[a.pts.length - 1], r = b.pts[1];
   if (!p || !r || dist(p, q) < 0.01 || dist(q, r) < 0.01) return null;
   const t = turnAngle(p, q, r);
-  return t > 90.5 ? {level: 'bad', text: `поворот ${Math.round(t)}° в узле — круче 90°`, x: q[0], y: q[1], seg: b} : null;
+  return t > 90.5 ? {level: 'bad', text: `поворот ${Math.round(t)}° в ${where} — круче 90°`, x: q[0], y: q[1], seg: b} : null;
+}
+
+/**
+ * Лишние повороты участка: вершины not в списке keep, без которых прямая между соседями проходит без нарушений плана.
+ * Такой поворот только удлиняет трассу — правила формы трассы его не допускают.
+ */
+export function extraBends(scene, s, own = null, keep = [], opts = {}) {
+  const out = [];
+  for (let i = 1; i + 1 < s.pts.length; i++) {
+    const q = s.pts[i];
+    if (keep.some(k => dist(k, q) < 1e-3)) continue;
+    const t = turnAngle(s.pts[i - 1], q, s.pts[i + 1]);
+    if (t < 1) continue;
+    if (planIssues(scene, {pts: [s.pts[i - 1], s.pts[i + 1]], p: s.p, special: s.special}, own, {lines: true, ...opts}).length) continue;
+    out.push({level: 'warn', text: `поворот ${Math.round(t)}° лишний: напрямую между соседними точками нарушений нет — уберите его`, x: q[0], y: q[1], seg: s, i});
+  }
+  return out;
 }
 
 /**
@@ -191,17 +226,22 @@ export function snapOrtho(p, neighbours, tol) {
 export function patchOutput(raw, scene, variant, edited, proj) {
   const fc = JSON.parse(raw), segById = new Map(variant.segs.map(s => [s.id, s])), nodeById = new Map(variant.nodes.map(n => [n.id, n]));
   let dCost = 0, dLen = 0;
+  const ll = q => proj.ll(q[0], q[1]).map(v => +v.toFixed(9));
   for (const f of fc.features) {
     const p = f.properties || {};
     if (String(p.variant_id ?? '1') !== String(variant.id)) continue;
     if (p.object_type === 'heat_network' && edited.segs.has(String(p.id))) {
-      const s = segById.get(String(p.id));
-      f.geometry = {type: 'LineString', coordinates: s.pts.map(q => proj.ll(q[0], q[1]).map(v => +v.toFixed(7)))};
-      dCost += s.p.cost - p.cost; dLen += s.len - (p.length ?? 0);
-      p.length = +s.len.toFixed(2); p.cost = +s.p.cost.toFixed(2); p.manual_edit = true;
+      const s = segById.get(String(p.id)), old = f.geometry.coordinates, n = s.pts.length;
+      // длина — в метрах сервиса (его проекция): масштаб берём у исходной геометрии участка
+      const L0 = old.slice(1).reduce((t, c, i) => t + dist(proj.xy(old[i]), proj.xy(c)), 0), len = s.len * (L0 > 0.01 && p.length ? p.length / L0 : 1);
+      // концы на неподвинутых узлах — точно как в исходном файле, иначе конец разойдётся с узлом на округлении
+      const keep = i => (i === 0 && !edited.nodes.has(String(p.start_node_id))) || (i === n - 1 && !edited.nodes.has(String(p.end_node_id)));
+      f.geometry = {type: 'LineString', coordinates: s.pts.map((q, i) => keep(i) ? old[i === 0 ? 0 : old.length - 1] : ll(q))};
+      dCost += s.p.cost - p.cost; dLen += len - (p.length ?? 0);
+      p.length = +len.toFixed(2); p.cost = +s.p.cost.toFixed(2); p.manual_edit = true;
     } else if (f.geometry?.type === 'Point' && edited.nodes.has(String(p.id))) {
       const n = nodeById.get(String(p.id));
-      f.geometry = {type: 'Point', coordinates: proj.ll(n.xy[0], n.xy[1]).map(v => +v.toFixed(7))};
+      f.geometry = {type: 'Point', coordinates: ll(n.xy)};
       p.manual_edit = true;
     }
   }

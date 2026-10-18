@@ -163,7 +163,7 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
         list.push(item);
         byInputId.set(id, {kind: 'utility', type: rt, item});
         for (let i = 0; i + 1 < pts.length; i++) {
-          const e = {type: rt, id, a: pts[i], b: pts[i + 1], top: u.top, h};
+          const e = {type: rt, id, a: pts[i], b: pts[i + 1], top: u.top, h, dn};
           for (const c of cells(pts[i], pts[i + 1])) { let l = grid.get(c); if (!l) grid.set(c, l = []); l.push(e); }
         }
       }
