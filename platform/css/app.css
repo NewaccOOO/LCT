@@ -282,7 +282,7 @@ body.editing #legBody { max-height: 34vh; overflow: auto; }
 .en.ok { box-shadow: inset 3px 0 0 var(--ok), var(--shadow); } .en.near { box-shadow: inset 3px 0 0 var(--warn), var(--shadow); }
 .en.bad { box-shadow: inset 0 0 0 1.5px var(--bad), var(--shadow); color: var(--bad-t); } .en.bad b { color: var(--bad-t); }
 .en.info { box-shadow: inset 3px 0 0 var(--muted), var(--shadow); }
-.en.dim { color: var(--text); font-weight: 500; padding: 1px 6px; background: color-mix(in srgb, var(--float) 88%, transparent); }
+.en.dim { color: var(--text); font-weight: 500; padding: 1px 6px; background: color-mix(in srgb, var(--float) 88%, transparent); box-shadow: inset 0 -2px 0 var(--sel), var(--shadow); }
 .en.ang { color: var(--text); padding: 1px 6px; } .en.ang.bad { color: var(--bad-t); }
 /* плашка у курсора при перетаскивании: самое серьёзное у точки */
 .edittip { position: absolute; left: 0; top: 0; z-index: 9; pointer-events: none; display: block; max-width: 360px; padding: 6px 10px; border-radius: var(--r-s); background: var(--tip); color: #fff; font-size: 13px; line-height: 1.35; box-shadow: var(--shadow-pop); }
@@ -315,7 +315,7 @@ body.editing .labels .lbl.cx:not(.bad), body.editing #legend { display: none; }
 .lg.c { width: 14px; height: 0; border-radius: 0; box-shadow: none; background: none; border-top: 2px dashed; }
 .lg.c.ok { border-color: var(--ok); } .lg.c.near { border-color: var(--warn); } .lg.c.bad { border-color: var(--bad); } .lg.c.info { border-color: var(--muted); }
 /* панель правки — слева вверху сцены, чтобы трасса в центре оставалась видна */
-.editbar { left: var(--gap); top: var(--gap); width: min(420px, calc(100% - 2 * var(--gap) - 70px)); padding: 8px 10px 10px; display: grid; gap: 6px; z-index: 8; }
+.editbar { left: var(--gap); top: var(--gap); width: min(420px, calc(100% - 2 * var(--gap) - 70px)); max-height: calc(100% - 2 * var(--gap)); overflow: auto; overscroll-behavior: contain; padding: 8px 10px 10px; display: grid; gap: 6px; z-index: 8; }
 .editbar .eb-h { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .editbar .eb-h b { font-size: 15px; font-weight: 500; white-space: nowrap; }
 .editbar .eb-h .mut { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; min-width: 0; }
@@ -343,8 +343,8 @@ body.editing .labels .lbl.cx:not(.bad), body.editing #legend { display: none; }
 .editbar .eb-sum.none { background: var(--ok-s); color: var(--ok-t); } .editbar .eb-sum.none .dot { background: var(--ok); }
 .editbar .eb-sum .mut { color: var(--muted); }
 .editbar .eb-sum .caret { margin-left: 2px; }
-.editbar .eb-p { display: grid; gap: 2px; max-height: min(232px, 32vh); overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; box-shadow: inset 0 -8px 8px -8px var(--line); }
-.editbar .iss { display: flex; align-items: flex-start; gap: 8px; text-align: left; min-height: 28px; padding: 4px 6px; font-size: 13px; line-height: 1.35; box-shadow: none; border-radius: var(--r-s); color: var(--text); }
+.editbar .eb-p { display: flex; flex-direction: column; gap: 2px; max-height: min(232px, 32vh); overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; box-shadow: inset 0 -8px 8px -8px var(--line); }
+.editbar .iss { flex: none; display: flex; align-items: flex-start; gap: 8px; text-align: left; min-height: 28px; padding: 4px 6px; font-size: 13px; line-height: 1.35; box-shadow: none; border-radius: var(--r-s); color: var(--text); }
 .editbar .iss .dot { margin-top: 5px; }
 .editbar .iss small { color: var(--muted); font-size: 12px; }
 .editbar .iss.old { color: var(--text2); } .editbar .iss.old .dot { opacity: .5; }
@@ -377,6 +377,7 @@ body.dragging .eh { cursor: grabbing; }
 .lbl.meas { color: var(--accent); font-weight: 500; box-shadow: inset 0 0 0 1.5px var(--accent), var(--shadow); }
 .lbl.clip { color: var(--sel); box-shadow: inset 0 0 0 1.5px var(--sel), var(--shadow); }
 .lbl.segno { font-size: 11px; padding: 1px 6px; color: var(--bad-t); box-shadow: inset 0 0 0 1px var(--bad), var(--shadow); }
+.lbl.segno.entry { color: var(--text); box-shadow: inset 0 0 0 1.5px var(--sel), var(--shadow); }
 
 /* ---------- профиль ---------- */
 #profile { position: relative; height: clamp(200px, 34vh, 320px); flex: none; box-shadow: 0 -1px 0 var(--line), 0 -2px 6px rgba(0,0,0,.08); background: var(--panel); display: flex; flex-direction: column; z-index: 4; }

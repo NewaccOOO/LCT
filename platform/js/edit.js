@@ -145,10 +145,10 @@ export function surroundings(scene, pieces, dn, {own = null, R = 15, tied = null
       const along = o.obj?.a ? alongZone(a, b, o.obj, o.need + o.ext) : 0, cap = 2 * (o.need + (o.ext || 0)) / Math.sin(Math.PI / 4) + 1;
       const ang = o.cross ? (o.ang ?? (o.obj?.a ? crossAngle(a, b, o.obj) : null)) : null;
       level = (ang != null && ang < 44.5) || along > cap ? 'bad' : 'info';
-      note = along > cap ? `спецпереход вдоль сети ${m1(along)} м` : ang != null ? `спецпереход под углом ${Math.round(ang)}°${ang < 44.5 ? ', нужно ≥ 45°' : ''}` : 'спецпереход';
+      note = along > cap ? `спецпереход вдоль сети ${m1(along)} м` : ang != null ? `спецпереход под углом ${Math.round(ang)}°${ang < 44.5 ? ', нужно ≥ 45°' : ' — допустимо'}` : 'спецпереход, в футляре — допустимо';
     }
     else if (o.cross) { level = 'bad'; note = o.ang != null ? `под углом ${Math.round(o.ang)}°, нужен спецпереход` : 'нужен спецпереход'; }
-    else if (o.d < o.need - 0.05) { if (nearSpecial(o, specials, dn)) { level = 'info'; note = 'у спецперехода'; } else { level = 'bad'; note = 'нужен спецпереход'; } }
+    else if (o.d < o.need - 0.05) { if (nearSpecial(o, specials, dn)) { level = 'info'; note = 'у спецперехода — допустимо'; } else { level = 'bad'; note = 'нужен спецпереход'; } }
     else level = o.d < o.need + 0.5 ? 'near' : 'ok';
     const it = {key: o.key, obj: o.obj, name: NAME[o.key]?.[0] || o.key, d: o.d, need: o.need, cross: o.cross, line: o.kind === 'line', p: o.p, q: o.q, level, note};
     const was = best.get(o.key);
@@ -343,7 +343,7 @@ export function toDxf(variant, proj, {zone = utmZone(proj.lon0)} = {}) {
     out.push('0', 'SEQEND', '8', layer);
     const m = s.pts[Math.floor((s.pts.length - 1) / 2)], m2 = s.pts[Math.floor((s.pts.length - 1) / 2) + 1] || m, [x, y] = P([(m[0] + m2[0]) / 2, (m[1] + m2[1]) / 2]);
     const id = (/_seg_(\d+)$/.exec(s.id) || [, s.id])[1];
-    out.push('0', 'TEXT', '8', 'LABELS', '10', n3(x), '20', n3(y), '30', '0.0', '40', '0.5', '1', `S${id} DN${s.p.diameter} L=${s.len.toFixed(2)}${s.edited ? ' EDIT' : ''}`);
+    out.push('0', 'TEXT', '8', 'LABELS', '10', n3(x), '20', n3(y), '30', '0.0', '40', '0.5', '1', `S${id} DN${s.p.diameter} L=${(s.p.length ?? s.len).toFixed(2)}${s.edited ? ' EDIT' : ''}`);
   }
   for (const n of variant.nodes) {
     if (n.type === 'technical_node' || n.type === 'oks_entry' || n.type === 'endpoint') continue;

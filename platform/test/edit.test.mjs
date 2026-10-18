@@ -198,6 +198,11 @@ test('patchOutput: правка участка и камеры на Купчин
   assert.equal(sm.manual_edits, 1);
   assert.equal(sm.manual_issues, 1);
 
+  // файл с правками открывается платформой как обычный выход сервиса: правленая геометрия на месте
+  const sc2 = await buildScene(JSON.parse(raw('spb-kupchino.in.geojson')), out);
+  const s2 = sc2.variants[0].segs.find(x => x.id === s.id);
+  assert.equal(s2.pts.length, 3);
+  assert.ok(Math.abs(s2.len - s.len) < 0.01);
   // камера: точка и концы всех её участков
   const n = v.nodes.find(x => x.id === 'v1_ch_20');
   const segs = v.segs.filter(x => x.from === n.id || x.to === n.id);
