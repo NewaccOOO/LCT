@@ -199,9 +199,10 @@ export function planIssues(scene, s, own = null, {lines = false, tied = null, sp
       // переход дороги — одним прямым участком под углом не меньше 45° к её краю
       if (o.cross && o.ang != null && o.ang < 45 - 0.5) add('bad', `пересекает ${thr} под углом ${Math.round(o.ang)}°, нужно не меньше 45°`, o.p, o);
       // сеть спецпереход тоже пересекает не острее 45° (СП 124.13330: под прямым углом, допускается до 45°)
-      if (o.cross && o.obj?.a && s.special && lines) { const ang = crossAngle(a, b, o.obj); if (ang < 45 - 0.5) add('bad', `пересекает ${thr} под углом ${Math.round(ang)}°, нужно не меньше 45°`, o.p, o); }
+      let sharp = false;
+      if (o.cross && o.obj?.a && s.special && lines) { const ang = crossAngle(a, b, o.obj); if (ang < 45 - 0.5) { sharp = true; add('bad', `пересекает ${thr} под углом ${Math.round(ang)}°, нужно не меньше 45°`, o.p, o); } }
       // спецпереход пересекает сеть поперёк: внутри её зоны звено не длиннее перехода под 45° (с запасом 1 м)
-      if (s.special && lines && o.obj?.a) {
+      if (s.special && lines && o.obj?.a && !sharp) {   // острый угол уже назван — второе сообщение про то же не нужно
         const zone = o.need + o.ext, inside = alongZone(a, b, o.obj, zone), cap = 2 * zone / Math.sin(Math.PI / 4) + 1;
         if (inside > cap) add('bad', `спецпереход идёт ${m1(inside)} м в зоне сети (${name}): пересекать её нужно поперёк, не острее 45°`, o.p, o);
       }
@@ -332,7 +333,7 @@ export function utm(lon, lat, zone = 37) {
  * LABELS — номер участка, Ду и длина. Текст латиницей: так его открывает любая версия AutoCAD.
  */
 export const utmZone = lon => Math.floor((lon + 180) / 6) + 1;
-export function toDxf(variant, proj, {zone = utmZone(proj.lon0)} = {}) {
+export function toDxf(variant, proj, {zone = utmZone(proj.lon0), scene = null} = {}) {
   const out = ['0', 'SECTION', '2', 'HEADER', '9', '$ACADVER', '1', 'AC1009', '9', '$INSUNITS', '70', '6', '0', 'ENDSEC', '0', 'SECTION', '2', 'ENTITIES'];
   const P = q => utm(...proj.ll(q[0], q[1]), zone);
   const n3 = v => v.toFixed(3);
@@ -344,6 +345,14 @@ export function toDxf(variant, proj, {zone = utmZone(proj.lon0)} = {}) {
     const m = s.pts[Math.floor((s.pts.length - 1) / 2)], m2 = s.pts[Math.floor((s.pts.length - 1) / 2) + 1] || m, [x, y] = P([(m[0] + m2[0]) / 2, (m[1] + m2[1]) / 2]);
     const id = (/_seg_(\d+)$/.exec(s.id) || [, s.id])[1];
     out.push('0', 'TEXT', '8', 'LABELS', '10', n3(x), '20', n3(y), '30', '0.0', '40', '0.5', '1', `S${id} DN${s.p.diameter} L=${(s.p.length ?? s.len).toFixed(2)}${s.edited ? ' EDIT' : ''}`);
+  }
+  // подложка: существующие сети и контуры зданий рядом с новой сетью (слои EXIST_<тип>, BUILDINGS)
+  if (scene) {
+    const seen = new Set(), add = (layer, pts) => { out.push('0', 'POLYLINE', '8', layer, '66', '1', '70', '0'); for (const q of pts) { const [x, y] = P(q); out.push('0', 'VERTEX', '8', layer, '10', n3(x), '20', n3(y), '30', '0.0'); } out.push('0', 'SEQEND', '8', layer); };
+    for (const s of variant.segs) for (let i = 0; i + 1 < s.pts.length; i++) {
+      for (const e of scene.utilsNear(s.pts[i], s.pts[i + 1], 30)) if (!seen.has(e)) { seen.add(e); add('EXIST_' + e.type.toUpperCase(), [e.a, e.b]); }
+      for (const z of scene.zonesNear(s.pts[i], s.pts[i + 1], 30)) if (!seen.has(z) && BUILDING_KEYS.has(z.type)) { seen.add(z); add('BUILDINGS', [...z.ring, z.ring[0]]); }
+    }
   }
   for (const n of variant.nodes) {
     if (n.type === 'technical_node' || n.type === 'oks_entry' || n.type === 'endpoint') continue;

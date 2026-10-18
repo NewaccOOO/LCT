@@ -271,6 +271,9 @@ body.flying #legend, body.flying .exchip { display: none; }
 .editguide .cl.ok { stroke: var(--ok); } .editguide .cl.near { stroke: var(--warn); } .editguide .cl.bad { stroke: var(--bad); stroke-width: 2; } .editguide .cl.info { stroke: var(--muted); }
 .editguide .ce { stroke: var(--float); stroke-width: 1.5; stroke-dasharray: none; }
 .editguide .ld { stroke: var(--muted); stroke-width: 1; stroke-dasharray: none; opacity: .8; }
+.editguide .act { stroke: var(--sel); stroke-width: 7; stroke-dasharray: none; stroke-linecap: round; opacity: .28; }
+.editbar .eb-slope { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; line-height: 1.35; color: var(--warn-t); background: var(--warn-s); border-radius: var(--r-s); padding: 5px 8px; }
+.editbar .eb-slope .dot { background: var(--warn); margin-top: 4px; }
 .editbar .eb-conf { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; background: var(--warn-s); border-radius: var(--r-s); padding: 6px 8px; }
 .editbar .eb-conf button { min-height: 30px; padding: 3px 10px; font-size: 13px; background: var(--float); }
 .editbar .eb-conf .link { background: none; box-shadow: none; color: var(--accent); }
@@ -301,8 +304,10 @@ body.editing #legBody { max-height: 34vh; overflow: auto; }
 .eh.m { width: 12px; height: 12px; margin: -6px 0 0 -6px; background: var(--accent); box-shadow: 0 0 0 1.5px var(--float); opacity: .55; }
 .eh.m::after { content: "+"; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font: 600 11px/1 var(--font); }
 .eh.m:hover { opacity: 1; }
+/* палец удержан на точке — отпустите, откроется меню */
+.eh.hold { box-shadow: 0 0 0 2px var(--accent), 0 0 0 9px color-mix(in srgb, var(--accent) 30%, transparent); }
 /* рядом спрятаны точки — «+N», своя кнопка поодаль от точки: касание приближает, точку не выбирает */
-.emore { position: absolute; left: 0; top: 0; z-index: 3; margin: -28px 0 0 12px; min-height: 0; padding: 0 5px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; box-shadow: 0 0 0 1.5px var(--float); font: 600 10px/16px var(--font); white-space: nowrap; cursor: zoom-in; pointer-events: auto; }
+.emore { position: absolute; left: 0; top: 0; z-index: 3; margin: 0; min-height: 0; padding: 0 5px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; box-shadow: 0 0 0 1.5px var(--float); font: 600 10px/16px var(--font); white-space: nowrap; cursor: zoom-in; pointer-events: auto; }
 .emore::before { content: ""; position: absolute; inset: -8px; }
 .emore:hover { background: var(--accent-h); }
 body.pinching .eh { pointer-events: none; }
@@ -310,7 +315,7 @@ body.pinching .eh { pointer-events: none; }
 .editctx .h { padding: 6px 12px 2px; font-size: 12px; color: var(--muted); }
 body.editing .labels .lbl.depth { display: none; }
 /* в правке: подписи пересечений без проблем и общая легенда уступают место выноскам и панели */
-body.editing .labels .lbl.cx:not(.bad), body.editing #legend { display: none; }
+body.editing .labels .lbl.cx:not(.bad) { display: none; }
 .editbar .eb-else { font-size: 12.5px; color: var(--text2); } .editbar .eb-else .link { background: none; box-shadow: none; min-height: 0; padding: 0; color: var(--accent); font-size: 12.5px; }
 .lg.c { width: 14px; height: 0; border-radius: 0; box-shadow: none; background: none; border-top: 2px dashed; }
 .lg.c.ok { border-color: var(--ok); } .lg.c.near { border-color: var(--warn); } .lg.c.bad { border-color: var(--bad); } .lg.c.info { border-color: var(--muted); }
@@ -563,8 +568,9 @@ dialog[open]::backdrop { animation: fadeIn .2s ease-out; }
   .eh { width: 16px; height: 16px; margin: -8px 0 0 -8px; } .eh.n { width: 16px; height: 16px; margin: -8px 0 0 -8px; } .eh.m { width: 18px; height: 18px; margin: -9px 0 0 -9px; opacity: .7; }
   .eh.m::after { font-size: 14px; }
   .eh::before { inset: -14px; }
+  .eh.m::before { inset: -8px; }   /* «+» ловит касание теснее точки: случайное касание по трассе — не новый поворот */
   /* значок «+N» — поодаль от точки, чтобы промах пальца по точке не приближал карту */
-  .emore { font-size: 12px; line-height: 20px; padding: 0 7px; border-radius: 10px; margin: -46px 0 0 22px; min-height: 0; }
+  .emore { font-size: 12px; line-height: 20px; padding: 0 7px; border-radius: 10px; margin: 0; min-height: 0; }
   .emore::before { inset: -6px; }
   .editbar .eb-hint .link { min-height: 32px; padding: 0 8px; }
   /* кнопки правки под палец: не ниже 40 px, отмена и возврат — 44 px с промежутком */

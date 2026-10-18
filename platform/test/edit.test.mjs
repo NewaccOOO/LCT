@@ -229,6 +229,8 @@ test('UTM 37N как у сервиса и DXF для AutoCAD', async () => {
   const dxf = toDxf(v, sc.proj);
   assert.equal(utmZone(sc.proj.lon0), 36);
   assert.ok(dxf.includes('\r\nK20\r\n'));
+  const bg = toDxf(v, sc.proj, {scene: sc});
+  assert.ok(bg.includes('\r\nEXIST_GAS_PIPELINE\r\n') && bg.includes('\r\nBUILDINGS\r\n'));
   assert.ok(dxf.startsWith('0\r\nSECTION'));
   assert.ok(dxf.trimEnd().endsWith('EOF'));
   assert.equal(dxf.split('\r\nPOLYLINE\r\n').length - 1, v.segs.length);
