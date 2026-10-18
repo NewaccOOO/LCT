@@ -116,11 +116,11 @@ export function surroundings(scene, pieces, dn, {own = null, R = 15, tied = null
   for (const [a, b] of pieces) for (const o of objectsNear(scene, a, b, dn, {own, tied, R})) {
     let level, note = null;
     if (o.kind !== 'line') level = o.d < o.need - 0.05 ? 'bad' : o.d < o.need + 1 ? 'near' : 'ok';
-    else if (special) { level = 'info'; note = 'спецпереход'; }
-    else if (o.cross) { level = 'bad'; note = 'нужен спецпереход'; }
+    else if (special) { level = o.cross && o.ang != null && o.ang < 44.5 ? 'bad' : 'info'; note = o.cross && o.ang != null ? `спецпереход под углом ${Math.round(o.ang)}°` : 'спецпереход'; }
+    else if (o.cross) { level = 'bad'; note = o.ang != null ? `под углом ${Math.round(o.ang)}°, нужен спецпереход` : 'нужен спецпереход'; }
     else if (o.d < o.need - 0.05) { if (nearSpecial(o, ends, dn)) { level = 'info'; note = 'у спецперехода'; } else { level = 'bad'; note = 'нужен спецпереход'; } }
     else level = o.d < o.need + 0.5 ? 'near' : 'ok';
-    const it = {key: o.key, name: NAME[o.key]?.[0] || o.key, d: o.d, need: o.need, cross: o.cross, line: o.kind === 'line', p: o.p, q: o.q, level, note};
+    const it = {key: o.key, obj: o.obj, name: NAME[o.key]?.[0] || o.key, d: o.d, need: o.need, cross: o.cross, line: o.kind === 'line', p: o.p, q: o.q, level, note};
     const was = best.get(o.key);
     if (!was || rank[level] < rank[was.level] || (rank[level] === rank[was.level] && o.d < was.d)) best.set(o.key, it);
   }
@@ -160,7 +160,7 @@ export function planIssues(scene, s, own = null, {lines = false, tied = null, en
   }
   for (let i = 1; i + 1 < s.pts.length; i++) {
     const t = turnAngle(s.pts[i - 1], s.pts[i], s.pts[i + 1]);
-    if (t > 90.5) add('bad', `поворот ${Math.round(t)}° — круче 90°`, s.pts[i]);
+    if (t > 90.5) add('bad', `угол поворота ${Math.round(t)}° — больше 90°`, s.pts[i]);
   }
   return out;
 }
@@ -170,7 +170,7 @@ export function jointIssue(a, b, where = 'узле') {
   const p = a.pts[a.pts.length - 2], q = a.pts[a.pts.length - 1], r = b.pts[1];
   if (!p || !r || dist(p, q) < 0.01 || dist(q, r) < 0.01) return null;
   const t = turnAngle(p, q, r);
-  return t > 90.5 ? {level: 'bad', text: `поворот ${Math.round(t)}° в ${where} — круче 90°`, x: q[0], y: q[1], seg: b} : null;
+  return t > 90.5 ? {level: 'bad', text: `угол поворота ${Math.round(t)}° в ${where} — больше 90°`, x: q[0], y: q[1], seg: b} : null;
 }
 
 /**
@@ -183,7 +183,7 @@ export function extraBends(scene, s, own = null, keep = [], opts = {}) {
     const q = s.pts[i];
     if (keep.some(k => dist(k, q) < 1e-3)) continue;
     const t = turnAngle(s.pts[i - 1], q, s.pts[i + 1]);
-    if (t < 1) continue;
+    if (t < 1 || t > 90.5) continue;   // круче 90° — уже нарушение, его и показываем
     if (planIssues(scene, {pts: [s.pts[i - 1], s.pts[i + 1]], p: s.p, special: s.special}, own, {lines: true, ...opts}).length) continue;
     out.push({level: 'warn', text: `поворот ${Math.round(t)}° лишний: напрямую между соседними точками нарушений нет — уберите его`, x: q[0], y: q[1], seg: s, i});
   }
@@ -221,7 +221,8 @@ export function snapOrtho(p, neighbours, tol) {
 
 /**
  * Выход сервиса с правками: геометрия и длина изменённых участков, их стоимость пропорционально длине,
- * координаты узлов и сводка варианта (стоимость, длина сети, S). Изменённое помечено manual_edit.
+ * координаты узлов и сводка варианта (стоимость, длина сети, S). Изменённое помечено manual_edit, нарушения правленого
+ * участка — manual_issues (edited.issues: id участка → тексты), в сводке — их число.
  */
 export function patchOutput(raw, scene, variant, edited, proj) {
   const fc = JSON.parse(raw), segById = new Map(variant.segs.map(s => [s.id, s])), nodeById = new Map(variant.nodes.map(n => [n.id, n]));
@@ -239,6 +240,8 @@ export function patchOutput(raw, scene, variant, edited, proj) {
       f.geometry = {type: 'LineString', coordinates: s.pts.map((q, i) => keep(i) ? old[i === 0 ? 0 : old.length - 1] : ll(q))};
       dCost += s.p.cost - p.cost; dLen += len - (p.length ?? 0);
       p.length = +len.toFixed(2); p.cost = +s.p.cost.toFixed(2); p.manual_edit = true;
+      const iss = edited.issues?.get(String(p.id));
+      if (iss?.length) p.manual_issues = iss; else delete p.manual_issues;
     } else if (f.geometry?.type === 'Point' && edited.nodes.has(String(p.id))) {
       const n = nodeById.get(String(p.id));
       f.geometry = {type: 'Point', coordinates: ll(n.xy)};
@@ -252,6 +255,7 @@ export function patchOutput(raw, scene, variant, edited, proj) {
     sm.new_network_length = +(sm.new_network_length + dLen).toFixed(2);
     sm.score = +score(sm.calculated_cost, sm.new_network_length).toFixed(4);
     sm.manual_edits = edited.segs.size;
+    sm.manual_issues = edited.issues ? [...edited.issues.values()].reduce((t, l) => t + l.length, 0) : 0;
   }
   return JSON.stringify(fc);
 }

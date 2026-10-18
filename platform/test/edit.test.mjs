@@ -63,14 +63,14 @@ test('planIssues: здание, зона запрета, дорога, пово�
   // поворот 153° — круче 90°
   const turn = planIssues(stub(), seg([[0, 0], [10, 0], [0, 5]]));
   assert.equal(turn.length, 1);
-  assert.match(turn[0].text, /поворот 153° — круче 90°/);
+  assert.match(turn[0].text, /угол поворота 153° — больше 90°/);
   assert.deepEqual(planIssues(stub(), seg([[0, 0], [10, 0], [10, 10]])), []);
 });
 
 test('jointIssue: излом на пути точки через узел или камеру', () => {
   const a = seg([[0, 0], [10, 0]]), b = seg([[10, 0], [0, 1]]);
-  assert.match(jointIssue(a, b).text, /в узле — круче 90°/);
-  assert.match(jointIssue(a, b, 'камере 20').text, /поворот 174° в камере 20 — круче 90°/);
+  assert.match(jointIssue(a, b).text, /в узле — больше 90°/);
+  assert.match(jointIssue(a, b, 'камере 20').text, /угол поворота 174° в камере 20 — больше 90°/);
   assert.equal(jointIssue(a, seg([[10, 0], [10, 10]])), null);
 });
 
@@ -157,12 +157,13 @@ test('patchOutput: правка участка и камеры на Купчин
   relen(s);
   s.p.cost = o.cost * s.len / o.len;
   assert.ok(s.len > o.len);
-  const out = JSON.parse(patchOutput(txt, sc, v, {segs: new Set([s.id]), nodes: new Set()}, sc.proj));
+  const out = JSON.parse(patchOutput(txt, sc, v, {segs: new Set([s.id]), nodes: new Set(), issues: new Map([[s.id, ['ближе 5 м к зданию: 4,2 м']]])}, sc.proj));
   const was = JSON.parse(txt);
   assert.equal(out.features.length, was.features.length);
   const f = out.features.find(x => x.properties.id === s.id);
   assert.equal(f.geometry.coordinates.length, 3);
   assert.equal(f.properties.manual_edit, true);
+  assert.deepEqual(f.properties.manual_issues, ['ближе 5 м к зданию: 4,2 м']);
   // длина — в метрах сервиса: тот же масштаб, что у исходного участка
   const k = was.features.find(x => x.properties.id === s.id).properties.length / o.len;
   assert.ok(Math.abs(k - 1) < 0.01);
@@ -182,6 +183,7 @@ test('patchOutput: правка участка и камеры на Купчин
   assert.ok(Math.abs(sm.calculated_cost - sw.calculated_cost - (s.p.cost - fw.properties.cost)) < 0.02);
   assert.equal(sm.score, +score(sm.calculated_cost, sm.new_network_length).toFixed(4));
   assert.equal(sm.manual_edits, 1);
+  assert.equal(sm.manual_issues, 1);
 
   // камера: точка и концы всех её участков
   const n = v.nodes.find(x => x.id === 'v1_ch_20');

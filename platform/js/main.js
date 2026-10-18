@@ -308,6 +308,7 @@ function renderSummary() {
       <div class="${bad ? 'bad' : 'ok'}"><b>${bad}</b><span>${plural(bad, 'проблема', 'проблемы', 'проблем')} по высоте</span></div>
       <div><b>${special}</b><span>${plural(special, 'спецпереход', 'спецперехода', 'спецпереходов')}</span></div>
     </div>
+    ${editedCount(v) ? `<div class="note info">В варианте ручные правки: ${editedCount(v)} ${plural(editedCount(v), 'участок', 'участка', 'участков')}, S до правок ${fmt(v.edit.score, 2)}. Вернуть как построил сервис — «Правка» → «Сбросить правки»</div>` : ''}
     <h2>Из чего стоимость</h2>
     <table>
       <tr><td>Трубы и спецпереходы</td><td>${rub((sm.construction_cost ?? 0) - (sm.chamber_construction_cost ?? 0))}</td></tr>
@@ -786,6 +787,7 @@ function showProps(sel) {
       ${hasRoute ? '<button id="pxFly" title="Пролёт камерой вдоль трассы (P)">Пролёт</button><button id="pxProf" title="Продольный профиль трассы">Профиль</button>' : ''}
       ${hasRoute && S.v ? `<button id="pxEdit" class="wide" title="Сдвинуть повороты и камеры трассы вручную (E)">${E.on ? 'Закончить правку' : 'Править трассу вручную'}</button>` : ''}
     </div>
+    ${hasRoute && S.route.segs.some(s => s.edited) ? `<div class="note info">Трасса правлена вручную: ${S.route.segs.filter(s => s.edited).length} ${plural(S.route.segs.filter(s => s.edited).length, 'участок', 'участка', 'участков')}. Вернуть как построил сервис — «Править трассу вручную» → «Сбросить правки»</div>` : ''}
     <table>${d.rows.filter(r => r[1] != null && r[1] !== '—').map(r => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`).join('')}</table>
     ${d.problem ? `<div class="note prob">${d.problem}</div>` : ''}${d.info ? `<details class="note warn"><summary>${esc(d.info.t)}</summary>${esc(d.info.more)}</details>` : ''}${d.fix ? `<div class="note fix"><b>Как исправить</b><br>${d.fix}</div>` : ''}${d.ok ? `<div class="note fix">${esc(d.ok)}</div>` : ''}`;
   $('#pxX').onclick = () => clearSel();
@@ -819,7 +821,7 @@ function openProfile() {
   if ($('#profile').hidden || $('#profile')._anim) morph($('#profile'), () => { $('#profile').hidden = false; });
   const o = S.model.oks.find(x => x.id === R.end);
   $('#pTitle').innerHTML = `Профиль: ${esc(nodeLabel(R.start))} → ${esc(o ? o.label : nodeLabel(R.end))} · ${meters(R.len)} · ${rub(R.cost)} · ` +
-    (R.bad ? `<span style="color:var(--bad-t)">${R.bad} ${plural(R.bad, 'проблема', 'проблемы', 'проблем')}</span>` : '<span style="color:var(--ok-t)">без проблем</span>');
+    (R.bad ? `<span style="color:var(--bad-t)">${R.bad} ${plural(R.bad, 'проблема', 'проблемы', 'проблем')} по высоте</span>` : '<span style="color:var(--ok-t)">без проблем</span>');
   const at = S.focusAt;
   S.focusAt = null;
   requestAnimationFrame(() => { profile.show(R, S.model); if (at != null) { profile.zoomTo(at, Math.min(60, R.len)); profile.setCursor(at); } });
@@ -857,7 +859,11 @@ function clickAt(x, y) {
   if (S.measure) return measureClick(x, y);
   const h = pickAt(x, y), sel = hitToSel(h);
   setXY(h?.point || rig.onPlane(x, y, 0, 1e6));
-  if (!sel) { clearSel(); return; }
+  if (!sel) {
+    // в правке пустое место только снимает выбор точки: трасса и панель остаются
+    if (E.on) { if (E.sel) { E.sel = null; editHandles(true); editPanel(); } return; }
+    clearSel(); return;
+  }
   select(sel, {room: true});
 }
 function dblAt(x, y) {
@@ -1562,7 +1568,7 @@ function restoreGeom(v, g) {
 // исходная геометрия участка — запоминается до первой правки, с ней сравнивают и по ней сбрасывают
 function remember(v, segs) {
   const st = editState(v);
-  for (const s of segs) if (!st.orig.has(s.id)) st.orig.set(s.id, {pts: s.pts.map(q => q.slice()), len: s.len, cost: s.p.cost, length: s.p.length, depth: s.depth.slice()});
+  for (const s of segs) if (!st.orig.has(s.id)) st.orig.set(s.id, {pts: s.pts.map(q => q.slice()), len: s.len, cost: s.p.cost, length: s.p.length, depth: s.depth.slice(), cx: new Set(s.cx.map(c => c.type + ':' + c.eid))});
 }
 function beginChange() { E.undo.push(snapGeom(S.v)); if (E.undo.length > 100) E.undo.shift(); E.redo = []; }
 // пересчёт участков после правки: длины, глубины, стоимость пропорционально длине, пересечения, сводка варианта
@@ -1622,7 +1628,7 @@ function editIssues() {
   const ownOf = s => { const o = S.model.oks.find(x => x.id === s.to); return o?.building || null; };
   // у изменённых участков — и отступы от дорог и сетей; показываем только то, что появилось от правки
   for (const s of segs) {
-    if (!s.edited) { out.push(...planIssues(S.model, s, ownOf(s))); continue; }
+    if (!s.edited) { out.push(...planIssues(S.model, s, ownOf(s)).map(i => ({...i, old: true}))); continue; }
     const opt = {lines: true, ...lineOpts(s)}, now = planIssues(S.model, s, ownOf(s), opt);
     const was = planIssues(S.model, {pts: v.edit.orig.get(s.id).pts, p: s.p, special: s.special}, ownOf(s), opt);
     out.push(...now.filter(i => !was.some(w => w.text === i.text || (i.obj && w.obj === i.obj && w.d <= i.d + 0.05))));
@@ -1630,10 +1636,15 @@ function editIssues() {
   out.push(...jointsAt(new Set([...segs].flatMap(s => [s.from, s.to]))));
   // лишние повороты, которые появились от правки
   for (const s of segs) if (s.edited) out.push(...extraBends(S.model, s, ownOf(s), v.edit.orig.get(s.id).pts, lineOpts(s)));
-  for (const s of segs) for (const c of s.cx) if (c.ok === false) out.push({level: 'bad', text: `${UTILITIES[c.type].name.toLowerCase()}: ${c.gap < 0 ? 'трубы пересекаются по высоте' : `зазор ${fmt(c.gap, 2)} м, нужно ${fmt(c.need, 2)}`}`, x: c.x, y: c.y, seg: s, cx: c});
-  for (const s of segs) for (const t of s.issues) out.push({level: 'bad', text: t, x: s.pts[0][0], y: s.pts[0][1], seg: s});
+  // по высоте: глубина водопровода и канализации в исходных данных не задана — сравнение условное, так и пишем
+  for (const s of segs) for (const c of s.cx) if (c.ok === false) out.push({level: 'bad', text: `${UTILITIES[c.type].name.toLowerCase()}: ${c.gap < 0 ? 'трубы пересекаются по высоте' : `зазор по высоте ${fmt(c.gap, 2)} м, нужно ${fmt(c.need, 2)}`}${UTILITIES[c.type].assumed ? ' (её глубина условная: в исходных данных её нет)' : ''}`,
+    x: c.x, y: c.y, seg: s, cx: c, old: !s.edited || !!v.edit?.orig.get(s.id)?.cx?.has(c.type + ':' + c.eid)});
+  for (const s of segs) for (const t of s.issues) out.push({level: 'bad', text: t.replace(/(\d)\.(\d)/g, '$1,$2'), x: s.pts[0][0], y: s.pts[0][1], seg: s, old: !s.edited});
   // предельная длина пути от врезки до здания по Ду ввода (табл. 1)
-  if (S.route) { const last = S.route.segs[S.route.segs.length - 1]; if (S.route.len > last.row.maxLen + 0.5) out.push({level: 'bad', text: `трасса ${meters(S.route.len)} длиннее предельной ${meters(last.row.maxLen)} для Ду ${last.p.diameter}`, x: last.pts[last.pts.length - 1][0], y: last.pts[last.pts.length - 1][1], seg: last}); }
+  if (S.route) {
+    const last = S.route.segs[S.route.segs.length - 1], was = S.route.segs.reduce((t, s) => t + (v.edit?.orig.get(s.id)?.len ?? s.len), 0);
+    if (S.route.len > last.row.maxLen + 0.5) out.push({level: 'bad', text: `трасса ${meters(S.route.len)} длиннее предельной ${meters(last.row.maxLen)} для Ду ${last.p.diameter}`, x: last.pts[last.pts.length - 1][0], y: last.pts[last.pts.length - 1][1], seg: last, old: was > last.row.maxLen + 0.5});
+  }
   return out;
 }
 // для проверок отступов от дорог и сетей: труба, в которую участок врезается, и его концы у спецпереходов
@@ -1649,9 +1660,31 @@ function jointsAt(ids) {
     const n = v.nodes.find(q => q.id === id); if (!n) continue;
     const ins = v.segs.filter(s => s.to === id), outs = v.segs.filter(s => s.from === id);
     const m = /_ch_(\d+)$/.exec(id), where = m ? `камере ${m[1]}` : 'узле';
-    for (const a of ins) for (const b of outs) { const j = jointIssue(a, b, where); if (j) out.push(j); }
+    for (const a of ins) for (const b of outs) { const j = jointIssue(a, b, where); if (j) out.push({...j, old: !a.edited && !b.edited && !n.edited}); }
   }
   return out;
+}
+// где нарушение: участок и здание
+function issWhere(i) {
+  const parts = [];
+  if (i.seg?.id) parts.push(segName(i.seg).replace('Участок', 'уч.'));
+  if (i.obj && BUILDING_KEYS.has(i.obj.type)) { const o = S.model.oks.find(x => x.building === i.obj); const nm = o?.label || i.obj.p?.address; if (nm) parts.push(nm.split(',')[0]); }
+  return parts.join(', ');
+}
+// участок → здания, чьи трассы через него идут (общие участки — у нескольких)
+function segOks(v) {
+  if (v._segOks) return v._segOks;
+  const m = new Map();
+  for (const id of v.connected) { const r = routeTo(v, id); if (r) for (const s of r.segs) { const l = m.get(s); if (l) l.push(id); else m.set(s, [id]); } }
+  return v._segOks = m;
+}
+const shortName = id => { const o = S.model.oks.find(x => x.id === id); return o ? o.label.split(',')[0].replace(/^Жилой дом\s*/, 'дом ') : nodeLabel(id); };
+// трассы каких зданий меняет правка и на сколько
+function editAffected(v) {
+  const st = v?.edit; if (!st) return [];
+  const ids = new Set();
+  for (const s of v.segs) if (s.edited) for (const id of segOks(v).get(s) || []) ids.add(id);
+  return [...ids].map(id => { const r = routeTo(v, id); const was = r.segs.reduce((t, s) => t + (st.orig.get(s.id)?.len ?? s.len), 0); return {id, d: r.len - was}; });
 }
 function editPanel() {
   const el = $('#editBar');
@@ -1661,22 +1694,32 @@ function editPanel() {
   const d = (a, b, f) => { const x = a - b; return Math.abs(x) < 1e-6 ? '' : ` <i class="${x > 0 ? 'up' : 'down'}">${x > 0 ? '+' : '−'}${f(Math.abs(x))}</i>`; };
   const sm = v?.summary, so = st?.sum;
   E.issues = editIssues();
-  const bad = E.issues.filter(i => i.level === 'bad'), warn = E.issues.filter(i => i.level === 'warn');
-  const touch = matchMedia('(pointer: coarse)').matches, all = [...bad, ...warn];
-  const open = E.listOpen ?? bad.length > 0;
+  // одинаковые сообщения — одной строкой с числом; сначала то, что сделала правка, потом бывшее в исходной трассе
+  const group = list => { const m = new Map(); for (const i of list) { const k = i.text + '|' + issWhere(i); const g = m.get(k); if (g) g.n++; else m.set(k, {...i, n: 1, where: issWhere(i)}); } return [...m.values()].sort((x, y) => (x.level === 'bad' ? 0 : 1) - (y.level === 'bad' ? 0 : 1)); };
+  const fresh = group(E.issues.filter(i => !i.old)), old = group(E.issues.filter(i => i.old));
+  const fb = fresh.filter(i => i.level === 'bad').length, fw = fresh.length - fb;
+  const touch = matchMedia('(pointer: coarse)').matches;
+  const open = E.listOpen ?? fresh.length > 0;
+  const item = (i, k) => `<button class="iss ${i.level}${i.old ? ' old' : ''}" data-i="${k}" title="Показать место"><span class="dot"></span><span>${esc(i.text)}${i.n > 1 ? ` <b>×${i.n}</b>` : ''}${i.where ? `<small> · ${esc(i.where)}</small>` : ''}</span></button>`;
+  const all = [...fresh, ...old];
+  const sumText = (fb ? `${fb} ${plural(fb, 'нарушение', 'нарушения', 'нарушений')} от правки` : fw ? '' : 'Правка нарушений не добавила') + (fb && fw ? ' · ' : '') + (fw ? `${fw} ${plural(fw, 'замечание', 'замечания', 'замечаний')}` : '') + (old.length ? `<span class="mut"> · ${old.length} в исходной трассе</span>` : '');
+  const aff = editAffected(v), others = aff.filter(a => a.id !== R?.end);
   const html = `<div class="eb-h"><b>Правка трассы</b><span class="mut">${R ? esc(R.endName || nodeLabel(R.end)) : 'выберите здание или трубу'}</span><span class="sp"></span>
       <button id="ebUndo" class="icon" ${E.undo.length ? '' : 'disabled'} title="Отменить (Ctrl Z)" aria-label="Отменить"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
       <button id="ebRedo" class="icon" ${E.redo.length ? '' : 'disabled'} title="Вернуть (Ctrl Shift Z)" aria-label="Вернуть"><svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
       <button id="ebDone" class="primary" title="Закончить правку (Esc). Правки сохраняются в браузере">Готово</button></div>
-    ${v ? `<div class="eb-m">${n ? `Изменено участков: <b>${n}</b> · ` : ''}сеть ${meters(sm.new_network_length)}${so ? d(sm.new_network_length, so.new_network_length, meters) : ''} · ${rub(sm.calculated_cost)}${so ? d(sm.calculated_cost, so.calculated_cost, rub) : ''} · S ${fmt(v.score, 2)}${st && Math.abs(v.score - st.score) > 1e-6 ? ` <span class="mut">было ${fmt(st.score, 2)}</span>` : ''}</div>` : ''}
-    ${R || n ? (all.length ? `<button id="ebList" class="eb-sum ${bad.length ? 'bad' : 'warn'}" aria-expanded="${open}"><span class="dot"></span>${bad.length ? `${bad.length} ${plural(bad.length, 'нарушение', 'нарушения', 'нарушений')} правил` : ''}${bad.length && warn.length ? ' · ' : ''}${warn.length ? `${warn.length} ${plural(warn.length, 'замечание', 'замечания', 'замечаний')}` : ''}<span class="caret">${open ? '▾' : '▸'}</span></button>
-      ${open ? `<div class="eb-p">${all.slice(0, 8).map((i, k) => `<button class="iss ${i.level}" data-i="${k}" title="Показать место"><span class="dot"></span>${esc(i.text)}</button>`).join('')}${all.length > 8 ? `<div class="mut">и ещё ${all.length - 8}</div>` : ''}</div>` : ''}`
+    ${v ? `<div class="eb-m"><div>${n ? `Изменено участков: <b>${n}</b>` : 'Правок пока нет'}${st && fmt(v.score, 2) !== fmt(st.score, 2) ? ` · <span title="${S_FORMULA}">S ${fmt(v.score, 2)} <span class="mut">было ${fmt(st.score, 2)}</span></span>` : ` · <span title="${S_FORMULA}">S ${fmt(v.score, 2)}</span>`}<span class="q" title="${S_FORMULA}">?</span></div>
+      <div>сеть ${meters(sm.new_network_length)}${so ? d(sm.new_network_length, so.new_network_length, meters) : ''} · ${rub(sm.calculated_cost)}${so ? d(sm.calculated_cost, so.calculated_cost, rub) : ''}</div></div>` : ''}
+    ${others.length ? `<div class="eb-aff"><span class="dot"></span><span>Правка меняет и трассы других зданий: ${others.slice(0, 4).map(a => `${esc(shortName(a.id))} ${Math.abs(a.d) < 0.05 ? '(длина та же)' : `${a.d > 0 ? '+' : '−'}${fmt(Math.abs(a.d), 1)} м`}`).join(', ')}${others.length > 4 ? ` и ещё ${others.length - 4}` : ''}</span></div>` : ''}
+    ${R || n ? (all.length ? `<button id="ebList" class="eb-sum ${fb ? 'bad' : fw ? 'warn' : 'none'}" aria-expanded="${open}"><span class="dot"></span><span>${sumText}</span><span class="caret">${open ? '▾' : '▸'}</span></button>
+      ${open ? `<div class="eb-p">${fresh.map((i, k) => item(i, k)).join('')}${old.length ? `<button id="ebOld" class="iss oldh" aria-expanded="${!!E.oldOpen}">Было в исходной трассе до правки: ${old.length}<span class="caret">${E.oldOpen ? '▾' : '▸'}</span></button>${E.oldOpen ? old.map((i, k) => item(i, fresh.length + k)).join('') : ''}` : ''}</div>` : ''}`
       : '<div class="iss ok"><span class="dot"></span>Нарушений правил на трассе нет</div>') : ''}
-    <div class="eb-a">${E.sel?.kind === 'v' ? '<button id="ebDel" title="Удалить выбранный поворот (Delete)">Удалить точку</button>' : ''}
+    <div class="eb-a">${E.sel?.kind === 'v' ? '<button id="ebDel" title="Удалить выбранный поворот (Delete)">Удалить поворот</button>' : ''}${E.sel?.kind === 'n' && canStraighten(E.sel) ? '<button id="ebDel" title="Поставить узел на прямую между соседними точками (Delete)">Убрать излом</button>' : ''}
       <button id="ebReset" ${n ? '' : 'disabled'} title="Вернуть трассы варианта как их построил сервис">Сбросить правки</button>
       <button id="ebSave" ${n ? '' : 'disabled'} title="GeoJSON в формате сервиса с вашими правками">Скачать с правками</button></div>
-    <div class="eb-hint">${touch ? 'Тяните точку — сдвинуть поворот · тяните «+» — новый поворот · коснитесь точки — выбрать' : 'Тяните точку — сдвинуть поворот · тяните «+» — новый поворот · двойной щелчок — удалить'}<button id="ebHelp" class="link" aria-expanded="${!!E.help}">${E.help ? 'скрыть' : 'подробнее'}</button>
-      ${E.help ? `<div class="more">Круги — повороты на трубе. Квадраты — камеры и узлы: двигаются вместе со всеми трубами, которые в них сходятся. Серые закреплены: ввод в здание и врезка в существующую сеть. Звенья липнут к прямым углам — пунктир показывает, к чему; ${touch ? '' : 'Alt — без привязки. '}Длина, стоимость и S пересчитываются сразу, проверки правил — ниже заголовка. Правки хранятся в этом браузере; «Скачать с правками» — файл в формате сервиса.</div>` : ''}</div>`;
+    <div class="eb-leg" aria-label="Обозначения"><span><i class="lg v"></i>поворот</span><span><i class="lg n"></i>узел, камера</span><span><i class="lg l"></i>закреплено</span><span><i class="lg m"></i>добавить поворот</span><span><i class="lg g"></i>как было</span></div>
+    <div class="eb-hint">${touch ? 'Тяните точку пальцем · коснитесь — выбрать · «+N» у точки — рядом ещё точки, коснитесь — приблизить' : 'Тяните точку · двойной щелчок — удалить поворот или убрать излом · Alt — без привязки к прямым углам'}<button id="ebHelp" class="link" aria-expanded="${!!E.help}">${E.help ? 'скрыть' : 'подробнее'}</button>
+      ${E.help ? `<div class="more"><b>Поворот</b> (круг) — излом внутри участка: тяните, удаляйте. <b>Узел</b> (квадрат) — граница участков, где меняется глубина, Ду или начинается спецпереход; <b>камера</b> — тоже квадрат. Их двигают вместе со всеми трубами, которые в них сходятся; удалить нельзя, но излом в узле можно убрать. <b>Серые</b> закреплены: ввод в здание и врезка в существующую сеть. Звенья липнут к прямым углам — пунктир показывает, к чему.<br>Расстояния до зданий, зон, дорог и сетей — от стенки канала трубы, нормы — из правил расчёта: здания 5/7/9 м по Ду, зоны запрета 1 м, метро 10 м, дороги и трамвай 1,5 м, газопровод и кабель 2 м, водопровод 1,5 м, канализация и теплосеть 1 м; ближе к дороге или сети можно только спецпереходом — его ставит пересчёт на сервере. Угол поворота — отклонение от прямой, не больше 90°; дорогу трасса переходит под углом не меньше 45°.<br>Длина, стоимость (пропорционально длине) и ${S_FORMULA}. Правки хранятся в этом браузере; «Скачать с правками» — файл в формате сервиса, в нём отмечены правленые участки и их нарушения.</div>` : ''}</div>`;
   // в кадре перетаскивания панель пересобирается, только если что-то в ней поменялось
   E.issAll = all;
   if (html === E.panelHtml) return;
@@ -1688,6 +1731,7 @@ function editPanel() {
   $('#ebRedo').onclick = () => editRedo();
   if ($('#ebDel')) $('#ebDel').onclick = () => editDelete();
   if ($('#ebList')) $('#ebList').onclick = () => { E.listOpen = !open; editPanel(); };
+  if ($('#ebOld')) $('#ebOld').onclick = () => { E.oldOpen = !E.oldOpen; editPanel(); };
   $('#ebReset').onclick = () => editReset();
   $('#ebSave').onclick = () => editDownload();
   el.querySelectorAll('.iss[data-i]').forEach(b => b.onclick = () => { const i = E.issAll[+b.dataset.i]; rig.lookAtFrom(new THREE.Vector3(i.x, i.y, 0), rig.yaw, -90 * D, Math.max(40, Math.min(rig.pos.z, 120))); viewer.marker('selpt', new THREE.Vector3(i.x, i.y, 0.5), {r: 1.2, color: PALETTE.problem}); });
@@ -1710,6 +1754,7 @@ function setEdit(on) {
     viewer.marker('selpt', null);
     if (E.auto && mapOnly) setMapOnly(false);
     E.auto = false;
+    if (S.sel) showProps(S.sel);
   }
   editGhost();
   editPanel();
@@ -1797,16 +1842,33 @@ function editPlace() {
   const scr = q => { V.set(q[0], q[1], 0.15).project(viewer.camera); return V.z > 1 ? null : [(V.x + 1) / 2 * r.width, (1 - V.y) / 2 * r.height]; };
   // точки не слипаются: ближе 14 px к уже показанной — прячется (выбранная и тащимая — всегда видны),
   // «+» — только на звене длиннее 40 px на экране; приблизьте — появятся все
+  // под палец точки стоят не теснее зоны касания (44 px), под мышь — 18 px; спрятанные считаются у ближайшей видимой: «+N»
+  const touch = matchMedia('(pointer: coarse)').matches, gap = touch ? 40 : 18, mgap = touch ? 100 : 50;
   const order = [...E.targets].sort((p, q) => (q.key === E.sel?.key) - (p.key === E.sel?.key) || 'nvm'.indexOf(p.kind) - 'nvm'.indexOf(q.kind));
+  const shown = [];
   for (const t of order) {
     const el = E.handles.get(t.key); if (!el) continue;
     const c = scr(t.p);
-    let show = c && c[0] > -10 && c[1] > -10 && c[0] < r.width + 10 && c[1] < r.height + 10;
-    if (show && t.kind === 'm') { const a = scr(t.seg.pts[t.i]), b = scr(t.seg.pts[t.i + 1]); show = a && b && Math.hypot(a[0] - b[0], a[1] - b[1]) > 40; }
+    let show = c && c[0] > -10 && c[1] > -10 && c[0] < r.width + 10 && c[1] < r.height + 10, near = null;
+    if (show && t.kind === 'm') { const a = scr(t.seg.pts[t.i]), b = scr(t.seg.pts[t.i + 1]); show = a && b && Math.hypot(a[0] - b[0], a[1] - b[1]) > mgap; }
     const must = E.drag?.t.key === t.key || E.sel?.key === t.key;
-    if (show && !must && placed.some(q => Math.hypot(q[0] - c[0], q[1] - c[1]) < 14)) show = false;
+    if (show && !must) {
+      near = shown.find(q => Math.hypot(q.c[0] - c[0], q.c[1] - c[1]) < gap);
+      if (near) {
+        show = false;
+        // точки ближе 0,3 м на плане — одно место, их не считаем: приближением их не развести
+        const dm = Math.hypot(near.t.p[0] - t.p[0], near.t.p[1] - t.p[1]);
+        if (t.kind !== 'm' && dm > 0.3) { near.more++; near.minM = Math.min(near.minM, dm); }
+      }
+    }
     el.style.display = show ? '' : 'none';
-    if (show) { placed.push(c); el.style.transform = `translate(${c[0].toFixed(1)}px, ${c[1].toFixed(1)}px)`; }
+    if (show) { const it = {c, el, t, more: 0, minM: Infinity}; shown.push(it); placed.push(c); el.style.transform = `translate(${c[0].toFixed(1)}px, ${c[1].toFixed(1)}px)`; }
+  }
+  for (const it of shown) {
+    const m = it.more ? '+' + it.more : '';
+    if (it.el.dataset.more !== m) { if (m) it.el.dataset.more = m; else delete it.el.dataset.more; }
+    // насколько приблизить, чтобы спрятанные соседи разошлись на зону касания
+    it.el._zoomTo = it.more ? it.minM / (gap * 1.4) * r.height / (2 * Math.tan(viewer.camera.fov * D / 2)) : null;
   }
   editDraw(r, V);
 }
@@ -1829,6 +1891,17 @@ function activeChains(t) {
   }
   return out;
 }
+// объекты, у которых исходная трасса участка уже была ближе нормы (так проложил сервис, спецпереходом): id участка → Set
+function origNear(s, own) {
+  E.origBad ||= new Map();
+  let m = E.origBad.get(s.id);
+  if (!m) {
+    const o = S.v.edit?.orig.get(s.id), pts = o ? o.pts : s.pts;
+    m = new Set(planIssues(S.model, {pts, p: s.p, special: s.special}, own, {lines: true, ...lineOpts(s)}).map(i => i.obj || i.text));
+    E.origBad.set(s.id, m);
+  }
+  return m;
+}
 function editNear() {
   const t = E.on && S.v ? editActive() : null;
   E.near = null;
@@ -1840,7 +1913,10 @@ function editNear() {
   const best = new Map();
   for (const c of chains) {
     const links = c.pts.slice(1).map((q, i) => [c.pts[i], q]);
+    const was = origNear(c.seg, ownOf(c.seg));
     for (const it of surroundings(S.model, links, c.seg.p.diameter || 50, {own: ownOf(c.seg), special: c.seg.special, ...lineOpts(c.seg)})) {
+      // у сервиса так и было — не нарушение правки: серым, с пометкой
+      if (it.level === 'bad' && it.obj && was.has(it.obj)) { it.level = 'info'; it.note = 'так у сервиса'; }
       const o = best.get(it.key);
       if (!o || LV[it.level] < LV[o.level] || (LV[it.level] === LV[o.level] && it.d < o.d)) best.set(it.key, it);
     }
@@ -1857,7 +1933,7 @@ function editNear() {
   }
   // проверки правил у точки — для плашки у курсора: самое серьёзное
   const iss = [];
-  for (const c of chains) iss.push(...planIssues(S.model, {pts: c.pts, p: c.seg.p, special: c.seg.special}, ownOf(c.seg), {lines: true, ...lineOpts(c.seg)}));
+  for (const c of chains) { const was = origNear(c.seg, ownOf(c.seg)); iss.push(...planIssues(S.model, {pts: c.pts, p: c.seg.p, special: c.seg.special}, ownOf(c.seg), {lines: true, ...lineOpts(c.seg)}).filter(i => !was.has(i.obj || i.text))); }
   const ends = new Set();
   for (const c of chains) {
     const s = c.seg, k = c.pts.length;
@@ -1874,11 +1950,13 @@ function editNear() {
     dims.map(d => `<div class="en dim">${m1(Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]))}</div>`).join('') +
     (ang != null && ang > 0.5 ? `<div class="en ang ${ang > 90.5 ? 'bad' : ''}">поворот ${Math.round(ang)}°</div>` : '');
   const tip = $('#editTip');
+  const shared = Math.max(0, ...chains.map(c => segOks(S.v).get(c.seg)?.length || 0));
   if (E.drag?.moved) {
     tip.hidden = false;
     tip.className = 'edittip ' + (top ? (top.level === 'bad' ? 'bad' : 'warn') : 'ok');
     tip.innerHTML = top ? `<span class="dot"></span>${esc(top.text[0].toUpperCase() + top.text.slice(1))}${E.near.n > 1 ? ` <span class="mut">и ещё ${E.near.n - 1}</span>` : ''}`
       : `<span class="dot"></span>Нормы соблюдены${dims.length ? ' · ' + dims.map(d => m1(Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]))).join(' + ') : ''}`;
+    if (shared > 1) tip.innerHTML += `<span class="mut">· участок общий для ${shared} зданий</span>`;
   } else tip.hidden = true;
 }
 const m1 = x => `${fmt(x, 1)} м`;
@@ -1900,13 +1978,16 @@ function editDraw(r, V) {
     const els = [...notes.children], placed = [];
     // занятые места: точки правки
     for (const el of E.handles.values()) if (el.style.display !== 'none') { const m = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(el.style.transform); if (m) placed.push([+m[1] - 12, +m[2] - 12, 24, 24]); }
+    // и плавающие панели поверх сцены: правка, легенда, масштаб глубины
+    for (const sel of ['#editBar', '#legend', '#exChip']) { const e = $(sel); if (!e || e.hidden) continue; const q = e.getBoundingClientRect(), vr = $('#view').getBoundingClientRect(); if (q.width) placed.push([q.left - vr.left - 4, q.top - vr.top - 4, q.width + 8, q.height + 8]); }
     const hit = (x, y, w, h) => placed.some(([px, py, pw, ph]) => x < px + pw && px < x + w && y < py + ph && py < y + h);
     // подпись встаёт у своей точки: сначала в сторону dir, потом по кругу и чуть дальше — первое свободное место
     const DIRS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+    const tb = $('#navR .toolbar').getBoundingClientRect(), vr = $('#view').getBoundingClientRect(), maxR = Math.min(r.width, tb.left - vr.left - 8);
     const put = (el, c, dir) => {
       if (!c) { el.style.display = 'none'; return; }
       const w = el.offsetWidth || 120, h = el.offsetHeight || 20;
-      const at = (d, k) => { const x = c[0] + d[0] * k - (d[0] < 0 ? w : d[0] === 0 ? w / 2 : 0), y = c[1] + d[1] * k - (d[1] < 0 ? h : d[1] === 0 ? h / 2 : 0); return [Math.max(4, Math.min(r.width - w - 4, x)), Math.max(4, Math.min(r.height - h - 4, y))]; };
+      const at = (d, k) => { const x = c[0] + d[0] * k - (d[0] < 0 ? w : d[0] === 0 ? w / 2 : 0), y = c[1] + d[1] * k - (d[1] < 0 ? h : d[1] === 0 ? h / 2 : 0); return [Math.max(4, Math.min(maxR - w, x)), Math.max(4, Math.min(r.height - h - 4, y))]; };
       let x, y;
       search: for (const k of [8, 22, 40]) for (const d of [dir, ...DIRS]) { [x, y] = at(d, k); if (!hit(x, y, w, h)) break search; [x, y] = at(dir, 8); }
       placed.push([x, y, w, h]);
@@ -2011,14 +2092,40 @@ function editUp(e, el) {
   document.body.classList.remove('dragging');
   const D0 = E.drag; E.drag = null;
   if (!D0) return;
-  if (!D0.moved) { E.sel = D0.t.kind === 'm' ? null : D0.t; editHandles(true); editPanel(); return; }
+  if (!D0.moved) {
+    E.sel = D0.t.kind === 'm' ? null : D0.t;
+    if (el.dataset.more && el._zoomTo && D0.t.p) { const P = new THREE.Vector3(D0.t.p[0], D0.t.p[1], 0), d = rig.pos.distanceTo(P); if (el._zoomTo < d * 0.95) rig.lookAtFrom(P, rig.yaw, rig.pitch, Math.max(5, el._zoomTo), 450); }
+    editHandles(true); editPanel(); return;
+  }
   E.sel = D0.t;
   $('#editTip').hidden = true;
   afterGeom(S.v, [...D0.changed]);
   editRedraw();
 }
+// узел между двумя участками (одна труба входит, одна выходит) с изломом — его можно поставить на прямую
+function straightPair(t) {
+  if (t?.kind !== 'n' || t.lock || t.node.type !== 'technical_node') return null;
+  const ins = S.v.segs.filter(s => s.to === t.node.id), outs = S.v.segs.filter(s => s.from === t.node.id);
+  if (ins.length !== 1 || outs.length !== 1) return null;
+  const a = ins[0], b = outs[0], p = a.pts[a.pts.length - 2], r = b.pts[1];
+  return p && r && turnAngle(p, t.node.xy, r) > 1 ? {a, b, p, r} : null;
+}
+const canStraighten = t => !!straightPair(t);
+function editStraighten(t) {
+  const sp = straightPair(t); if (!sp) return;
+  const {a, b, p, r} = sp, n = t.node, dx = r[0] - p[0], dy = r[1] - p[1], l2 = dx * dx + dy * dy;
+  const k = Math.max(0.05, Math.min(0.95, ((n.xy[0] - p[0]) * dx + (n.xy[1] - p[1]) * dy) / l2)), q = [p[0] + dx * k, p[1] + dy * k];
+  beginChange();
+  remember(S.v, [a, b]);
+  if (!editState(S.v).nodes.has(n.id)) editState(S.v).nodes.set(n.id, n.xy.slice());
+  n.xy = q; a.pts[a.pts.length - 1] = q.slice(); b.pts[0] = q.slice();
+  afterGeom(S.v, [a, b]);
+  editRedraw();
+  toast('Излом убран: узел встал на прямую между соседними точками. Сам узел остаётся — в нём меняются параметры трубы', 'ok', 4500);
+}
 function editDelete(t = E.sel) {
-  if (!t || t.kind !== 'v') { if (t?.kind === 'n') toast('Камеру и узел удалить нельзя: их задаёт схема сети. Удалить можно только поворот на трубе', 'info', 3500); return; }
+  if (t?.kind === 'n' && canStraighten(t)) return editStraighten(t);
+  if (!t || t.kind !== 'v') { if (t?.kind === 'n') toast(t.node.type === 'technical_node' ? 'Узел удалить нельзя: в нём меняются параметры трубы (глубина, Ду, спецпереход). Излома в нём нет — двигайте его или соседние точки' : 'Камеру удалить нельзя: её задаёт схема сети. Двигайте её — трубы пойдут следом', 'info', 4500); return; }
   beginChange();
   remember(S.v, [t.seg]);
   t.seg.pts.splice(t.i, 1);
@@ -2065,15 +2172,24 @@ function loadEdits() {
 }
 function editDownload() {
   if (!S.raw) return toast('Результата трассировки нет', 'info');
-  let raw = S.raw;
+  let raw = S.raw, nBad = 0;
+  const cur = S.v, route = S.route;
   for (const v of S.model.variants) {
     if (!editedCount(v)) continue;
-    raw = patchOutput(raw, S.model, v, {segs: new Set(v.segs.filter(s => s.edited).map(s => s.id)), nodes: new Set(v.nodes.filter(n => n.edited).map(n => n.id))}, S.model.proj);
+    // нарушения правленых участков — в файл, у каждого участка (manual_issues), чтобы проектный отдел их видел
+    S.v = v; S.route = null;
+    const iss = new Map();
+    for (const i of editIssues()) if (!i.old && i.seg?.id && i.level === 'bad') { const l = iss.get(i.seg.id); if (l) l.push(i.text); else iss.set(i.seg.id, [i.text]); nBad++; }
+    raw = patchOutput(raw, S.model, v, {segs: new Set(v.segs.filter(s => s.edited).map(s => s.id)), nodes: new Set(v.nodes.filter(n => n.edited).map(n => n.id)), issues: iss}, S.model.proj);
   }
-  download(new Blob([raw], {type: 'application/geo+json'}), `${S.ds?.name || 'result'}-с-правками.geojson`);
-  toast('Скачан результат с правками. Проверить по правилам: make validate IN=<исходные> OUT=<этот файл>', 'ok', 6000);
+  S.v = cur; S.route = route;
+  const name = `${S.ds?.name || 'result'}-manual-edits.geojson`;
+  download(new Blob([raw], {type: 'application/geo+json'}), name);
+  toast(`Скачан ${name}: трасса в формате сервиса, правленые участки отмечены. ${nBad ? `Неснятых нарушений: ${nBad} — они записаны у участков в файле` : 'Нарушений правил от правки нет'}`, nBad ? 'info' : 'ok', 7000);
 }
 $('#editBtn').onclick = () => setEdit(!E.on);
+// «?» с подсказкой: на сенсорном экране наведения нет — показываем по касанию
+document.addEventListener('click', e => { const q = e.target.closest?.('.q'); if (q) toast(q.title || q.closest('[title]')?.title || '', 'info', 7000); });
 
 // ---------- тема: светлая, тёмная или как в системе ----------
 const darkMQ = matchMedia('(prefers-color-scheme: dark)');

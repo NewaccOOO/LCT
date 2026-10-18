@@ -284,16 +284,19 @@ body.flying #legend, body.flying .exchip { display: none; }
 .edittip .dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--ok); }
 .edittip.bad .dot { background: var(--bad); } .edittip.warn .dot { background: var(--warn); }
 .edittip .mut { color: #bdbdbd; }
-.eh { position: absolute; left: 0; top: 0; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: var(--float); box-shadow: 0 0 0 2px var(--accent), 0 1px 4px rgba(0,0,0,.35); pointer-events: auto; cursor: grab; touch-action: none; transition: box-shadow .1s ease-out, background-color .1s ease-out; }
-.eh::before { content: ""; position: absolute; inset: -9px; border-radius: 50%; }
-.eh:hover { box-shadow: 0 0 0 3px var(--accent), 0 2px 8px rgba(0,0,0,.35); }
+.eh { position: absolute; left: 0; top: 0; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: var(--float); box-shadow: 0 0 0 2px var(--accent), 0 1px 3px rgba(0,0,0,.35); pointer-events: auto; cursor: grab; touch-action: none; transition: box-shadow .1s ease-out, background-color .1s ease-out; }
+/* видимая точка мелкая, чтобы не закрывать короткие звенья; зона захвата — шире (под мышь 26 px, под палец 44 px) */
+.eh::before { content: ""; position: absolute; inset: -8px; border-radius: 50%; }
+.eh:hover { box-shadow: 0 0 0 3px var(--accent), 0 2px 6px rgba(0,0,0,.35); }
 .eh:active { cursor: grabbing; }
-.eh.n { width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 4px; }
-.eh.sel { background: var(--accent); box-shadow: 0 0 0 3px var(--float), 0 0 0 5px var(--accent); }
+.eh.n { width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; border-radius: 2px; }
+.eh.sel { background: var(--accent); box-shadow: 0 0 0 2px var(--float), 0 0 0 4px var(--accent); }
 .eh.lock { background: var(--card2); box-shadow: 0 0 0 2px var(--muted); cursor: not-allowed; }
-.eh.m { width: 14px; height: 14px; margin: -7px 0 0 -7px; background: var(--accent); box-shadow: 0 0 0 2px var(--float); opacity: .55; }
-.eh.m::after { content: "+"; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font: 600 13px/1 var(--font); }
+.eh.m { width: 12px; height: 12px; margin: -6px 0 0 -6px; background: var(--accent); box-shadow: 0 0 0 1.5px var(--float); opacity: .55; }
+.eh.m::after { content: "+"; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font: 600 11px/1 var(--font); }
 .eh.m:hover { opacity: 1; }
+/* рядом спрятаны точки — «+N»: коснитесь, и карта приблизится */
+.eh[data-more]::after { content: attr(data-more); position: absolute; left: calc(100% + 3px); bottom: calc(100% - 2px); padding: 0 4px; border-radius: 7px; background: var(--accent); color: #fff; font: 600 10px/14px var(--font); white-space: nowrap; pointer-events: none; }
 body.editing .labels .lbl.depth { display: none; }
 /* панель правки — слева вверху сцены, чтобы трасса в центре оставалась видна */
 .editbar { left: var(--gap); top: var(--gap); width: min(420px, calc(100% - 2 * var(--gap) - 70px)); padding: 8px 10px 10px; display: grid; gap: 6px; z-index: 8; }
@@ -303,15 +306,30 @@ body.editing .labels .lbl.depth { display: none; }
 .editbar .eb-h .icon { width: 32px; min-height: 32px; flex: none; box-shadow: none; }
 .editbar .eb-h .icon svg { width: 18px; height: 18px; }
 .editbar .eb-h .primary { min-height: 32px; flex: none; padding: 4px 12px; }
-.editbar .eb-m { font-size: 13px; color: var(--text2); font-variant-numeric: tabular-nums; }
+.editbar .eb-m { font-size: 13px; color: var(--text2); font-variant-numeric: tabular-nums; display: grid; gap: 1px; }
+.editbar .eb-m .q { margin-left: 5px; }
+.editbar .eb-aff { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--warn-t); background: var(--warn-s); border-radius: var(--r-s); padding: 5px 8px; }
+.editbar .eb-aff .dot { background: var(--warn); margin-top: 5px; }
+.editbar .eb-leg { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; color: var(--text2); }
+.editbar .eb-leg span { display: inline-flex; align-items: center; gap: 5px; }
+.lg { display: inline-block; width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--accent); background: var(--float); }
+.lg.n { border-radius: 2px; } .lg.l { border-radius: 2px; box-shadow: 0 0 0 1.5px var(--muted); background: var(--card2); }
+.lg.m { background: var(--accent); opacity: .6; box-shadow: none; width: 10px; height: 10px; }
+.lg.g { width: 16px; height: 0; border-radius: 0; box-shadow: none; background: none; border-top: 2px dashed var(--muted); }
 .editbar .eb-m i { font-style: normal; } .editbar .eb-m i.up { color: var(--bad-t); } .editbar .eb-m i.down { color: var(--ok-t); }
 .editbar .eb-a { display: flex; flex-wrap: wrap; gap: 6px; }
 .editbar .eb-a button { min-height: 30px; padding: 3px 10px; font-size: 13px; }
-.editbar .eb-sum { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 3px 8px; font-size: 13px; box-shadow: none; justify-self: start; }
+.editbar .eb-sum { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 3px 8px; font-size: 13px; box-shadow: none; justify-self: start; text-align: left; }
 .editbar .eb-sum.bad { background: var(--bad-s); color: var(--bad-t); } .editbar .eb-sum.warn { background: var(--warn-s); color: var(--warn-t); }
+.editbar .eb-sum.none { background: var(--ok-s); color: var(--ok-t); } .editbar .eb-sum.none .dot { background: var(--ok); }
+.editbar .eb-sum .mut { color: var(--muted); }
 .editbar .eb-sum .caret { margin-left: 2px; }
-.editbar .eb-p { display: grid; gap: 2px; max-height: 140px; overflow: auto; }
-.editbar .iss { display: flex; align-items: center; gap: 8px; text-align: left; min-height: 28px; padding: 3px 6px; font-size: 13px; box-shadow: none; border-radius: var(--r-s); color: var(--text); }
+.editbar .eb-p { display: grid; gap: 2px; max-height: min(232px, 32vh); overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; box-shadow: inset 0 -8px 8px -8px var(--line); }
+.editbar .iss { display: flex; align-items: flex-start; gap: 8px; text-align: left; min-height: 28px; padding: 4px 6px; font-size: 13px; line-height: 1.35; box-shadow: none; border-radius: var(--r-s); color: var(--text); }
+.editbar .iss .dot { margin-top: 5px; }
+.editbar .iss small { color: var(--muted); font-size: 12px; }
+.editbar .iss.old { color: var(--text2); } .editbar .iss.old .dot { opacity: .5; }
+.editbar .iss.oldh { color: var(--muted); font-size: 12.5px; min-height: 26px; }
 .editbar .dot { width: 8px; height: 8px; flex: none; border-radius: 50%; display: inline-block; }
 .editbar .bad .dot { background: var(--bad); } .editbar .warn .dot { background: var(--warn); } .editbar .ok .dot { background: var(--ok); }
 .editbar .iss.ok { color: var(--ok-t); min-height: 24px; }
@@ -510,8 +528,10 @@ dialog[open]::backdrop { animation: fadeIn .2s ease-out; }
   p.touch { display: block; }
   .kbm { display: none !important; }
   .exchip { min-height: 36px; }
-  .eh { width: 22px; height: 22px; margin: -11px 0 0 -11px; } .eh.n { width: 24px; height: 24px; margin: -12px 0 0 -12px; } .eh.m { width: 22px; height: 22px; margin: -11px 0 0 -11px; opacity: .7; }
-  .eh::before { inset: -10px; }
+  .eh { width: 16px; height: 16px; margin: -8px 0 0 -8px; } .eh.n { width: 16px; height: 16px; margin: -8px 0 0 -8px; } .eh.m { width: 18px; height: 18px; margin: -9px 0 0 -9px; opacity: .7; }
+  .eh.m::after { font-size: 14px; }
+  .eh::before { inset: -14px; }
+  .eh[data-more]::after { font-size: 12px; line-height: 16px; padding: 0 5px; }
   #legend > button { min-height: 40px; }
   #legend { bottom: 76px; }
 }
