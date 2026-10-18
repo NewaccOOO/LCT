@@ -6,7 +6,7 @@ import {ViewCube} from './viewcube.js';
 import {Profile} from './profile.js';
 import {buildScene, routeTo, branchEnd, pointAt, segName, nodeName, UTILITIES, SURFACES, NODE_TYPES, BUILDING_KEYS} from './model.js';
 import {$, $$, fmt, rub, meters, esc, clamp, store, toast, plural} from './util.js';
-import {relen, planIssues, jointIssue, extraBends, snapOrtho, patchOutput, surroundings, turnAngle, score as editScore} from './edit.js';
+import {relen, planIssues, jointIssue, extraBends, snapOrtho, patchOutput, surroundings, turnAngle, toDxf, score as editScore} from './edit.js';
 
 const D = Math.PI / 180;
 const S = {
@@ -308,7 +308,7 @@ function renderSummary() {
       <div class="${bad ? 'bad' : 'ok'}"><b>${bad}</b><span>${plural(bad, 'проблема', 'проблемы', 'проблем')} по высоте</span></div>
       <div><b>${special}</b><span>${plural(special, 'спецпереход', 'спецперехода', 'спецпереходов')}</span></div>
     </div>
-    ${editedCount(v) ? `<div class="note info">В варианте ручные правки: ${editedCount(v)} ${plural(editedCount(v), 'участок', 'участка', 'участков')}, S до правок ${fmt(v.edit.score, 2)}. Вернуть как построил сервис — «Правка» → «Сбросить правки»</div>` : ''}
+    ${editedCount(v) ? `<div class="note info">В варианте ручные правки: ${editedCount(v)} ${plural(editedCount(v), 'участок', 'участка', 'участков')}, S до правок ${fmt(v.edit.score, 2)}. Затронуты трассы: ${editAffected(v).map(a => `<button class="link" data-goks="${esc(a.id)}">${esc(shortName(a.id))}</button>`).join(', ')}. Вернуть как построил сервис — кнопка «Правка» → «Сбросить правки»</div>` : ''}
     <h2>Из чего стоимость</h2>
     <table>
       <tr><td>Трубы и спецпереходы</td><td>${rub((sm.construction_cost ?? 0) - (sm.chamber_construction_cost ?? 0))}</td></tr>
@@ -334,6 +334,8 @@ function renderSummary() {
     const gb = e.target.closest('button[data-ghost]');
     if (gb) { S.ghost = S.ghost === gb.dataset.ghost ? null : gb.dataset.ghost; viewer.setGhost(S.model.variants.find(x => x.id === S.ghost) || null);
       if (S.ghost) toast(`Вариант ${esc(S.ghost)} показан пунктиром поверх текущего`, 'info', 2500); renderSummary(); renderLegend(); return; }
+    const go = e.target.closest('button[data-goks]');
+    if (go) { const o = S.model.oks.find(x => String(x.id) === go.dataset.goks); if (o) select({kind: 'oks', ref: o}, {fly: true}); return; }
     const b = e.target.closest('button[data-go]');
     if (!b) return;
     if (b.dataset.go === 'help') $('#helpDlg').showModal();
@@ -379,7 +381,7 @@ function renderOks() {
     $('#oksL').innerHTML = list.slice(0, 1500).map(({o, conn}) => {
       const r = conn ? routeTo(v, o.id) : null;
       return `<button class="item ${S.sel?.ref === o ? 'sel' : ''}" data-id="${esc(o.id)}"><div class="t"><span>${esc(o.label)}</span>
-        ${v ? `<span class="badge ${conn ? 'b-ok' : 'b-bad'}">${conn ? 'подключено' : 'не подключено'}</span>` : ''}</div>
+        ${r && r.segs.some(s => s.edited) ? '<span class="badge b-mut" title="Трасса правлена вручную">правлено</span>' : ''}${v ? `<span class="badge ${conn ? 'b-ok' : 'b-bad'}">${conn ? 'подключено' : 'не подключено'}</span>` : ''}</div>
         <div class="m">${o.flow != null ? `расход ${fmt(o.flow, 1)} т/ч` : ''}${r ? ` · трасса ${meters(r.len)}${r.bad ? ` · <span style="color:var(--bad-t)">${r.bad} ${plural(r.bad, 'проблема', 'проблемы', 'проблем')} по высоте</span>` : ''}` : v ? ' · маршрут не найден' : ''}</div></button>`;
     }).join('') || '<div class="item m">Ничего не найдено</div>';
   };
@@ -494,6 +496,11 @@ function renderLegend() {
   rows.push('<div class="h">Существующее под землёй</div>');
   for (const k of Object.keys(M.utilities)) rows.push(sw(UTILITIES[k].color) + `<span>${UTILITIES[k].name.toLowerCase()}, верх ${fmt(UTILITIES[k].top, 1)} м${UTILITIES[k].assumed ? ' (условно)' : ''}</span>`);
   if (M.points.heat_chamber?.length) rows.push(dot(PALETTE.chamberOld) + '<span>существующая камера</span>');
+  rows.push('<div class="h">На поверхности</div>');
+  const surf = viewer.th.surf || {};
+  for (const k of ['road', 'tram_tracks', 'park', 'social_area', 'water', 'prohibited_site']) if (M.surfaces[k]?.length) rows.push(`<i class="sw" style="background:${surf[k]};height:10px;box-shadow:inset 0 0 0 1px var(--edge)"></i><span>${SURFACES[k].name.toLowerCase()}</span>`);
+  rows.push(`<i class="sw" style="background:none;height:10px;box-shadow:inset 0 0 0 2px ${PALETTE.selection}"></i><span>выбранное здание — контур</span>`, `<i class="dot" style="background:none;box-shadow:inset 0 0 0 2px ${PALETTE.problem};margin-left:5px"></i><span>кольцо вокруг места проблемы по высоте</span>`);
+  if (E.on) rows.push('<div class="h">Правка трассы</div>', sw('var(--ok)', true) + '<span>выноска: норма соблюдена</span>', sw('var(--warn)', true) + '<span>выноска: запас меньше 1 м</span>', sw('var(--bad)', true) + '<span>выноска: нарушение</span>', sw('var(--muted)', true) + '<span>выноска: справочно, спецпереход</span>', sw(viewer.th.ghost, true) + '<span>трасса до правки</span>');
   $('#legBody').innerHTML = rows.join('');
 }
 $('#legBtn').onclick = () => { const b = $('#legBody'); b.hidden = !b.hidden; $('#legBtn').setAttribute('aria-expanded', String(!b.hidden)); $('#legBtn .caret').textContent = b.hidden ? '▸' : '▾'; store.set('legend', !b.hidden); };
@@ -787,7 +794,7 @@ function showProps(sel) {
       ${hasRoute ? '<button id="pxFly" title="Пролёт камерой вдоль трассы (P)">Пролёт</button><button id="pxProf" title="Продольный профиль трассы">Профиль</button>' : ''}
       ${hasRoute && S.v ? `<button id="pxEdit" class="wide" title="Сдвинуть повороты и камеры трассы вручную (E)">${E.on ? 'Закончить правку' : 'Править трассу вручную'}</button>` : ''}
     </div>
-    ${hasRoute && S.route.segs.some(s => s.edited) ? `<div class="note info">Трасса правлена вручную: ${S.route.segs.filter(s => s.edited).length} ${plural(S.route.segs.filter(s => s.edited).length, 'участок', 'участка', 'участков')}. Вернуть как построил сервис — «Править трассу вручную» → «Сбросить правки»</div>` : ''}
+    ${hasRoute && S.route.segs.some(s => s.edited) ? `<div class="note info">Трасса правлена вручную: ${S.route.segs.filter(s => s.edited).length} ${plural(S.route.segs.filter(s => s.edited).length, 'участок', 'участка', 'участков')}. Вернуть как построил сервис — кнопка «Правка» → «Сбросить правки»</div>` : ''}
     <table>${d.rows.filter(r => r[1] != null && r[1] !== '—').map(r => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`).join('')}</table>
     ${d.problem ? `<div class="note prob">${d.problem}</div>` : ''}${d.info ? `<details class="note warn"><summary>${esc(d.info.t)}</summary>${esc(d.info.more)}</details>` : ''}${d.fix ? `<div class="note fix"><b>Как исправить</b><br>${d.fix}</div>` : ''}${d.ok ? `<div class="note fix">${esc(d.ok)}</div>` : ''}`;
   $('#pxX').onclick = () => clearSel();
@@ -872,6 +879,7 @@ function dblAt(x, y) {
 }
 let hoverRaf = 0, hoverXY = null;
 function hoverAt(x, y, dragging) {
+  dragging ||= !!E.drag;
   hoverXY = dragging ? null : [x, y];
   if (dragging) { $('#tip').hidden = true; return; }
   if (hoverRaf) return;
@@ -996,7 +1004,7 @@ function setMode(m, quiet = false) { rig.mode = m; updateModeUi(); if (!quiet) t
 function status(extra) {
   const fly = rig.mode === 'fly';
   $('#stHint').innerHTML = extra ? `<b>${esc(extra)}</b>` : S.measure ? '<b>Линейка:</b> щёлкните две точки · Esc — выйти'
-    : E.on ? '<b>Правка:</b> тяните точку · <b>«+»</b> добавить поворот · <b>Delete</b> удалить · <b>Ctrl Z</b> отменить · <b>Esc</b> закончить'
+    : E.on ? '<b>Правка:</b> тяните точку · тяните синий «+» на звене — новый поворот · <b>Delete</b> удалить · <b>Ctrl Z</b> отменить · <b>Esc</b> закончить'
     : fly ? '<b>Полёт:</b> <b>мышь</b> поворачивает взгляд · <b>WASD</b> лететь · <b>Q/E</b> вниз/вверх · <b>Shift</b> быстрее · <b>Esc</b> выйти'
       : '<b>левая</b> двигать · <b>правая</b> вращать · <b>колесо</b> масштаб · <b>WASD</b> лететь';
   if (extra) { clearTimeout(status.t); status.t = setTimeout(() => status(), 2200); }
@@ -1016,7 +1024,7 @@ function updateScale() {
   $('#stCam').textContent = above ? (cam.z < 0.5 ? 'у поверхности земли' : `вид с высоты ${meters(cam.z)}`) : `под землёй, ${fmt(-cam.z / viewer.ex, 1)} м · E — вверх, H — общий вид`;
   $('#camChip').hidden = above;
   $('#camChip').innerHTML = `Под землёй, ${fmt(-cam.z / viewer.ex, 1)} м <b>Наверх</b>`;
-  if ($('#exChip')) $('#exChip').innerHTML = viewer.ex === 1 ? 'Глубина <b>×1</b> как есть' : `Глубина растянута <b>×${viewer.ex}</b>`;
+  if ($('#exChip')) $('#exChip').innerHTML = E.on ? 'План: трубы <b>без глубины</b>, она — на профиле' : viewer.ex === 1 ? 'Глубина <b>×1</b> как есть' : `Глубина растянута <b>×${viewer.ex}</b>`;
   const top = rig.pitch < -80 * D;
   $('#v2d').classList.toggle('is2d', top);
   $('#v2d').title = top ? 'Сейчас вид сверху (2D). Щёлкните — 3D-наклон (T)' : 'Сейчас 3D. Щёлкните — вид сверху (T)';
@@ -1267,6 +1275,7 @@ async function menuAct(a) {
   if (a === 'open') openDlg('demo');
   if (a === 'run' || a === 'jobs') openDlg('srv');
   if (a === 'png') { const blob = await snapshot(); download(blob, snapName()); }
+  if (a === 'dxf') return editDxf();
   if (a === 'geojson-edit') { if (!S.model?.variants.some(editedCount)) return toast('Ручных правок нет: результат совпадает с расчётом сервиса', 'info'); return editDownload(); }
   if (a === 'geojson') { if (!S.raw) return toast('Результата трассировки нет, скачивать нечего', 'info'); download(new Blob([S.raw], {type: 'application/geo+json'}), `${S.ds?.name || 'result'}.geojson`); }
   if (a === 'link') copyLink();
@@ -1443,6 +1452,8 @@ addEventListener('keydown', e => {
     if (rig.mode === 'fly') return setMode('orbit');
     if (S.measure) return setMeasure(false);
     if (S.clip) return setClip(null);
+    if (E.on && E.confirm) { E.confirm = null; return editPanel(); }
+    if (E.on && E.help) { E.help = false; return editPanel(); }
     if (E.on && E.sel) { E.sel = null; editHandles(true); return editPanel(); }
     if (E.on) return setEdit(false);
     if (S.sel) return clearSel();
@@ -1542,7 +1553,7 @@ $('#leftBtn').onclick = () => toggleLeft();
 $('#pMin').onclick = () => toggleProfileMin();
 $('#pTitle').onclick = () => toggleProfileMin();
 // отметка вертикального масштаба прямо на сцене: щелчок — ×1 «как есть» или обратно растянуть
-$('#exChip').onclick = () => { const last = store.get('exLast', 3); if (viewer.ex === 1) setEx(last > 1 ? last : 3); else { store.set('exLast', viewer.ex); setEx(1); } updateScale(); };
+$('#exChip').onclick = () => { if (E.on) return toast('В правке трасса — в плане: трубы нарисованы без глубины, чтобы точки лежали точно на них. Глубина — на профиле; после «Готово» вернётся', 'info', 6000); const last = store.get('exLast', 3); if (viewer.ex === 1) setEx(last > 1 ? last : 3); else { store.set('exLast', viewer.ex); setEx(1); } updateScale(); };
 // подсказка управления уходит сама после первого действия в сцене
 viewer.renderer.domElement.addEventListener('pointerdown', () => { if (!$('#coach').hidden) setTimeout(() => $('#coachOk').click(), 1500); }, {once: true});
 $('#coachOk').onclick = () => { $('#coach').hidden = true; store.set('coach', 1); if (store.get('legend', false) && !isMobile() && $('#legBody').hidden) $('#legBtn').click(); };
@@ -1672,7 +1683,7 @@ function jointsAt(ids) {
 function issWhere(i) {
   const parts = [];
   if (i.seg?.id) parts.push(segName(i.seg).replace('Участок', 'уч.'));
-  if (i.obj && BUILDING_KEYS.has(i.obj.type)) { const o = S.model.oks.find(x => x.building === i.obj); const nm = o?.label || i.obj.p?.address; if (nm) parts.push(nm.split(',')[0]); }
+  if (i.obj && BUILDING_KEYS.has(i.obj.type)) { const o = S.model.oks.find(x => x.building === i.obj); const nm = o?.label || i.obj.p?.address || i.obj.p?.name; parts.push(o && o.id === S.route?.end ? 'своё здание' : nm ? nm.split(',')[0] : 'соседнее здание без адреса'); }
   return parts.join(', ');
 }
 // участок → здания, чьи трассы через него идут (общие участки — у нескольких)
@@ -1708,7 +1719,8 @@ function editPanel() {
   const all = [...fresh, ...old];
   const sumText = (fb ? `${fb} ${plural(fb, 'нарушение', 'нарушения', 'нарушений')} от правки` : fw ? '' : 'Правка нарушений не добавила') + (fb && fw ? ' · ' : '') + (fw ? `${fw} ${plural(fw, 'замечание', 'замечания', 'замечаний')}` : '') + (old.length ? `<span class="mut"> · ${old.length} в исходной трассе</span>` : '');
   const aff = editAffected(v), others = aff.filter(a => a.id !== R?.end), compact = isMobile();
-  const selp = E.sel?.kind === 'n' ? `${nodeName(E.sel.node, S.model)}${E.sel.node.type === 'technical_node' ? ' — узел, стык участков' : ''}` : E.sel?.kind === 'v' ? `излом на ${segName(E.sel.seg).replace('Участок', 'участке')}` : '';
+  const unit = s => `${segName(s).replace('Участок', 'уч.')}: Ду ${s.p.diameter}, ${rub(s.p.cost / Math.max(0.01, s.len))}/м${s.special ? ', спецпереход' : ''}`;
+  const selp = E.sel?.kind === 'n' ? `${nodeName(E.sel.node, S.model)}${E.sel.node.type === 'technical_node' ? ' — узел, стык участков' : ''}` : E.sel?.kind === 'v' ? `излом · ${unit(E.sel.seg)}` : '';
   const html = `<div class="eb-h"><b>Правка трассы</b><span class="mut">${R ? esc(R.endName || nodeLabel(R.end)) : 'выберите здание или трубу'}</span><span class="sp"></span>
       <button id="ebUndo" class="icon" ${E.undo.length ? '' : 'disabled'} title="Отменить (Ctrl Z)" aria-label="Отменить"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
       <button id="ebRedo" class="icon" ${E.redo.length ? '' : 'disabled'} title="Вернуть (Ctrl Shift Z)" aria-label="Вернуть"><svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
@@ -1720,8 +1732,10 @@ function editPanel() {
       ${open ? `<div class="eb-p">${fresh.map((i, k) => item(i, k)).join('')}${old.length ? `<button id="ebOld" class="iss oldh" aria-expanded="${!!E.oldOpen}">Было в исходной трассе до правки: ${old.length}<span class="caret">${E.oldOpen ? '▾' : '▸'}</span></button>${E.oldOpen ? old.map((i, k) => item(i, fresh.length + k)).join('') : ''}` : ''}</div>` : ''}`
       : '<div class="iss ok"><span class="dot"></span>Нарушений правил на трассе нет</div>') : ''}
     ${selp ? `<div class="eb-selp"><span>Выбрано: <b>${esc(selp)}</b></span>${E.sel?.kind === 'v' ? '<button id="ebDel" title="Удалить выбранный поворот (Delete)">Удалить поворот</button>' : ''}${E.sel?.kind === 'n' && canStraighten(E.sel) ? '<button id="ebDel" title="Поставить узел на прямую между соседними точками (Delete)">Убрать излом</button>' : ''}</div>` : ''}
-    <div class="eb-a"><button id="ebReset" ${n ? '' : 'disabled'} title="Вернуть трассы варианта как их построил сервис">Сбросить правки</button>
-      <button id="ebSave" ${n ? '' : 'disabled'} title="GeoJSON в формате сервиса с вашими правками">Скачать с правками</button></div>
+    ${E.confirm === 'reset' ? `<div class="eb-conf"><span>Вернуть как построил сервис:</span><button id="ebRR" ${R && R.segs.some(s => s.edited) ? '' : 'disabled'}>эту трассу (${R ? R.segs.filter(s => s.edited).length : 0} уч.)</button><button id="ebRA">весь вариант (${n} уч.)</button><button id="ebRC" class="link">отмена</button></div>` : ''}
+    <div class="eb-a"><button id="ebReset" ${n ? '' : 'disabled'} title="Вернуть трассу или весь вариант как построил сервис">Сбросить правки…</button>
+      <button id="ebSave" ${n ? '' : 'disabled'} title="GeoJSON в формате сервиса с вашими правками (WGS84)">Скачать с правками</button>
+      <button id="ebDxf" title="Трассы для AutoCAD/Civil 3D: DXF в метрах UTM 37N, как у сервиса">DXF</button></div>
     ${!compact || E.help ? '<div class="eb-leg" aria-label="Обозначения"><span><i class="lg n"></i>узел: стык участков (поворот, камера)</span><span><i class="lg v"></i>излом внутри участка</span><span><i class="lg l"></i>закреплено</span><span><i class="lg m"></i>добавить поворот</span><span><i class="lg g"></i>как было</span></div>' : ''}
     <div class="eb-hint">${compact && !E.help ? '' : touch ? 'Тяните точку пальцем · коснитесь — выбрать · «+» — новый поворот · «+N» — рядом ещё точки, коснитесь — приблизить' : 'Тяните точку · двойной щелчок — удалить поворот или убрать излом · Alt — без привязки к прямым углам'}<button id="ebHelp" class="link" aria-expanded="${!!E.help}">${E.help ? 'скрыть' : 'подробнее'}</button>
       ${E.help ? `<div class="more"><b>Квадрат</b> — узел, стык двух участков: так сервис ставит повороты трассы («поворот N») и границы, где меняется глубина, Ду или начинается спецпереход; <b>камера</b> — тоже квадрат. <b>Круг</b> — излом внутри участка (его добавляете вы «+»): тяните, удаляйте. Их двигают вместе со всеми трубами, которые в них сходятся; удалить нельзя, но излом в узле можно убрать. <b>Серые</b> закреплены: ввод в здание и врезка в существующую сеть. Звенья липнут к прямым углам — пунктир показывает, к чему.<br>Расстояния до зданий, зон, дорог и сетей — от стенки канала трубы, нормы — из правил расчёта: здания 5/7/9 м по Ду, зоны запрета 1 м, метро 10 м, дороги и трамвай 1,5 м, газопровод и кабель 2 м, водопровод 1,5 м, канализация и теплосеть 1 м; ближе к дороге или сети можно только спецпереходом — его ставит пересчёт на сервере. Угол поворота — отклонение от прямой, не больше 90°; дорогу трасса переходит под углом не меньше 45°.<br>Длина, стоимость (пропорционально длине) и ${S_FORMULA}. Правки хранятся в этом браузере; «Скачать с правками» — файл в формате сервиса, в нём отмечены правленые участки и их нарушения.</div>` : ''}</div>`;
@@ -1737,11 +1751,16 @@ function editPanel() {
   if ($('#ebDel')) $('#ebDel').onclick = () => editDelete();
   if ($('#ebList')) $('#ebList').onclick = () => { E.listOpen = !open; editPanel(); };
   if ($('#ebOld')) $('#ebOld').onclick = () => { E.oldOpen = !E.oldOpen; editPanel(); };
-  $('#ebReset').onclick = () => editReset();
+  $('#ebReset').onclick = () => { const all = editedCount(S.v), mine = S.route ? S.route.segs.filter(s => s.edited).length : 0; if (all === mine && mine) return editReset('route'); E.confirm = 'reset'; editPanel(); };
+  if ($('#ebRR')) $('#ebRR').onclick = () => editReset('route');
+  if ($('#ebRA')) $('#ebRA').onclick = () => editReset('all');
+  if ($('#ebRC')) $('#ebRC').onclick = () => { E.confirm = null; editPanel(); };
   $('#ebSave').onclick = () => editDownload();
+  $('#ebDxf').onclick = () => editDxf();
   el.querySelectorAll('.iss[data-i]').forEach(b => b.onclick = () => { const i = E.issAll[+b.dataset.i]; rig.lookAtFrom(new THREE.Vector3(i.x, i.y, 0), rig.yaw, -90 * D, Math.max(40, Math.min(rig.pos.z, 120))); viewer.marker('selpt', new THREE.Vector3(i.x, i.y, 0.5), {r: 1.2, color: PALETTE.problem}); });
   $('#editBtn').classList.toggle('on', E.on);
 }
+const PLAN_EX = 0.02;
 function setEdit(on) {
   if (on && !S.v) return toast('Результата трассировки нет: править нечего', 'info');
   E.on = on;
@@ -1753,12 +1772,17 @@ function setEdit(on) {
     E.listOpen = null;
     stopFly(); setMeasure(false);
     rig.noContext = true;
+    // план без перспективного сдвига: трубы и сети на глубине рисуются почти у земли, там же, где точки правки
+    // (глубину показывает профиль); на выходе вертикальный масштаб возвращается
+    E.ex0 = viewer.ex;
+    viewer.setExaggeration(PLAN_EX); setMinZ(); updateScale(); refreshHighlight();
     // править удобнее на всю сцену: панели уходят, как в «только карта», на выходе возвращаются
     E.auto = !mapOnly;
     if (E.auto) setMapOnly(true);
   } else {
     viewer.marker('selpt', null);
     rig.noContext = false;
+    if (E.ex0 != null) { viewer.setExaggeration(E.ex0); E.ex0 = null; setMinZ(); updateScale(); refreshHighlight(); }
     if (E.auto && mapOnly) setMapOnly(false);
     E.auto = false;
     if (S.sel) showProps(S.sel);
@@ -1766,6 +1790,7 @@ function setEdit(on) {
   editGhost();
   editPanel();
   editHandles(true);
+  renderLegend();
   if (on) {
     if (!S.route) toast('Выберите здание или трубу: на её трассе появятся точки, которые можно тянуть', 'info', 4000);
     // кадр — когда панели доехали: иначе окно сцены ещё старого размера
@@ -1824,7 +1849,7 @@ function editHandles(rebuild) {
       if (!el) { el = document.createElement('div'); el.addEventListener('pointerdown', editDown); el.addEventListener('dblclick', e => { e.stopPropagation(); editDelete(el._t); }); layer.appendChild(el); E.handles.set(t.key, el); }
       el._t = t;
       el.className = 'eh ' + t.kind + (t.lock ? ' lock' : '') + (E.sel && E.sel.key === t.key ? ' sel' : '');
-      el.title = t.kind === 'm' ? 'Потяните, чтобы добавить поворот' : t.lock ? t.lock : t.kind === 'n' ? `${t.title[0].toUpperCase() + t.title.slice(1)}: потяните, чтобы сдвинуть вместе с трубами` : 'Поворот: потяните, чтобы сдвинуть; двойной щелчок — удалить';
+      el.title = t.kind === 'm' ? 'Потяните или щёлкните, чтобы добавить поворот' : t.lock ? t.lock : t.kind === 'n' ? `${t.title[0].toUpperCase() + t.title.slice(1)} — ${t.node.type === 'technical_node' ? 'узел, стык участков' : 'камера'}: потяните, чтобы сдвинуть вместе с трубами` : 'Излом внутри участка: потяните, чтобы сдвинуть; двойной щелчок — удалить';
     }
     layer.hidden = !E.on || !E.targets.length;
     if (!E.on) $('#editGuide').hidden = true;
@@ -1838,12 +1863,6 @@ function editPlan() {
   for (const old of viewer.g.overlay.children.filter(o => o.name === 'editPlan')) { viewer.g.overlay.remove(old); old.geometry?.dispose(); viewer.lineMats.delete(old.material); old.material?.dispose(); }
   if (!E.on || !S.route) { viewer.redraw(); return; }
   const add = (seg, o) => { viewer.overlayLines(seg, o); viewer.g.overlay.children[viewer.g.overlay.children.length - 1].name = 'editPlan'; };
-  // сети рядом с трассой — тоже по земле, своим цветом: точка и чужая труба видны в одной плоскости, без сдвига перспективы
-  const near = new Map();
-  for (const s of S.route.segs) for (let i = 0; i + 1 < s.pts.length; i++) for (const e of S.model.utilsNear(s.pts[i], s.pts[i + 1], 25)) near.set(e, true);
-  const by = {};
-  for (const e of near.keys()) (by[e.type] ||= []).push(e.a[0], e.a[1], 0.25, e.b[0], e.b[1], 0.25);
-  for (const [t, seg] of Object.entries(by)) add(seg, {color: UTILITIES[t]?.color || '#888', width: 1.5});
   const seg = [];
   for (const s of S.route.segs) for (let i = 0; i + 1 < s.pts.length; i++) seg.push(s.pts[i][0], s.pts[i][1], 0.3, s.pts[i + 1][0], s.pts[i + 1][1], 0.3);
   add(seg, {width: 3});
@@ -1976,7 +1995,7 @@ const m1 = x => `${fmt(x, 1)} м`;
 // расстояние до объекта — с округлением вниз: 4,97 м при норме 5 м показываем 4,9, а не 5,0
 const dfmt = x => x < 1 ? fmt(Math.floor(x * 100 + 1e-6) / 100, 2) : fmt(Math.floor(x * 10 + 1e-6) / 10, 1);
 function noteText(i, plain = false) {
-  const d = i.cross ? (i.line ? 'пересекает' : 'заходит внутрь') : `${dfmt(i.d)} м`;
+  const d = i.cross ? (i.line ? 'пересекает' : 'труба заходит внутрь') : `${dfmt(i.d)} м`;
   const name = i.name[0].toUpperCase() + i.name.slice(1), tail = `${i.need != null ? ` · норма ≥ ${fmt(i.need, i.need % 1 ? 1 : 0)} м` : ''}${i.note ? ' · ' + i.note : ''}`;
   return plain ? `${name} ${d}${tail}` : `${esc(name)} <b>${d}</b>${tail}`;
 }
@@ -2009,6 +2028,9 @@ function editDraw(r, V) {
       if (!pos) { if (!must) { el.style.display = 'none'; return; } pos = at(dir, 8); }
       placed.push([pos[0], pos[1], w, h]);
       el.style.transform = `translate(${pos[0].toFixed(1)}px, ${pos[1].toFixed(1)}px)`;
+      // подпись отъехала от своей точки — тонкая линия от ближнего края подписи к точке
+      const ex = Math.max(pos[0], Math.min(pos[0] + w, c[0])), ey = Math.max(pos[1], Math.min(pos[1] + h, c[1]));
+      if (Math.hypot(ex - c[0], ey - c[1]) > 14) svg += `<polyline class="ld" points="${f(c)} ${ex.toFixed(1)},${ey.toFixed(1)}"/>`;
     };
     const Pc = scr(N.P), nI = N.items.length, nD = N.dims.length;
     N.items.forEach((i, k) => {
@@ -2178,15 +2200,20 @@ function editDelete(t = E.sel) {
 }
 function editUndo() { if (!E.undo.length) return; E.redo.push(snapGeom(S.v)); restoreGeom(S.v, E.undo.pop()); E.sel = null; editRedraw(); }
 function editRedo() { if (!E.redo.length) return; E.undo.push(snapGeom(S.v)); restoreGeom(S.v, E.redo.pop()); E.sel = null; editRedraw(); }
-function editReset() {
+function editReset(scope) {
   const v = S.v, st = v?.edit; if (!st) return;
+  // по умолчанию — только участки этой трассы; весь вариант — по отдельной кнопке
+  const only = scope === 'route' && S.route ? new Set(S.route.segs.map(s => s.id)) : null;
+  const segs = v.segs.filter(s => st.orig.has(s.id) && s.edited && (!only || only.has(s.id)));
+  if (!segs.length) return;
   beginChange();
-  for (const s of v.segs) { const o = st.orig.get(s.id); if (o) s.pts = o.pts.map(q => q.slice()); }
-  for (const n of v.nodes) { const o = st.nodes.get(n.id); if (o) n.xy = o.slice(); }
+  for (const s of segs) s.pts = st.orig.get(s.id).pts.map(q => q.slice());
+  const ends = new Set(segs.flatMap(s => [s.from, s.to]));
+  for (const n of v.nodes) { const o = st.nodes.get(n.id); if (o && (!only || ends.has(n.id))) { n.xy = o.slice(); for (const s of v.segs) { if (s.from === n.id) s.pts[0] = o.slice(); if (s.to === n.id) s.pts[s.pts.length - 1] = o.slice(); } } }
   afterGeom(v, v.segs.filter(s => st.orig.has(s.id)));
-  E.sel = null;
+  E.sel = null; E.confirm = null;
   editRedraw();
-  toast('Трассы варианта возвращены как их построил сервис. «Отменить» вернёт правки', 'ok', 3500);
+  toast(`${only ? 'Трасса возвращена' : 'Все трассы варианта возвращены'} как их построил сервис. Стрелка «Отменить» ↶ в панели вернёт правки`, 'ok', 4500);
 }
 // ---------- сохранение в браузере и выгрузка ----------
 const editKey = () => 'edits:' + (S.ds?.name || S.ds?.title || 'local');
@@ -2229,6 +2256,13 @@ function editDownload() {
   const name = `${S.ds?.name || 'result'}-manual-edits.geojson`;
   download(new Blob([raw], {type: 'application/geo+json'}), name);
   toast(`Скачан ${name}: трасса в формате сервиса, правленые участки отмечены. ${nBad ? `Неснятых нарушений: ${nBad} — они записаны у участков в файле` : 'Нарушений правил от правки нет'}`, nBad ? 'info' : 'ok', 7000);
+}
+// трассы текущего варианта (с правками, если есть) — в DXF для AutoCAD/Civil 3D, в метрах сервиса
+function editDxf() {
+  if (!S.v) return toast('Результата трассировки нет', 'info');
+  const name = `${S.ds?.name || 'result'}-v${S.v.id}${editedCount(S.v) ? '-manual-edits' : ''}.dxf`;
+  download(new Blob([toDxf(S.v, S.model.proj)], {type: 'application/dxf'}), name);
+  toast(`Скачан ${name}: координаты UTM 37N (EPSG:32637), метры — как у сервиса. Слои: HEAT_NEW, HEAT_EDITED (правки), HEAT_SPECIAL, CHAMBERS, LABELS. В местную систему — преобразованием координат в Civil 3D`, 'ok', 8000);
 }
 $('#editBtn').onclick = () => setEdit(!E.on);
 // «?» с подсказкой: на сенсорном экране наведения нет — показываем по касанию

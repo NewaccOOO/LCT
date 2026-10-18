@@ -71,8 +71,7 @@ export function objectsNear(scene, a, b, dn, {own = null, tied = null, R = 15} =
   const out = [], w2 = dnRow(dn).w / 2;
   if (dist(a, b) < 0.01) return out;
   for (const z of scene.zonesNear(a, b, R)) {
-    const bld = BUILDING_KEYS.has(z.type);
-    if (bld && z.item === own) continue;
+    const bld = BUILDING_KEYS.has(z.type), mine = bld && own != null && z.item === own;
     const need = bld ? buildingGap(dn) : FORBID[z.type] ?? SPECIAL[z.type]?.[0];
     if (need == null) continue;
     const ring = z.ring;
@@ -91,7 +90,7 @@ export function objectsNear(scene, a, b, dn, {own = null, tied = null, R = 15} =
     const inside = inRing(a[0], a[1], ring) || inRing(b[0], b[1], ring);
     const axis = inside ? 0 : c.d;
     if (axis > R) continue;
-    out.push({key: bld ? 'bld' : z.type, obj: z, type: z.type, kind: bld ? 'bld' : FORBID[z.type] ? 'forbid' : 'line', axis, d: Math.max(0, axis - w2), need,
+    out.push({key: mine ? 'own' : bld ? 'bld' : z.type, obj: z, type: z.type, kind: bld ? 'bld' : FORBID[z.type] ? 'forbid' : 'line', mine, axis, d: Math.max(0, axis - w2), need,
       cross: axis === 0, ang, p: c.p, q: c.q});
   }
   for (const e of scene.utilsNear(a, b, R)) {
@@ -114,6 +113,7 @@ const nearSpecial = (o, ends, dn) => ends?.some(e => dist(e, o.p) < o.need + dnR
 export function surroundings(scene, pieces, dn, {own = null, R = 15, tied = null, special = false, ends = null} = {}) {
   const best = new Map(), rank = {bad: 0, near: 1, info: 2, ok: 3};
   for (const [a, b] of pieces) for (const o of objectsNear(scene, a, b, dn, {own, tied, R})) {
+    if (o.mine) continue;
     let level, note = null;
     if (o.kind !== 'line') level = o.d < o.need - 0.05 ? 'bad' : o.d < o.need + 1 ? 'near' : 'ok';
     else if (special) { level = o.cross && o.ang != null && o.ang < 44.5 ? 'bad' : 'info'; note = o.cross && o.ang != null ? `спецпереход под углом ${Math.round(o.ang)}°` : 'спецпереход'; }
@@ -146,9 +146,16 @@ export function planIssues(scene, s, own = null, {lines = false, tied = null, en
   for (let i = 0; i + 1 < s.pts.length; i++) {
     const a = s.pts[i], b = s.pts[i + 1];
     for (const o of objectsNear(scene, a, b, dn, {own, tied, R: 12})) {
-      const [name, to, thr] = NAME[o.key] || [o.key, o.key, o.key];
+      const [name, to, thr] = NAME[o.key === 'own' ? 'bld' : o.key] || [o.key, o.key, o.key];
+      if (o.mine) {
+        // своё здание: участок входит в него только у ввода — последним звеном и только своим концом
+        const last = i === s.pts.length - 2, L = dist(a, b);
+        const end = last ? (L > 0.6 ? [b[0] + (a[0] - b[0]) * 0.5 / L, b[1] + (a[1] - b[1]) * 0.5 / L] : null) : b;
+        if (end && objectsNear(scene, a, end, dn, {R: 0.5}).some(q => q.obj === o.obj && q.cross)) add('bad', last ? 'заходит в своё здание не у ввода' : 'проходит через своё здание до ввода', o.p, o);
+        continue;
+      }
       if (o.kind !== 'line') {
-        if (o.d < o.need - 0.05) add('bad', o.cross ? `проходит через ${thr}` : `ближе ${o.need} м к ${to}: ${m1(o.d)} м`, o.p, o);
+        if (o.d < o.need - 0.05) add('bad', o.cross ? `проходит через ${thr}` : o.d < 0.01 ? `задевает ${thr}: ближе ${o.need} м` : `ближе ${o.need} м к ${to}: ${m1(o.d)} м`, o.p, o);
         continue;
       }
       // переход дороги — одним прямым участком под углом не меньше 45° к её краю
@@ -259,4 +266,43 @@ export function patchOutput(raw, scene, variant, edited, proj) {
     sm.manual_issues = edited.issues ? [...edited.issues.values()].reduce((t, l) => t + l.length, 0) : 0;
   }
   return JSON.stringify(fc);
+}
+
+/** WGS84 → UTM (метры), северное полушарие; сервис и check18 считают в UTM 37N (EPSG:32637). Ряды Крюгера, как у Снайдера. */
+export function utm(lon, lat, zone = 37) {
+  const a = 6378137, f = 1 / 298.257223563, k0 = 0.9996, e2 = f * (2 - f), ep2 = e2 / (1 - e2), D = Math.PI / 180;
+  const phi = lat * D, lam = lon * D - (zone * 6 - 183) * D, s = Math.sin(phi), c = Math.cos(phi), t = Math.tan(phi);
+  const N = a / Math.sqrt(1 - e2 * s * s), T = t * t, C = ep2 * c * c, A = c * lam;
+  const M = a * ((1 - e2 / 4 - 3 * e2 ** 2 / 64 - 5 * e2 ** 3 / 256) * phi - (3 * e2 / 8 + 3 * e2 ** 2 / 32 + 45 * e2 ** 3 / 1024) * Math.sin(2 * phi)
+    + (15 * e2 ** 2 / 256 + 45 * e2 ** 3 / 1024) * Math.sin(4 * phi) - (35 * e2 ** 3 / 3072) * Math.sin(6 * phi));
+  const x = k0 * N * (A + (1 - T + C) * A ** 3 / 6 + (5 - 18 * T + T * T + 72 * C - 58 * ep2) * A ** 5 / 120) + 500000;
+  const y = k0 * (M + N * t * (A * A / 2 + (5 - T + 9 * C + 4 * C * C) * A ** 4 / 24 + (61 - 58 * T + T * T + 600 * C - 330 * ep2) * A ** 6 / 720));
+  return [x, y];
+}
+
+/**
+ * Трассы варианта в DXF (R12, ASCII) для AutoCAD/Civil 3D: координаты UTM, метры. Слои: HEAT_NEW — новая сеть,
+ * HEAT_EDITED — участки, правленные вручную, HEAT_SPECIAL — спецпереходы, CHAMBERS — камеры (круг 1 м),
+ * LABELS — номер участка, Ду и длина. Текст латиницей: так его открывает любая версия AutoCAD.
+ */
+export function toDxf(variant, proj, {zone = 37} = {}) {
+  const out = ['0', 'SECTION', '2', 'HEADER', '9', '$ACADVER', '1', 'AC1009', '9', '$INSUNITS', '70', '6', '0', 'ENDSEC', '0', 'SECTION', '2', 'ENTITIES'];
+  const P = q => utm(...proj.ll(q[0], q[1]), zone);
+  const n3 = v => v.toFixed(3);
+  for (const s of variant.segs) {
+    const layer = s.edited ? 'HEAT_EDITED' : s.special ? 'HEAT_SPECIAL' : 'HEAT_NEW';
+    out.push('0', 'POLYLINE', '8', layer, '66', '1', '70', '0');
+    for (const q of s.pts) { const [x, y] = P(q); out.push('0', 'VERTEX', '8', layer, '10', n3(x), '20', n3(y), '30', '0.0'); }
+    out.push('0', 'SEQEND', '8', layer);
+    const m = s.pts[Math.floor((s.pts.length - 1) / 2)], m2 = s.pts[Math.floor((s.pts.length - 1) / 2) + 1] || m, [x, y] = P([(m[0] + m2[0]) / 2, (m[1] + m2[1]) / 2]);
+    const id = (/_seg_(\d+)$/.exec(s.id) || [, s.id])[1];
+    out.push('0', 'TEXT', '8', 'LABELS', '10', n3(x), '20', n3(y), '30', '0.0', '40', '0.5', '1', `S${id} DN${s.p.diameter} L=${s.len.toFixed(2)}${s.edited ? ' EDIT' : ''}`);
+  }
+  for (const n of variant.nodes) {
+    if (n.type === 'technical_node' || n.type === 'oks_entry' || n.type === 'endpoint') continue;
+    const [x, y] = P(n.xy);
+    out.push('0', 'CIRCLE', '8', 'CHAMBERS', '10', n3(x), '20', n3(y), '30', '0.0', '40', '1.0');
+  }
+  out.push('0', 'ENDSEC', '0', 'EOF');
+  return out.join('\r\n') + '\r\n';
 }

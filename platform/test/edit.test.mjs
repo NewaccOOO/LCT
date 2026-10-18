@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {buildScene} from '../js/model.js';
-import {planIssues, jointIssue, extraBends, snapOrtho, surroundings, patchOutput, relen, score, buildingGap, turnAngle} from '../js/edit.js';
+import {planIssues, jointIssue, extraBends, snapOrtho, surroundings, patchOutput, relen, score, buildingGap, turnAngle, utm, toDxf} from '../js/edit.js';
 
 const raw = n => readFileSync(new URL(`../demo/${n}`, import.meta.url), 'utf8');
 const box = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
@@ -35,8 +35,10 @@ test('planIssues: здание, зона запрета, дорога, пово�
   assert.deepEqual(planIssues(sc, seg([[4.6, -20], [4.6, 20]])), []);
   // насквозь
   assert.match(planIssues(sc, seg([[15, -20], [15, 20]]))[0].text, /проходит через здание/);
-  // своё здание участок заходит законно
-  assert.deepEqual(planIssues(sc, seg([[15, -20], [15, 0]]), house.item), []);
+  // своё здание: участок входит в него только последним звеном у ввода
+  assert.deepEqual(planIssues(sc, seg([[15, -20], [15, -5]]), house.item), []);
+  assert.match(planIssues(sc, seg([[15, -20], [15, 0], [15, 3]]), house.item)[0].text, /проходит через своё здание до ввода/);
+  assert.match(planIssues(sc, seg([[15, -20], [15, 4], [12, 4.9]]), house.item).map(i => i.text).join(), /своё здание/);
   // Ду 500 — норма 7 м
   assert.match(planIssues(sc, seg([[3, -20], [3, 20]], 500))[0].text, /ближе 7 м к зданию/);
   // запретная зона: отступ 1 м
@@ -199,4 +201,19 @@ test('patchOutput: правка участка и камеры на Купчин
     const end = t.from === n.id ? g[0] : g[g.length - 1];
     assert.deepEqual(end, pt.geometry.coordinates);
   }
+});
+
+test('UTM 37N как у сервиса и DXF для AutoCAD', async () => {
+  // pyproj EPSG:4326 → EPSG:32637 для этой точки Купчино: 22546.5816, 6664402.8752
+  const [x, y] = utm(30.465510886, 59.839809322);
+  assert.ok(Math.abs(x - 22546.5816) < 0.01 && Math.abs(y - 6664402.8752) < 0.01);
+  const sc = await buildScene(JSON.parse(raw('spb-kupchino.in.geojson')), JSON.parse(raw('spb-kupchino.out.geojson')));
+  const v = sc.variants[0];
+  v.segs[0].edited = true;
+  const dxf = toDxf(v, sc.proj);
+  assert.ok(dxf.startsWith('0\r\nSECTION'));
+  assert.ok(dxf.trimEnd().endsWith('EOF'));
+  assert.equal(dxf.split('\r\nPOLYLINE\r\n').length - 1, v.segs.length);
+  assert.ok(dxf.includes('\r\nHEAT_EDITED\r\n'));
+  assert.equal(dxf.split('\r\nCIRCLE\r\n').length - 1, v.nodes.filter(n => !['technical_node', 'oks_entry', 'endpoint'].includes(n.type)).length);
 });

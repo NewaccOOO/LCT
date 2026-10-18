@@ -270,6 +270,11 @@ body.flying #legend, body.flying .exchip { display: none; }
 .editguide .cl { stroke-width: 1.5; stroke-dasharray: 4 3; }
 .editguide .cl.ok { stroke: var(--ok); } .editguide .cl.near { stroke: var(--warn); } .editguide .cl.bad { stroke: var(--bad); stroke-width: 2; } .editguide .cl.info { stroke: var(--muted); }
 .editguide .ce { stroke: var(--float); stroke-width: 1.5; stroke-dasharray: none; }
+.editguide .ld { stroke: var(--muted); stroke-width: 1; stroke-dasharray: none; opacity: .8; }
+.editbar .eb-conf { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; background: var(--warn-s); border-radius: var(--r-s); padding: 6px 8px; }
+.editbar .eb-conf button { min-height: 30px; padding: 3px 10px; font-size: 13px; background: var(--float); }
+.editbar .eb-conf .link { background: none; box-shadow: none; color: var(--accent); }
+body.editing #legBody { max-height: 34vh; overflow: auto; }
 .editguide .ce.ok { fill: var(--ok); } .editguide .ce.near { fill: var(--warn); } .editguide .ce.bad { fill: var(--bad); } .editguide .ce.info { fill: var(--muted); }
 .editnotes { position: absolute; inset: 0; pointer-events: none; z-index: 4; overflow: hidden; }
 .en { position: absolute; left: 0; top: 0; white-space: nowrap; font-size: 12px; line-height: 16px; padding: 2px 7px; border-radius: var(--r-s); background: var(--float); color: var(--text2); box-shadow: var(--shadow); font-variant-numeric: tabular-nums; }
