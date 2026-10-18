@@ -200,6 +200,11 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
     for (const c of cells([Math.min(a[0], b[0]) - pad, Math.min(a[1], b[1]) - pad], [Math.max(a[0], b[0]) + pad, Math.max(a[1], b[1]) + pad])) for (const z of zones.get(c) || []) found.add(z);
     return [...found];
   };
+  const utilsNear = (a, b, pad = 0) => {
+    const found = new Set();
+    for (const c of cells([Math.min(a[0], b[0]) - pad, Math.min(a[1], b[1]) - pad], [Math.max(a[0], b[0]) + pad, Math.max(a[1], b[1]) + pad])) for (const e of grid.get(c) || []) found.add(e);
+    return [...found];
+  };
   const zonesAt = (x, y) => (zones.get(Math.floor(x / CELL) * 100003 + Math.floor(y / CELL)) || [])
     .filter(z => x >= z.bbox[0] && x <= z.bbox[2] && y >= z.bbox[1] && y <= z.bbox[3] && inRing(x, y, z.ring));
 
@@ -350,7 +355,7 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
   const count = o => Object.values(o).reduce((a, l) => a + l.length, 0);
   return {
     proj, bbox: Number.isFinite(x0) ? [x0, y0, x1, y1] : [-100, -100, 100, 100],
-    utilities, surfaces, points, oks, variants, segs, nodes, crossings, recon, byInputId, zonesAt, zonesNear, checkSeg,
+    utilities, surfaces, points, oks, variants, segs, nodes, crossings, recon, byInputId, zonesAt, zonesNear, utilsNear, checkSeg,
     hasOutput: fout.length > 0,
     hasAddresses: oks.some(o => o.name) || [...BUILDING_KEYS].some(k => (surfaces[k] || []).some(it => it.p.address)),
     skipped: [...skipped.entries()].sort((a, b) => b[1] - a[1]),

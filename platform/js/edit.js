@@ -44,6 +44,59 @@ const turnAngle = (p, q, r) => {
   return Math.acos(Math.max(-1, Math.min(1, c))) * 180 / Math.PI;
 };
 
+/** Ближайшие точки двух отрезков: {d, p (на ab), q (на cd)}. */
+export function closestSeg(a, b, c, d) {
+  const x = segX(a, b, c, d);
+  if (x) return {d: 0, p: [x[1], x[2]], q: [x[1], x[2]]};
+  const proj = (p, s, e) => { const dx = e[0] - s[0], dy = e[1] - s[1], l2 = dx * dx + dy * dy, t = l2 ? Math.max(0, Math.min(1, ((p[0] - s[0]) * dx + (p[1] - s[1]) * dy) / l2)) : 0; return [s[0] + t * dx, s[1] + t * dy]; };
+  let best = null;
+  for (const [p, q] of [[a, proj(a, c, d)], [b, proj(b, c, d)], [proj(c, a, b), c], [proj(d, a, b), d]]) {
+    const dd = Math.hypot(p[0] - q[0], p[1] - q[1]);
+    if (!best || dd < best.d) best = {d: dd, p, q};
+  }
+  return best;
+}
+// существующие сети: зона, в которой новая труба кладётся как спецпереход (rules.json, restrictions … clearance_m)
+const UTIL_ZONE = {gas_pipeline: [2.0, 'газопровод'], power_cable: [2.0, 'электрокабель'], heat_network: [1.0, 'существующая теплосеть'], water_supply: [1.5, 'водопровод'], sewer: [1.0, 'канализация']};
+const OBJ_NAME = {park: 'парк', social_area: 'школа, больница', prohibited_site: 'запретная зона', water: 'водоём', metro: 'метро', railway: 'ж/д', road: 'дорога', tram_tracks: 'трамвай'};
+
+/**
+ * Размеры вокруг правки, как в CAD: от звеньев pieces ([[a, b], …]) до ближайших объектов в радиусе R —
+ * [{name, d, need, level: 'ok'|'near'|'bad'|'info', p (на трубе), q (на объекте), note}]. Самое близкое из каждого вида.
+ */
+export function surroundings(scene, pieces, dn, own = null, R = 15) {
+  const best = new Map();
+  const keep = (key, item) => { const o = best.get(key); if (!o || item.d < o.d) best.set(key, item); };
+  const lvl = (d, need) => need == null ? 'info' : d < need - 0.05 ? 'bad' : d < need + 1 ? 'near' : 'ok';
+  for (const [a, b] of pieces) {
+    if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 0.01) continue;
+    for (const z of scene.zonesNear(a, b, R)) {
+      const bld = BUILDING_KEYS.has(z.type);
+      if (bld && z.item === own) continue;
+      if (!bld && !FORBID[z.type] && !ROAD[z.type]) continue;
+      let c = null;
+      const ring = z.ring;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) { const r = closestSeg(a, b, ring[j], ring[i]); if (!c || r.d < c.d) c = r; }
+      if (!c) continue;
+      if (inRing(a[0], a[1], ring) || inRing(b[0], b[1], ring)) c = {d: 0, p: c.p, q: c.q};
+      if (c.d > R) continue;
+      const need = bld ? buildingGap(dn) : FORBID[z.type] ?? null;
+      const road = !!ROAD[z.type];
+      keep(bld ? 'здание' : z.type, {name: bld ? 'здание' : OBJ_NAME[z.type], d: c.d, need, p: c.p, q: c.q,
+        level: road ? 'info' : lvl(c.d, need), note: road ? (c.d === 0 ? 'переход — спецпереход под углом ≥ 45°' : null) : null});
+    }
+    for (const e of scene.utilsNear(a, b, R)) {
+      const u = UTIL_ZONE[e.type]; if (!u) continue;
+      const c = closestSeg(a, b, e.a, e.b);
+      if (c.d > R) continue;
+      keep('u:' + e.type, {name: u[1], d: c.d, need: null, zone: u[0], p: c.p, q: c.q,
+        level: c.d === 0 ? 'info' : c.d < u[0] ? 'near' : 'info', note: c.d === 0 ? 'пересечение — проверьте зазор по высоте' : c.d < u[0] ? `в зоне ${String(u[0]).replace('.', ',')} м — прокладка как спецпереход` : null});
+    }
+  }
+  const rank = {bad: 0, near: 1, info: 2, ok: 3};
+  return [...best.values()].sort((x, y) => rank[x.level] - rank[y.level] || x.d - y.d).slice(0, 6);
+}
+
 /** Длины по вершинам и глубина: концы участка держат свою глубину, между ними — линейно. */
 export function relen(s) {
   s.lens = [0];
