@@ -221,6 +221,10 @@ export class Viewer {
   resize() {
     const w = this.host.clientWidth, h = this.host.clientHeight;
     if (!w || !h) return;
+    // окно сцены меняется (свернули панель, открыли профиль): main держит точки на своих местах экрана
+    const r = this.host.getBoundingClientRect(), cur = {x: r.left, y: r.top, w, h};
+    if (this._box && (this._box.w !== w || this._box.h !== h || this._box.x !== cur.x || this._box.y !== cur.y)) this.onResize?.(this._box, cur);
+    this._box = cur;
     this.renderer.setSize(w, h, false);
     this.labels.setSize(w, h);
     this.camera.aspect = w / h;

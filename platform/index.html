@@ -25,6 +25,7 @@ document.documentElement.dataset.theme = t === 'system' ? (matchMedia('(prefers-
       <hr>
       <button role="menuitem" data-act="png">Сохранить снимок экрана (PNG)</button>
       <button role="menuitem" data-act="geojson">Скачать результат трассировки (GeoJSON)</button>
+      <button role="menuitem" data-act="geojson-edit">Скачать результат с ручными правками</button>
       <button role="menuitem" data-act="link">Скопировать ссылку на этот вид</button>
     </div>
   </div>
@@ -72,6 +73,7 @@ document.documentElement.dataset.theme = t === 'system' ? (matchMedia('(prefers-
         <button id="v2d" title="Вид сверху или 3D-наклон (T)" aria-label="2D или 3D"><span class="v2">2D</span><span class="v3">3D</span></button>
         <hr>
         <button id="xrayBtn" title="Рентген: земля и здания прозрачные (X)" aria-label="Рентген"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><small>Рентген</small></button>
+        <button id="editBtn" title="Править трассу вручную: сдвинуть повороты и камеры (E)" aria-label="Правка трассы"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m14 6 4 4"/></svg><small>Правка</small></button>
         <button id="measureBtn" title="Линейка: измерить расстояние (M)" aria-label="Линейка"><svg viewBox="0 0 24 24"><path d="m3 17 14-14 4 4L7 21z"/><path d="m7 9 2 2m1-5 2 2m1-5 2 2M4 12l2 2"/></svg><small>Линейка</small></button>
       </div>
       </div>
@@ -91,6 +93,9 @@ document.documentElement.dataset.theme = t === 'system' ? (matchMedia('(prefers-
       <button id="camChip" class="camchip" hidden title="Подняться над землёй над этим же местом"></button>
       <button id="exChip" class="exchip" title="Глубина растянута, чтобы трубы на 3 м было видно на фоне района. Диаметры не меняются. Щёлкните, чтобы переключить на настоящий масштаб и обратно"></button>
       <div id="measure" class="floatcard" hidden></div>
+      <div id="editLayer" class="editlayer" hidden></div>
+      <svg id="editGuide" class="editguide" hidden></svg>
+      <div id="editBar" class="floatcard editbar" role="region" aria-label="Правка трассы" hidden></div>
       <div id="player" class="floatcard" hidden>
       <button id="plPlay" class="icon" aria-label="Пауза" title="Пауза (пробел)"></button>
       <input id="plPos" type="range" min="0" max="1000" value="0" aria-label="Положение на трассе">

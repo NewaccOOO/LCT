@@ -6,6 +6,7 @@ import {ViewCube} from './viewcube.js';
 import {Profile} from './profile.js';
 import {buildScene, routeTo, branchEnd, pointAt, segName, nodeName, UTILITIES, SURFACES, NODE_TYPES, BUILDING_KEYS} from './model.js';
 import {$, $$, fmt, rub, meters, esc, clamp, store, toast, plural} from './util.js';
+import {relen, planIssues, jointIssue, snapOrtho, patchOutput, score as editScore} from './edit.js';
 
 const D = Math.PI / 180;
 const S = {
@@ -29,7 +30,48 @@ const rig = new CameraRig(viewer.camera, viewer.renderer.domElement, {
   onFit: () => (S.sel ? frameSel() : home()),
   orbitPivot: (x, y) => { const h = pickAt(x, y); if (h) return h.point; const b = selBox(); return b ? new THREE.Vector3((b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2) : null; },
 });
-viewer.onRender = () => { if (booted) cube.update(); };
+viewer.onRender = () => { if (booted) { cube.update(); editPlace(); } };
+// окно сцены меняет размер (свернули панель, открыли профиль, карточку): масштаб и точки на земле остаются на своих
+// местах экрана — карта не прыгает, а открывается или закрывается край, как у боковой панели в Картах
+viewer.onResize = (a, b) => {
+  if (!booted || !S.model || rig.anim || S.fly || !a.h || !b.h) return;
+  const f = rig.forward(), t = f.z < -0.05 ? Math.min(-rig.pos.z / f.z, 5e4) : Math.max(50, Math.abs(rig.pos.z));
+  const mpp = 2 * t * Math.tan(viewer.camera.fov * D / 2) / a.h, nt = t * b.h / a.h;
+  const dx = (b.x + b.w / 2) - (a.x + a.w / 2), dy = (b.y + b.h / 2) - (a.y + a.h / 2);
+  viewer.camera.updateMatrixWorld();
+  const m = viewer.camera.matrixWorld, R = new THREE.Vector3().setFromMatrixColumn(m, 0), U = new THREE.Vector3().setFromMatrixColumn(m, 1);
+  rig.pos.addScaledVector(f, t - nt).addScaledVector(R, dx * mpp).addScaledVector(U, -dy * mpp);
+  rig.apply();
+};
+// плавное изменение высоты блока: замерить до и после, проиграть между ними (сцена над ним подстраивается кадр за кадром)
+const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+function morph(el, change, {hide = false} = {}) {
+  if (calm()) { change(); if (hide) el.hidden = true; return; }
+  el._anim?.cancel();
+  const from = el.hidden ? 0 : el.offsetHeight;
+  change();
+  if (el.hidden && !hide) return;
+  const to = hide ? 0 : el.offsetHeight;
+  if (Math.abs(from - to) < 1) { if (hide) el.hidden = true; return; }
+  el.style.overflow = 'hidden';
+  const an = el._anim = el.animate([{height: from + 'px'}, {height: to + 'px'}], {duration: 220, easing: 'cubic-bezier(.2,.7,.2,1)'});
+  an.onfinish = an.oncancel = () => { if (el._anim === an) { el._anim = null; el.style.overflow = ''; if (hide) el.hidden = true; } };
+}
+// карточка выезжает справа (на телефоне — снизу) и уезжает обратно
+function slideCard(el, show) {
+  if (calm()) { el.hidden = !show; return; }
+  const off = isMobile() ? 'translateY(105%)' : 'translateX(calc(100% + 24px))';
+  if (show) { if (!el.hidden && !el._out) return; el._out?.cancel(); el._out = null; el.hidden = false; el.animate([{transform: off, opacity: .4}, {transform: 'none', opacity: 1}], {duration: 220, easing: 'cubic-bezier(.2,.7,.2,1)'}); return; }
+  if (el.hidden || el._out) return;
+  const an = el._out = el.animate([{transform: 'none', opacity: 1}, {transform: off, opacity: .4}], {duration: 180, easing: 'ease-in'});
+  an.onfinish = () => { if (el._out === an) { el._out = null; el.hidden = true; } };
+  an.oncancel = () => { if (el._out === an) el._out = null; };
+}
+function fadeHide(el) {
+  if (el.hidden) return;
+  if (calm()) { el.hidden = true; return; }
+  el.animate([{opacity: 1}, {opacity: 0}], {duration: 250, easing: 'ease-out'}).onfinish = () => { el.hidden = true; };
+}
 cube = new ViewCube($('#cube'), viewer.camera, {
   orient: (dir, name) => orient(dir, name),
   orbit: (dx, dy) => { const P = rig.center(); rig.rotateAround(P, dx * 0.012, -dy * 0.01); },
@@ -97,7 +139,7 @@ async function load({input, output, outText = null, ds}) {
     progress(0.05, 'Строю сцену…');
     const model = await buildScene(input, output, {onProgress: (k, t) => progress(0.05 + k * 0.75, t)});
     if (!model.stats.utilities && !model.stats.surfaces && !model.stats.points && !model.hasOutput) {
-      $('#loading').hidden = true;
+      fadeHide($('#loading'));
       $('#errH').textContent = 'Файл не распознан';
       const n = model.skipped.reduce((a, [, k]) => a + k, 0);
       $('#errBody').innerHTML = `<p>В «${esc(ds.title)}» нет ни одного объекта в формате сервиса: ${fmt(n)} ${plural(n, 'объект', 'объекта', 'объектов')} пропущено.</p>
@@ -121,14 +163,16 @@ async function load({input, output, outText = null, ds}) {
     $('#dsBtnM').textContent = 'Набор: ' + ds.title.slice(0, 18) + (ds.title.length > 18 ? '…' : '');
     document.title = `${ds.title} — Тепломаршрут`;
     renderVariants();
+    E.undo = []; E.redo = []; E.sel = null;
     setVariant(model.variants[0]?.id, {quiet: true});
+    loadEdits();
     renderLayers();
     renderLegend();
     // адрес с видом и выбором применяем только при первом открытии; новый набор — с исходного вида
     const fromLink = !S.opened && applyHash();
     S.opened = true;
     if (!fromLink) { history.replaceState(null, '', location.pathname + location.search); home(0); }
-    $('#loading').hidden = true;
+    fadeHide($('#loading'));
     const v = S.v;
     if (!model.hasOutput) toast(`Результата трассировки нет, на сцене только исходные данные. Откройте файл результата${S.server ? ' или запустите расчёт: «Файл → Новый расчёт на сервере»' : ''}.`, 'info', 6000);
     if (!ds.local) store.set('ds', ds.name || null);
@@ -140,7 +184,7 @@ async function load({input, output, outText = null, ds}) {
 
   } catch (e) {
     console.error(e);
-    $('#loading').hidden = true;
+    fadeHide($('#loading'));
     toast(`Не удалось открыть данные: ${esc(e.message)}`, 'error', 8000);
   }
 }
@@ -149,7 +193,7 @@ async function loadDemo(d) {
   try {
     const [i, o] = await Promise.all([fetchJson('demo/' + d.input, 'исходные данные'), d.output ? fetchJson('demo/' + d.output, 'результат') : null]);
     await load({input: i.json, output: o?.json, outText: o?.text, ds: {name: d.name, title: d.title, attribution: d.attribution}});
-  } catch (e) { $('#loading').hidden = true; toast(`Не удалось загрузить демо-набор: ${esc(e.message)}`, 'error', 8000); }
+  } catch (e) { fadeHide($('#loading')); toast(`Не удалось загрузить демо-набор: ${esc(e.message)}`, 'error', 8000); }
 }
 function isOutput(fc) { return (fc.features || []).some(f => f.properties && (f.properties.object_type === 'variant_summary' || f.properties.variant_id != null)); }
 // JSON с понятной ошибкой: имя файла, строка и столбец
@@ -181,7 +225,7 @@ async function loadFiles(files, {fromCache = false} = {}) {
       cacheFiles(parsed.map(p => ({name: p.name, text: p.text})));
       toast('Файлы открыты и сохранены в этом браузере: после обновления страницы они откроются снова. Коллега по ссылке на вид их не увидит, файлы есть только у вас.', 'info', 7000);
     }
-  } catch (e) { $('#loading').hidden = true; $('#errH').textContent = 'Файл не открылся'; $('#errBody').innerHTML = `<p>${esc(e.message)}</p>`; $('#errDlg').showModal(); }
+  } catch (e) { fadeHide($('#loading')); $('#errH').textContent = 'Файл не открылся'; $('#errBody').innerHTML = `<p>${esc(e.message)}</p>`; $('#errDlg').showModal(); }
 }
 // последние свои файлы — в IndexedDB этого браузера
 function idb() { return new Promise((res, rej) => { const r = indexedDB.open('hn3d', 1); r.onupgradeneeded = () => r.result.createObjectStore('files'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
@@ -208,6 +252,7 @@ function setVariant(id, {quiet = false} = {}) {
   clearSel();
   viewer.setVariant(v);
   if (S.ghost === id) { S.ghost = null; viewer.setGhost(null); }
+  E.undo = []; E.redo = []; E.sel = null;
   if (booted && S.model) renderLegend();
   renderSummary(); renderOks(); renderCx();
   if (keep && keep.kind === 'oks') select(keep, {fly: false});
@@ -473,13 +518,14 @@ function clearSel() {
   viewer.setDetour(null);
   viewer.opts.dim = false;
   viewer.applyOpts();
-  $('#props').hidden = true;
+  slideCard($('#props'), false);
   document.body.classList.remove('propsOpen', 'propsMin');
   if (document.activeElement !== $('#q')) $('#q').value = '';
   if (S.autoLeft) { document.body.classList.remove('leftHidden'); S.autoLeft = false; }
   closeProfile();
   layout();
   $$('.item.sel').forEach(x => x.classList.remove('sel'));
+  if (E.on) { E.sel = null; editHandles(true); editPanel(); }
   scheduleHash();
 }
 function refreshHighlight() {
@@ -522,6 +568,7 @@ function select(sel, {fly = false, room = false} = {}) {
   if (S.route && !isMobile()) openProfile(); else closeProfile();
   if (fly) frameSel();
   $$('.item.sel').forEach(x => x.classList.remove('sel'));
+  if (E.on) { E.sel = null; editGhost(); editHandles(true); editPanel(); }
   scheduleHash();
 }
 // контур выбранного здания по крыше и по земле — видно, какое выбрано, даже если трасса за ним
@@ -664,7 +711,7 @@ function describe(sel) {
       const flat = Math.abs(s.d1 - s.d0) / s.len < 0.002;
       return {kind: 'Новая труба', title: `${segName(s)}: ${nn(s.from)} → ${nn(s.to)}`, info: flat ? {t: 'Уклон меньше 0,002', more: SLOPE_NOTE} : null, rows: [['Диаметр', `Ду ${s.p.diameter}`], ['Длина', meters(s.p.length ?? s.len)], ['Прокладка', s.special ? 'спецпереход в футляре' : 'обычная, в канале'],
         ['Глубина верха', s.d0 === s.d1 ? ND(s.d0) : `${ND(s.d0)} → ${ND(s.d1)}`], ['Уклон', fmt(Math.abs(s.d1 - s.d0) / s.len, 3) + slopeNote(s)], ['Расход теплоносителя', s.p.flow_tph != null ? fmt(s.p.flow_tph, 2) + ' т/ч' : '—'],
-        ['Стоимость', rub(s.p.cost)], ['Пересечений с сетями', s.cx.length]],
+        ['Стоимость', rub(s.p.cost)], ['Пересечений с сетями', s.cx.length], ...(s.edited ? [['Трасса', 'изменена вручную']] : [])],
         problem: s.issues.length || bad.length ? [...s.issues, ...bad.map(c => `${UTILITIES[c.type].name.toLowerCase()}: ${gapText(c)}${c.need != null ? `, нужен зазор ${fmt(c.need, 2)} м` : ''}`)].join('<br>') : null};
     }
     case 'oks': {
@@ -724,7 +771,7 @@ function describe(sel) {
 }
 function showProps(sel) {
   const d = describe(sel), el = $('#props');
-  el.hidden = false;
+  slideCard(el, true);
   document.body.classList.add('propsOpen');
   // на телефоне выбранное должно быть видно: панель слева прячем, лист со свойствами свёрнут, если есть профиль
   if (isMobile()) { document.body.classList.remove('leftOpen'); el.classList.toggle('min', !!S.route); }
@@ -736,6 +783,7 @@ function showProps(sel) {
       <button id="pxGo" class="primary" title="Навести камеру на объект (F)">Показать</button>
       <button id="pxClip" title="Оставить на сцене только куб вокруг объекта (B)">${S.clip ? 'Убрать срез' : 'Срез вокруг'}</button>
       ${hasRoute ? '<button id="pxFly" title="Пролёт камерой вдоль трассы (P)">Пролёт</button><button id="pxProf" title="Продольный профиль трассы">Профиль</button>' : ''}
+      ${hasRoute && S.v ? `<button id="pxEdit" class="wide" title="Сдвинуть повороты и камеры трассы вручную (E)">${E.on ? 'Закончить правку' : 'Править трассу вручную'}</button>` : ''}
     </div>
     <table>${d.rows.filter(r => r[1] != null && r[1] !== '—').map(r => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`).join('')}</table>
     ${d.problem ? `<div class="note prob">${d.problem}</div>` : ''}${d.info ? `<details class="note warn"><summary>${esc(d.info.t)}</summary>${esc(d.info.more)}</details>` : ''}${d.fix ? `<div class="note fix"><b>Как исправить</b><br>${d.fix}</div>` : ''}${d.ok ? `<div class="note fix">${esc(d.ok)}</div>` : ''}`;
@@ -754,6 +802,7 @@ function showProps(sel) {
   $('#pxClip').onclick = () => toggleClip();
   if (hasRoute) {
     $('#pxFly').onclick = () => startFly();
+    if ($('#pxEdit')) $('#pxEdit').onclick = () => setEdit(!E.on);
     $('#pxProf').onclick = () => { if ($('#profile').hidden) { openProfile(); if (isMobile()) el.classList.add('min'); } else closeProfile(); };
   }
   // «Показать обход»: зелёная труба на рекомендуемой глубине в 3D и пунктир на профиле
@@ -766,7 +815,7 @@ function showProps(sel) {
 // ---------- профиль ----------
 function openProfile() {
   const R = S.route;
-  $('#profile').hidden = false;
+  if ($('#profile').hidden || $('#profile')._anim) morph($('#profile'), () => { $('#profile').hidden = false; });
   const o = S.model.oks.find(x => x.id === R.end);
   $('#pTitle').innerHTML = `Профиль: ${esc(nodeLabel(R.start))} → ${esc(o ? o.label : nodeLabel(R.end))} · ${meters(R.len)} · ${rub(R.cost)} · ` +
     (R.bad ? `<span style="color:var(--bad-t)">${R.bad} ${plural(R.bad, 'проблема', 'проблемы', 'проблем')}</span>` : '<span style="color:var(--ok-t)">без проблем</span>');
@@ -774,7 +823,7 @@ function openProfile() {
   S.focusAt = null;
   requestAnimationFrame(() => { profile.show(R, S.model); if (at != null) { profile.zoomTo(at, Math.min(60, R.len)); profile.setCursor(at); } });
 }
-function closeProfile() { $('#profile').hidden = true; profile.show(null); viewer.marker('pcur', null); }
+function closeProfile() { if (!$('#profile').hidden) morph($('#profile'), () => {}, {hide: true}); profile.show(null); viewer.marker('pcur', null); }
 $('#pClose').onclick = () => closeProfile();
 $('#pFly').onclick = () => startFly();
 {
@@ -936,6 +985,7 @@ function setMode(m, quiet = false) { rig.mode = m; updateModeUi(); if (!quiet) t
 function status(extra) {
   const fly = rig.mode === 'fly';
   $('#stHint').innerHTML = extra ? `<b>${esc(extra)}</b>` : S.measure ? '<b>Линейка:</b> щёлкните две точки · Esc — выйти'
+    : E.on ? '<b>Правка:</b> тяните точку · <b>«+»</b> добавить поворот · <b>Delete</b> удалить · <b>Ctrl Z</b> отменить · <b>Esc</b> закончить'
     : fly ? '<b>Полёт:</b> <b>мышь</b> поворачивает взгляд · <b>WASD</b> лететь · <b>Q/E</b> вниз/вверх · <b>Shift</b> быстрее · <b>Esc</b> выйти'
       : '<b>левая</b> двигать · <b>правая</b> вращать · <b>колесо</b> масштаб · <b>WASD</b> лететь';
   if (extra) { clearTimeout(status.t); status.t = setTimeout(() => status(), 2200); }
@@ -1206,6 +1256,7 @@ async function menuAct(a) {
   if (a === 'open') openDlg('demo');
   if (a === 'run' || a === 'jobs') openDlg('srv');
   if (a === 'png') { const blob = await snapshot(); download(blob, snapName()); }
+  if (a === 'geojson-edit') { if (!S.model?.variants.some(editedCount)) return toast('Ручных правок нет: результат совпадает с расчётом сервиса', 'info'); return editDownload(); }
   if (a === 'geojson') { if (!S.raw) return toast('Результата трассировки нет, скачивать нечего', 'info'); download(new Blob([S.raw], {type: 'application/geo+json'}), `${S.ds?.name || 'result'}.geojson`); }
   if (a === 'link') copyLink();
 }
@@ -1283,7 +1334,7 @@ async function openJob(id) {
     const [i, o] = await Promise.all([fetchJson(`/api/v1/jobs/${id}/input`, 'исходные данные'), fetchJson(`/api/v1/jobs/${id}/result`, 'результат')]);
     history.replaceState(null, '', location.pathname + '?job=' + encodeURIComponent(id));
     await load({input: i.json, output: o.json, outText: o.text, ds: {name: null, title: `Расчёт ${id.slice(0, 8)}`, job: id}});
-  } catch (e) { $('#loading').hidden = true; toast(`Не удалось открыть расчёт: ${esc(e.message)}`, 'error', 8000); }
+  } catch (e) { fadeHide($('#loading')); toast(`Не удалось открыть расчёт: ${esc(e.message)}`, 'error', 8000); }
 }
 $('#jGo').onclick = async () => {
   const f = $('#jIn').files[0];
@@ -1370,6 +1421,7 @@ addEventListener('keydown', e => {
   if ((e.key === '/' && !typing) || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) { e.preventDefault(); $('#q').focus(); $('#q').select(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') { e.preventDefault(); openDlg('demo'); return; }
   if ((e.ctrlKey || e.metaKey) && e.code === 'Backslash') { e.preventDefault(); setMapOnly(!mapOnly); return; }
+  if (!typing && E.on && (e.ctrlKey || e.metaKey) && (e.code === 'KeyZ' || e.code === 'KeyY')) { e.preventDefault(); (e.shiftKey || e.code === 'KeyY') ? editRedo() : editUndo(); return; }
   if (!typing && ((e.altKey && e.code === 'ArrowLeft') || ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ'))) { e.preventDefault(); backView(); return; }
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   if (document.querySelector('dialog[open]')) return;
@@ -1380,12 +1432,15 @@ addEventListener('keydown', e => {
     if (rig.mode === 'fly') return setMode('orbit');
     if (S.measure) return setMeasure(false);
     if (S.clip) return setClip(null);
+    if (E.on && E.sel) { E.sel = null; editHandles(true); return editPanel(); }
+    if (E.on) return setEdit(false);
     if (S.sel) return clearSel();
     if (mapOnly) return setMapOnly(false);
     document.body.classList.remove('leftOpen');
     return;
   }
   if (e.code === 'Space' && S.fly) { e.preventDefault(); $('#plPlay').click(); return; }
+  if (E.on && E.sel && (e.code === 'Delete' || e.code === 'Backspace')) { e.preventDefault(); editDelete(); return; }
   if (e.code === 'Backspace') { e.preventDefault(); backView(); return; }
   const k = e.code;
   if (k === 'KeyF') frameSel();
@@ -1401,6 +1456,7 @@ addEventListener('keydown', e => {
     setClip([cx - hx, cy - hy, b[2], cx + hx, cy + hy, b[5]]);
   }
   else if (k === 'KeyM') setMeasure(!S.measure);
+  else if (k === 'KeyE') setEdit(!E.on);
   else if (k === 'Equal' || k === 'NumpadAdd') zoomStep(0.6);
   else if (k === 'Minus' || k === 'NumpadSubtract') zoomStep(1.6);
   else if (/^Digit[1-9]$/.test(k) && S.model) { const v = S.model.variants[+k.slice(5) - 1]; if (v) setVariant(v.id); }
@@ -1446,10 +1502,16 @@ function toggleCard() {
   if (isMobile()) $('#props').classList.toggle('min'); else document.body.classList.toggle('propsMin');
   layout();
 }
+// свёрнутый профиль — только заголовок; высоту, которую задал пользователь ручкой, помним до разворота
+function setProfMin(p, on) {
+  if (on && p.style.height) { p.dataset.h = p.style.height; p.style.height = ''; }
+  if (!on && p.dataset.h) { p.style.height = p.dataset.h; delete p.dataset.h; }
+  p.classList.toggle('min', on);
+}
 function toggleProfileMin() {
   const p = $('#profile'), min = !p.classList.contains('min');
   mapOnly = null;
-  p.classList.toggle('min', min);
+  morph(p, () => setProfMin(p, min));
   store.set('profMin', min);
   layout();
 }
@@ -1457,11 +1519,11 @@ function setMapOnly(on) {
   const b = document.body, p = $('#profile'), sheet = $('#props');
   if (on && !mapOnly) {
     mapOnly = {left: b.classList.contains('leftHidden'), card: b.classList.contains('propsMin'), prof: p.classList.contains('min'), sheet: sheet.classList.contains('min')};
-    b.classList.add('leftHidden', 'propsMin'); b.classList.remove('leftOpen'); p.classList.add('min'); sheet.classList.add('min');
+    b.classList.add('leftHidden', 'propsMin'); b.classList.remove('leftOpen'); morph(p, () => setProfMin(p, true)); sheet.classList.add('min');
   } else if (!on && mapOnly) {
     const m = mapOnly;
     mapOnly = null;
-    b.classList.toggle('leftHidden', m.left); b.classList.toggle('propsMin', m.card); p.classList.toggle('min', m.prof); sheet.classList.toggle('min', m.sheet);
+    b.classList.toggle('leftHidden', m.left); b.classList.toggle('propsMin', m.card); morph(p, () => setProfMin(p, m.prof)); sheet.classList.toggle('min', m.sheet);
   }
   layout();
 }
@@ -1478,6 +1540,345 @@ document.addEventListener('change', e => { if (e.target.matches?.('#left input[t
 document.addEventListener('pointerup', e => { if (e.target.matches?.('#left input[type=range]')) setTimeout(() => e.target.blur(), 0); });
 $('#coachAll').onclick = () => { $('#coach').hidden = true; store.set('coach', 1); $('#helpDlg').showModal(); };
 
+// ---------- ручная правка трассы ----------
+// Инженер двигает повороты и камеры на плане, добавляет и удаляет точки; длина, стоимость, S и проверки правил
+// пересчитываются сразу. Ввод в здание и врезка закреплены: их задают исходные данные и существующая сеть.
+// Правки хранятся у варианта (v.edit) и в браузере, выгружаются в формате выхода сервиса.
+const E = {on: false, sel: null, undo: [], redo: [], drag: null, handles: new Map(), issues: [], key: ''};
+const NODE_LOCK = {oks_entry: 'Ввод в здание: точка подключения задана в исходных данных', existing_chamber: 'Врезка в существующую камеру: её место задаёт существующая сеть',
+  endpoint: 'Конец участка в объекте исходных данных'};
+function nodeLock(n) { return NODE_LOCK[n.type] || (n.p?.existing_object_id != null ? 'Камера врезки на существующей трубе: её место задаёт существующая сеть' : null); }
+function editState(v) {
+  return v.edit ||= {orig: new Map(), nodes: new Map(), sum: {...v.summary}, score: v.score};
+}
+const snapGeom = v => ({segs: v.segs.map(s => s.pts.map(q => q.slice())), nodes: v.nodes.map(n => n.xy.slice())});
+function restoreGeom(v, g) {
+  const changed = [];
+  v.segs.forEach((s, i) => { const q = g.segs[i]; if (q.length !== s.pts.length || q.some((c, k) => c[0] !== s.pts[k][0] || c[1] !== s.pts[k][1])) { s.pts = q.map(c => c.slice()); changed.push(s); } });
+  v.nodes.forEach((n, i) => { n.xy = g.nodes[i].slice(); });
+  afterGeom(v, changed);
+}
+// исходная геометрия участка — запоминается до первой правки, с ней сравнивают и по ней сбрасывают
+function remember(v, segs) {
+  const st = editState(v);
+  for (const s of segs) if (!st.orig.has(s.id)) st.orig.set(s.id, {pts: s.pts.map(q => q.slice()), len: s.len, cost: s.p.cost, length: s.p.length, depth: s.depth.slice()});
+}
+function beginChange() { E.undo.push(snapGeom(S.v)); if (E.undo.length > 100) E.undo.shift(); E.redo = []; }
+// пересчёт участков после правки: длины, глубины, стоимость пропорционально длине, пересечения, сводка варианта
+function afterGeom(v, changed, {light = false} = {}) {
+  const st = editState(v);
+  for (const s of changed) {
+    relen(s);
+    const o = st.orig.get(s.id);
+    if (!o) { s.edited = false; if (!light) s._cx = S.model.checkSeg(s); continue; }
+    const same = o.pts.length === s.pts.length && o.pts.every((q, i) => Math.hypot(q[0] - s.pts[i][0], q[1] - s.pts[i][1]) < 1e-3);
+    s.edited = !same;
+    s.p.cost = same ? o.cost : o.cost * s.len / o.len;
+    s.p.length = same ? o.length : +s.len.toFixed(2);
+    if (!light) s._cx = S.model.checkSeg(s);
+  }
+  for (const n of v.nodes) { const o = st.nodes.get(n.id); if (o) n.edited = Math.hypot(o[0] - n.xy[0], o[1] - n.xy[1]) > 1e-3; }
+  if (!light) {
+    const ch = new Set(changed);
+    v.crossings = v.crossings.filter(c => !ch.has(c.seg)).concat(changed.flatMap(s => s._cx || []));
+  }
+  let dc = 0, dl = 0;
+  for (const s of v.segs) { const o = st.orig.get(s.id); if (o) { dc += s.p.cost - o.cost; dl += s.len - o.len; } }
+  const sm = v.summary;
+  sm.construction_cost = st.sum.construction_cost + dc; sm.calculated_cost = st.sum.calculated_cost + dc; sm.new_network_length = st.sum.new_network_length + dl;
+  v.score = sm.score = Math.abs(dc) + Math.abs(dl) < 1e-6 ? st.score : +editScore(sm.calculated_cost, sm.new_network_length).toFixed(4);
+}
+const editedCount = v => v?.edit ? v.segs.filter(s => s.edited).length : 0;
+function editRedraw({light = false} = {}) {
+  viewer.buildNetwork();
+  if (S.sel) {
+    S.route = routeFor(S.sel);
+    if (S.route) { const o = S.model.oks.find(x => x.id === S.route.end); S.route.endName = o ? o.label : null; }
+    refreshHighlight();
+    if (!light && S.route && !$('#profile').hidden) openProfileKeep();
+  }
+  editGhost();
+  if (!light) { renderSummary(); renderOks(); renderCx(); renderVariants(); if (S.sel) showProps(S.sel); saveEdits(); }
+  editPanel();
+  editHandles(true);
+}
+// исходная трасса изменённых участков — пунктиром, чтобы было видно, откуда сдвинули
+function editGhost() {
+  const v = S.v, st = v?.edit;
+  const segs = st ? v.segs.filter(s => s.edited).map(s => { const o = st.orig.get(s.id); return {pts: o.pts, depth: o.depth, row: s.row}; }) : [];
+  if (E.on && segs.length) viewer.setGhost({segs});
+  else viewer.setGhost(S.ghost ? S.model.variants.find(x => x.id === S.ghost) : null);
+}
+// проблемы плана на трассе и у всех изменённых участков, плюс пересечения по высоте
+function editIssues() {
+  const v = S.v, out = [];
+  if (!v) return out;
+  const segs = new Set([...(S.route?.segs || []), ...v.segs.filter(s => s.edited)]);
+  const ownOf = s => { const o = S.model.oks.find(x => x.id === s.to); return o?.building || null; };
+  for (const s of segs) out.push(...planIssues(S.model, s, ownOf(s)));
+  const byStart = new Map(); for (const s of v.segs) { const l = byStart.get(s.from); if (l) l.push(s); else byStart.set(s.from, [s]); }
+  for (const a of segs) { const nx = byStart.get(a.to); const n = v.nodes.find(q => q.id === a.to); if (nx?.length === 1 && n?.type === 'technical_node') { const j = jointIssue(a, nx[0]); if (j) out.push(j); } }
+  for (const s of segs) for (const c of s.cx) if (c.ok === false) out.push({level: 'bad', text: `${UTILITIES[c.type].name.toLowerCase()}: ${c.gap < 0 ? 'трубы пересекаются по высоте' : `зазор ${fmt(c.gap, 2)} м, нужно ${fmt(c.need, 2)}`}`, x: c.x, y: c.y, seg: s, cx: c});
+  for (const s of segs) for (const t of s.issues) out.push({level: 'bad', text: t, x: s.pts[0][0], y: s.pts[0][1], seg: s});
+  // предельная длина пути от врезки до здания по Ду ввода (табл. 1)
+  if (S.route) { const last = S.route.segs[S.route.segs.length - 1]; if (S.route.len > last.row.maxLen + 0.5) out.push({level: 'bad', text: `трасса ${meters(S.route.len)} длиннее предельной ${meters(last.row.maxLen)} для Ду ${last.p.diameter}`, x: last.pts[last.pts.length - 1][0], y: last.pts[last.pts.length - 1][1], seg: last}); }
+  return out;
+}
+function editPanel() {
+  const el = $('#editBar');
+  if (!E.on) { el.hidden = true; return; }
+  el.hidden = false;
+  const v = S.v, st = v?.edit, n = editedCount(v), R = S.route;
+  const d = (a, b, f) => { const x = a - b; return Math.abs(x) < 1e-6 ? '' : ` <i class="${x > 0 ? 'up' : 'down'}">${x > 0 ? '+' : '−'}${f(Math.abs(x))}</i>`; };
+  const sm = v?.summary, so = st?.sum;
+  E.issues = editIssues();
+  const bad = E.issues.filter(i => i.level === 'bad'), warn = E.issues.filter(i => i.level === 'warn');
+  const touch = matchMedia('(pointer: coarse)').matches, all = [...bad, ...warn];
+  const open = E.listOpen ?? bad.length > 0;
+  el.innerHTML = `<div class="eb-h"><b>Правка трассы</b><span class="mut">${R ? esc(R.endName || nodeLabel(R.end)) : 'выберите здание или трубу'}</span><span class="sp"></span>
+      <button id="ebUndo" class="icon" ${E.undo.length ? '' : 'disabled'} title="Отменить (Ctrl Z)" aria-label="Отменить"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
+      <button id="ebRedo" class="icon" ${E.redo.length ? '' : 'disabled'} title="Вернуть (Ctrl Shift Z)" aria-label="Вернуть"><svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
+      <button id="ebDone" class="primary" title="Закончить правку (Esc). Правки сохраняются в браузере">Готово</button></div>
+    ${v ? `<div class="eb-m">${n ? `Изменено участков: <b>${n}</b> · ` : ''}сеть ${meters(sm.new_network_length)}${so ? d(sm.new_network_length, so.new_network_length, meters) : ''} · ${rub(sm.calculated_cost)}${so ? d(sm.calculated_cost, so.calculated_cost, rub) : ''} · S ${fmt(v.score, 2)}${st && Math.abs(v.score - st.score) > 1e-6 ? ` <span class="mut">было ${fmt(st.score, 2)}</span>` : ''}</div>` : ''}
+    ${R || n ? (all.length ? `<button id="ebList" class="eb-sum ${bad.length ? 'bad' : 'warn'}" aria-expanded="${open}"><span class="dot"></span>${bad.length ? `${bad.length} ${plural(bad.length, 'нарушение', 'нарушения', 'нарушений')} правил` : ''}${bad.length && warn.length ? ' · ' : ''}${warn.length ? `${warn.length} ${plural(warn.length, 'замечание', 'замечания', 'замечаний')}` : ''}<span class="caret">${open ? '▾' : '▸'}</span></button>
+      ${open ? `<div class="eb-p">${all.slice(0, 8).map((i, k) => `<button class="iss ${i.level}" data-i="${k}" title="Показать место"><span class="dot"></span>${esc(i.text)}</button>`).join('')}${all.length > 8 ? `<div class="mut">и ещё ${all.length - 8}</div>` : ''}</div>` : ''}`
+      : '<div class="iss ok"><span class="dot"></span>Нарушений правил на трассе нет</div>') : ''}
+    <div class="eb-a">${E.sel?.kind === 'v' ? '<button id="ebDel" title="Удалить выбранный поворот (Delete)">Удалить точку</button>' : ''}
+      <button id="ebReset" ${n ? '' : 'disabled'} title="Вернуть трассы варианта как их построил сервис">Сбросить правки</button>
+      <button id="ebSave" ${n ? '' : 'disabled'} title="GeoJSON в формате сервиса с вашими правками">Скачать с правками</button></div>
+    <div class="eb-hint">${touch ? 'Тяните точку — сдвинуть поворот · тяните «+» — новый поворот · коснитесь точки — выбрать' : 'Тяните точку — сдвинуть поворот · тяните «+» — новый поворот · двойной щелчок — удалить'}<button id="ebHelp" class="link" aria-expanded="${!!E.help}">${E.help ? 'скрыть' : 'подробнее'}</button>
+      ${E.help ? `<div class="more">Круги — повороты на трубе. Квадраты — камеры и узлы: двигаются вместе со всеми трубами, которые в них сходятся. Серые закреплены: ввод в здание и врезка в существующую сеть. Звенья липнут к прямым углам — пунктир показывает, к чему; ${touch ? '' : 'Alt — без привязки. '}Длина, стоимость и S пересчитываются сразу, проверки правил — ниже заголовка. Правки хранятся в этом браузере; «Скачать с правками» — файл в формате сервиса.</div>` : ''}</div>`;
+  $('#ebDone').onclick = () => setEdit(false);
+  $('#ebHelp').onclick = () => { E.help = !E.help; editPanel(); };
+  $('#ebUndo').onclick = () => editUndo();
+  $('#ebRedo').onclick = () => editRedo();
+  if ($('#ebDel')) $('#ebDel').onclick = () => editDelete();
+  if ($('#ebList')) $('#ebList').onclick = () => { E.listOpen = !open; editPanel(); };
+  $('#ebReset').onclick = () => editReset();
+  $('#ebSave').onclick = () => editDownload();
+  el.querySelectorAll('.iss[data-i]').forEach(b => b.onclick = () => { const i = all[+b.dataset.i]; rig.lookAtFrom(new THREE.Vector3(i.x, i.y, 0), rig.yaw, -90 * D, Math.max(40, Math.min(rig.pos.z, 120))); viewer.marker('selpt', new THREE.Vector3(i.x, i.y, 0.5), {r: 1.2, color: PALETTE.problem}); });
+  $('#editBtn').classList.toggle('on', E.on);
+}
+function setEdit(on) {
+  if (on && !S.v) return toast('Результата трассировки нет: править нечего', 'info');
+  E.on = on;
+  E.sel = null;
+  document.body.classList.toggle('editing', on);
+  $('#editBtn').classList.toggle('on', on);
+  if (on) {
+    E.help = false;
+    E.listOpen = null;
+    stopFly(); setMeasure(false);
+  } else viewer.marker('selpt', null);
+  editGhost();
+  editPanel();
+  editHandles(true);
+  if (on) { if (!S.route) toast('Выберите здание или трубу: на её трассе появятся точки, которые можно тянуть', 'info', 4000); else editFrame(); }
+  status();
+}
+// вид сверху на трассу — править удобнее в плане, как в AutoCAD
+function editFrame() {
+  const R = S.route; if (!R) return;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const s of R.segs) for (const q of s.pts) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); }
+  // свободное окно сцены: правее панели правки, левее инструментов и карточки
+  const r = $('#view').getBoundingClientRect(), bar = $('#editBar').getBoundingClientRect(), tb = $('#navR .toolbar').getBoundingClientRect();
+  const pr = !$('#props').hidden && !isMobile() && document.body.classList.contains('propsShown') ? $('#props').getBoundingClientRect().left : Infinity;
+  const left = isMobile() ? 0 : bar.right - r.left + 12, right = Math.min(tb.left, pr) - r.left - 12;
+  const top = isMobile() ? bar.bottom - r.top + 8 : 16, bottom = r.height - 50;
+  const fw = Math.max(160, right - left), fh = Math.max(160, bottom - top);
+  const half = Math.tan(viewer.camera.fov * D / 2);
+  const mpp = Math.max((x1 - x0 + 16) / fw, (y1 - y0 + 16) / fh, 0.05);   // метров на пиксель
+  const dist = Math.max(30, mpp * r.height / (2 * half));
+  const ox = (left + right) / 2 - r.width / 2, oy = (top + bottom) / 2 - r.height / 2;   // сдвиг центра окна на экране, px
+  // экран вправо — (cos yaw, −sin yaw) в плане, экран вниз — (−sin yaw, −cos yaw)
+  const cy0 = Math.cos(rig.yaw), sy0 = Math.sin(rig.yaw);
+  const cx = (x0 + x1) / 2 - mpp * (ox * cy0 - oy * sy0), cy = (y0 + y1) / 2 - mpp * (-ox * sy0 - oy * cy0);
+  rig.lookAtFrom(new THREE.Vector3(cx, cy, 0), rig.yaw, -90 * D, dist, 600);
+}
+// ---------- точки на трассе ----------
+function editTargets() {
+  const R = S.route, v = S.v, out = [];
+  if (!E.on || !R || !v) return out;
+  const seenN = new Set(), nodeOf = id => v.nodes.find(n => n.id === id);
+  for (const s of R.segs) {
+    for (const [i, id] of [[0, s.from], [s.pts.length - 1, s.to]]) {
+      if (seenN.has(id)) continue; seenN.add(id);
+      const n = nodeOf(id); if (!n) continue;
+      out.push({key: 'n:' + id, kind: 'n', node: n, p: s.pts[i], lock: nodeLock(n), title: nodeName(n, S.model)});
+    }
+    for (let i = 1; i + 1 < s.pts.length; i++) out.push({key: `v:${s.id}:${i}`, kind: 'v', seg: s, i, p: s.pts[i]});
+    for (let i = 0; i + 1 < s.pts.length; i++) {
+      const a = s.pts[i], b = s.pts[i + 1];
+      if (Math.hypot(b[0] - a[0], b[1] - a[1]) > 2) out.push({key: `m:${s.id}:${i}`, kind: 'm', seg: s, i, p: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]});
+    }
+  }
+  return out;
+}
+function editHandles(rebuild) {
+  const layer = $('#editLayer');
+  if (rebuild) {
+    E.targets = editTargets();
+    const keep = new Set(E.targets.map(t => t.key));
+    for (const [k, el] of E.handles) if (!keep.has(k)) { el.remove(); E.handles.delete(k); }
+    for (const t of E.targets) {
+      let el = E.handles.get(t.key);
+      if (!el) { el = document.createElement('div'); el.addEventListener('pointerdown', editDown); el.addEventListener('dblclick', e => { e.stopPropagation(); editDelete(el._t); }); layer.appendChild(el); E.handles.set(t.key, el); }
+      el._t = t;
+      el.className = 'eh ' + t.kind + (t.lock ? ' lock' : '') + (E.sel && E.sel.key === t.key ? ' sel' : '');
+      el.title = t.kind === 'm' ? 'Потяните, чтобы добавить поворот' : t.lock ? t.lock : t.kind === 'n' ? `${t.title[0].toUpperCase() + t.title.slice(1)}: потяните, чтобы сдвинуть вместе с трубами` : 'Поворот: потяните, чтобы сдвинуть; двойной щелчок — удалить';
+    }
+    layer.hidden = !E.on || !E.targets.length;
+  }
+  editPlace();
+}
+// положение точек на экране — каждый кадр, после отрисовки сцены
+function editPlace() {
+  if (!E.on || !E.targets?.length) return;
+  const r = $('#view').getBoundingClientRect(), V = new THREE.Vector3(), placed = [];
+  const scr = q => { V.set(q[0], q[1], 0.15).project(viewer.camera); return V.z > 1 ? null : [(V.x + 1) / 2 * r.width, (1 - V.y) / 2 * r.height]; };
+  // точки не слипаются: ближе 14 px к уже показанной — прячется (выбранная и тащимая — всегда видны),
+  // «+» — только на звене длиннее 40 px на экране; приблизьте — появятся все
+  const order = [...E.targets].sort((p, q) => (q.key === E.sel?.key) - (p.key === E.sel?.key) || 'nvm'.indexOf(p.kind) - 'nvm'.indexOf(q.kind));
+  for (const t of order) {
+    const el = E.handles.get(t.key); if (!el) continue;
+    const c = scr(t.p);
+    let show = c && c[0] > -10 && c[1] > -10 && c[0] < r.width + 10 && c[1] < r.height + 10;
+    if (show && t.kind === 'm') { const a = scr(t.seg.pts[t.i]), b = scr(t.seg.pts[t.i + 1]); show = a && b && Math.hypot(a[0] - b[0], a[1] - b[1]) > 40; }
+    const must = E.drag?.t.key === t.key || E.sel?.key === t.key;
+    if (show && !must && placed.some(q => Math.hypot(q[0] - c[0], q[1] - c[1]) < 14)) show = false;
+    el.style.display = show ? '' : 'none';
+    if (show) { placed.push(c); el.style.transform = `translate(${c[0].toFixed(1)}px, ${c[1].toFixed(1)}px)`; }
+  }
+  const g = $('#editGuide');
+  if (E.drag?.guide?.length) {
+    g.hidden = false;
+    const pt = q => { V.set(q[0], q[1], 0.15).project(viewer.camera); return `${((V.x + 1) / 2 * r.width).toFixed(1)},${((1 - V.y) / 2 * r.height).toFixed(1)}`; };
+    g.innerHTML = E.drag.guide.map(([a, b]) => `<polyline points="${pt(a)} ${pt(b)}"/>`).join('');
+  } else g.hidden = true;
+}
+function planAt(e) { const r = $('#view').getBoundingClientRect(); return rig.onPlane(e.clientX - r.left, e.clientY - r.top, 0, 1e6); }
+function metersPerPx(e) { const a = planAt(e), r = $('#view').getBoundingClientRect(), b = rig.onPlane(e.clientX - r.left + 10, e.clientY - r.top, 0, 1e6); return a && b ? Math.hypot(a.x - b.x, a.y - b.y) / 10 : 0.2; }
+function editDown(e) {
+  const el = e.currentTarget, t = el._t;
+  e.stopPropagation(); e.preventDefault();
+  if (t.lock) { E.sel = null; toast(t.lock + '. Двигать её нельзя.', 'info', 3000); editHandles(true); return; }
+  el.setPointerCapture(e.pointerId);
+  E.drag = {t, x: e.clientX, y: e.clientY, moved: false, guide: null};
+  el.onpointermove = editMove;
+  el.onpointerup = el.onpointercancel = ev => editUp(ev, el);
+}
+function editMove(e) {
+  const D0 = E.drag; if (!D0) return;
+  if (!D0.moved && Math.hypot(e.clientX - D0.x, e.clientY - D0.y) < 4) return;
+  const P = planAt(e); if (!P) return;
+  const t = D0.t;
+  if (!D0.moved) {
+    D0.moved = true;
+    beginChange();
+    $('#tip').hidden = true;
+    remember(S.v, t.kind === 'n' ? S.v.segs.filter(s => s.from === t.node.id || s.to === t.node.id) : [t.seg]);
+    if (t.kind === 'n' && !editState(S.v).nodes.has(t.node.id)) editState(S.v).nodes.set(t.node.id, t.node.xy.slice());
+    if (t.kind === 'm') { t.seg.pts.splice(t.i + 1, 0, [P.x, P.y]); D0.t = {kind: 'v', seg: t.seg, i: t.i + 1, key: `v:${t.seg.id}:${t.i + 1}`}; }
+  }
+  const tt = D0.t;
+  let p = [P.x, P.y];
+  if (!e.altKey) {
+    // соседние вершины и направления звеньев за ними — к ним липнет точка под прямым углом
+    const nb = [];
+    if (tt.kind === 'v') {
+      const s = tt.seg, a = s.pts[tt.i - 1], aa = s.pts[tt.i - 2], b = s.pts[tt.i + 1], bb = s.pts[tt.i + 2];
+      nb.push({at: a, dir: aa ? [a[0] - aa[0], a[1] - aa[1]] : (b ? [b[0] - a[0], b[1] - a[1]] : null)});
+      nb.push({at: b, dir: bb ? [bb[0] - b[0], bb[1] - b[1]] : (a ? [b[0] - a[0], b[1] - a[1]] : null)});
+    } else {
+      for (const s of S.v.segs) {
+        if (s.from === tt.node.id && s.pts.length > 1) { const b = s.pts[1], bb = s.pts[2]; nb.push({at: b, dir: bb ? [bb[0] - b[0], bb[1] - b[1]] : null}); }
+        if (s.to === tt.node.id && s.pts.length > 1) { const a = s.pts[s.pts.length - 2], aa = s.pts[s.pts.length - 3]; nb.push({at: a, dir: aa ? [a[0] - aa[0], a[1] - aa[1]] : null}); }
+      }
+    }
+    const sn = snapOrtho(p, nb, 10 * metersPerPx(e));
+    p = sn.p; D0.guide = sn.guide;
+  } else D0.guide = null;
+  const changed = [];
+  if (tt.kind === 'v') { tt.seg.pts[tt.i] = p; changed.push(tt.seg); }
+  else {
+    tt.node.xy = p;
+    for (const s of S.v.segs) {
+      if (s.from === tt.node.id) { s.pts[0] = p.slice(); changed.push(s); }
+      if (s.to === tt.node.id) { s.pts[s.pts.length - 1] = p.slice(); changed.push(s); }
+    }
+  }
+  D0.changed = new Set([...(D0.changed || []), ...changed]);
+  afterGeom(S.v, changed, {light: true});
+  if (!E.raf) E.raf = requestAnimationFrame(() => { E.raf = 0; editRedraw({light: true}); });
+}
+function editUp(e, el) {
+  el.onpointermove = el.onpointerup = el.onpointercancel = null;
+  const D0 = E.drag; E.drag = null;
+  if (!D0) return;
+  if (!D0.moved) { E.sel = D0.t.kind === 'm' ? null : D0.t; editHandles(true); editPanel(); return; }
+  E.sel = D0.t.kind === 'v' ? D0.t : null;
+  afterGeom(S.v, [...D0.changed]);
+  editRedraw();
+}
+function editDelete(t = E.sel) {
+  if (!t || t.kind !== 'v') { if (t?.kind === 'n') toast('Камеру и узел удалить нельзя: их задаёт схема сети. Удалить можно только поворот на трубе', 'info', 3500); return; }
+  beginChange();
+  remember(S.v, [t.seg]);
+  t.seg.pts.splice(t.i, 1);
+  E.sel = null;
+  afterGeom(S.v, [t.seg]);
+  editRedraw();
+}
+function editUndo() { if (!E.undo.length) return; E.redo.push(snapGeom(S.v)); restoreGeom(S.v, E.undo.pop()); E.sel = null; editRedraw(); }
+function editRedo() { if (!E.redo.length) return; E.undo.push(snapGeom(S.v)); restoreGeom(S.v, E.redo.pop()); E.sel = null; editRedraw(); }
+function editReset() {
+  const v = S.v, st = v?.edit; if (!st) return;
+  beginChange();
+  for (const s of v.segs) { const o = st.orig.get(s.id); if (o) s.pts = o.pts.map(q => q.slice()); }
+  for (const n of v.nodes) { const o = st.nodes.get(n.id); if (o) n.xy = o.slice(); }
+  afterGeom(v, v.segs.filter(s => st.orig.has(s.id)));
+  E.sel = null;
+  editRedraw();
+  toast('Трассы варианта возвращены как их построил сервис. «Отменить» вернёт правки', 'ok', 3500);
+}
+// ---------- сохранение в браузере и выгрузка ----------
+const editKey = () => 'edits:' + (S.ds?.name || S.ds?.title || 'local');
+function saveEdits() {
+  const all = {}, ll = q => S.model.proj.ll(q[0], q[1]);
+  for (const v of S.model.variants) {
+    const segs = {}, nodes = {};
+    for (const s of v.segs) if (s.edited) segs[s.id] = s.pts.map(ll);
+    for (const n of v.nodes) if (n.edited) nodes[n.id] = ll(n.xy);
+    if (Object.keys(segs).length || Object.keys(nodes).length) all[v.id] = {segs, nodes};
+  }
+  if (Object.keys(all).length) store.set(editKey(), all); else { try { localStorage.removeItem('hn3d.' + editKey()); } catch (e) { /* приватный режим */ } }
+}
+function loadEdits() {
+  const all = store.get(editKey(), null);
+  if (!all) return;
+  let n = 0;
+  for (const v of S.model.variants) {
+    const e = all[v.id]; if (!e) continue;
+    const xy = c => S.model.proj.xy(c), st = editState(v), changed = new Set();
+    for (const nd of v.nodes) if (e.nodes[nd.id]) { st.nodes.set(nd.id, nd.xy.slice()); nd.xy = xy(e.nodes[nd.id]); }
+    for (const s of v.segs) if (e.segs[s.id]) { remember(v, [s]); s.pts = e.segs[s.id].map(xy); changed.add(s); n++; }
+    afterGeom(v, [...changed]);
+  }
+  if (n) { viewer.buildNetwork(); renderSummary(); renderOks(); renderCx(); renderVariants(); toast(`Открыты ваши ручные правки: ${n} ${plural(n, 'участок', 'участка', 'участков')}. Сбросить — «Правка» → «Сбросить правки»`, 'info', 6000); }
+}
+function editDownload() {
+  if (!S.raw) return toast('Результата трассировки нет', 'info');
+  let raw = S.raw;
+  for (const v of S.model.variants) {
+    if (!editedCount(v)) continue;
+    raw = patchOutput(raw, S.model, v, {segs: new Set(v.segs.filter(s => s.edited).map(s => s.id)), nodes: new Set(v.nodes.filter(n => n.edited).map(n => n.id))}, S.model.proj);
+  }
+  download(new Blob([raw], {type: 'application/geo+json'}), `${S.ds?.name || 'result'}-с-правками.geojson`);
+  toast('Скачан результат с правками. Проверить по правилам: make validate IN=<исходные> OUT=<этот файл>', 'ok', 6000);
+}
+$('#editBtn').onclick = () => setEdit(!E.on);
+
 // ---------- тема: светлая, тёмная или как в системе ----------
 const darkMQ = matchMedia('(prefers-color-scheme: dark)');
 function applyTheme() {
@@ -1491,7 +1892,7 @@ function applyTheme() {
 }
 function themeMenu(open) { $('#themeDd .menu').hidden = !open; $('#themeBtn').setAttribute('aria-expanded', String(open)); }
 $('#themeBtn').onclick = () => themeMenu($('#themeDd .menu').hidden);
-$('#themeSeg').onclick = e => { const b = e.target.closest('button[data-theme]'); if (b) { store.set('theme', b.dataset.theme); applyTheme(); } };
+$('#themeSeg').onclick = e => { const b = e.target.closest('button[data-theme]'); if (!b) return; store.set('theme', b.dataset.theme); if (document.startViewTransition && !calm()) document.startViewTransition(() => applyTheme()); else applyTheme(); };
 darkMQ.addEventListener('change', applyTheme);
 applyTheme();
 
@@ -1528,7 +1929,7 @@ async function start() {
   const want = q.get('ds') !== 'local' && q.get('ds') || store.get('ds', null);
   const d = demos.find(x => x.name === want) || demos[0];
   if (d) return loadDemo(d);
-  $('#loading').hidden = true;
+  fadeHide($('#loading'));
   openDlg(S.server ? 'srv' : 'files');
 }
 booted = true;

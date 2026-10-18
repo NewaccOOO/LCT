@@ -195,6 +195,11 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
   await wait();
   onProgress(0.5, 'Здания к подключению');
 
+  const zonesNear = (a, b, pad = 0) => {
+    const found = new Set();
+    for (const c of cells([Math.min(a[0], b[0]) - pad, Math.min(a[1], b[1]) - pad], [Math.max(a[0], b[0]) + pad, Math.max(a[1], b[1]) + pad])) for (const z of zones.get(c) || []) found.add(z);
+    return [...found];
+  };
   const zonesAt = (x, y) => (zones.get(Math.floor(x / CELL) * 100003 + Math.floor(y / CELL)) || [])
     .filter(z => x >= z.bbox[0] && x <= z.bbox[2] && y >= z.bbox[1] && y <= z.bbox[3] && inRing(x, y, z.ring));
 
@@ -254,9 +259,10 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
   onProgress(0.6, 'Пересечения с коммуникациями');
   const crossings = [];
   const tiedOf = s => new Set([s.from, s.to].map(id => outById.get(id)?.p.existing_object_id).filter(x => x != null).map(String));
-  for (let si = 0; si < segs.length; si++) {
-    if (si % 500 === 499) { onProgress(0.6 + 0.3 * si / segs.length, `Пересечения: участок ${si} из ${segs.length}`); await wait(); }
-    const s = segs[si], {pts, lens, len, d0, d1, row} = s, tied = tiedOf(s), seen = new Set(), issues = [];
+  // пересечения участка с коммуникациями и проверки глубины; вызывается и после ручной правки трассы
+  const checkSeg = s => {
+    const {pts, lens, len, d0, d1, row} = s, tied = tiedOf(s), seen = new Set(), issues = [], out = [];
+    s.cx = [];
     const slope = Math.abs(d1 - d0) / len;
     // глубины в выходе округлены до мм: на коротком участке это даёт лишнюю тысячную уклона
     if (slope > MAX_SLOPE + 0.0011 / len + 1e-9) issues.push(`уклон ${slope.toFixed(3)} больше ${MAX_SLOPE}`);
@@ -285,7 +291,7 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
           side: over >= under ? 'над' : 'под', gap, need: u.clear, ok,
           above: aboveMax != null && aboveMax >= MIN_DEPTH ? aboveMax : null, below: belowMin, kBelow: belowMin == null ? null : kDepth(belowMin)};
         s.cx.push(c);
-        crossings.push(c);
+        out.push(c);
       }
       // дороги и трамвай: верх не мельче 1,0/1,2 м — концы и середина отрезка
       for (const [q, sq] of [[a, lens[i]], [b, lens[i + 1]], [[(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], (lens[i] + lens[i + 1]) / 2]]) {
@@ -299,8 +305,13 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
     }
     s.cx.sort((p, q) => p.s - q.s);
     s.issues = [...new Set(issues)];
-    if (s.issues.length) crossings.push({seg: s, v: s.v, x: pts[0][0], y: pts[0][1], s: 0, type: 'segment', eid: s.id, ok: false, issues: s.issues});
+    if (s.issues.length) out.push({seg: s, v: s.v, x: pts[0][0], y: pts[0][1], s: 0, type: 'segment', eid: s.id, ok: false, issues: s.issues});
     s.bad = s.issues.length > 0 || s.cx.some(c => c.ok === false);
+    return out;
+  };
+  for (let si = 0; si < segs.length; si++) {
+    if (si % 500 === 499) { onProgress(0.6 + 0.3 * si / segs.length, `Пересечения: участок ${si} из ${segs.length}`); await wait(); }
+    crossings.push(...checkSeg(segs[si]));
   }
 
   // ---------- узлы: глубина и связи ----------
@@ -339,7 +350,7 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
   const count = o => Object.values(o).reduce((a, l) => a + l.length, 0);
   return {
     proj, bbox: Number.isFinite(x0) ? [x0, y0, x1, y1] : [-100, -100, 100, 100],
-    utilities, surfaces, points, oks, variants, segs, nodes, crossings, recon, byInputId, zonesAt,
+    utilities, surfaces, points, oks, variants, segs, nodes, crossings, recon, byInputId, zonesAt, zonesNear, checkSeg,
     hasOutput: fout.length > 0,
     hasAddresses: oks.some(o => o.name) || [...BUILDING_KEYS].some(k => (surfaces[k] || []).some(it => it.p.address)),
     skipped: [...skipped.entries()].sort((a, b) => b[1] - a[1]),

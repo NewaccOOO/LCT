@@ -262,6 +262,46 @@ body.flying #legend, body.flying .exchip { display: none; }
 #drop { position: absolute; inset: 8px; z-index: 35; border: 2px dashed var(--accent); border-radius: var(--r); background: color-mix(in srgb, var(--soft) 85%, transparent); display: grid; place-items: center; text-align: center; font-size: 20px; font-weight: 600; }
 #drop small { font-size: 14px; font-weight: 400; color: var(--muted); }
 
+/* ---------- ручная правка трассы ---------- */
+/* точки поверх сцены: круг — поворот, квадрат — камера или узел, серые закреплены, «+» — добавить поворот */
+.editlayer { position: absolute; inset: 0; pointer-events: none; z-index: 5; overflow: hidden; }
+.editguide { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.eh { position: absolute; left: 0; top: 0; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: var(--float); box-shadow: 0 0 0 2px var(--accent), 0 1px 4px rgba(0,0,0,.35); pointer-events: auto; cursor: grab; touch-action: none; transition: box-shadow .1s ease-out, background-color .1s ease-out; }
+.eh::before { content: ""; position: absolute; inset: -9px; border-radius: 50%; }
+.eh:hover { box-shadow: 0 0 0 3px var(--accent), 0 2px 8px rgba(0,0,0,.35); }
+.eh:active { cursor: grabbing; }
+.eh.n { width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 4px; }
+.eh.sel { background: var(--accent); box-shadow: 0 0 0 3px var(--float), 0 0 0 5px var(--accent); }
+.eh.lock { background: var(--card2); box-shadow: 0 0 0 2px var(--muted); cursor: not-allowed; }
+.eh.m { width: 14px; height: 14px; margin: -7px 0 0 -7px; background: var(--accent); box-shadow: 0 0 0 2px var(--float); opacity: .55; }
+.eh.m::after { content: "+"; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font: 600 13px/1 var(--font); }
+.eh.m:hover { opacity: 1; }
+body.editing .labels .lbl.depth { display: none; }
+/* панель правки — слева вверху сцены, чтобы трасса в центре оставалась видна */
+.editbar { left: var(--gap); top: var(--gap); width: min(420px, calc(100% - 2 * var(--gap) - 70px)); padding: 8px 10px 10px; display: grid; gap: 6px; z-index: 8; }
+.editbar .eb-h { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.editbar .eb-h b { font-size: 15px; font-weight: 500; white-space: nowrap; }
+.editbar .eb-h .mut { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; min-width: 0; }
+.editbar .eb-h .icon { width: 32px; min-height: 32px; flex: none; box-shadow: none; }
+.editbar .eb-h .icon svg { width: 18px; height: 18px; }
+.editbar .eb-h .primary { min-height: 32px; flex: none; padding: 4px 12px; }
+.editbar .eb-m { font-size: 13px; color: var(--text2); font-variant-numeric: tabular-nums; }
+.editbar .eb-m i { font-style: normal; } .editbar .eb-m i.up { color: var(--bad-t); } .editbar .eb-m i.down { color: var(--ok-t); }
+.editbar .eb-a { display: flex; flex-wrap: wrap; gap: 6px; }
+.editbar .eb-a button { min-height: 30px; padding: 3px 10px; font-size: 13px; }
+.editbar .eb-sum { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 3px 8px; font-size: 13px; box-shadow: none; justify-self: start; }
+.editbar .eb-sum.bad { background: var(--bad-s); color: var(--bad-t); } .editbar .eb-sum.warn { background: var(--warn-s); color: var(--warn-t); }
+.editbar .eb-sum .caret { margin-left: 2px; }
+.editbar .eb-p { display: grid; gap: 2px; max-height: 140px; overflow: auto; }
+.editbar .iss { display: flex; align-items: center; gap: 8px; text-align: left; min-height: 28px; padding: 3px 6px; font-size: 13px; box-shadow: none; border-radius: var(--r-s); color: var(--text); }
+.editbar .dot { width: 8px; height: 8px; flex: none; border-radius: 50%; display: inline-block; }
+.editbar .bad .dot { background: var(--bad); } .editbar .warn .dot { background: var(--warn); } .editbar .ok .dot { background: var(--ok); }
+.editbar .iss.ok { color: var(--ok-t); min-height: 24px; }
+.editbar .eb-hint { font-size: 12.5px; color: var(--muted); line-height: 1.4; }
+.editbar .eb-hint .link { background: none; box-shadow: none; min-height: 0; padding: 0 0 0 6px; color: var(--accent); font-size: 12.5px; }
+.editbar .eb-hint .more { margin-top: 6px; color: var(--text2); background: var(--card); border-radius: var(--r-s); padding: 8px 10px; }
+body.editing .coach, body.editing .camchip { display: none !important; }
+
 /* ---------- подписи в 3D ---------- */
 /* подписи на сцене — маленькие таблетки, как подписи организаций на карте; цветная обводка — смысл подписи */
 .lbl { font-size: 12px; padding: 3px 8px; border-radius: var(--r-s); background: var(--float); box-shadow: var(--shadow); color: var(--text); white-space: nowrap; transform-origin: bottom center; }
@@ -286,7 +326,7 @@ body.flying #legend, body.flying .exchip { display: none; }
 .phead .legend .sw { margin-left: 8px; }
 .phead button { min-height: 32px; }
 #pc { flex: 1; width: 100%; min-height: 0; cursor: crosshair; }
-#profile.min { height: auto !important; }
+#profile.min { height: auto; }
 #profile.min #pc, #profile.min .grip, #profile.min .legend { display: none; }
 #profile.min .phead { padding-bottom: 6px; }
 #pTitle { cursor: pointer; }
@@ -391,6 +431,7 @@ table.wrap td:last-child { white-space: normal; }
   .coach { left: 8px; right: 8px; width: auto; top: 8px; padding: 10px 12px; }
   .coach .cg { grid-template-columns: auto 1fr; font-size: 12.5px; gap: 4px 10px; margin: 6px 0 8px; }
   .exchip { left: 8px; bottom: 30px; }
+  .editbar { left: 8px; right: 8px; width: auto; top: 8px; }
   .variants button { display: none; }
   #varSel { display: block; }
   body.flying #profile { display: none; }
@@ -401,6 +442,28 @@ table.wrap td:last-child { white-space: normal; }
   .sugg button { flex-direction: column; gap: 0; }
   #legend { bottom: 62px; }
   .helpgrid { grid-template-columns: 1fr; }
+}
+
+/* ---------- плавность: всё, что появляется, проявляется; всё, что сдвигается, едет ---------- */
+@keyframes popIn { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
+@keyframes fadeIn { from { opacity: 0; } }
+@keyframes riseIn { from { opacity: 0; transform: translateY(8px); } }
+@keyframes dlgIn { from { opacity: 0; transform: translateY(10px) scale(.98); } }
+.menu:not([hidden]), .sugg:not([hidden]) { animation: popIn .14s ease-out; transform-origin: top; }
+.editbar:not([hidden]), .coach:not([hidden]) { animation: popIn .18s ease-out; }
+#measure:not([hidden]), #player:not([hidden]), #drop:not([hidden]), .camchip:not([hidden]) { animation: fadeIn .18s ease-out; }
+.pane:not([hidden]), #legBody:not([hidden]), .eb-p, .eb-hint .more, details[open] > :not(summary) { animation: fadeIn .16s ease-out; }
+.toast { animation: riseIn .2s ease-out; }
+dialog[open] { animation: dlgIn .2s cubic-bezier(.2,.7,.2,1); }
+dialog[open]::backdrop { animation: fadeIn .2s ease-out; }
+.eh { animation: fadeIn .15s ease-out; }
+#tip:not([hidden]) { animation: fadeIn .1s ease-out; }
+#profile { transition: margin-right .2s ease; }
+.tabs button::after { transition: background-color .15s ease-out; }
+.seg button, .filters button, .item { transition: background-color .12s ease-out, color .12s ease-out, box-shadow .12s ease-out; }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: .25s; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 
 /* ---------- сенсорный экран: цели под палец не меньше 44 px, как в рекомендациях Apple ---------- */
@@ -427,6 +490,8 @@ table.wrap td:last-child { white-space: normal; }
   p.touch { display: block; }
   .kbm { display: none !important; }
   .exchip { min-height: 36px; }
+  .eh { width: 22px; height: 22px; margin: -11px 0 0 -11px; } .eh.n { width: 24px; height: 24px; margin: -12px 0 0 -12px; } .eh.m { width: 22px; height: 22px; margin: -11px 0 0 -11px; opacity: .7; }
+  .eh::before { inset: -10px; }
   #legend > button { min-height: 40px; }
   #legend { bottom: 76px; }
 }
