@@ -6,7 +6,7 @@ import {ViewCube} from './viewcube.js';
 import {Profile} from './profile.js';
 import {buildScene, routeTo, branchEnd, pointAt, segName, nodeName, UTILITIES, SURFACES, NODE_TYPES, BUILDING_KEYS} from './model.js';
 import {$, $$, fmt, rub, meters, esc, clamp, store, toast, plural} from './util.js';
-import {relen, planIssues, jointIssue, extraBends, snapOrtho, patchOutput, surroundings, turnAngle, toDxf, utmZone, sameBuilding, score as editScore} from './edit.js';
+import {relen, planIssues, jointIssue, extraBends, snapOrtho, patchOutput, surroundings, turnAngle, toDxf, cp1251, utmZone, sameBuilding, score as editScore} from './edit.js';
 
 const D = Math.PI / 180;
 const S = {
@@ -56,6 +56,21 @@ function morph(el, change, {hide = false} = {}) {
   el.style.overflow = 'hidden';
   const an = el._anim = el.animate([{height: from + 'px'}, {height: to + 'px'}], {duration: 220, easing: 'cubic-bezier(.2,.7,.2,1)'});
   an.onfinish = an.oncancel = () => { if (el._anim === an) { el._anim = null; el.style.overflow = ''; if (hide) el.hidden = true; } };
+}
+// переключатели-сегменты и вкладки: выделение (плашка, линия) едет к выбранному, а не прыгает
+function slideMark(box) {
+  const on = box.querySelector(':scope > button.on');
+  if (!on || !on.offsetWidth) return;
+  box.style.setProperty('--sx', on.offsetLeft + 'px');
+  box.style.setProperty('--sw', on.offsetWidth + 'px');
+  if (!box.classList.contains('slide')) { box.classList.add('slide', 'still'); requestAnimationFrame(() => requestAnimationFrame(() => box.classList.remove('still'))); }
+}
+{
+  const seen = new WeakSet(), ro = new ResizeObserver(es => es.forEach(e => slideMark(e.target)));
+  const scan = () => document.querySelectorAll('.seg, .tabs').forEach(b => { if (!seen.has(b)) { seen.add(b); ro.observe(b); } slideMark(b); });
+  new MutationObserver(ms => { for (const m of ms) if (m.type === 'attributes' ? m.target.parentElement?.matches('.seg, .tabs') : m.target.querySelector?.('.seg, .tabs') || m.target.matches?.('.seg, .tabs')) { scan(); return; } })
+    .observe(document.body, {subtree: true, attributes: true, attributeFilter: ['class'], childList: true});
+  addEventListener('load', scan); setTimeout(scan, 0);
 }
 // карточка выезжает справа (на телефоне — снизу) и уезжает обратно
 function slideCard(el, show) {
@@ -290,7 +305,7 @@ function verdict(M) {
   if (du) parts.push(du > 0 ? `подключает на ${du} ${plural(du, 'здание', 'здания', 'зданий')} больше` : `подключает на ${-du} ${plural(-du, 'здание', 'здания', 'зданий')} меньше`);
   return `<div class="verdict"><b>Вариант ${esc(b.id)}</b> лучше варианта ${esc(n.id)} на ${fmt(n.score - b.score, 2)} по S: ${parts.join(', ') || 'показатели близки'}.</div>`;
 }
-const S_FORMULA = 'S = 0,7 × стоимость / 25 млн ₽ + 0,3 × длина / 100 м — чем меньше, тем лучше';
+const S_FORMULA = 'S = 0,7 × стоимость / 25 млн ₽ + 0,3 × длина / 100 м — чем меньше, тем лучше. В стоимость входит штраф за неподключённые здания, поэтому правка трассы меняет S в тысячных';
 function renderSummary() {
   const M = S.model, v = S.v, el = $('#t-sum');
   if (!v) {
@@ -507,7 +522,7 @@ function renderLegend() {
   if (E.on) rows.push('<div class="h">Правка трассы</div>', sw('var(--ok)', true) + '<span>выноска: норма соблюдена</span>', sw('var(--warn)', true) + '<span>выноска: запас меньше 1 м</span>', sw('var(--bad)', true) + '<span>выноска: нарушение</span>', sw('var(--muted)', true) + '<span>выноска: справочно, спецпереход</span>', sw(viewer.th.ghost, true) + '<span>трасса до правки</span>');
   $('#legBody').innerHTML = rows.join('');
 }
-$('#legBtn').onclick = () => { const b = $('#legBody'); b.hidden = !b.hidden; $('#legBtn').setAttribute('aria-expanded', String(!b.hidden)); $('#legBtn .caret').textContent = b.hidden ? '▸' : '▾'; store.set('legend', !b.hidden); };
+$('#legBtn').onclick = () => { const b = $('#legBody'); morph($('#legend'), () => { b.hidden = !b.hidden; }); $('#legBtn').setAttribute('aria-expanded', String(!b.hidden)); $('#legBtn .caret').textContent = b.hidden ? '▸' : '▾'; store.set('legend', !b.hidden); };
 
 function setEx(ex) {
   const P = rig.center(), oldEx = viewer.ex;
@@ -1717,13 +1732,13 @@ function editAffected(v) {
   return [...ids].map(id => { const r = routeTo(v, id); const was = r.segs.reduce((t, s) => t + (st.orig.get(s.id)?.len ?? s.len), 0); return {id, d: r.len - was}; });
 }
 // к месту нарушения: ближе, участок подсвечен, на месте — метка
-function editGoto(i) {
-  const dist = Math.max(18, Math.min(rig.pos.z * 0.6, 45)), f = editFree(), mpp = 2 * dist * Math.tan(viewer.camera.fov * D / 2) / f.r.height;
+function editGoto(i, {dist = Math.max(18, Math.min(rig.pos.z * 0.6, 45)), pick = true} = {}) {
+  const f = editFree(), mpp = 2 * dist * Math.tan(viewer.camera.fov * D / 2) / f.r.height;
   const ox = (f.left + f.right) / 2 - f.r.width / 2, oy = (f.top + f.bottom) / 2 - f.r.height / 2, cy0 = Math.cos(rig.yaw), sy0 = Math.sin(rig.yaw);
   rig.lookAtFrom(new THREE.Vector3(i.x - mpp * (ox * cy0 - oy * sy0), i.y - mpp * (-ox * sy0 - oy * cy0), 0), rig.yaw, -90 * D, dist, 500);
   // ближайшая точка правки — выбрана: у неё видны расстояния и нормы
   const t = (E.targets || []).filter(t => t.kind !== 'm' && !t.lock).map(t => ({t, d: Math.hypot(t.p[0] - i.x, t.p[1] - i.y)})).sort((a, b) => a.d - b.d)[0];
-  if (t && t.d < 6) { E.sel = t.t; editHandles(true); editPanel(); }
+  if (pick && t && t.d < 6) { E.sel = t.t; editHandles(true); editPanel(); }
   viewer.marker('selpt', new THREE.Vector3(i.x, i.y, 0.5), {r: 0.9, color: PALETTE.problem});
   if (S.route && i.seg && S.route.segs.includes(i.seg)) viewer.highlight(S.route, i.seg);
 }
@@ -1751,7 +1766,8 @@ function editPanel() {
   const elsewhere = editAffected(v).filter(a => a.id !== R?.end && !others.some(o => o.id === a.id));
   const unit = s => `${segName(s).replace('Участок', 'уч.')}: Ду ${s.p.diameter}, ${rub(s.p.cost / Math.max(0.01, s.len))}/м${s.special ? ', спецпереход' : ''}`;
  const selp = E.sel?.kind === 'n' ? `${editNodeName(E.sel.node)} — ${E.sel.node.type === 'technical_node' ? (canStraighten(E.sel) ? 'узел: удалить нельзя, излом можно убрать' : 'узел на прямой: удалять нечего, его можно сдвинуть') : 'камера: двигается вместе с трубами'}` : E.sel?.kind === 'v' ? `поворот внутри участка · ${unit(E.sel.seg)}` : '';
-  const html = `${compact ? `<button id="ebGrip" class="eb-grip" aria-expanded="${!E.mini}" title="${E.mini ? 'Развернуть панель правки' : 'Свернуть панель правки'}"><span></span></button>` : ''}<div class="eb-h"><b>Правка трассы</b><span class="mut">${R ? esc(R.endName || nodeLabel(R.end)) : 'выберите здание или трубу'}</span><span class="sp"></span>
+  const miniBad = E.mini && compact && fb ? `<span class="eb-minibad" title="Нарушений от правки: ${fb}">${fb}</span>` : '';
+  const html = `${compact ? `<button id="ebGrip" class="eb-grip" aria-expanded="${!E.mini}" title="${E.mini ? 'Развернуть панель правки' : 'Свернуть панель правки'}"><span></span></button>` : ''}<div class="eb-h"><b>Правка трассы</b>${miniBad}<span class="mut">${R ? esc(R.endName || nodeLabel(R.end)) : 'выберите здание или трубу'}</span><span class="sp"></span>
       <button id="ebUndo" class="icon" ${E.undo.length ? '' : 'disabled'} title="Отменить (Ctrl Z)" aria-label="Отменить"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
       <button id="ebRedo" class="icon" ${E.redo.length ? '' : 'disabled'} title="Вернуть (Ctrl Shift Z)" aria-label="Вернуть"><svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
       <button id="ebDone" class="primary" title="Закончить правку (Esc). Правки сохраняются в браузере">Готово</button></div>
@@ -1767,7 +1783,7 @@ function editPanel() {
     ${E.confirm === 'reset' ? `<div class="eb-conf"><span>Вернуть как построил сервис:</span>${R && R.segs.some(s => s.edited) ? `<button id="ebRR">эту трассу (${R.segs.filter(s => s.edited).length} уч.)</button>` : ''}<button id="ebRA">весь вариант (${n} уч.)</button><button id="ebRC" class="link">отмена</button></div>` : ''}
     <div class="eb-a"><button id="ebReset" ${n ? '' : 'disabled'} title="Вернуть трассу или весь вариант как построил сервис">Сбросить правки${mineEdited.length && mineEdited.length === n ? '' : '…'}</button>
       <button id="ebSave" ${n ? '' : 'disabled'} title="GeoJSON в формате сервиса с вашими правками (WGS84)">Скачать с правками</button>
-      <button id="ebDxf" title="Трассы для AutoCAD/Civil 3D: DXF в метрах UTM 37N, как у сервиса">DXF</button></div>
+      <button id="ebDxf" title="Трассы для AutoCAD/Civil 3D: DXF в метрах UTM зоны набора, Z — глубина; нарушения правки — слой ISSUES">DXF</button></div>
     ${!compact || E.help ? '<div class="eb-leg" aria-label="Обозначения"><span><i class="lg n"></i>узел: стык участков (поворот, камера)</span><span><i class="lg v"></i>поворот внутри участка</span><span><i class="lg l"></i>закреплено</span><span><i class="lg m"></i>добавить поворот</span><span><i class="lg g"></i>как было</span><span><i class="lg c ok"></i>норма</span><span><i class="lg c near"></i>запас &lt; 1 м</span><span><i class="lg c bad"></i>нарушение</span><span><i class="lg c info"></i>справочно, допустимо</span></div>' : ''}
     <div class="eb-hint">${compact && !E.help ? '' : touch ? 'Тяните точку пальцем · коснитесь — выбрать · «+» — новый поворот · «+N» — рядом ещё точки, коснитесь — приблизить' : 'Тяните точку · двойной щелчок — удалить поворот или убрать излом · Alt — без привязки к прямым углам'}<button id="ebHelp" class="link" aria-expanded="${!!E.help}">${E.help ? 'скрыть' : 'подробнее'}</button>
       ${E.help ? `<div class="more"><b>Справочно (серые выноски)</b> — сближение допустимо: в зоне сети или дороги труба идёт спецпереходом (в футляре), а у его концов норма действует только вне круга «норма + 0,1 м» у точки пересечения (правила расчёта, раздел 4). Серые подписи «в исходной трассе» — так проложил сервис спецпереходом. <b>Правки</b> хранятся в этом браузере; коллеге передайте «Скачать с правками» — файл открывается через «Файл → Открыть данные» вместе с исходными данными.<br><b>Квадрат</b> — узел, стык двух участков: так сервис ставит повороты трассы («поворот N») и границы, где меняется глубина, Ду или начинается спецпереход; <b>камера</b> — тоже квадрат. <b>Круг</b> — излом внутри участка (его добавляете вы «+»): тяните, удаляйте. Их двигают вместе со всеми трубами, которые в них сходятся; удалить нельзя, но излом в узле можно убрать. <b>Серые</b> закреплены: ввод в здание и врезка в существующую сеть. Звенья липнут к прямым углам — пунктир показывает, к чему.<br>Расстояния до зданий, зон, дорог и сетей — от стенки канала трубы, нормы — из правил расчёта: здания 5/7/9 м по Ду, зоны запрета 1 м, метро 10 м, дороги и трамвай 1,5 м, газопровод и кабель 2 м, водопровод 1,5 м, канализация и теплосеть 1 м; ближе к дороге или сети можно только спецпереходом — его ставит пересчёт на сервере. Угол поворота — отклонение от прямой, не больше 90°; дорогу трасса переходит под углом не меньше 45°.<br>Длина, стоимость (пропорционально длине) и ${S_FORMULA}. Правки хранятся в этом браузере; «Скачать с правками» — файл в формате сервиса, в нём отмечены правленые участки и их нарушения.
@@ -1779,21 +1795,22 @@ function editPanel() {
   el.innerHTML = html;
   $('#ebDone').onclick = () => setEdit(false);
   el.classList.toggle('mini', !!E.mini && compact);
+  el.classList.toggle('low', compact && el.getBoundingClientRect().top > $('#view').getBoundingClientRect().top + 100);
   if ($('#ebGrip')) {
     const g = $('#ebGrip');
-    g.onclick = () => { E.mini = !E.mini; E.panelHtml = null; editPanel(); };
+    g.onclick = () => { E.mini = !E.mini; E.panelHtml = null; morph(el, () => editPanel()); };
     // смахнуть вниз — свернуть, вверх — развернуть
     g.onpointerdown = ev => { g._y = ev.clientY; g.setPointerCapture(ev.pointerId); };
-    g.onpointerup = ev => { const dy = ev.clientY - (g._y ?? ev.clientY); g._y = null; if (Math.abs(dy) > 24) { E.mini = dy > 0; E.panelHtml = null; editPanel(); ev.preventDefault(); g._skip = true; setTimeout(() => { g._skip = false; }, 0); } };
+    g.onpointerup = ev => { const dy = ev.clientY - (g._y ?? ev.clientY); g._y = null; if (Math.abs(dy) > 24) { E.mini = el.classList.contains('low') ? dy > 0 : dy < 0; E.panelHtml = null; morph(el, () => editPanel()); ev.preventDefault(); g._skip = true; setTimeout(() => { g._skip = false; }, 0); } };
     g.addEventListener('click', ev => { if (g._skip) ev.stopImmediatePropagation(); }, true);
   }
-  $('#ebHelp').onclick = () => { E.help = !E.help; editPanel(); };
+  $('#ebHelp').onclick = () => { E.help = !E.help; morph(el, () => editPanel()); };
   $('#ebUndo').onclick = () => editUndo();
   $('#ebRedo').onclick = () => editRedo();
   if ($('#ebDel')) $('#ebDel').onclick = () => editDelete();
-  if ($('#ebList')) $('#ebList').onclick = () => { E.listOpen = !open; editPanel(); };
+  if ($('#ebList')) $('#ebList').onclick = () => { E.listOpen = !open; morph(el, () => editPanel()); };
   el.querySelectorAll('[data-goks]').forEach(b => b.onclick = () => { const o = S.model.oks.find(x => String(x.id) === b.dataset.goks); if (o) select({kind: 'oks', ref: o}); });
-  if ($('#ebOld')) $('#ebOld').onclick = () => { E.oldOpen = !E.oldOpen; editPanel(); };
+  if ($('#ebOld')) $('#ebOld').onclick = () => { E.oldOpen = !E.oldOpen; morph(el, () => editPanel()); };
   $('#ebReset').onclick = () => { const all = editedCount(S.v), mine = S.route ? S.route.segs.filter(s => s.edited).length : 0; if (all === mine && mine) return editReset('route'); E.confirm = 'reset'; editPanel(); };
   if ($('#ebRR')) $('#ebRR').onclick = () => editReset('route');
   if ($('#ebRA')) $('#ebRA').onclick = () => editReset('all');
@@ -1804,6 +1821,22 @@ function editPanel() {
   $('#editBtn').classList.toggle('on', E.on);
 }
 const PLAN_EX = 0.02;
+// вертикальный масштаб меняется плавно: группы под землёй сжимаются по высоте за 0,35 с, потом сцена пересобирается
+const EX_GROUPS = ['utilities', 'utilLines', 'existing', 'network', 'netLines', 'overlay', 'ghost', 'drag'];
+function exTween(to, done) {
+  const from = viewer.ex, k1 = to / from;
+  if (calm() || Math.abs(k1 - 1) < 1e-3) { viewer.setExaggeration(to); done(); return; }
+  const t0 = performance.now(), T = 350;
+  const step = () => {
+    const t = Math.min(1, (performance.now() - t0) / T), e = 1 - (1 - t) ** 3, k = 1 + (k1 - 1) * e;
+    for (const g of EX_GROUPS) viewer.g[g].scale.z = k;
+    viewer.redraw();
+    if (t < 1) return requestAnimationFrame(step);
+    for (const g of EX_GROUPS) viewer.g[g].scale.z = 1;
+    viewer.setExaggeration(to); done();
+  };
+  requestAnimationFrame(step);
+}
 function setEdit(on) {
   if (on && !S.v) return toast('Результата трассировки нет: править нечего', 'info');
   E.on = on;
@@ -1819,7 +1852,7 @@ function setEdit(on) {
     // план без перспективного сдвига: трубы и сети на глубине рисуются почти у земли, там же, где точки правки
     // (глубину показывает профиль); на выходе вертикальный масштаб возвращается
     E.ex0 = viewer.ex;
-    viewer.setExaggeration(PLAN_EX); setMinZ(); updateScale(); refreshHighlight();
+    exTween(PLAN_EX, () => { if (!E.on) return; setMinZ(); updateScale(); refreshHighlight(); editHandles(true); });
     // здания — контурами по земле (рисует editPlan), объёмы в перспективе закрывали бы план
     E.bld0 = viewer.opts.buildings; if (E.bld0 === 'solid') viewer.opts.buildings = 'flat';
     viewer.opts.plan = true; viewer.applyOpts();
@@ -1829,14 +1862,14 @@ function setEdit(on) {
   } else {
     viewer.marker('selpt', null);
     rig.noContext = false; rig.lockYaw = false;
-    if (E.ex0 != null) { viewer.setExaggeration(E.ex0); E.ex0 = null; setMinZ(); updateScale(); refreshHighlight(); }
+    if (E.ex0 != null) { const ex0 = E.ex0; E.ex0 = null; exTween(ex0, () => { setMinZ(); updateScale(); refreshHighlight(); }); }
     if (E.bld0) { viewer.opts.buildings = E.bld0; E.bld0 = null; }
     viewer.opts.plan = false; viewer.applyOpts();
     if (E.auto && mapOnly) setMapOnly(false);
     E.auto = false;
     if (S.sel) showProps(S.sel);
     const bad = badCount(editBadOf(S.v));
-    if (!bad) toast('Правки сохранены в этом браузере. Для коллеги и проектного отдела — «Скачать с правками» или DXF', 'ok', 5000);
+    if (!bad && editedCount(S.v)) toast('Правки сохранены в этом браузере. Для коллеги и проектного отдела — «Скачать с правками» или DXF', 'ok', 5000);
     if (bad) toast(`В правках остались нарушения: ${bad}. Они видны в карточке, на «Обзоре», во вкладке «Проблемы» и записываются в файл с правками`, 'info', 7000);
     renderSummary(); renderCx(); renderOks();
   }
@@ -1951,7 +1984,7 @@ function editPlace() {
   // точки не слипаются: ближе 14 px к уже показанной — прячется (выбранная и тащимая — всегда видны),
   // «+» — только на звене длиннее 40 px на экране; приблизьте — появятся все
   // под палец точки стоят не теснее зоны касания (44 px), под мышь — 18 px; спрятанные считаются у ближайшей видимой: «+N»
-  const touch = matchMedia('(pointer: coarse)').matches, close = rig.pos.z < 9, gap = touch ? (close ? 24 : 40) : 18, mgap = touch ? 84 : 44;
+  const touch = matchMedia('(pointer: coarse)').matches, close = rig.pos.z < 9, gap = touch ? (close ? 24 : 40) : (close ? 10 : 18), mgap = touch ? 84 : 44;
   // под панелью правки и плашками точки не видны — значит, и не хватаются пальцем, который тянется к панели
   const cover = ['#editBar', '#exChip', '#cube', '#navR .toolbar'].map(q => $(q)).filter(e => e && !e.hidden).map(e => e.getBoundingClientRect()).filter(q => q.width).map(q => [q.left - r.left - 14, q.top - r.top - 14, q.right - r.left + 14, q.bottom - r.top + 14]);
   const under = c => cover.some(([x0, y0, x1, y1]) => c[0] > x0 && c[0] < x1 && c[1] > y0 && c[1] < y1);
@@ -1982,8 +2015,9 @@ function editPlace() {
     let b = it.el._more;
     if (m && !b) {
       b = it.el._more = document.createElement('button'); b.className = 'emore'; b.title = 'Рядом ещё точки: коснитесь, чтобы приблизить';
-      b.addEventListener('pointerdown', e => { e.stopPropagation(); e.preventDefault(); });
-      b.addEventListener('click', e => { e.stopPropagation(); const t = it.el._t, P = new THREE.Vector3(t.p[0], t.p[1], 0), d = rig.pos.distanceTo(P); rig.lookAtFrom(P, rig.yaw, rig.pitch, Math.max(5, Math.min(d / 2.5, it.el._zoomTo || d)), 450); });
+      b.addEventListener('pointerdown', e => { e.stopPropagation(); e.preventDefault(); if (e.pointerType === 'touch') E.badge = {id: e.pointerId, x: e.clientX, y: e.clientY, el: b}; });
+      b.addEventListener('pointerup', () => { setTimeout(() => { E.badge = null; }, 0); });
+      b.addEventListener('click', e => { e.stopPropagation(); if (b._pinched) { b._pinched = false; return; } const t = it.el._t, d = rig.pos.distanceTo(new THREE.Vector3(t.p[0], t.p[1], 0)); editGoto({x: t.p[0], y: t.p[1]}, {dist: Math.max(5, Math.min(d / 2.5, it.el._zoomTo || d)), pick: false}); });
       $('#editLayer').appendChild(b);
     }
     if (b) {
@@ -2089,7 +2123,8 @@ function editNear() {
     tip.className = 'edittip ' + (top ? (top.level === 'bad' ? 'bad' : 'warn') : 'ok');
     tip.innerHTML = top ? `<span class="dot"></span>${esc(top.text[0].toUpperCase() + top.text.slice(1))}${E.near.n > 1 ? ` <span class="mut">и ещё ${E.near.n - 1}</span>` : ''}`
       : `<span class="dot"></span>Нормы соблюдены${dims.length ? ' · ' + dims.map(d => m1(Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]))).join(' + ') : ''}`;
-    if (shared > 1) tip.innerHTML += `<span class="mut">· участок общий для ${shared} зданий</span>`;
+    if (E.drag.from) { const q = t.kind === 'n' ? t.node.xy : t.seg?.pts[t.i]; if (q) tip.innerHTML += `<span class="mut">сдвиг ${m1(Math.hypot(q[0] - E.drag.from[0], q[1] - E.drag.from[1]))} от места касания</span>`; }
+    if (shared > 1) tip.innerHTML += `<span class="mut">участок общий для ${shared} зданий</span>`;
   } else tip.hidden = true;
 }
 const m1 = x => `${fmt(x, 1)} м`;
@@ -2186,6 +2221,7 @@ function editDown(e) {
   e.stopPropagation(); e.preventDefault();
   if (t.lock) { E.sel = null; toast(t.lock + '. Двигать её нельзя.', 'info', 3000); editHandles(true); return; }
   el.setPointerCapture(e.pointerId);
+  el.classList.add('grab');
   E.drag = {t, x: e.clientX, y: e.clientY, moved: false, guide: null, id: e.pointerId, key0: t.key, touch: e.pointerType === 'touch'};
   // долгое нажатие пальцем на точке — меню действий с ней
   if (E.drag.touch) { const D0 = E.drag; clearTimeout(E.lp); E.lp = setTimeout(() => { if (E.drag === D0 && !D0.moved) { D0.longReady = true; el.classList.add('hold'); } }, 550); }
@@ -2214,6 +2250,7 @@ function editMove(e) {
     D0.skip = moving;
     viewer.buildNetwork({skip: new Set(moving)});
     if (t.kind === 'n' && !editState(S.v).nodes.has(t.node.id)) editState(S.v).nodes.set(t.node.id, t.node.xy.slice());
+    D0.from = (t.kind === 'n' ? t.node.xy : t.kind === 'v' ? t.seg.pts[t.i] : t.p).slice();
     if (t.kind === 'm') { t.seg.pts.splice(t.i + 1, 0, [P.x - D0.d[0], P.y - D0.d[1]]); D0.t = {kind: 'v', seg: t.seg, i: t.i + 1, key: `v:${t.seg.id}:${t.i + 1}`}; }
   }
   const tt = D0.t;
@@ -2258,7 +2295,12 @@ function editCtx(t) {
   const name = t.kind === 'n' ? editNodeName(t.node) : 'поворот внутри участка';
   box.innerHTML = `<div class="h">${esc(name)}</div>${t.kind === 'v' ? '<button data-a="del">Удалить поворот</button>' : ''}${canStraighten(t) ? '<button data-a="del">Убрать излом в узле</button>' : t.kind === 'n' ? `<div class="h">${t.node.type === 'technical_node' ? 'узел на прямой: удалять нечего, его можно сдвинуть' : 'камера двигается вместе с трубами, удалить её нельзя'}</div>` : ''}<button data-a="undo" ${E.undo.length ? '' : 'disabled'}>Отменить последнее</button><button data-a="x">Закрыть</button>`;
   box.hidden = false;
-  box.style.transform = `translate(${Math.max(8, Math.min(vr.width - box.offsetWidth - 8, x - box.offsetWidth / 2)).toFixed(0)}px, ${Math.max(8, y - box.offsetHeight - 30).toFixed(0)}px)`;
+  // меню — в свободном окне карты: не на панели правки и не под инструментами; над точкой, а если сверху тесно — под ней
+  const f = editFree(), w = box.offsetWidth, h = box.offsetHeight, fit = (v, lo, hi) => hi < lo ? lo : Math.max(lo, Math.min(hi, v));
+  const L = f.right - f.left >= w ? f.left : 8, R = f.right - f.left >= w ? f.right - w : vr.width - w - 8;
+  const T = Math.max(8, f.top), B = (f.bottom - T >= h ? f.bottom : vr.height - 8) - h;
+  const by = y - h - 30 >= T ? y - h - 30 : y + 30;
+  box.style.transform = `translate(${fit(x - w / 2, L, R).toFixed(0)}px, ${fit(by, T, B).toFixed(0)}px)`;
   box._armed = false;
   box.onpointerdown = () => { box._armed = true; };
   box.onclick = e => { const b = e.target.closest('button'); if (!b || !box._armed) return; box.hidden = true; if (b.dataset.a === 'del') editDelete(t); if (b.dataset.a === 'undo') editUndo(); };
@@ -2285,7 +2327,7 @@ function editReveal(p) {
 function editCancel() {
   const D0 = E.drag; if (!D0) return;
   const el = E.handles.get(D0.key0);
-  if (el) el.onpointermove = el.onpointerup = el.onpointercancel = null;
+  if (el) { el.onpointermove = el.onpointerup = el.onpointercancel = null; el.classList.remove('grab'); }
   document.body.classList.remove('dragging');
   E.drag = null;
   $('#editTip').hidden = true;
@@ -2301,7 +2343,10 @@ function editHandoff(id, x, y, el) {
 addEventListener('pointerdown', e => {
   if (e.pointerType !== 'touch') return;
   if (E.drag && e.pointerId !== E.drag.id) { const D0 = E.drag, el = E.handles.get(D0.key0); editCancel(); editHandoff(D0.id, D0.lx ?? D0.x, D0.ly ?? D0.y, el); }
+  if (E.badge && e.pointerId !== E.badge.id) { const B = E.badge; E.badge = null; B.el._pinched = true; editHandoff(B.id, B.x, B.y, B.el); }
   const h = e.target.closest?.('.eh, .editctx');
+  const em = e.target.closest?.('.emore');
+  if (em && (touchIds.size || document.body.classList.contains('pinching'))) { e.stopPropagation(); e.preventDefault(); em._pinched = true; editHandoff(e.pointerId, e.clientX, e.clientY, em); }
   if (h?.classList.contains('eh') && (touchIds.size || document.body.classList.contains('pinching'))) { e.stopPropagation(); e.preventDefault(); editHandoff(e.pointerId, e.clientX, e.clientY, h); }
   touchIds.add(e.pointerId);
 }, true);
@@ -2310,6 +2355,7 @@ addEventListener('pointerdown', e => { const m = $('#editCtx'); if (!m.hidden &&
 for (const ev of ['pointerup', 'pointercancel']) addEventListener(ev, e => { if (e.pointerType !== 'touch') return; touchIds.delete(e.pointerId); if (!touchIds.size) document.body.classList.remove('pinching'); }, true);
 function editUp(e, el) {
   el.onpointermove = el.onpointerup = el.onpointercancel = null;
+  el.classList.remove('grab');
   document.body.classList.remove('dragging');
   const D0 = E.drag; E.drag = null;
   if (!D0) return;
@@ -2359,7 +2405,8 @@ function editStraighten(t) {
   n.xy = q; a.pts[a.pts.length - 1] = q.slice(); b.pts[0] = q.slice();
   afterGeom(S.v, [a, b]);
   editRedraw();
-  toast('Излом убран: узел встал на прямую между соседними точками. Сам узел остаётся — в нём меняются параметры трубы', 'ok', 4500);
+  const back = o0 && Math.hypot(o0[0] - q[0], o0[1] - q[1]) < 1e-6;
+  toast(back ? 'Излом убран: узел вернулся на своё место' : 'Излом убран: узел встал на прямую, но в другом месте, чем был, — длины участков по обе стороны изменились. Вернуть точно как было: ↶ или «Сбросить правки»', 'ok', 5500);
 }
 function editDelete(t = E.sel) {
   if (t?.kind === 'n' && canStraighten(t)) return editStraighten(t);
@@ -2440,7 +2487,9 @@ function editDownload() {
 function editDxf() {
   if (!S.v) return toast('Результата трассировки нет', 'info');
   const zone = utmZone(S.model.proj.lon0), name = `${S.ds?.name || 'result'}-v${S.v.id}${editedCount(S.v) ? '-manual-edits' : ''}-utm${zone}n.dxf`;
-  download(new Blob([toDxf(S.v, S.model.proj, {zone, scene: S.model})], {type: 'application/dxf'}), name);
+  const issues = [...new Map(editBadOf(S.v).map(i => [i.text + '|' + i.x.toFixed(1) + '|' + i.y.toFixed(1), i])).values()], nb = badCount(issues);
+  download(new Blob([cp1251(toDxf(S.v, S.model.proj, {zone, scene: S.model, issues}))], {type: 'application/dxf'}), name);
+  if (nb) toast(`В чертеже ${nb} ${plural(nb, 'нарушение', 'нарушения', 'нарушений')} от правки — слой ISSUES (красные круги с текстом). Проектному отделу передайте их вместе с чертежом`, 'info', 9000);
   toast(`Скачан ${name}: координаты UTM ${zone}N (EPSG:326${zone}), метры; Z — верх трубы от поверхности. Слои: HEAT_NEW, HEAT_EDITED (правки), HEAT_SPECIAL, CHAMBERS (камеры K…), LABELS, подложка EXIST_… (сети) и BUILDINGS. В местную систему (МСК) — преобразованием координат в Civil 3D`, 'ok', 9000);
 }
 $('#editBtn').onclick = () => setEdit(!E.on);

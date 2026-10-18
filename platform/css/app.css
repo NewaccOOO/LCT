@@ -29,7 +29,7 @@
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html, body { height: 100%; }
+html, body { height: 100%; overscroll-behavior: none; }   /* свайп вбок по панели не уводит браузер «назад» */
 body { margin: 0; font: 14px/1.4 var(--font); -webkit-font-smoothing: antialiased; background: var(--bg); color: var(--text); overflow: hidden; display: grid; grid-template-rows: var(--hdr) minmax(0, 1fr) var(--st); grid-template-columns: minmax(0, 1fr); }
 button, select, input { font: inherit; color: var(--text); }
 /* кнопки: контур в волосок, радиус 6, обычный вес; выбранная — синий контур на мягком синем; главная — синяя заливка */
@@ -236,6 +236,8 @@ body.propsShown #profile { margin-right: calc(var(--props) + 2 * var(--gap)); }
 #plEnd button { min-height: 32px; padding: 3px 12px; font-size: 13px; }
 body.propsShown #player, body.propsShown #measure { left: calc(50% - var(--props) / 2); }
 body.flying #legend, body.flying .exchip { display: none; }
+/* в правке легенда и плашка масштаба — правее панели правки, чтобы она их не закрывала */
+body.editing #legend, body.editing .exchip { left: calc(2 * var(--gap) + min(420px, 100% - 2 * var(--gap) - 70px)); }
 #pc { touch-action: none; }
 #errBody { margin: 8px 0; }
 #measure { left: 50%; transform: translateX(-50%); top: 12px; display: flex; gap: 12px; align-items: center; font-size: 13.5px; }
@@ -301,9 +303,11 @@ body.editing #legBody { max-height: 34vh; overflow: auto; }
 .eh.n { width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; border-radius: 2px; }
 .eh.sel { background: var(--accent); box-shadow: 0 0 0 2px var(--float), 0 0 0 4px var(--accent); }
 .eh.lock { background: var(--card2); box-shadow: 0 0 0 2px var(--muted); cursor: not-allowed; }
-.eh.m { width: 12px; height: 12px; margin: -6px 0 0 -6px; background: var(--accent); box-shadow: 0 0 0 1.5px var(--float); opacity: .55; }
+.eh.m { width: 14px; height: 14px; margin: -7px 0 0 -7px; background: var(--accent); box-shadow: 0 0 0 1.5px var(--float); opacity: .55; }
 .eh.m::after { content: "+"; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font: 600 11px/1 var(--font); }
 .eh.m:hover { opacity: 1; }
+/* точку взяли — кольцо вокруг сразу: видно, что тянется точка, а не карта */
+.eh.grab { box-shadow: 0 0 0 2px var(--accent), 0 0 0 7px color-mix(in srgb, var(--accent) 22%, transparent); }
 /* палец удержан на точке — отпустите, откроется меню */
 .eh.hold { box-shadow: 0 0 0 2px var(--accent), 0 0 0 9px color-mix(in srgb, var(--accent) 30%, transparent); }
 /* рядом спрятаны точки — «+N», своя кнопка поодаль от точки: касание приближает, точку не выбирает */
@@ -367,6 +371,8 @@ body.dragging .editbar :is(.eb-p, .eb-selp, .eb-conf, .eb-leg, .eb-hint, .eb-els
 /* ручка панели на сенсорном экране: коснуться или смахнуть — свернуть до строки кнопок */
 .editbar .eb-grip { order: -1; justify-self: center; width: 64px; min-height: 22px !important; padding: 0; margin: -6px 0 -2px; box-shadow: none; background: none; display: grid; place-items: center; }
 .editbar .eb-grip span { width: 40px; height: 4px; border-radius: 2px; background: var(--card2); }
+.editbar { touch-action: pan-y; }
+.editbar .eb-minibad { flex: none; min-width: 20px; padding: 0 6px; border-radius: 10px; background: var(--bad); color: #fff; font-size: 12px; line-height: 20px; text-align: center; font-weight: 500; }
 .editbar.mini > :not(.eb-h):not(.eb-grip) { display: none; }
 body.dragging .eh { cursor: grabbing; }
 
@@ -504,6 +510,7 @@ table.wrap td:last-child { white-space: normal; }
   /* телефон и планшет вертикально: панель правки снизу — под большой палец, верх сцены свободен; карточка не нужна */
   .editbar { left: 8px; right: 8px; width: auto; top: auto; bottom: 8px; max-height: 42vh; overflow: auto; overscroll-behavior: contain; }
   .editbar .eb-p { max-height: 20vh; }
+  .en { white-space: normal; max-width: calc(100vw - 110px); }
   /* кнопки «Отменить», «Вернуть», «Готово» — у нижнего края, на месте, сколько бы ни выросла панель */
   .editbar .eb-h { order: 99; position: sticky; bottom: -10px; background: var(--float); padding: 4px 0 2px; }
   body.editing #props { display: none !important; }
@@ -537,6 +544,22 @@ dialog[open]::backdrop { animation: fadeIn .2s ease-out; }
 .tabs button::after { transition: background-color .15s ease-out; }
 .seg button, .filters button, .item { transition: background-color .12s ease-out, color .12s ease-out, box-shadow .12s ease-out; }
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .25s; }
+/* переключатели: в сегменте едет белая плашка, у вкладок — линия; без них (до первого замера) — как раньше */
+.seg, .tabs { position: relative; }
+.seg.slide::before { content: ""; position: absolute; top: 2px; bottom: 2px; left: 0; width: var(--sw); transform: translateX(var(--sx)); background: var(--seg-on); border-radius: var(--rb); box-shadow: 0 1px 4px rgba(0,0,0,.15); transition: transform .22s cubic-bezier(.2,.7,.2,1), width .22s cubic-bezier(.2,.7,.2,1); }
+.seg.slide button { position: relative; z-index: 1; }
+.seg.slide button.on, .seg.slide button.on:hover { background: none; box-shadow: none; }
+.tabs.slide::before { content: ""; position: absolute; bottom: -1px; left: 0; height: 2px; width: var(--sw); transform: translateX(var(--sx)); background: var(--accent); transition: transform .22s cubic-bezier(.2,.7,.2,1), width .22s cubic-bezier(.2,.7,.2,1); }
+.tabs.slide button.on::after { background: transparent; }
+.seg.still::before, .tabs.still::before { transition: none; }
+/* флажки: заливка и галочка проявляются, а не появляются рывком */
+.tog input { appearance: none; -webkit-appearance: none; flex: none; padding: 0; border: 0; border-radius: 4px; background: var(--panel) no-repeat center / 0 0; box-shadow: inset 0 0 0 1.5px var(--muted); cursor: pointer; transition: background-color .15s ease-out, background-size .15s ease-out, box-shadow .15s ease-out; }
+.tog input:checked { background-color: var(--accent); box-shadow: inset 0 0 0 1.5px var(--accent); background-size: 78% 78%; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+/* закрытие — так же плавно, как появление: меню, панель правки, меню точки, подсказки гаснут, а не исчезают */
+.menu, .sugg, .editbar, .editctx, .edittip, .coach, #measure, #player, .camchip, .editnotes, .editguide { transition: opacity .15s ease-out, display .15s allow-discrete, overlay .15s allow-discrete; }
+:is(.menu, .sugg, .editbar, .editctx, .edittip, .coach, #measure, #player, .camchip, .editnotes, .editguide)[hidden] { opacity: 0; }
+.en, .edittip:not([hidden]) { animation: fadeIn .14s ease-out; }
+body.dragging .en, body.dragging .edittip { animation: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
@@ -573,6 +596,7 @@ dialog[open]::backdrop { animation: fadeIn .2s ease-out; }
   .emore { font-size: 12px; line-height: 20px; padding: 0 7px; border-radius: 10px; margin: 0; min-height: 0; }
   .emore::before { inset: -6px; }
   .editbar .eb-hint .link { min-height: 32px; padding: 0 8px; }
+  .editbar .eb-p { max-height: 22vh; }
   /* кнопки правки под палец: не ниже 40 px, отмена и возврат — 44 px с промежутком */
   .editbar .eb-a button, .editbar .eb-selp button, .editbar .eb-sum, .editbar .iss { min-height: 40px; }
   .editbar .eb-h .icon { width: 44px; min-height: 44px; } .editbar .eb-h .primary { min-height: 44px; }
@@ -583,3 +607,5 @@ dialog[open]::backdrop { animation: fadeIn .2s ease-out; }
 }
 /* планшет горизонтально: панель правки уже, сцене больше места */
 @media (pointer: coarse) and (min-width: 901px) { .editbar { width: min(380px, calc(100% - 2 * var(--gap) - 70px)); } }
+@media (pointer: coarse) and (min-width: 901px) { body.editing #legend, body.editing .exchip { left: calc(2 * var(--gap) + min(380px, 100% - 2 * var(--gap) - 70px)); } }
+@media (max-width: 900px) { body.editing #legend, body.editing .exchip { left: 8px; } }

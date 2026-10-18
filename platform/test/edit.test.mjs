@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {buildScene} from '../js/model.js';
-import {planIssues, jointIssue, extraBends, snapOrtho, surroundings, patchOutput, relen, score, buildingGap, turnAngle, utm, utmZone, toDxf} from '../js/edit.js';
+import {planIssues, jointIssue, extraBends, snapOrtho, surroundings, patchOutput, relen, score, buildingGap, turnAngle, utm, utmZone, toDxf, cp1251} from '../js/edit.js';
 
 const raw = n => readFileSync(new URL(`../demo/${n}`, import.meta.url), 'utf8');
 const box = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
@@ -52,7 +52,7 @@ test('planIssues: здание, зона запрета, дорога, пово�
   assert.deepEqual(planIssues(stub({zones: [road]}), seg([[0, -10], [0, 10]])), []);
   const r90 = planIssues(stub({zones: [road]}), seg([[0, -10], [0, 10]]), null, {lines: true});
   assert.equal(r90[0].level, 'bad');
-  assert.match(r90[0].text, /обычной прокладкой: нужен спецпереход/);
+  assert.match(r90[0].text, /обычной прокладкой: уведите трассу или пересеките одним прямым звеном под 45–90°/);
   assert.deepEqual(planIssues(stub({zones: [road]}), seg([[0, -10], [0, 10]], 150, {special: true}), null, {lines: true}), []);
   // вдоль дороги ближе 1,5 м от стенки — нарушение вне спецперехода; у конца спецперехода — допустимо
   const along = seg([[-20, 4.5], [20, 4.5]]);
@@ -231,6 +231,10 @@ test('UTM 37N как у сервиса и DXF для AutoCAD', async () => {
   assert.ok(dxf.includes('\r\nK20\r\n'));
   const bg = toDxf(v, sc.proj, {scene: sc});
   assert.ok(bg.includes('\r\nEXIST_GAS_PIPELINE\r\n') && bg.includes('\r\nBUILDINGS\r\n'));
+  // нарушения правки — слой ISSUES; кириллица — в Windows-1251, как объявлено в заголовке
+  const wi = toDxf(v, sc.proj, {issues: [{x: 0, y: 0, text: 'ближе 5 м к зданию: 3,1 м'}]});
+  assert.ok(wi.includes('$DWGCODEPAGE\r\n3\r\nANSI_1251') && wi.includes('\r\nISSUES\r\n') && wi.includes('ближе 5 м к зданию: 3,1 м'));
+  assert.deepEqual([...cp1251('Ду №5')], [0xC4, 0xF3, 0x20, 0xB9, 0x35]);
   assert.ok(dxf.startsWith('0\r\nSECTION'));
   assert.ok(dxf.trimEnd().endsWith('EOF'));
   assert.equal(dxf.split('\r\nPOLYLINE\r\n').length - 1, v.segs.length);

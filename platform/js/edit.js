@@ -193,7 +193,7 @@ export function planIssues(scene, s, own = null, {lines = false, tied = null, sp
         continue;
       }
       if (o.kind !== 'line') {
-        if (o.d < o.need - 0.05) add('bad', o.cross ? `проходит через ${thr}` : o.d < 0.01 ? `задевает ${thr}: ближе ${o.need} м` : `ближе ${o.need} м к ${to}: ${m1(o.d)} м`, o.p, o);
+        if (o.d < o.need - 0.05) add('bad', o.cross ? `проходит через ${thr}` : o.d < 0.01 ? `задевает ${thr}: 0 м от стенки канала, нужно ≥ ${o.need} м` : `ближе ${o.need} м к ${to}: ${m1(o.d)} м`, o.p, o);
         continue;
       }
       // переход дороги — одним прямым участком под углом не меньше 45° к её краю
@@ -207,7 +207,7 @@ export function planIssues(scene, s, own = null, {lines = false, tied = null, sp
         if (inside > cap) add('bad', `спецпереход идёт ${m1(inside)} м в зоне сети (${name}): пересекать её нужно поперёк, не острее 45°`, o.p, o);
       }
       if (s.special || !lines) continue;
-      if (o.cross) add('bad', `пересекает ${thr} обычной прокладкой: нужен спецпереход, его ставит пересчёт на сервере`, o.p, o);
+      if (o.cross) add('bad', `пересекает ${thr} обычной прокладкой: уведите трассу или пересеките одним прямым звеном под 45–90° — футляр спецперехода ставит пересчёт на сервере`, o.p, o);
       else if (o.d < o.need - 0.05 && !nearSpecial(o, specials, dn)) add('bad', `ближе ${String(o.need).replace('.', ',')} м к ${to} вне спецперехода: ${m1(o.d)} м`, o.p, o);
     }
   }
@@ -333,8 +333,8 @@ export function utm(lon, lat, zone = 37) {
  * LABELS — номер участка, Ду и длина. Текст латиницей: так его открывает любая версия AutoCAD.
  */
 export const utmZone = lon => Math.floor((lon + 180) / 6) + 1;
-export function toDxf(variant, proj, {zone = utmZone(proj.lon0), scene = null} = {}) {
-  const out = ['0', 'SECTION', '2', 'HEADER', '9', '$ACADVER', '1', 'AC1009', '9', '$INSUNITS', '70', '6', '0', 'ENDSEC', '0', 'SECTION', '2', 'ENTITIES'];
+export function toDxf(variant, proj, {zone = utmZone(proj.lon0), scene = null, issues = []} = {}) {
+  const out = ['0', 'SECTION', '2', 'HEADER', '9', '$ACADVER', '1', 'AC1009', '9', '$DWGCODEPAGE', '3', 'ANSI_1251', '9', '$INSUNITS', '70', '6', '0', 'ENDSEC', '0', 'SECTION', '2', 'ENTITIES'];
   const P = q => utm(...proj.ll(q[0], q[1]), zone);
   const n3 = v => v.toFixed(3);
   for (const s of variant.segs) {
@@ -361,6 +361,23 @@ export function toDxf(variant, proj, {zone = utmZone(proj.lon0), scene = null} =
     const m = /_ch_(\d+)$/.exec(n.id);
     out.push('0', 'TEXT', '8', 'CHAMBERS', '10', n3(x + 1.2), '20', n3(y + 1.2), '30', '0.0', '40', '0.7', '1', m ? `K${m[1]}` : String(n.id).replace(/[^\x20-\x7e]/g, '_'));
   }
+  // нарушения ручной правки — слой ISSUES: красный круг 1,5 м и текст у места (цвет 1 — красный)
+  for (const i of issues) {
+    const [x, y] = P([i.x, i.y]);
+    out.push('0', 'CIRCLE', '8', 'ISSUES', '62', '1', '10', n3(x), '20', n3(y), '30', '0.0', '40', '1.5');
+    out.push('0', 'TEXT', '8', 'ISSUES', '62', '1', '10', n3(x + 1.8), '20', n3(y), '30', '0.0', '40', '0.6', '1', i.text.replace(/≥/g, '>=').replace(/[\r\n]/g, ' '));
+  }
   out.push('0', 'ENDSEC', '0', 'EOF');
   return out.join('\r\n') + '\r\n';
+}
+
+// строка в кодировке Windows-1251 для DXF R12 ($DWGCODEPAGE ANSI_1251): AutoCAD читает кириллицу без искажений
+export function cp1251(str) {
+  const extra = {'Ё': 0xA8, 'ё': 0xB8, '№': 0xB9, '°': 0xB0, '«': 0xAB, '»': 0xBB, '—': 0x97, '–': 0x96, '·': 0xB7, '×': 0xD7};
+  const out = new Uint8Array(str.length);
+  for (let i = 0; i < str.length; i++) {
+    const c = str[i], k = c.charCodeAt(0);
+    out[i] = k < 0x80 ? k : k >= 0x410 && k <= 0x44F ? k - 0x350 : extra[c] ?? 0x3F;
+  }
+  return out;
 }
