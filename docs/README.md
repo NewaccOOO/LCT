@@ -15,7 +15,7 @@
 | понять, как работает алгоритм и почему он не нарушает правила | [algorithm.md](algorithm.md) — шаги расчёта, таблица «правило → как соблюдается → проверка check18», угловые случаи с картинками |
 | разобраться в устройстве сервиса по классам | [architecture/ARCHITECTURE.md](architecture/ARCHITECTURE.md) |
 | API, критерии, сборка, тесты, границы применения | [architecture/BACKEND.md](architecture/BACKEND.md) |
-| посмотреть результат в 3D | [platform/README.md](../platform/README.md) — платформа инженера «Тепломаршрут» |
+| посмотреть результат в 3D | [PLATFORM.md](PLATFORM.md) — что умеет платформа инженера «Тепломаршрут», со снимками; запуск и управление — [platform/README.md](../platform/README.md) |
 | внести изменение или выпустить версию | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## Что где
@@ -28,6 +28,7 @@
 | [architecture/](architecture) | [CONSTRAINTS.md](architecture/CONSTRAINTS.md) — правила кейса, [ARCHITECTURE.md](architecture/ARCHITECTURE.md) — устройство сервиса, [BACKEND.md](architecture/BACKEND.md) — запуск, API, сборка |
 | [algorithm.md](algorithm.md) | как работает алгоритм: конвейер, правила и их проверка, угловые случаи |
 | [interpretation.md](interpretation.md) | толкования правил, одинаковые для сервиса и проверщика |
+| [PLATFORM.md](PLATFORM.md) | платформа инженера «Тепломаршрут»: что умеет, снимки на районе Москвы |
 | [depth-optimization.md](depth-optimization.md) | режим с учётом глубины: чек-лист правил, доказательство оптимальности профиля, замеры |
 | [depth-agent-guide.md](depth-agent-guide.md) | режим глубины для разработчика: файлы, конвейер `DepthProfiler`, константы, как прогнать проверки |
 | [real-cities.md](real-cities.md) | Москва, Петербург и Нижний Новгород по открытым данным: что пришлось изменить в сервисе и результат |
