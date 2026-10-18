@@ -1,14 +1,14 @@
 # Как запустить и проверить сервис
 
-Инструкция для проверки решения с нуля: от пустой машины до готового GeoJSON с вариантами трассы и проверки его по правилам кейса. Сервис можно запустить тремя способами:
+Инструкция для проверки решения с нуля: от пустой машины до готового GeoJSON с вариантами трассы и проверки его по правилам кейса. Версия сервиса — 0.11.1 (Java 11, Spring Boot 2.6.3), что менялось по версиям — в [CHANGELOG.md](CHANGELOG.md). Сервис можно запустить тремя способами:
 
 | Способ | Когда подходит | Что нужно |
 |---|---|---|
-| [A. Docker Compose](#a-docker-compose-сервис-с-api) | проверить REST API и Swagger, как в эксплуатации | Docker |
+| [A. Docker Compose](#a-docker-compose-сервис-с-api) | проверить REST API, Swagger и платформу инженера, как в эксплуатации | Docker |
 | [B. Командная строка](#b-командная-строка-без-веба-и-базы) | посчитать файл и посмотреть результат, без веба и базы | JDK 11 и Maven или Gradle, либо только Docker |
 | [C. jar с PostgreSQL](#c-jar-с-api-без-docker) | API без Docker | JDK 11, PostgreSQL |
 
-Все команды выполняются из корня репозитория.
+Все команды выполняются из корня репозитория. Короткие цели `make` (`make up`, `make cli`, `make run`, `make real`, `make validate`) перечисляет `make help`.
 
 ## Что понадобится
 
@@ -48,7 +48,7 @@
      --data-binary @data/samples/small-1.geojson http://localhost:8080/api/v1/jobs
    ```
 
-   Ответ содержит номер задачи: `{"id":"…","status":"QUEUED"}`.
+   Ответ содержит номер задачи: `{"id":"…","status":"QUEUED"}`. Режим с учётом глубины включается параметром `?depth=true`: `…/api/v1/jobs?depth=true` (раздел [«Режим с учётом глубины»](#режим-с-учётом-глубины)).
 
 4. Спрашивайте статус, пока он не станет `DONE` или `FAILED`:
 
@@ -72,13 +72,17 @@
 
 Swagger UI с описанием всех запросов открывается по адресу `http://localhost:8080/swagger-ui/index.html`.
 
+Платформа инженера «Тепломаршрут» открывается на `http://localhost:8080/`: 3D-сцена труб под землёй, продольный профиль, сравнение вариантов, новый расчёт на сервере и история расчётов. Без сервиса её можно открыть с демо-наборами: `make platform` и `http://localhost:8091/`. Подробно — [platform/README.md](platform/README.md).
+
 | Запрос | Что делает |
 |---|---|
-| `POST /api/v1/jobs` | принимает GeoJSON, ставит задачу в очередь, отвечает `202` с `id` |
+| `POST /api/v1/jobs` | принимает GeoJSON (`application/json`, `application/geo+json` или `application/octet-stream`), ставит задачу в очередь, отвечает `202` с `id`; `?depth=true` — режим с учётом глубины; `400` — пустое тело или не JSON-объект, `415` — другой `Content-Type` |
 | `GET /api/v1/jobs` | список задач, новые первыми |
 | `GET /api/v1/jobs/{id}` | статус `QUEUED`, `RUNNING`, `DONE` или `FAILED`, ошибки входа, сводки вариантов |
 | `GET /api/v1/jobs/{id}/result` | выходной GeoJSON; `409`, пока задача не готова |
 | `GET /api/v1/jobs/{id}/input` | исходный файл байт в байт |
+
+Неизвестный `id` даёт `404`. Ошибки API приходят JSON-ом `{"message": "…", "errors": [...]}`.
 
 Порты и параметры меняются переменными окружения перед `docker compose up`:
 
@@ -106,6 +110,8 @@ APP_PORT=18080 docker compose up -d --build
    ./gradlew bootJar            # Gradle: build/libs/heatnet.jar
    ```
 
+   Ниже используется путь Maven `target/heatnet.jar`; после Gradle подставьте `build/libs/heatnet.jar`.
+
    Maven и Gradle должны видеть JDK 11: проверьте `java -version`. На macOS с Homebrew JDK 11 ставится командой `brew install openjdk@11`, а `source scripts/env.sh` подставляет его в `JAVA_HOME`.
 
 2. Посчитайте файл:
@@ -114,13 +120,13 @@ APP_PORT=18080 docker compose up -d --build
    java -jar target/heatnet.jar --cli data/samples/small-1.geojson data/out/small-1.geojson
    ```
 
-   В конце печатается `PIPELINE DONE variants=3 elapsed=…s`. Рядом с выходом появится `data/out/small-1.criteria.json` с дополнительными критериями вариантов.
+   `--cli` должен стоять первым аргументом. По окончании печатается строка `PIPELINE DONE variants=3 elapsed=…s`. Рядом с выходом появится `data/out/small-1.criteria.json` с дополнительными критериями вариантов, путь к нему — в строке `CRITERIA …`.
 
    | Код выхода | Что значит |
    |---|---|
    | `0` | расчёт завершён, результат записан |
    | `2` | во входе ошибки данных; они напечатаны по объектам, выходной файл не создаётся |
-   | `1` | другая ошибка, текст напечатан |
+   | `1` | другая ошибка или не два пути в аргументах, текст напечатан |
 
 Без JDK то же самое делает собранный Docker-образ:
 
@@ -168,7 +174,9 @@ SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/heatnet java -jar target/
 uv run --project tools python tools/validator/check18.py data/samples/small-1.geojson data/out/small-1.geojson
 ```
 
-Последняя строка `CHECK18 OK` значит, что нарушений нет. Строки с пометкой `i` — справочные, не нарушения. `make run IN=<вход> OUT=<выход>` считает файл и сразу проверяет его.
+Последняя строка `CHECK18 OK` значит, что нарушений нет, иначе `CHECK18 VIOLATIONS <n>` и код выхода 1. Строки с пометкой `i` — справочные, не нарушения. `make run IN=<вход> OUT=<выход>` считает файл и сразу проверяет его.
+
+Датасет организаторов кладётся в `data/real/dataset.geojson`, `make real` считает его в `data/out/real.geojson` и проверяет. Ожидаемый результат v0.11.1: S варианта 1 = 12,7841, все 17 точек подключены, `CHECK18 OK`; расчёт около 10 с на MacBook M3 Pro под Java 11.
 
 Посмотреть результат на карте:
 
@@ -178,9 +186,29 @@ python3 scripts/visualize.py data/samples/small-1.geojson data/out/small-1.geojs
 
 Рядом с выходом появится `small-1.html`. Страница открывается в браузере без интернета: варианты во вкладках, сводка справа, щелчок по объекту показывает его свойства.
 
+## Режим с учётом глубины
+
+Дополнительная задача (§5 приложения от 18.09.2026). Включается флагом `--depth` в CLI или `?depth=true` в `POST /api/v1/jobs`; в платформе — флажок «С учётом глубины» при новом расчёте. Без флага выход 2D, `depth_start` и `depth_end` равны `null`.
+
+```bash
+java -jar target/heatnet.jar --cli --depth data/samples/small-1.geojson data/out/small-1-depth.geojson
+uv run --project tools python tools/validator/check18.py --depth data/samples/small-1.geojson data/out/small-1-depth.geojson
+```
+
+Трасса в плане, Ду и камеры берутся из 2D, сверху строится профиль глубины. Что меняется в выходе:
+
+| Где | Что |
+|---|---|
+| `heat_network` | заполнены `depth_start` и `depth_end`; стоимость с Kгл; участки делятся по изломам профиля; у участка с пересечением газа, кабеля или сети — `depth_crossings` (тип, выше или ниже, просвет); `manual_review: true`, если профиль по правилам не найден |
+| `technical_node` | узлы излома профиля с `reason: depth_profile` |
+| `heat_chamber` | `depth_m` — глубина труб в камере; `depth_shifted: true`, если камера не на 3,0 м |
+| `variant_summary` | стоимость и S с Kгл, ранги пересчитаны |
+
+Как считается профиль, доказательство оптимальности и замеры — [docs/depth-optimization.md](docs/depth-optimization.md).
+
 ## Большие файлы
 
-Сервис читает вход потоком и не держит файл в памяти целиком. Если зданий с точками подключения больше 500, включается городской режим: точки рядом с сетью подключаются прямыми участками, остальные считаются районами параллельно. Районы дальних точек (5–11 км от сети) не начинаются после срока `heatnet.city.deadline`, по умолчанию 275 секунд от начала городского расчёта; начатые районы досчитываются ещё до 40 с. На синтетическом городе в 3,2 ГБ и 3,14 млн зданий расчёт занимает около 335 с, подключается 12 681 точка.
+Сервис читает вход потоком и не держит файл в памяти целиком. Если зданий с точками подключения больше 500, включается городской режим: точки рядом с сетью подключаются прямыми участками, остальные считаются районами параллельно. Районы дальних точек (5–11 км от сети) не начинаются после срока `heatnet.city.deadline`, по умолчанию 275 секунд от начала городского расчёта; начатые районы досчитываются ещё до 40 с. На синтетическом городе в 3,2 ГБ и 3,14 млн зданий расчёт занимает около 335 с, подключается 12 681 точка (последний замер — v0.9.0).
 
 ```bash
 java -Xmx12g -XX:MaxNewSize=512m -jar target/heatnet.jar --cli big.geojson big-out.geojson
@@ -217,8 +245,12 @@ java -jar target/heatnet.jar --cli --rules=classpath:/examples/water-supply.json
 | Документ | Что в нём |
 |---|---|
 | [README.md](README.md) | что делает сервис, качество и время по версиям |
+| [CHANGELOG.md](CHANGELOG.md) | история версий |
 | [docs/algorithm.md](docs/algorithm.md) | как работает алгоритм и как соблюдает правила, угловые случаи с картинками |
-| [architecture/ARCHITECTURE.md](architecture/ARCHITECTURE.md) | как устроен расчёт по шагам, по классам |
-| [architecture/BACKEND.md](architecture/BACKEND.md) | API, критерии, сборка и тесты подробно |
-| [architecture/CONSTRAINTS.md](architecture/CONSTRAINTS.md) | правила кейса, которым следует расчёт |
+| [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) | как устроен расчёт по шагам, по классам |
+| [docs/architecture/BACKEND.md](docs/architecture/BACKEND.md) | API, CLI, свойства, сборка и тесты подробно |
+| [docs/architecture/CONSTRAINTS.md](docs/architecture/CONSTRAINTS.md) | правила кейса, которым следует расчёт |
+| [docs/depth-optimization.md](docs/depth-optimization.md) | режим с учётом глубины: профиль, проверки, замеры |
+| [platform/README.md](platform/README.md) | платформа инженера «Тепломаршрут» |
 | [docs/interpretation.md](docs/interpretation.md) | как читаются спорные места правил |
+| [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md) | выжимка документации в одном файле |

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Иллюстрации к architecture/ARCHITECTURE.md: как строится граф, растёт дерево, считаются спецпереход,
+"""Иллюстрации к docs/architecture/ARCHITECTURE.md: как строится граф, растёт дерево, считаются спецпереход,
 реконструкция и ходы локального поиска.
 
 Запуск из корня: uv run --project tools python scripts/docs_assets.py

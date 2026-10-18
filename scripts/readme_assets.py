@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Картинки для README: трассировка на синтетической сцене и динамика качества по версиям.
+"""Картинки для README и CHANGELOG: трассировка на синтетической сцене и динамика качества по версиям.
 
 Запуск из корня: uv run --project tools python scripts/readme_assets.py [IN.geojson OUT.geojson]
-Пишет docs/assets/versions.svg (таблица «Версии и динамика качества» из README, версии с правил 18.09), docs/assets/city.svg
+Пишет docs/assets/versions.svg (таблица версий из CHANGELOG.md, версии с правил 18.09), docs/assets/city.svg
 (таблица «Город» там же) и, если заданы IN/OUT,
 docs/assets/hero.svg (вариант 1 расчёта на сцене). Для README берётся синтетическая сцена: датасет организаторов
 наружу не показывается.
@@ -148,12 +148,12 @@ def hero(inp_path, out_path):
 
 
 def versions():
-    text = open("README.md", encoding="utf-8").read()
+    text = open("CHANGELOG.md", encoding="utf-8").read()
     rows = re.findall(r"^\| (v[\d.]+) \| [^|]+ \| ([\d,]+) \| ([\d,]+) \| (\d+) \|", text, re.MULTILINE)
     # только версии по правилам 18.09: прежние S считались по другой модели стоимости и несравнимы
     rows = [r for r in reversed(rows) if tuple(int(x) for x in r[0][1:].split(".")) >= FIRST_1809]
     if not rows:
-        sys.exit("в README нет таблицы версий")
+        sys.exit("в CHANGELOG.md нет таблицы версий")
     vals = [(v, float(s.replace(",", ".")), float(c.replace(",", ".")), int(t)) for v, s, c, t in rows]
     left, right, top, bottom = 56, 24, 48, 36
     w, h = max(760, left + right + 72 * len(vals)), 300
@@ -195,11 +195,11 @@ def versions():
 
 
 def city():
-    """Столбцы времени расчёта файла «город» по версиям из таблицы «Город» в README; подпись — подключено и память."""
-    text = open("README.md", encoding="utf-8").read()
+    """Столбцы времени расчёта файла «город» по версиям из таблицы «Город» в CHANGELOG.md; подпись — подключено и память."""
+    text = open("CHANGELOG.md", encoding="utf-8").read()
     rows = re.findall(r"^\| (v[\d.]+) \| ([\d ]+) \| [\d ]+ \| (\d+) \| ([\d,]+) \|", text, re.MULTILINE)
     if not rows:
-        sys.exit("в README нет таблицы «Город»")
+        sys.exit("в CHANGELOG.md нет таблицы «Город»")
     vals = [(v, int(c.replace(" ", "")), int(t), m) for v, c, t, m in reversed(rows)]
     left, right, top, bottom = 56, 24, 48, 36
     w, h = 760, 300

@@ -48,6 +48,14 @@ sourceSets {
     }
 }
 
+// платформа инженера (platform/): сервис отдаёт её на / рядом с API, как ресурс static в pom.xml
+processResources {
+    from('platform') {
+        into 'static'
+        exclude 'test/**', 'tools/**', 'docs/**'
+    }
+}
+
 bootJar {
     archiveFileName = 'heatnet.jar'
 }

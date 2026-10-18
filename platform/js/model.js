@@ -1,7 +1,7 @@
 // Модель сцены из входа и выхода сервиса — без three.js, чтобы проверялась в node.
 // Геометрия переводится в метры вокруг центра набора (x — восток, y — север). У новой сети по вершинам хранится
 // глубина верха габарита d (depth_start/depth_end, между ними линейно; без них — 3,0 м). Пересечения с коммуникациями
-// и проверки глубины — раздел 14 architecture/CONSTRAINTS.md, та же логика, что в scripts/ui3d/prep.py.
+// и проверки глубины — раздел 14 docs/architecture/CONSTRAINTS.md, та же логика, что в scripts/ui3d/prep.py.
 
 export const NORMAL_DEPTH = 3.0;
 export const MIN_DEPTH = 0.7;
