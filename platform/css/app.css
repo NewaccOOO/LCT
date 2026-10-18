@@ -175,7 +175,10 @@ td.best { color: var(--ok-t); font-weight: 500; }
 #props { position: absolute; top: var(--gap); right: var(--gap); bottom: var(--gap); width: var(--props); background: var(--panel); border-radius: var(--r); overflow: auto; padding: 14px 16px 16px; z-index: 12; box-shadow: var(--shadow-panel); transition: transform .2s ease, visibility 0s; }
 body.propsMin #props { transform: translateX(calc(100% + var(--gap))); visibility: hidden; transition: transform .2s ease, visibility 0s .2s; }
 #navR { transition: right .2s ease; }
-body.propsShown #navR { right: calc(var(--props) + 2 * var(--gap)); }
+body.propsShown #navR, body.propsShown .attr { right: calc(var(--props) + 2 * var(--gap)); }
+/* подпись источника карты в правом нижнем углу сцены */
+.attr { position: absolute; right: var(--gap); bottom: 4px; z-index: 6; font-size: 11px; color: var(--muted); background: color-mix(in srgb, var(--panel) 80%, transparent); border-radius: var(--r-s); padding: 1px 6px; text-decoration: none; transition: right .2s ease; }
+.attr:hover { color: var(--text); }
 body.propsShown #profile { margin-right: calc(var(--props) + 2 * var(--gap)); }
 #props .grab { display: none; }
 #props .h { display: flex; align-items: flex-start; gap: 4px; }

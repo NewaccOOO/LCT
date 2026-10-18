@@ -116,6 +116,8 @@ async function load({input, output, outText = null, ds}) {
     rig.bounds = model.bbox;
     setMinZ();
     $('#dsName').textContent = ds.title;
+    // источник карты по его лицензии (OpenStreetMap — ODbL): подпись видна рядом со сценой
+    $('#attr').textContent = ds.attribution || ''; $('#attr').hidden = !ds.attribution;
     $('#dsBtnM').textContent = 'Набор: ' + ds.title.slice(0, 18) + (ds.title.length > 18 ? '…' : '');
     document.title = `${ds.title} — Тепломаршрут`;
     renderVariants();
@@ -146,7 +148,7 @@ let demos = [];
 async function loadDemo(d) {
   try {
     const [i, o] = await Promise.all([fetchJson('demo/' + d.input, 'исходные данные'), d.output ? fetchJson('demo/' + d.output, 'результат') : null]);
-    await load({input: i.json, output: o?.json, outText: o?.text, ds: {name: d.name, title: d.title}});
+    await load({input: i.json, output: o?.json, outText: o?.text, ds: {name: d.name, title: d.title, attribution: d.attribution}});
   } catch (e) { $('#loading').hidden = true; toast(`Не удалось загрузить демо-набор: ${esc(e.message)}`, 'error', 8000); }
 }
 function isOutput(fc) { return (fc.features || []).some(f => f.properties && (f.properties.object_type === 'variant_summary' || f.properties.variant_id != null)); }
@@ -296,6 +298,7 @@ function renderSummary() {
 function dataInfo() {
   const M = S.model, u = Object.entries(M.utilities).map(([k, l]) => `${UTILITIES[k].name.toLowerCase()} ${fmt(l.length)}`).join(', ');
   return `<table class="wrap"><tr><td>Объектов в исходных данных</td><td>${fmt(M.stats.input)}</td></tr>
+    ${S.ds?.attribution ? `<tr><td>Источник карты</td><td style="white-space:normal">${esc(S.ds.attribution)}</td></tr>` : ''}
     <tr><td>Зданий к подключению</td><td>${fmt(M.oks.length)}</td></tr>
     <tr><td>Коммуникации</td><td style="white-space:normal">${u || '—'}</td></tr>
     <tr><td>Глубины новых труб</td><td>${M.hasDepth ? 'подобраны при трассировке' : M.hasOutput ? 'в результате нет, трубы показаны на глубине 3,0 м' : '—'}</td></tr>

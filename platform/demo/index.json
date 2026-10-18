@@ -9,6 +9,7 @@
   "name": "spb-kupchino",
   "title": "Санкт-Петербург, Купчино (глубина)",
   "input": "spb-kupchino.in.geojson",
-  "output": "spb-kupchino.out.geojson"
+  "output": "spb-kupchino.out.geojson",
+  "attribution": "© участники OpenStreetMap, ODbL"
  }
 ]

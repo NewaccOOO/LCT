@@ -33,6 +33,7 @@
 | [real-cities.md](real-cities.md) | Москва, Петербург и Нижний Новгород по открытым данным: что пришлось изменить в сервисе и результат |
 | [research.md](research.md) | история поиска алгоритма: хронология версий, что сработало, что нет |
 | [performance.md](performance.md) | замеры версий 0.9.0 и 0.8.1 против предыдущих: датасет организаторов, плотные сцены, город 3,2 ГБ; новые версии — в [CHANGELOG.md](../CHANGELOG.md) |
+| [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | сторонние библиотеки и данные, их лицензии |
 | [adr/](adr) | записи о принятых архитектурных решениях |
 | [handoff/](handoff) | доработки после встречи с организаторами 16.10.2026: задачи, патчи, стенд замеров |
 | [assets/](assets) | картинки README и документов, пересобираются скриптами `scripts/readme_assets.py` и `scripts/docs_assets.py`; в [assets/algorithm/](assets/algorithm) — картинки угловых случаев и их входы, пересобираются `scripts/algorithm_figures.py` |
