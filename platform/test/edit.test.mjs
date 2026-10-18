@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {buildScene} from '../js/model.js';
-import {planIssues, jointIssue, extraBends, snapOrtho, surroundings, patchOutput, relen, score, buildingGap, turnAngle, utm, toDxf} from '../js/edit.js';
+import {planIssues, jointIssue, extraBends, snapOrtho, surroundings, patchOutput, relen, score, buildingGap, turnAngle, utm, utmZone, toDxf} from '../js/edit.js';
 
 const raw = n => readFileSync(new URL(`../demo/${n}`, import.meta.url), 'utf8');
 const box = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
@@ -132,8 +132,13 @@ test('surroundings: расстояния от стенки канала, нор�
   assert.equal(h.level, 'bad');
   assert.match(h.note, /спецпереход/);
   assert.equal(all[0].level, 'bad');
-  // у спецперехода — справочно; теплосеть врезки — не считается
-  assert.equal(surroundings(sc, pipe, 150, {special: true}).find(i => i.key === 'heat_network').level, 'info');
+  // спецпереход поперёк сети — справочно; вдоль сети в её зоне — нарушение
+  assert.equal(surroundings(sc, [[[-5, 0], [5, 0]]], 150, {special: true}).find(i => i.key === 'heat_network').level, 'info');
+  const along = surroundings(sc, pipe, 150, {special: true}).find(i => i.key === 'heat_network');
+  assert.equal(along.level, 'bad');
+  assert.match(along.note, /вдоль сети/);
+  assert.match(planIssues(stub({utils: [hn]}), seg([[0, -10], [0, 10]], 150, {special: true}), null, {lines: true})[0].text, /спецпереход идёт .* в зоне сети/);
+  // теплосеть врезки — не считается
   assert.ok(!surroundings(sc, pipe, 150, {tied: new Set(['h1'])}).some(i => i.key === 'heat_network'));
   // дальше радиуса — не показываем
   assert.deepEqual(surroundings(stub({zones: [house]}), [[[-30, -10], [-30, 10]]], 150, {R: 15}), []);
@@ -205,12 +210,14 @@ test('patchOutput: правка участка и камеры на Купчин
 
 test('UTM 37N как у сервиса и DXF для AutoCAD', async () => {
   // pyproj EPSG:4326 → EPSG:32637 для этой точки Купчино: 22546.5816, 6664402.8752
-  const [x, y] = utm(30.465510886, 59.839809322);
+  const [x, y] = utm(30.465510886, 59.839809322, 37);
   assert.ok(Math.abs(x - 22546.5816) < 0.01 && Math.abs(y - 6664402.8752) < 0.01);
   const sc = await buildScene(JSON.parse(raw('spb-kupchino.in.geojson')), JSON.parse(raw('spb-kupchino.out.geojson')));
   const v = sc.variants[0];
   v.segs[0].edited = true;
   const dxf = toDxf(v, sc.proj);
+  assert.equal(utmZone(sc.proj.lon0), 36);
+  assert.ok(dxf.includes('\r\nK20\r\n'));
   assert.ok(dxf.startsWith('0\r\nSECTION'));
   assert.ok(dxf.trimEnd().endsWith('EOF'));
   assert.equal(dxf.split('\r\nPOLYLINE\r\n').length - 1, v.segs.length);

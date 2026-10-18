@@ -62,6 +62,16 @@ export function closestSeg(a, b, c, d) {
   }
   return best;
 }
+const centroid = r => [r.reduce((t, q) => t + q[0], 0) / r.length, r.reduce((t, q) => t + q[1], 0) / r.length];
+/** Контур z — то же здание, что item: сам item или перекрывающий его контур (у дома бывают проектный и существующий). */
+export function sameBuilding(z, item) {
+  if (!item || !z || !BUILDING_KEYS.has(z.type)) return false;
+  if (z.item === item) return true;
+  const r = item.rings?.[0]; if (!r) return false;
+  const a = centroid(z.ring), b = centroid(r);
+  return inRing(a[0], a[1], r) || inRing(b[0], b[1], z.ring);
+}
+
 /**
  * Объекты у звена ab в радиусе R: [{key, obj, type, kind: 'bld'|'forbid'|'line', d (от стенки канала, ≥ 0), axis (от оси),
  * need (норма), cross (звено пересекает объект), ang (угол перехода дороги к её краю), p (на трубе), q (на объекте)}].
@@ -71,7 +81,7 @@ export function objectsNear(scene, a, b, dn, {own = null, tied = null, R = 15} =
   const out = [], w2 = dnRow(dn).w / 2;
   if (dist(a, b) < 0.01) return out;
   for (const z of scene.zonesNear(a, b, R)) {
-    const bld = BUILDING_KEYS.has(z.type), mine = bld && own != null && z.item === own;
+    const bld = BUILDING_KEYS.has(z.type), mine = bld && own != null && sameBuilding(z, own);
     const need = bld ? buildingGap(dn) : FORBID[z.type] ?? SPECIAL[z.type]?.[0];
     if (need == null) continue;
     const ring = z.ring;
@@ -98,7 +108,7 @@ export function objectsNear(scene, a, b, dn, {own = null, tied = null, R = 15} =
     const c = closestSeg(a, b, e.a, e.b);
     if (c.d > R) continue;
     const extra = sp[1] ?? dnRow(e.dn).w / 2;
-    out.push({key: e.type, obj: e, type: e.type, kind: 'line', axis: c.d, d: Math.max(0, c.d - w2 - extra), need: sp[0], cross: c.d === 0, ang: null, p: c.p, q: c.q});
+    out.push({key: e.type, obj: e, type: e.type, kind: 'line', axis: c.d, d: Math.max(0, c.d - w2 - extra), ext: w2 + extra, need: sp[0], cross: c.d === 0, ang: null, p: c.p, q: c.q});
   }
   return out;
 }
@@ -116,7 +126,11 @@ export function surroundings(scene, pieces, dn, {own = null, R = 15, tied = null
     if (o.mine) continue;
     let level, note = null;
     if (o.kind !== 'line') level = o.d < o.need - 0.05 ? 'bad' : o.d < o.need + 1 ? 'near' : 'ok';
-    else if (special) { level = o.cross && o.ang != null && o.ang < 44.5 ? 'bad' : 'info'; note = o.cross && o.ang != null ? `спецпереход под углом ${Math.round(o.ang)}°` : 'спецпереход'; }
+    else if (special) {
+      const along = o.obj?.a ? alongZone(a, b, o.obj, o.need + o.ext) : 0, cap = 2 * (o.need + (o.ext || 0)) / Math.sin(Math.PI / 4) + 1;
+      level = (o.cross && o.ang != null && o.ang < 44.5) || along > cap ? 'bad' : 'info';
+      note = along > cap ? `спецпереход вдоль сети ${m1(along)} м` : o.cross && o.ang != null ? `спецпереход под углом ${Math.round(o.ang)}°` : 'спецпереход';
+    }
     else if (o.cross) { level = 'bad'; note = o.ang != null ? `под углом ${Math.round(o.ang)}°, нужен спецпереход` : 'нужен спецпереход'; }
     else if (o.d < o.need - 0.05) { if (nearSpecial(o, ends, dn)) { level = 'info'; note = 'у спецперехода'; } else { level = 'bad'; note = 'нужен спецпереход'; } }
     else level = o.d < o.need + 0.5 ? 'near' : 'ok';
@@ -125,6 +139,14 @@ export function surroundings(scene, pieces, dn, {own = null, R = 15, tied = null
     if (!was || rank[level] < rank[was.level] || (rank[level] === rank[was.level] && o.d < was.d)) best.set(o.key, it);
   }
   return [...best.values()].sort((x, y) => rank[x.level] - rank[y.level] || x.d - y.d).slice(0, 6);
+}
+
+// длина звена ab, которая лежит ближе zone к отрезку линии e (по точкам через 0,25 м)
+function alongZone(a, b, e, zone) {
+  const L = dist(a, b), n = Math.max(1, Math.ceil(L / 0.25));
+  let k = 0;
+  for (let i = 0; i <= n; i++) { const t = i / n, q = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]; if (ptSeg(q, e.a, e.b) < zone) k++; }
+  return L * k / (n + 1);
 }
 
 /** Длины по вершинам и глубина: концы участка держат свою глубину, между ними — линейно. */
@@ -160,6 +182,11 @@ export function planIssues(scene, s, own = null, {lines = false, tied = null, en
       }
       // переход дороги — одним прямым участком под углом не меньше 45° к её краю
       if (o.cross && o.ang != null && o.ang < 45 - 0.5) add('bad', `пересекает ${thr} под углом ${Math.round(o.ang)}°, нужно не меньше 45°`, o.p, o);
+      // спецпереход пересекает сеть поперёк: внутри её зоны звено не длиннее перехода под 45° (с запасом 1 м)
+      if (s.special && lines && o.obj?.a) {
+        const zone = o.need + o.ext, inside = alongZone(a, b, o.obj, zone), cap = 2 * zone / Math.sin(Math.PI / 4) + 1;
+        if (inside > cap) add('bad', `спецпереход идёт ${m1(inside)} м в зоне сети (${name}): пересекать её нужно поперёк, не острее 45°`, o.p, o);
+      }
       if (s.special || !lines) continue;
       if (o.cross) add('bad', `пересекает ${thr} обычной прокладкой: нужен спецпереход, его ставит пересчёт на сервере`, o.p, o);
       else if (o.d < o.need - 0.05 && !nearSpecial(o, ends, dn)) add('bad', `ближе ${String(o.need).replace('.', ',')} м к ${to} вне спецперехода: ${m1(o.d)} м`, o.p, o);
@@ -281,18 +308,20 @@ export function utm(lon, lat, zone = 37) {
 }
 
 /**
- * Трассы варианта в DXF (R12, ASCII) для AutoCAD/Civil 3D: координаты UTM, метры. Слои: HEAT_NEW — новая сеть,
- * HEAT_EDITED — участки, правленные вручную, HEAT_SPECIAL — спецпереходы, CHAMBERS — камеры (круг 1 м),
+ * Трассы варианта в DXF (R12, ASCII) для AutoCAD/Civil 3D: координаты UTM своей зоны (по долготе набора — меньше
+ * искажение длин), метры; Z — верх трубы относительно поверхности (минус глубина). Слои: HEAT_NEW — новая сеть,
+ * HEAT_EDITED — участки, правленные вручную, HEAT_SPECIAL — спецпереходы, CHAMBERS — камеры (круг 1 м) и их номера,
  * LABELS — номер участка, Ду и длина. Текст латиницей: так его открывает любая версия AutoCAD.
  */
-export function toDxf(variant, proj, {zone = 37} = {}) {
+export const utmZone = lon => Math.floor((lon + 180) / 6) + 1;
+export function toDxf(variant, proj, {zone = utmZone(proj.lon0)} = {}) {
   const out = ['0', 'SECTION', '2', 'HEADER', '9', '$ACADVER', '1', 'AC1009', '9', '$INSUNITS', '70', '6', '0', 'ENDSEC', '0', 'SECTION', '2', 'ENTITIES'];
   const P = q => utm(...proj.ll(q[0], q[1]), zone);
   const n3 = v => v.toFixed(3);
   for (const s of variant.segs) {
     const layer = s.edited ? 'HEAT_EDITED' : s.special ? 'HEAT_SPECIAL' : 'HEAT_NEW';
-    out.push('0', 'POLYLINE', '8', layer, '66', '1', '70', '0');
-    for (const q of s.pts) { const [x, y] = P(q); out.push('0', 'VERTEX', '8', layer, '10', n3(x), '20', n3(y), '30', '0.0'); }
+    out.push('0', 'POLYLINE', '8', layer, '66', '1', '10', '0.0', '20', '0.0', '30', '0.0', '70', '8');
+    s.pts.forEach((q, i) => { const [x, y] = P(q); out.push('0', 'VERTEX', '8', layer, '10', n3(x), '20', n3(y), '30', n3(-(s.depth?.[i] ?? 0)), '70', '32'); });
     out.push('0', 'SEQEND', '8', layer);
     const m = s.pts[Math.floor((s.pts.length - 1) / 2)], m2 = s.pts[Math.floor((s.pts.length - 1) / 2) + 1] || m, [x, y] = P([(m[0] + m2[0]) / 2, (m[1] + m2[1]) / 2]);
     const id = (/_seg_(\d+)$/.exec(s.id) || [, s.id])[1];
@@ -302,6 +331,8 @@ export function toDxf(variant, proj, {zone = 37} = {}) {
     if (n.type === 'technical_node' || n.type === 'oks_entry' || n.type === 'endpoint') continue;
     const [x, y] = P(n.xy);
     out.push('0', 'CIRCLE', '8', 'CHAMBERS', '10', n3(x), '20', n3(y), '30', '0.0', '40', '1.0');
+    const m = /_ch_(\d+)$/.exec(n.id);
+    out.push('0', 'TEXT', '8', 'CHAMBERS', '10', n3(x + 1.2), '20', n3(y + 1.2), '30', '0.0', '40', '0.7', '1', m ? `K${m[1]}` : String(n.id).replace(/[^\x20-\x7e]/g, '_'));
   }
   out.push('0', 'ENDSEC', '0', 'EOF');
   return out.join('\r\n') + '\r\n';

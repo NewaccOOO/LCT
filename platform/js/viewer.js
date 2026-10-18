@@ -756,7 +756,7 @@ export class Viewer {
     if (flat) flat.visible = on('buildings') && o.buildings !== 'hidden';
     for (const m of [...this.g.utilities.children, ...this.g.utilLines.children]) m.visible = on(m.userData.key);
     this._lodK = null;
-    this.g.oks.visible = on('oks');
+    this.g.oks.visible = on('oks') && !o.plan;   // в плане правки иглы подключения закрывают место ввода
     this.g.netLines.getObjectByName('trace') && (this.g.netLines.getObjectByName('trace').visible = on('trace'));
     this.redraw();
   }
