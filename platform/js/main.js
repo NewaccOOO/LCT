@@ -1699,7 +1699,11 @@ function setEdit(on) {
   editGhost();
   editPanel();
   editHandles(true);
-  if (on) { if (!S.route) toast('Выберите здание или трубу: на её трассе появятся точки, которые можно тянуть', 'info', 4000); else setTimeout(editFrame, 260); }
+  if (on) {
+    if (!S.route) toast('Выберите здание или трубу: на её трассе появятся точки, которые можно тянуть', 'info', 4000);
+    // кадр — когда панели доехали: иначе окно сцены ещё старого размера
+    else setTimeout(() => Promise.all(document.getAnimations().filter(an => an.effect?.target?.closest?.('#left, #props, #profile, #navR')).map(an => an.finished.catch(() => {}))).then(() => { if (E.on) editFrame(); }), 30);
+  }
   status();
 }
 // вид сверху на трассу — править удобнее в плане, как в AutoCAD
@@ -2109,4 +2113,4 @@ booted = true;
 start();
 // для автотестов и записи видео: точка сцены → пиксель окна
 const toScreen = (x, y, z = 0) => { const v = new THREE.Vector3(x, y, z).project(viewer.camera), r = $('#view').getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; };
-window.__app = {S, E, editNear, editRedraw, editPanel, viewer, rig, select, selectCrossing, setVariant, home, startFly, stopFly, setEx, setMode, toScreen};
+window.__app = {S, E, editNear, editRedraw, editPanel, editFrame, viewer, rig, select, selectCrossing, setVariant, home, startFly, stopFly, setEx, setMode, toScreen};
