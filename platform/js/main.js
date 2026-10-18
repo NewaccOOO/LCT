@@ -1,6 +1,6 @@
 // Платформа инженера: загрузка данных, выбор объектов, панели, инструменты. Сцена — viewer.js, навигация — controls.js.
 import * as THREE from 'three';
-import {Viewer, PALETTE, buildingHeight, dnColor} from './viewer.js';
+import {Viewer, PALETTE, SCENE, buildingHeight, dnColor} from './viewer.js';
 import {CameraRig} from './controls.js';
 import {ViewCube} from './viewcube.js';
 import {Profile} from './profile.js';
@@ -117,7 +117,7 @@ async function load({input, output, outText = null, ds}) {
     setMinZ();
     $('#dsName').textContent = ds.title;
     $('#dsBtnM').textContent = 'Набор: ' + ds.title.slice(0, 18) + (ds.title.length > 18 ? '…' : '');
-    document.title = `${ds.title} — Теплосеть 3D`;
+    document.title = `${ds.title} — Тепломаршрут`;
     renderVariants();
     setVariant(model.variants[0]?.id, {quiet: true});
     renderLayers();
@@ -271,7 +271,7 @@ function renderSummary() {
     </table>
     ${M.variants.length > 1 ? `<h2>Сравнение вариантов</h2>${verdict(M)}${cmpTable(M, v)}
       <div class="mut kbm" style="font-size:12.5px;margin-top:6px">Клавиши 1–${M.variants.length} — переключить вариант.</div>
-      <div class="filters" style="margin-top:8px">${M.variants.filter(x => x !== v).map(x => `<button data-ghost="${esc(x.id)}" class="${S.ghost === x.id ? 'on' : ''}" title="Трассы варианта ${esc(x.id)} белым пунктиром поверх текущего"><i class="sw" style="background:none;border-top:2px dashed #f1f5f9;height:0"></i> ${S.ghost === x.id ? `Скрыть вариант ${esc(x.id)}` : `Показать вариант ${esc(x.id)} поверх`}</button>`).join('')}</div>` : ''}
+      <div class="filters" style="margin-top:8px">${M.variants.filter(x => x !== v).map(x => `<button data-ghost="${esc(x.id)}" class="${S.ghost === x.id ? 'on' : ''}" title="Трассы варианта ${esc(x.id)} пунктиром поверх текущего"><i class="sw" style="background:none;border-top:2px dashed ${viewer.th.ghost};height:0"></i> ${S.ghost === x.id ? `Скрыть вариант ${esc(x.id)}` : `Показать вариант ${esc(x.id)} поверх`}</button>`).join('')}</div>` : ''}
     <h2>С чего начать</h2>
     <div class="actions">
       <button data-go="oks">Найти здание и его трассу</button>
@@ -285,7 +285,7 @@ function renderSummary() {
     if (tr) return setVariant(tr.dataset.v);
     const gb = e.target.closest('button[data-ghost]');
     if (gb) { S.ghost = S.ghost === gb.dataset.ghost ? null : gb.dataset.ghost; viewer.setGhost(S.model.variants.find(x => x.id === S.ghost) || null);
-      if (S.ghost) toast(`Вариант ${esc(S.ghost)} показан белым пунктиром поверх текущего`, 'info', 2500); renderSummary(); renderLegend(); return; }
+      if (S.ghost) toast(`Вариант ${esc(S.ghost)} показан пунктиром поверх текущего`, 'info', 2500); renderSummary(); renderLegend(); return; }
     const b = e.target.closest('button[data-go]');
     if (!b) return;
     if (b.dataset.go === 'help') $('#helpDlg').showModal();
@@ -331,7 +331,7 @@ function renderOks() {
       const r = conn ? routeTo(v, o.id) : null;
       return `<button class="item ${S.sel?.ref === o ? 'sel' : ''}" data-id="${esc(o.id)}"><div class="t"><span>${esc(o.label)}</span>
         ${v ? `<span class="badge ${conn ? 'b-ok' : 'b-bad'}">${conn ? 'подключено' : 'не подключено'}</span>` : ''}</div>
-        <div class="m">${o.flow != null ? `расход ${fmt(o.flow, 1)} т/ч` : ''}${r ? ` · трасса ${meters(r.len)}${r.bad ? ` · <span style="color:#fda4af">${r.bad} ${plural(r.bad, 'проблема', 'проблемы', 'проблем')} по высоте</span>` : ''}` : v ? ' · маршрут не найден' : ''}</div></button>`;
+        <div class="m">${o.flow != null ? `расход ${fmt(o.flow, 1)} т/ч` : ''}${r ? ` · трасса ${meters(r.len)}${r.bad ? ` · <span style="color:var(--bad-t)">${r.bad} ${plural(r.bad, 'проблема', 'проблемы', 'проблем')} по высоте</span>` : ''}` : v ? ' · маршрут не найден' : ''}</div></button>`;
     }).join('') || '<div class="item m">Ничего не найдено</div>';
   };
   draw();
@@ -392,14 +392,14 @@ function renderLayers() {
     <div class="fld"><label>Цвет новой сети</label><div class="seg" id="cby"><button data-c="dn">По диаметру</button><button data-c="status">Проблемы</button><button data-c="depth">Глубина</button></div>
       <div id="cbyLeg" class="mut" style="font-size:12px;margin-top:6px"></div></div>
     <h2>Новая сеть</h2>
-    ${tog('trace', 'Проекция трассы на землю (пунктир)', '#67e8f9')}
+    ${tog('trace', 'Проекция трассы на землю (пунктир)', viewer.th.trace)}
     ${tog('oks', 'Здания к подключению (булавки)', PALETTE.connected, M.oks.length, true)}
     <h2>Под землёй</h2>
     ${Object.entries(M.utilities).map(([k, l]) => tog('u:' + k, UTILITIES[k].name + (UTILITIES[k].assumed ? ' <span class="mut">(глубина условно)</span>' : ''), UTILITIES[k].color, l.length)).join('')}
     ${M.points.heat_chamber?.length ? tog('n:heat_chamber', 'Существующие камеры', PALETTE.chamberOld, M.points.heat_chamber.length, true) : ''}
     <h2>На поверхности</h2>
-    ${tog('ground', 'Земля с сеткой 10/100 м', '#334155')}
-    ${nb ? tog('buildings', 'Здания', '#8b9ab0', nb) : ''}
+    ${tog('ground', 'Земля с сеткой 10/100 м', viewer.th.ground)}
+    ${nb ? tog('buildings', 'Здания', viewer.th.building, nb) : ''}
     ${surf.map(k => tog('p:' + k, (SURFACES[k] || {name: k}).name, (SURFACES[k] || {}).color || '#64748b', M.surfaces[k].length)).join('')}
     <h2>Глубины коммуникаций</h2>
     <table>${Object.entries(UTILITIES).filter(([k]) => M.utilities[k]).map(([k, u]) => `<tr><td><i class="sw" style="background:${u.color}"></i> ${u.name}</td><td>верх ${fmt(u.top, 1)} м${u.clear != null ? `, зазор ≥ ${fmt(u.clear, 1)}` : ' (условно)'}</td></tr>`).join('')}</table>`;
@@ -436,10 +436,10 @@ function renderLegend() {
   if (o.colorBy === 'status') rows.push(sw('#5eead4') + '<span>участок с проблемой — ярко</span>', sw('#335c5a') + '<span>участок без проблем — приглушён</span>');
   else if (o.colorBy === 'depth') rows.push(`<i class="sw" style="background:linear-gradient(90deg,${DEPTH_GRAD})"></i><span>глубина верха: мельче → глубже</span>`);
   else rows.push(`<i class="sw" style="background:linear-gradient(90deg,${grad})"></i><span>новая труба: светлее — тоньше, Ду 50 → 1400</span>`);
-  rows.push('<i class="sw" style="background:rgba(248,250,252,.35);height:10px;border:1px solid rgba(248,250,252,.6)"></i><span>футляр спецперехода</span>',
+  rows.push('<i class="sw" style="background:var(--veil);height:10px;border:1px solid var(--edge)"></i><span>футляр спецперехода</span>',
     dot(PALETTE.problem) + '<span>проблема по высоте (метка с иглой)</span>');
-  rows.push(sw(PALETTE.selection) + '<span>выбранная трасса</span>', sw('#67e8f9', true) + '<span>проекция трассы на поверхность</span>');
-  if (S.ghost) rows.push(sw('#f1f5f9', true) + `<span>вариант ${esc(S.ghost)} для сравнения</span>`);
+  rows.push(sw(PALETTE.selection) + '<span>выбранная трасса</span>', sw(viewer.th.trace, true) + '<span>проекция трассы на поверхность</span>');
+  if (S.ghost) rows.push(sw(viewer.th.ghost, true) + `<span>вариант ${esc(S.ghost)} для сравнения</span>`);
   rows.push(dot(PALETTE.chamberNew) + '<span>новая камера (колодец)</span>');
   if (M.oks.length) rows.push(dot(PALETTE.connected) + '<span>здание подключено</span>', dot(PALETTE.unconnected) + '<span>здание не подключено</span>');
   rows.push('<div class="h">Существующее под землёй</div>');
@@ -766,7 +766,7 @@ function openProfile() {
   $('#profile').hidden = false;
   const o = S.model.oks.find(x => x.id === R.end);
   $('#pTitle').innerHTML = `Профиль: ${esc(nodeLabel(R.start))} → ${esc(o ? o.label : nodeLabel(R.end))} · ${meters(R.len)} · ${rub(R.cost)} · ` +
-    (R.bad ? `<span style="color:#fda4af">${R.bad} ${plural(R.bad, 'проблема', 'проблемы', 'проблем')}</span>` : '<span style="color:#86efac">без проблем</span>');
+    (R.bad ? `<span style="color:var(--bad-t)">${R.bad} ${plural(R.bad, 'проблема', 'проблемы', 'проблем')}</span>` : '<span style="color:var(--ok-t)">без проблем</span>');
   const at = S.focusAt;
   S.focusAt = null;
   requestAnimationFrame(() => { profile.show(R, S.model); if (at != null) { profile.zoomTo(at, Math.min(60, R.len)); profile.setCursor(at); } });
@@ -841,11 +841,11 @@ function hoverText(h) {
   const r = h.ref;
   if (h.kind === 'seg') {
     const d = ((h.on || h.point).z / -viewer.ex) - r.row.h / 2;
-    return {title: `Новая труба Ду ${r.p.diameter}`, lines: [`${segName(r)} · ${meters(r.p.length ?? r.len)}`, `верх на глубине ${fmt(Math.max(0, d), 2)} м${r.special ? ' · спецпереход' : ''}`, r.bad ? '<span style="color:#f9a8d4">есть проблема по высоте</span>' : ''].filter(Boolean),
+    return {title: `Новая труба Ду ${r.p.diameter}`, lines: [`${segName(r)} · ${meters(r.p.length ?? r.len)}`, `верх на глубине ${fmt(Math.max(0, d), 2)} м${r.special ? ' · спецпереход' : ''}`, r.bad ? '<span style="color:var(--bad-t)">есть проблема по высоте</span>' : ''].filter(Boolean),
       status: `<b>Новая труба</b> ${segName(r)} · Ду ${r.p.diameter} · верх ${fmt(Math.max(0, d), 2)} м`};
   }
   if (h.kind === 'utility') { const u = UTILITIES[h.type]; return {title: u.name, lines: [`верх ${fmt(r.top, 1)} м${u.assumed ? ' (условно)' : ''}${r.dn ? ` · Ду ${r.dn}` : ''}`], status: `<b>${u.name}</b> · верх ${fmt(r.top, 1)} м`}; }
-  if (h.kind === 'oks') { const c = S.v ? S.v.connected.has(r.id) : null; return {title: esc(r.label), lines: [`расход ${fmt(r.flow, 1)} т/ч`, c == null ? '' : c ? '<span style="color:#86efac">подключено</span>' : '<span style="color:#fda4af">не подключено</span>'].filter(Boolean), status: `<b>${esc(r.label)}</b>`}; }
+  if (h.kind === 'oks') { const c = S.v ? S.v.connected.has(r.id) : null; return {title: esc(r.label), lines: [`расход ${fmt(r.flow, 1)} т/ч`, c == null ? '' : c ? '<span style="color:var(--ok-t)">подключено</span>' : '<span style="color:var(--bad-t)">не подключено</span>'].filter(Boolean), status: `<b>${esc(r.label)}</b>`}; }
   if (h.kind === 'node') { const t = nodeName(r, S.model); return {title: t[0].toUpperCase() + t.slice(1), lines: [`низ трубы ${ND(r.depth)}`], status: `<b>${esc(t)}</b>`}; }
   if (h.kind === 'chamber') { const no = esc(String(r.id).replace(/^hc-/, '')); return {title: `Существующая камера ${no}`, lines: [], status: `<b>Камера ${no}</b>`}; }
   if (h.kind === 'source') return {title: 'Источник тепла', lines: [esc(r.p.name || r.id)], status: `<b>Источник</b> ${esc(r.p.name || r.id)}`};
@@ -893,7 +893,7 @@ function showCtx(x, y) {
   };
 }
 function hideCtx() { $('#ctx').hidden = true; }
-addEventListener('pointerdown', e => { if (!e.target.closest('#ctx')) hideCtx(); if (!e.target.closest('#fileDd')) closeMenu(); if (!e.target.closest('.search')) $('#sugg').hidden = true; }, true);
+addEventListener('pointerdown', e => { if (!e.target.closest('#ctx')) hideCtx(); if (!e.target.closest('#fileDd')) closeMenu(); if (!e.target.closest('#themeDd')) themeMenu(false); if (!e.target.closest('.search')) $('#sugg').hidden = true; }, true);
 
 // ---------- вид ----------
 function homeBox() {
@@ -1134,7 +1134,7 @@ function searchFor(q) {
   const m = q.match(/^(-?\d{1,3}[.,]\d+)\s*[,; ]\s*(-?\d{1,3}[.,]\d+)$/);
   if (m) {
     let a = +m[1].replace(',', '.'), b = +m[2].replace(',', '.');
-    if (!(a > 40 && a < 80) && b > 40 && b < 80) [a, b] = [b, a];   // широта, долгота — как в Яндекс Картах
+    if (!(a > 40 && a < 80) && b > 40 && b < 80) [a, b] = [b, a];   // широта, долгота — как в онлайн-картах
     return [{label: `Координаты ${a}, ${b}`, sub: 'перелететь сюда', coords: [b, a]}];
   }
   searchIdx ||= buildIndex();
@@ -1208,23 +1208,24 @@ async function menuAct(a) {
 }
 function snapName() {
   const d = new Date().toISOString().slice(0, 10), sel = S.sel ? describe(S.sel).title : 'вид';
-  return `${(S.ds?.title || 'Теплосеть 3D').split(/[,(]/)[0].trim()}_вариант${S.v?.id || ''}_${sel}_${d}.png`.replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, '_');
+  return `${(S.ds?.title || 'Тепломаршрут').split(/[,(]/)[0].trim()}_вариант${S.v?.id || ''}_${sel}_${d}.png`.replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, '_');
 }
 async function snapshot() {
   viewer.render();
   const src = viewer.renderer.domElement, w = src.width, h = src.height, k = w / src.clientWidth, top = 46 * k, bot = 40 * k;
   const c = document.createElement('canvas'); c.width = w; c.height = h + top + bot;
-  const g = c.getContext('2d');
-  g.fillStyle = '#0b1322'; g.fillRect(0, 0, c.width, c.height);
+  const g = c.getContext('2d'), css = getComputedStyle(document.documentElement), cv = n => css.getPropertyValue(n).trim();
+  const font = '"Helvetica Neue", Arial, sans-serif';
+  g.fillStyle = cv('--panel'); g.fillRect(0, 0, c.width, c.height);
   g.drawImage(src, 0, top);
-  g.fillStyle = '#e6edf7'; g.font = `600 ${16 * k}px system-ui, sans-serif`;
+  g.fillStyle = cv('--text'); g.font = `500 ${16 * k}px ${font}`;
   const sm = S.v?.summary;
   g.fillText(`${S.ds?.title || ''}${S.v ? ` · вариант ${S.v.id}, S ${fmt(S.v.score, 2)}, ${rub(sm?.calculated_cost)}` : ''}`, 14 * k, 20 * k);
-  g.font = `${13 * k}px system-ui, sans-serif`; g.fillStyle = '#94a3b8';
+  g.font = `${13 * k}px ${font}`; g.fillStyle = cv('--muted');
   g.fillText(`${S.sel ? describe(S.sel).title + ' · ' : ''}${new Date().toLocaleString('ru-RU')} · глубина ×${viewer.ex} · ${$('#scale span').textContent} = ${$('#scale .bar').style.width}`, 14 * k, 38 * k);
   let x = 14 * k;
   const y = h + top + 25 * k;
-  const item = (color, text) => { g.fillStyle = color; g.fillRect(x, y - 8 * k, 18 * k, 5 * k); x += 24 * k; g.fillStyle = '#cbd5e1'; g.fillText(text, x, y); x += g.measureText(text).width + 16 * k; };
+  const item = (color, text) => { g.fillStyle = color; g.fillRect(x, y - 8 * k, 18 * k, 5 * k); x += 24 * k; g.fillStyle = cv('--text'); g.fillText(text, x, y); x += g.measureText(text).width + 16 * k; };
   item('#2ee6d0', 'новая сеть'); item(PALETTE.problem, 'проблема');
   for (const t of Object.keys(S.model?.utilities || {})) item(UTILITIES[t].color, UTILITIES[t].name.toLowerCase());
   return new Promise(res => c.toBlob(res, 'image/png'));
@@ -1473,6 +1474,23 @@ $('#coachOk').onclick = () => { $('#coach').hidden = true; store.set('coach', 1)
 document.addEventListener('change', e => { if (e.target.matches?.('#left input[type=range], #left input[type=checkbox], #left select')) setTimeout(() => e.target.blur(), 0); });
 document.addEventListener('pointerup', e => { if (e.target.matches?.('#left input[type=range]')) setTimeout(() => e.target.blur(), 0); });
 $('#coachAll').onclick = () => { $('#coach').hidden = true; store.set('coach', 1); $('#helpDlg').showModal(); };
+
+// ---------- тема: светлая, тёмная или как в системе ----------
+const darkMQ = matchMedia('(prefers-color-scheme: dark)');
+function applyTheme() {
+  const pref = store.get('theme', 'system'), t = pref === 'system' ? (darkMQ.matches ? 'dark' : 'light') : pref;
+  document.documentElement.dataset.theme = t;
+  $$('#themeSeg button').forEach(b => b.classList.toggle('on', b.dataset.theme === pref));
+  if (viewer.th === SCENE[t]) return;
+  viewer.setTheme(t);
+  if (S.model) { renderSummary(); renderLayers(); renderLegend(); }
+  profile.draw();
+}
+function themeMenu(open) { $('#themeDd .menu').hidden = !open; $('#themeBtn').setAttribute('aria-expanded', String(open)); }
+$('#themeBtn').onclick = () => themeMenu($('#themeDd .menu').hidden);
+$('#themeSeg').onclick = e => { const b = e.target.closest('button[data-theme]'); if (b) { store.set('theme', b.dataset.theme); applyTheme(); } };
+darkMQ.addEventListener('change', applyTheme);
+applyTheme();
 
 // ---------- старт ----------
 async function start() {

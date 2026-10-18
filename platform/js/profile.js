@@ -5,6 +5,7 @@
 import {UTILITIES, UNDER, NORMAL_DEPTH, MIN_DEPTH, pointAt} from './model.js';
 import {fmt} from './util.js';
 
+const FONT = '"Helvetica Neue", Arial, sans-serif';
 const ROWS = ['Ду', 'Уклон, ‰', 'Глубина верха, м', 'Длина, м'];
 const BAND = ROWS.length * 17 + 4;   // подвал, как в Civil 3D: строки по участкам
 // пикетаж, как на чертежах: ПК — сотня метров, плюс — метры внутри неё
@@ -139,9 +140,12 @@ export class Profile {
     if (!R) return;
     const L = this.layout(), {X, Y, pl, W, pt, maxD, a: wa, b: wb} = L;
     const css = getComputedStyle(document.documentElement);
-    const muted = css.getPropertyValue('--muted').trim() || '#94a3b8', line = css.getPropertyValue('--line').trim() || '#253349';
+    // цвета текста и линий — из темы страницы (светлая или тёмная), цвета сетей — свои, одинаковые в обеих
+    const v = (n, d) => css.getPropertyValue(n).trim() || d;
+    const muted = v('--muted', '#878787'), line = v('--line', '#ebebeb'), text = v('--text', '#000');
+    const veil = v('--veil', 'rgba(0,0,0,.05)'), edge = v('--edge', 'rgba(0,0,0,.6)'), badT = v('--bad-t', '#e0301e'), warnT = v('--warn-t', '#c27c00'), okT = v('--ok-t', '#2f8f00');
     const pipe = '#2ee6d0', bad = '#ff2fd1';
-    g.font = '12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+    g.font = '12px ' + FONT;
     const clip = () => { g.save(); g.beginPath(); g.rect(pl, 0, W, r.height); g.clip(); };
 
     clip();
@@ -150,7 +154,7 @@ export class Profile {
     for (const z of this.zones) {
       g.fillStyle = z.type === 'road' ? 'rgba(148,163,184,.14)' : 'rgba(148,163,184,.22)';
       g.fillRect(X(z.a), Y(-0.6), Math.max(2, X(z.b) - X(z.a)), Y(maxD) - Y(-0.6));
-      g.strokeStyle = 'rgba(203,213,225,.5)'; g.setLineDash([4, 4]);
+      g.strokeStyle = muted; g.setLineDash([4, 4]);
       g.beginPath(); g.moveTo(X(z.a), Y(UNDER[z.type])); g.lineTo(X(z.b), Y(UNDER[z.type])); g.stroke(); g.setLineDash([]);
       if (X(z.b) - X(z.a) > 70) { g.fillStyle = muted; g.fillText(z.type === 'road' ? 'под дорогой' : 'под трамваем', Math.max(pl, X(z.a)) + 4, Y(UNDER[z.type]) - 4); }
     }
@@ -169,10 +173,10 @@ export class Profile {
     dash(NORMAL_DEPTH, 'rgba(46,230,208,.6)', 'обычная глубина 3 м');
     dash(MIN_DEPTH, 'rgba(148,163,184,.8)', 'минимальная глубина 0,7 м');
     g.fillStyle = '#a16207'; g.fillRect(pl, Y(0) - 3, W, 3);
-    g.fillStyle = '#d6a64a'; g.fillText('поверхность', Math.max(pl, X(0)) + 4, Y(0) - 6);
+    g.fillStyle = '#b07a1f'; g.fillText('поверхность', Math.max(pl, X(0)) + 4, Y(0) - 6);
     // спецпереходы — светлым фоном и рамкой футляра
     for (const s of R.segs) if (s.special) {
-      g.fillStyle = 'rgba(248,250,252,.07)'; g.fillRect(X(s.s0), Y(0), X(s.s0 + s.len) - X(s.s0), Y(maxD) - Y(0));
+      g.fillStyle = veil; g.fillRect(X(s.s0), Y(0), X(s.s0 + s.len) - X(s.s0), Y(maxD) - Y(0));
     }
     // новая труба полосой габарита; участок с нарушением уклона или глубины — целиком красный
     for (const s of R.segs) {
@@ -181,7 +185,7 @@ export class Profile {
       for (let i = 0; i < s.pts.length; i++) { const x = X(s.s0 + s.lens[i]); i ? g.lineTo(x, Y(s.depth[i])) : g.moveTo(x, Y(s.depth[i])); }
       for (let i = s.pts.length - 1; i >= 0; i--) g.lineTo(X(s.s0 + s.lens[i]), Math.max(Y(s.depth[i] + s.row.h), Y(s.depth[i]) + 2));
       g.closePath(); g.fill();
-      if (s.special) { g.strokeStyle = 'rgba(248,250,252,.85)'; g.strokeRect(X(s.s0), Y(Math.min(s.d0, s.d1)) - 3, X(s.s0 + s.len) - X(s.s0), Y(Math.max(s.d0, s.d1) + s.row.h) - Y(Math.min(s.d0, s.d1)) + 6); }
+      if (s.special) { g.strokeStyle = edge; g.strokeRect(X(s.s0), Y(Math.min(s.d0, s.d1)) - 3, X(s.s0 + s.len) - X(s.s0), Y(Math.max(s.d0, s.d1) + s.row.h) - Y(Math.min(s.d0, s.d1)) + 6); }
     }
     // конфликт — красным только ±2 м вокруг точки
     for (const c of this.cxs) if (c.ok === false) {
@@ -200,10 +204,10 @@ export class Profile {
       g.fillStyle = 'rgba(74,222,128,.12)';
       g.fillRect(X(D.pts[0].S), Y(0), Math.max(6, X(D.pts[D.pts.length - 1].S) - X(D.pts[0].S)), Y(maxD) - Y(0));
       const mid = D.pts[Math.floor(D.pts.length / 2)];
-      g.fillStyle = '#86efac'; g.fillText(D.label, Math.min(X(mid.S) + 8, pl + W - g.measureText(D.label).width - 4), Y(mid.d + D.h) + 14);
+      g.fillStyle = okT; g.fillText(D.label, Math.min(X(mid.S) + 8, pl + W - g.measureText(D.label).width - 4), Y(mid.d + D.h) + 14);
     }
     // камеры на стыках участков — вертикаль и подпись (повороты без подписи)
-    g.strokeStyle = 'rgba(226,232,240,.35)'; g.fillStyle = muted;
+    g.strokeStyle = line; g.fillStyle = muted;
     let lastX = -1e9;
     for (const s of R.segs) {
       const x = X(s.s0);
@@ -222,7 +226,7 @@ export class Profile {
       }
       g.fillStyle = color;
       g.beginPath(); g.ellipse(x, (Y(c.top) + Y(c.top + c.eh)) / 2, 5, Math.max(3, (Y(c.top + c.eh) - Y(c.top)) / 2), 0, 0, Math.PI * 2); g.fill();
-      g.font = `${c.ok === false ? 'bold ' : ''}12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+      g.font = `${c.ok === false ? '500 ' : ''}12px ${FONT}`;
       const t = UTILITIES[c.type]?.short || c.type, w = g.measureText(t).width;
       const lx = Math.max(pl + 2, Math.min(x - w / 2, pl + W - w - 2));
       let row = rows.findIndex(end => end < lx - 4);
@@ -231,7 +235,7 @@ export class Profile {
       const ly = pt - 26 + row * 12;
       g.strokeStyle = c.ok === false ? 'rgba(255,31,75,.6)' : 'rgba(148,163,184,.35)';
       g.beginPath(); g.moveTo(x, ly + 3); g.lineTo(x, Y(c.top - (c.need || 0)) - 2); g.stroke();
-      g.fillStyle = c.ok === false ? '#fda4af' : muted;
+      g.fillStyle = c.ok === false ? badT : muted;
       g.fillText(t, lx, ly);
     }
     g.restore();
@@ -243,7 +247,7 @@ export class Profile {
     for (let s = Math.ceil(wa / step) * step; s <= wb + 1e-6; s += step) { const t = pk(s); g.fillText(t, Math.max(pl, X(s) - g.measureText(t).width / 2), Y(maxD) + 14); g.beginPath(); g.moveTo(X(s), Y(maxD)); g.lineTo(X(s), Y(maxD) + 4); g.stroke(); }
     // подвал: Ду, уклон, длина по участкам — как в Civil 3D
     const by = Y(maxD) + 20;
-    g.save(); g.font = '11px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+    g.save(); g.font = '11px ' + FONT;
     ROWS.forEach((t, i) => { g.fillStyle = muted; g.fillText(t, 4, by + i * 17 + 12); g.strokeStyle = line; g.beginPath(); g.moveTo(pl, by + i * 17); g.lineTo(pl + W, by + i * 17); g.stroke(); });
     g.restore();
     g.beginPath(); g.moveTo(pl, by + ROWS.length * 17); g.lineTo(pl + W, by + ROWS.length * 17); g.stroke();
@@ -257,7 +261,7 @@ export class Profile {
       const slope = Math.abs(s.d1 - s.d0) / s.len;
       const vals = [String(s.p.diameter), fmt(slope * 1000, 1), s.d0 === s.d1 ? fmt(s.d0, 2) : `${fmt(s.d0, 2)}→${fmt(s.d1, 2)}`, fmt(s.p.length ?? s.len, (s.p.length ?? s.len) < 10 ? 1 : 0)];
       vals.forEach((t, i) => {
-        g.fillStyle = s.issues.length ? '#f9a8d4' : i === 1 && slope < 0.002 ? '#fcd34d' : '#cbd5e1';
+        g.fillStyle = s.issues.length ? badT : i === 1 && slope < 0.002 ? warnT : text;
         const tw = g.measureText(t).width; if (tw + 4 < w) g.fillText(t, v0 + (w - tw) / 2, by + i * 17 + 12);
       });
     }
@@ -280,9 +284,10 @@ export class Profile {
       lines.push(n.gap < 0 ? `${u}: трубы перекрываются по высоте на ${fmt(-n.gap, 2)} м` : n.ok === false ? `${u}: зазор ${fmt(n.gap, 2)} м, нужно ${fmt(n.need, 2)} м` : `${u}: зазор ${fmt(n.gap, 2)} м`, 'щёлкните, чтобы показать в 3D');
     }
     const w = Math.max(...lines.map(t => g.measureText(t).width)) + 16, bx = x + 12 + w > r.width ? x - 12 - w : x + 12;
-    g.fillStyle = 'rgba(5,10,22,.92)'; g.strokeStyle = line;
-    g.beginPath(); g.roundRect(bx, pt, w, lines.length * 16 + 10, 6); g.fill(); g.stroke();
-    g.fillStyle = '#e2e8f0';
+    // подсказка — тёмно-серая в обеих темах, как у курсора на сцене
+    g.fillStyle = 'rgba(51,51,51,.96)';
+    g.beginPath(); g.roundRect(bx, pt, w, lines.length * 16 + 10, 8); g.fill();
+    g.fillStyle = '#fff';
     lines.forEach((t, i) => g.fillText(t, bx + 8, pt + 18 + i * 16));
   }
 }

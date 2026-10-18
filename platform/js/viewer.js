@@ -17,6 +17,17 @@ export const PALETTE = {
   selection: '#ff8a1f', problem: '#ff2fd1', ok: '#22c55e', special: '#fb923c',
   connected: '#22c55e', unconnected: '#f43f5e', future: '#e8dcc0', chamberOld: '#94a3b8', chamberNew: '#38bdf8',
 };
+// Подложка сцены в двух темах. Земля, дороги, парки и вода — спокойные цвета картографической подложки;
+// коммуникации и новая сеть — инженерная семантика, одинаковы в обеих темах. Линии поверх сцены (проекция трассы,
+// другой вариант, футляр, отвесы) — контрастные к земле: на светлой тёмные, на тёмной светлые
+export const SCENE = {
+  light: {sky: '#f5f4f2', under: '#e9dfcf', ground: '#eeebe6', grid: '#bdb6aa', underGrid: ['#d9c7a6', '#8a6a44'], building: '#eeebe6', future: '#ffd84d', flat: '#c7c1b7',
+    trace: '#0891b2', ghost: '#21201f', casing: '#4d4d4d', drop: '#c2410c', focus: '#21201f', surfK: 1.9,
+    surf: {road: '#ffffff', tram_tracks: '#dcd7cf', railway: '#bdb7ae', metro: '#f4b6cf', park: '#c4e3a6', social_area: '#f3dccb', water: '#8ec5f0', prohibited_site: '#efc4c4', power_line_support: '#c026d3'}},
+  dark: {sky: '#1f2533', under: '#1a140e', ground: '#2b3445', grid: '#5b6680', underGrid: ['#3b2a18', '#a07850'], building: '#6b7891', future: '#e8dcc0', flat: '#64748b',
+    trace: '#67e8f9', ghost: '#f1f5f9', casing: '#f8fafc', drop: '#fef08a', focus: '#ffffff', surfK: 0.9,
+    surf: {road: '#4a5468', tram_tracks: '#6b7280', railway: '#78716c', metro: '#be185d', park: '#2f6b4f', social_area: '#9a5b3c', water: '#2a55a8', prohibited_site: '#7f2a2a', power_line_support: '#e879f9'}},
+};
 // Новая сеть — свой бирюзовый цвет, которого нет ни у одной существующей сети (вода синяя, кабель фиолетовый,
 // теплосеть красная). Ду меняет только светлоту: тонкие — светлее, магистрали — насыщеннее; толщина — настоящая
 export function dnColor(dn) {
@@ -132,10 +143,10 @@ export const buildingHeight = it => {
 };
 
 // Земля: полупрозрачная плоскость с сеткой 10/100 м, которая гаснет вдали (шейдер с логарифмической глубиной)
-function groundMaterial() {
+function groundMaterial(color, line) {
   return new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, side: THREE.DoubleSide,
-    uniforms: {uColor: {value: col('#1f2a3d')}, uLine: {value: col('#64748b')}, uOpacity: {value: 0.6}, uCam: {value: new THREE.Vector3()}},
+    uniforms: {uColor: {value: col(color)}, uLine: {value: col(line)}, uOpacity: {value: 0.6}, uCam: {value: new THREE.Vector3()}},
     vertexShader: `
       #include <common>
       #include <logdepthbuf_pars_vertex>
@@ -163,7 +174,8 @@ export class Viewer {
     this.host = host;
     this.renderer = new THREE.WebGLRenderer({antialias: true, logarithmicDepthBuffer: true, preserveDrawingBuffer: false, powerPreference: 'high-performance'});
     this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
-    this.renderer.setClearColor(0x0d1526, 1);
+    this.th = SCENE.dark;
+    this.renderer.setClearColor(this.th.sky, 1);
     this.renderer.localClippingEnabled = true;
     this.renderer.domElement.tabIndex = 0;
     this.renderer.domElement.setAttribute('aria-label', '3D-сцена теплосети');
@@ -173,7 +185,7 @@ export class Viewer {
     host.appendChild(this.labels.domElement);
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog(0x0d1526, 1e5, 2e5);
+    this.scene.fog = new THREE.Fog(this.th.sky, 1e5, 2e5);
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.05, 2e5);
     this.scene.add(new THREE.HemisphereLight(0xdbeafe, 0x334155, 1.6));
     const sun = new THREE.DirectionalLight(0xffffff, 1.4);
@@ -236,8 +248,8 @@ export class Viewer {
     const under = this.camera.position.z < 0;
     if (under !== this._under) {
       this._under = under;
-      this.renderer.setClearColor(under ? 0x1a140e : 0x0d1526, 1);
-      this.scene.fog.color.set(under ? 0x1a140e : 0x0d1526);
+      this.renderer.setClearColor(under ? this.th.under : this.th.sky, 1);
+      this.scene.fog.color.set(under ? this.th.under : this.th.sky);
       if (this.depthGrid) this.depthGrid.visible = under;
     }
     const net = this.g.netLines.getObjectByName('netLine');
@@ -298,6 +310,23 @@ export class Viewer {
     return [...m.values()];
   }
 
+  // ---------- тема ----------
+  // Перекрашивает подложку и линии поверх сцены; данные и камера остаются
+  setTheme(name) {
+    const t = this.th = SCENE[name] || SCENE.light;
+    PALETTE.future = t.future;
+    for (const [k, c] of Object.entries(t.surf)) if (SURFACES[k]) SURFACES[k].color = c;
+    this._under = null;
+    if (!this.model) { this.renderer.setClearColor(t.sky, 1); this.scene.fog.color.set(t.sky); return this.redraw(); }
+    this.groundMat.uniforms.uColor.value.set(t.ground); this.groundMat.uniforms.uLine.value.set(t.grid);
+    this.depthGridMat.uniforms.uColor.value.set(t.underGrid[0]); this.depthGridMat.uniforms.uLine.value.set(t.underGrid[1]);
+    this.buildSurface(); this.buildBuildings();
+    if (this.variant) this.setVariant(this.variant);
+    if (this.ghost) this.setGhost(this.ghost);
+    if (this.route) this.highlight(this.route, this.focusSeg);
+    this.applyOpts();
+  }
+
   // ---------- исходные данные ----------
   setModel(model) {
     this.model = model;
@@ -305,7 +334,7 @@ export class Viewer {
     for (const k of Object.keys(this.g)) this.clear(this.g[k]);
     if (this.ground) { this.scene.remove(this.ground); this.ground.geometry.dispose(); }
     const [x0, y0, x1, y1] = model.bbox, W = Math.max(x1 - x0, y1 - y0, 300);
-    this.groundMat = groundMaterial();
+    this.groundMat = groundMaterial(this.th.ground, this.th.grid);
     this.groundMat.clippingPlanes = this.clipPlanes;
     this.ground = new THREE.Mesh(new THREE.PlaneGeometry(W * 3, W * 3), this.groundMat);
     this.ground.position.set((x0 + x1) / 2, (y0 + y1) / 2, 0);
@@ -313,8 +342,8 @@ export class Viewer {
     this.scene.add(this.ground);
     // под землёй — сетка на обычной глубине 3 м, чтобы было за что зацепиться глазом
     if (this.depthGrid) { this.scene.remove(this.depthGrid); this.depthGrid.geometry.dispose(); }
-    const dg = groundMaterial();
-    dg.uniforms.uColor.value.set('#3b2a18'); dg.uniforms.uLine.value.set('#a07850'); dg.uniforms.uOpacity.value = 0.08;
+    const dg = groundMaterial(...this.th.underGrid);
+    dg.uniforms.uOpacity.value = 0.08;
     this.depthGrid = new THREE.Mesh(new THREE.PlaneGeometry(W * 3, W * 3), dg);
     this.depthGrid.position.set((x0 + x1) / 2, (y0 + y1) / 2, -3 * this.ex);
     this.depthGrid.visible = false; this.depthGrid.renderOrder = 1;
@@ -357,7 +386,7 @@ export class Viewer {
     const solid = new THREE.Group();
     solid.name = 'buildings';
     for (const part of this.tiles(items, it => it.rings[0][0])) {
-      const mesh = new THREE.Mesh(buildingGeometry(part, buildingHeight, it => it.isFuture || it.p.object_type === 'oks_future' ? PALETTE.future : '#6b7a90'), this.bldMat);
+      const mesh = new THREE.Mesh(buildingGeometry(part, buildingHeight, it => it.isFuture || it.p.object_type === 'oks_future' ? PALETTE.future : this.th.building), this.bldMat);
       mesh.geometry.computeBoundingSphere();
       mesh.renderOrder = 10;
       solid.add(mesh);
@@ -365,7 +394,7 @@ export class Viewer {
     this.g.buildings.add(solid);
     // контуры зданий на земле — для режима «контуром»
     const flat = flatGeometry(items, 0.02);
-    const fm = new THREE.Mesh(flat, this.material('basic', {color: '#64748b', transparent: true, opacity: 0.7, depthWrite: false, side: THREE.DoubleSide}));
+    const fm = new THREE.Mesh(flat, this.material('basic', {color: this.th.flat, transparent: true, opacity: 0.7, depthWrite: false, side: THREE.DoubleSide}));
     fm.name = 'buildingsFlat';
     fm.renderOrder = 9;
     this.g.buildings.add(fm);
@@ -500,7 +529,7 @@ export class Viewer {
     this.g.netLines.add(this.trackLines(ln));
     this._lodK = null;
     // проекция трассы на землю — видно сверху сквозь непрозрачную землю (отвес «где копать»)
-    const tr = fatLines(trace, {width: 1.2, color: '#67e8f9', opacity: 0.55, dashed: true});
+    const tr = fatLines(trace, {width: 1.2, color: this.th.trace, opacity: 0.55, dashed: true});
     tr.name = 'trace';
     this.g.netLines.add(this.trackLines(tr));
     // камеры и врезки новой сети
@@ -520,7 +549,7 @@ export class Viewer {
     const casings = [];
     for (const s of v.segs) if (s.special) {
       const P = s.pts.map((p, i) => [p[0], p[1], -(s.depth[i] + s.row.h / 2) * ex]);
-      for (let i = 0; i + 1 < P.length; i++) casings.push({a: P[i], b: P[i + 1], r: s.row.h * 0.95 + 0.12, color: '#f8fafc'});
+      for (let i = 0; i + 1 < P.length; i++) casings.push({a: P[i], b: P[i + 1], r: s.row.h * 0.95 + 0.12, color: this.th.casing});
     }
     if (casings.length) {
       const cm = tubeMesh(casings, {radial: 14, material: this.material('standard', {color: 0xffffff, transparent: true, opacity: 0.22, depthWrite: false, roughness: 0.2}), overlap: true});
@@ -565,7 +594,7 @@ export class Viewer {
     this.redraw();
   }
 
-  // Другой вариант поверх текущего — белым пунктиром, чтобы сравнить трассы на месте
+  // Другой вариант поверх текущего — пунктиром (белым на тёмной земле, тёмным на светлой), чтобы сравнить трассы на месте
   setGhost(v) {
     this.clear(this.g.ghost);
     this.ghost = v;
@@ -575,7 +604,7 @@ export class Viewer {
       const P = s.pts.map((p, i) => [p[0], p[1], -(s.depth[i] + s.row.h / 2) * this.ex]);
       for (let i = 0; i + 1 < P.length; i++) seg.push(...P[i], ...P[i + 1]);
     }
-    const ln = fatLines(seg, {width: 3, color: '#f1f5f9', opacity: 0.9, dashed: true});
+    const ln = fatLines(seg, {width: 3, color: this.th.ghost, opacity: 0.9, dashed: true});
     ln.renderOrder = 17;
     this.g.ghost.add(this.trackLines(ln));
     this.redraw();
@@ -590,13 +619,13 @@ export class Viewer {
   // ---------- выделение трассы ----------
   highlight(route, focusSeg = null) {
     this.clear(this.g.overlay);
-    this.route = route;
+    this.route = route; this.focusSeg = focusSeg;
     if (!route) { this.redraw(); return; }
     const ex = this.ex, pieces = [], drops = [], segs = [];
     for (const s of route.segs) {
       const r = s.row.h / 2 * 1.9 + 0.08;
       const P = s.pts.map((p, i) => [p[0], p[1], -(s.depth[i] + s.row.h / 2) * ex]);
-      for (let i = 0; i + 1 < P.length; i++) { pieces.push({a: P[i], b: P[i + 1], r, color: s === focusSeg ? '#ffffff' : PALETTE.selection}); segs.push(...P[i], ...P[i + 1]); }
+      for (let i = 0; i + 1 < P.length; i++) { pieces.push({a: P[i], b: P[i + 1], r, color: s === focusSeg ? this.th.focus : PALETTE.selection}); segs.push(...P[i], ...P[i + 1]); }
     }
     const shell = tubeMesh(pieces, {radial: 14, material: this.material('basic', {color: 0xffffff, transparent: true, opacity: 0.38, depthWrite: false}), overlap: true});
     shell.renderOrder = 20;
@@ -618,7 +647,7 @@ export class Viewer {
         }
       }
     }
-    const dl = fatLines(drops, {width: 1.2, color: '#fef08a', opacity: 0.8, dashed: true});
+    const dl = fatLines(drops, {width: 1.2, color: this.th.drop, opacity: 0.8, dashed: true});
     this.g.overlay.add(this.trackLines(dl));
     // пересечения по трассе: кольца и подписи
     for (const s of route.segs) for (const c of s.cx) {
@@ -687,7 +716,7 @@ export class Viewer {
     const on = k => L[k] !== false;
     const gop = o.xray ? Math.min(o.groundOpacity, 0.15) : o.groundOpacity;
     if (this.groundMat) { this.groundMat.uniforms.uOpacity.value = gop; this.ground.visible = on('ground'); }
-    for (const m of this.g.surface.children) { m.visible = on('p:' + m.userData.key); if (m.material.opacity !== undefined && m.material.transparent) m.material.opacity = Math.max(0.1, gop * 0.75); }
+    for (const m of this.g.surface.children) { m.visible = on('p:' + m.userData.key); if (m.material.opacity !== undefined && m.material.transparent) m.material.opacity = Math.min(0.95, Math.max(0.1, gop * this.th.surfK)); }
     const solid = this.g.buildings.getObjectByName('buildings'), flat = this.g.buildings.getObjectByName('buildingsFlat');
     if (solid) {
       solid.visible = on('buildings') && o.buildings === 'solid';

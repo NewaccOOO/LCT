@@ -14,13 +14,13 @@ function faceTexture(text, hover = false) {
   const c = document.createElement('canvas');
   c.width = c.height = 256;
   const g = c.getContext('2d');
-  g.fillStyle = hover ? '#0369a1' : '#e2e8f0';
+  g.fillStyle = hover ? '#196dff' : '#ffffff';
   g.fillRect(0, 0, 256, 256);
-  g.strokeStyle = hover ? '#7dd3fc' : '#94a3b8';
+  g.strokeStyle = hover ? '#4183ff' : '#d9d9d9';
   g.lineWidth = 10;
   g.strokeRect(5, 5, 246, 246);
-  g.fillStyle = hover ? '#ffffff' : '#1e293b';
-  g.font = `bold ${text.length > 5 ? 46 : 58}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+  g.fillStyle = hover ? '#ffffff' : '#4d4d4d';
+  g.font = `500 ${text.length > 5 ? 46 : 58}px "Helvetica Neue", Arial, sans-serif`;
   g.textAlign = 'center';
   g.textBaseline = 'middle';
   g.fillText(text, 128, 132);
@@ -69,15 +69,15 @@ export class ViewCube {
       this.faces.push(m);
       this.scene.add(m);
     }
-    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(2.002, 2.002, 2.002)), new THREE.LineBasicMaterial({color: 0x475569}));
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(2.002, 2.002, 2.002)), new THREE.LineBasicMaterial({color: 0xbdbdbd}));
     this.scene.add(edges);
     // компас под кубом
-    const ring = new THREE.Mesh(new THREE.RingGeometry(1.7, 1.95, 64), new THREE.MeshBasicMaterial({color: 0x64748b, transparent: true, opacity: 0.85, side: THREE.DoubleSide}));
+    const ring = new THREE.Mesh(new THREE.RingGeometry(1.7, 1.95, 64), new THREE.MeshBasicMaterial({color: 0x9e9e9e, transparent: true, opacity: 0.85, side: THREE.DoubleSide}));
     ring.position.z = -1.1;
     this.scene.add(ring);
     this.ring = ring;
     this.letters = [];
-    for (const [ch, x, y, color] of [['С', 0, 1, '#f87171'], ['В', 1, 0, '#cbd5e1'], ['Ю', 0, -1, '#cbd5e1'], ['З', -1, 0, '#cbd5e1']]) {
+    for (const [ch, x, y, color] of [['С', 0, 1, '#ff4433'], ['В', 1, 0, '#878787'], ['Ю', 0, -1, '#878787'], ['З', -1, 0, '#878787']]) {
       const m = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.62), new THREE.MeshBasicMaterial({map: letterTexture(ch, color), transparent: true, side: THREE.DoubleSide, depthTest: false}));
       m.position.set(x * 1.82, y * 1.82, -1.1);
       m.userData.dir = [x, y];
@@ -85,7 +85,7 @@ export class ViewCube {
       this.letters.push(m);
       this.scene.add(m);
     }
-    this.hot = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 12), new THREE.MeshBasicMaterial({color: 0x0ea5e9}));
+    this.hot = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 12), new THREE.MeshBasicMaterial({color: 0x196dff}));
     this.hot.visible = false;
     this.scene.add(this.hot);
     this.bind();
