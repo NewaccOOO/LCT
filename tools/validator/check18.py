@@ -769,7 +769,7 @@ def check_variant(inp, trees, vid, feats, rep):
             k *= p.get("_kgl", 1.0)
         cost = line.length * DN[p["diameter"]]["new_rub_m"] * k
         seg_cost_new += cost
-        if abs(cost - p["cost"]) > max(1.0, 0.01 * DN[p["diameter"]]["new_rub_m"] * k):
+        if abs(cost - p["cost"]) > max(1.0, 0.01 * p.get("_parts", 1) * DN[p["diameter"]]["new_rub_m"] * k):
             rep.count["E1 cost участка не равен L·c·Kспец (без надбавки за поворот)"] += 1
             if len(rep.sample["E1 cost участка не равен L·c·Kспец (без надбавки за поворот)"]) < 3:
                 rep.sample["E1 cost участка не равен L·c·Kспец (без надбавки за поворот)"].append(f"{p['id']} {p['cost']:.0f} vs {cost:.0f} (x{p['cost'] / cost:.3f})")
@@ -850,6 +850,9 @@ def plan_view(feats):
     стоимость частей с их Kгл, делённая на стоимость без него."""
     segs = [f for f in feats if f["properties"]["object_type"] == "heat_network"]
     tech = {str(f["properties"]["id"]) for f in feats if f["properties"]["object_type"] == "technical_node"}
+    # узлы, которые поставил профиль глубины (излом, переход через 3,0 м, §2.1 и §5): делят и спецучасток
+    profile_nodes = {str(f["properties"]["id"]) for f in feats if f["properties"]["object_type"] == "technical_node"
+                     and f["properties"].get("reason") == "depth_profile"}
     by_start = defaultdict(list)
     ins = Counter()
     for f in segs:
@@ -862,8 +865,10 @@ def plan_view(feats):
             return None
         b = nxt[0]["properties"]
         pa = a["properties"]
-        # профиль делит только обычные участки; спецучастки на стыке разных зон разделены уже в 2D
-        if not (b["laying_method"] == pa["laying_method"] == "base") or b["diameter"] != pa["diameter"]:
+        # профиль делит обычные участки, а спецучастки — только в узлах с reason depth_profile; спецучастки на стыке
+        # разных зон разделены уже в 2D
+        same = b["laying_method"] == pa["laying_method"] and (b["laying_method"] == "base" or node in profile_nodes)
+        if not same or b["diameter"] != pa["diameter"]:
             return None
         return nxt[0]
 
@@ -899,6 +904,7 @@ def plan_view(feats):
         flat = sum(q["properties"]["cost"] / ((k_depth(q["properties"]["depth_start"]) + k_depth(q["properties"]["depth_end"])) / 2)
                    if q["properties"].get("depth_start") is not None else q["properties"]["cost"] for q in parts)
         props["_kgl"] = props["cost"] / flat if flat else 1.0
+        props["_parts"] = len(parts)  # длина каждого куска округлена до см: допуск E1 — по 1 см на кусок
         props["depth_start"] = props["depth_end"] = None
         merged.append({"type": "Feature", "geometry": {"type": "LineString", "coordinates": coords}, "properties": props})
     rest = [f for f in feats if f["properties"]["object_type"] != "heat_network"
@@ -966,9 +972,9 @@ def check_depth(inp, feats, rep):
             meet = line.intersection(g)
             pts = [Point(c) for c in shapely.get_coordinates(meet)] if not meet.is_empty else []
             for pt in pts:
-                if min(pt.distance(e) for e in ends) <= NODE_TOL and kinds.get(
+                if name.startswith("heat_network") and min(pt.distance(e) for e in ends) <= NODE_TOL and kinds.get(
                         str(p["start_node_id"] if pt.distance(ends[0]) <= NODE_TOL else p["end_node_id"])) != "technical_node":
-                    continue  # врезка или подключение в узле, а не пересечение
+                    continue  # врезка в существующую сеть в узле, а не пересечение (газ и кабель врезкой не бывают)
                 h = depth_at(pt)
                 gap = max(top - (h + h_new), h - (top + h_obj))
                 if gap < clear - DEPTH_TOL:
