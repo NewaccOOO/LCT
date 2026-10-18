@@ -859,11 +859,11 @@ function clickAt(x, y) {
   if (S.measure) return measureClick(x, y);
   const h = pickAt(x, y), sel = hitToSel(h);
   setXY(h?.point || rig.onPlane(x, y, 0, 1e6));
-  if (!sel) {
-    // в правке пустое место только снимает выбор точки: трасса и панель остаются
-    if (E.on) { if (E.sel) { E.sel = null; editHandles(true); editPanel(); } return; }
-    clearSel(); return;
-  }
+  // в правке случайное касание не уводит с трассы: пустое место, объект без трассы, своя же труба или узел
+  // только снимают выбор точки; другую трассу выбирают касанием её трубы или здания
+  const mine = sel && S.route && ((sel.kind === 'seg' && S.route.segs.includes(sel.ref)) || (sel.kind === 'node' && S.route.segs.some(s => s.from === sel.ref.id || s.to === sel.ref.id)) || (sel.kind === 'oks' && sel.ref.id === S.route.end));
+  if (E.on && (!sel || mine || !routeFor(sel))) { if (E.sel) { E.sel = null; editHandles(true); editPanel(); } return; }
+  if (!sel) { clearSel(); return; }
   select(sel, {room: true});
 }
 function dblAt(x, y) {
@@ -933,12 +933,16 @@ function showCtx(x, y) {
     <div class="lbl">${P.z < -0.05 ? `глубина ${fmt(-P.z / viewer.ex, 2)} м` : 'на поверхности'}</div>`;
   const r = $('#view').getBoundingClientRect();
   menu.hidden = false;
+  menu._armed = false;
+  menu.onpointerdown = () => { menu._armed = true; };
   $('#tip').hidden = true;
   menu.style.left = Math.min(x, r.width - menu.offsetWidth - 8) + 'px';
   menu.style.top = Math.min(y, r.height - menu.offsetHeight - 8) + 'px';
   menu.onclick = e => {
     const b = e.target.closest('button');
     if (!b) return;
+    // меню открыто долгим нажатием: отпускание того же пальца над пунктом — не выбор
+    if (!menu._armed && e.pointerType !== 'mouse' && e.detail !== 0 && matchMedia('(pointer: coarse)').matches) return;
     hideCtx();
     const c = b.dataset.c, dist = rig.pos.distanceTo(P);
     if (c === 'sel') select(sel, {fly: false});
@@ -1703,7 +1707,8 @@ function editPanel() {
   const item = (i, k) => `<button class="iss ${i.level}${i.old ? ' old' : ''}" data-i="${k}" title="Показать место"><span class="dot"></span><span>${esc(i.text)}${i.n > 1 ? ` <b>×${i.n}</b>` : ''}${i.where ? `<small> · ${esc(i.where)}</small>` : ''}</span></button>`;
   const all = [...fresh, ...old];
   const sumText = (fb ? `${fb} ${plural(fb, 'нарушение', 'нарушения', 'нарушений')} от правки` : fw ? '' : 'Правка нарушений не добавила') + (fb && fw ? ' · ' : '') + (fw ? `${fw} ${plural(fw, 'замечание', 'замечания', 'замечаний')}` : '') + (old.length ? `<span class="mut"> · ${old.length} в исходной трассе</span>` : '');
-  const aff = editAffected(v), others = aff.filter(a => a.id !== R?.end);
+  const aff = editAffected(v), others = aff.filter(a => a.id !== R?.end), compact = isMobile();
+  const selp = E.sel?.kind === 'n' ? `${nodeName(E.sel.node, S.model)}${E.sel.node.type === 'technical_node' ? ' — узел, стык участков' : ''}` : E.sel?.kind === 'v' ? `излом на ${segName(E.sel.seg).replace('Участок', 'участке')}` : '';
   const html = `<div class="eb-h"><b>Правка трассы</b><span class="mut">${R ? esc(R.endName || nodeLabel(R.end)) : 'выберите здание или трубу'}</span><span class="sp"></span>
       <button id="ebUndo" class="icon" ${E.undo.length ? '' : 'disabled'} title="Отменить (Ctrl Z)" aria-label="Отменить"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
       <button id="ebRedo" class="icon" ${E.redo.length ? '' : 'disabled'} title="Вернуть (Ctrl Shift Z)" aria-label="Вернуть"><svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
@@ -1714,12 +1719,12 @@ function editPanel() {
     ${R || n ? (all.length ? `<button id="ebList" class="eb-sum ${fb ? 'bad' : fw ? 'warn' : 'none'}" aria-expanded="${open}"><span class="dot"></span><span>${sumText}</span><span class="caret">${open ? '▾' : '▸'}</span></button>
       ${open ? `<div class="eb-p">${fresh.map((i, k) => item(i, k)).join('')}${old.length ? `<button id="ebOld" class="iss oldh" aria-expanded="${!!E.oldOpen}">Было в исходной трассе до правки: ${old.length}<span class="caret">${E.oldOpen ? '▾' : '▸'}</span></button>${E.oldOpen ? old.map((i, k) => item(i, fresh.length + k)).join('') : ''}` : ''}</div>` : ''}`
       : '<div class="iss ok"><span class="dot"></span>Нарушений правил на трассе нет</div>') : ''}
-    <div class="eb-a">${E.sel?.kind === 'v' ? '<button id="ebDel" title="Удалить выбранный поворот (Delete)">Удалить поворот</button>' : ''}${E.sel?.kind === 'n' && canStraighten(E.sel) ? '<button id="ebDel" title="Поставить узел на прямую между соседними точками (Delete)">Убрать излом</button>' : ''}
-      <button id="ebReset" ${n ? '' : 'disabled'} title="Вернуть трассы варианта как их построил сервис">Сбросить правки</button>
+    ${selp ? `<div class="eb-selp"><span>Выбрано: <b>${esc(selp)}</b></span>${E.sel?.kind === 'v' ? '<button id="ebDel" title="Удалить выбранный поворот (Delete)">Удалить поворот</button>' : ''}${E.sel?.kind === 'n' && canStraighten(E.sel) ? '<button id="ebDel" title="Поставить узел на прямую между соседними точками (Delete)">Убрать излом</button>' : ''}</div>` : ''}
+    <div class="eb-a"><button id="ebReset" ${n ? '' : 'disabled'} title="Вернуть трассы варианта как их построил сервис">Сбросить правки</button>
       <button id="ebSave" ${n ? '' : 'disabled'} title="GeoJSON в формате сервиса с вашими правками">Скачать с правками</button></div>
-    <div class="eb-leg" aria-label="Обозначения"><span><i class="lg v"></i>поворот</span><span><i class="lg n"></i>узел, камера</span><span><i class="lg l"></i>закреплено</span><span><i class="lg m"></i>добавить поворот</span><span><i class="lg g"></i>как было</span></div>
-    <div class="eb-hint">${touch ? 'Тяните точку пальцем · коснитесь — выбрать · «+N» у точки — рядом ещё точки, коснитесь — приблизить' : 'Тяните точку · двойной щелчок — удалить поворот или убрать излом · Alt — без привязки к прямым углам'}<button id="ebHelp" class="link" aria-expanded="${!!E.help}">${E.help ? 'скрыть' : 'подробнее'}</button>
-      ${E.help ? `<div class="more"><b>Поворот</b> (круг) — излом внутри участка: тяните, удаляйте. <b>Узел</b> (квадрат) — граница участков, где меняется глубина, Ду или начинается спецпереход; <b>камера</b> — тоже квадрат. Их двигают вместе со всеми трубами, которые в них сходятся; удалить нельзя, но излом в узле можно убрать. <b>Серые</b> закреплены: ввод в здание и врезка в существующую сеть. Звенья липнут к прямым углам — пунктир показывает, к чему.<br>Расстояния до зданий, зон, дорог и сетей — от стенки канала трубы, нормы — из правил расчёта: здания 5/7/9 м по Ду, зоны запрета 1 м, метро 10 м, дороги и трамвай 1,5 м, газопровод и кабель 2 м, водопровод 1,5 м, канализация и теплосеть 1 м; ближе к дороге или сети можно только спецпереходом — его ставит пересчёт на сервере. Угол поворота — отклонение от прямой, не больше 90°; дорогу трасса переходит под углом не меньше 45°.<br>Длина, стоимость (пропорционально длине) и ${S_FORMULA}. Правки хранятся в этом браузере; «Скачать с правками» — файл в формате сервиса, в нём отмечены правленые участки и их нарушения.</div>` : ''}</div>`;
+    ${!compact || E.help ? '<div class="eb-leg" aria-label="Обозначения"><span><i class="lg n"></i>узел: стык участков (поворот, камера)</span><span><i class="lg v"></i>излом внутри участка</span><span><i class="lg l"></i>закреплено</span><span><i class="lg m"></i>добавить поворот</span><span><i class="lg g"></i>как было</span></div>' : ''}
+    <div class="eb-hint">${compact && !E.help ? '' : touch ? 'Тяните точку пальцем · коснитесь — выбрать · «+» — новый поворот · «+N» — рядом ещё точки, коснитесь — приблизить' : 'Тяните точку · двойной щелчок — удалить поворот или убрать излом · Alt — без привязки к прямым углам'}<button id="ebHelp" class="link" aria-expanded="${!!E.help}">${E.help ? 'скрыть' : 'подробнее'}</button>
+      ${E.help ? `<div class="more"><b>Квадрат</b> — узел, стык двух участков: так сервис ставит повороты трассы («поворот N») и границы, где меняется глубина, Ду или начинается спецпереход; <b>камера</b> — тоже квадрат. <b>Круг</b> — излом внутри участка (его добавляете вы «+»): тяните, удаляйте. Их двигают вместе со всеми трубами, которые в них сходятся; удалить нельзя, но излом в узле можно убрать. <b>Серые</b> закреплены: ввод в здание и врезка в существующую сеть. Звенья липнут к прямым углам — пунктир показывает, к чему.<br>Расстояния до зданий, зон, дорог и сетей — от стенки канала трубы, нормы — из правил расчёта: здания 5/7/9 м по Ду, зоны запрета 1 м, метро 10 м, дороги и трамвай 1,5 м, газопровод и кабель 2 м, водопровод 1,5 м, канализация и теплосеть 1 м; ближе к дороге или сети можно только спецпереходом — его ставит пересчёт на сервере. Угол поворота — отклонение от прямой, не больше 90°; дорогу трасса переходит под углом не меньше 45°.<br>Длина, стоимость (пропорционально длине) и ${S_FORMULA}. Правки хранятся в этом браузере; «Скачать с правками» — файл в формате сервиса, в нём отмечены правленые участки и их нарушения.</div>` : ''}</div>`;
   // в кадре перетаскивания панель пересобирается, только если что-то в ней поменялось
   E.issAll = all;
   if (html === E.panelHtml) return;
@@ -1747,11 +1752,13 @@ function setEdit(on) {
     E.help = false;
     E.listOpen = null;
     stopFly(); setMeasure(false);
+    rig.noContext = true;
     // править удобнее на всю сцену: панели уходят, как в «только карта», на выходе возвращаются
     E.auto = !mapOnly;
     if (E.auto) setMapOnly(true);
   } else {
     viewer.marker('selpt', null);
+    rig.noContext = false;
     if (E.auto && mapOnly) setMapOnly(false);
     E.auto = false;
     if (S.sel) showProps(S.sel);
@@ -1775,7 +1782,8 @@ function editFrame() {
   const r = $('#view').getBoundingClientRect(), bar = $('#editBar').getBoundingClientRect(), tb = $('#navR .toolbar').getBoundingClientRect(), cb = $('#cube').getBoundingClientRect();
   const pr = !$('#props').hidden && !isMobile() && document.body.classList.contains('propsShown') ? $('#props').getBoundingClientRect().left : Infinity;
   const left = isMobile() ? 0 : bar.right - r.left + 12, right = Math.min(tb.left, cb.width ? cb.left : Infinity, pr) - r.left - 12;
-  const top = isMobile() ? bar.bottom - r.top + 8 : 16, bottom = r.height - 50;
+  const low = bar.top > r.top + r.height / 2;   // панель правки снизу (телефон)
+  const top = isMobile() && !low ? bar.bottom - r.top + 8 : 16, bottom = low ? bar.top - r.top - 8 : r.height - 50;
   const fw = Math.max(160, right - left), fh = Math.max(160, bottom - top);
   const half = Math.tan(viewer.camera.fov * D / 2);
   const mpp = Math.max((x1 - x0 + 16) / fw, (y1 - y0 + 16) / fh, 0.05);   // метров на пиксель
@@ -1827,13 +1835,18 @@ function editHandles(rebuild) {
 }
 // трасса в плане по земле — там же, где точки: трубы лежат на глубине и в перспективе сверху видны со сдвигом к центру
 function editPlan() {
-  const old = viewer.g.overlay.getObjectByName('editPlan');
-  if (old) { viewer.g.overlay.remove(old); old.geometry?.dispose(); viewer.lineMats.delete(old.material); old.material?.dispose(); }
+  for (const old of viewer.g.overlay.children.filter(o => o.name === 'editPlan')) { viewer.g.overlay.remove(old); old.geometry?.dispose(); viewer.lineMats.delete(old.material); old.material?.dispose(); }
   if (!E.on || !S.route) { viewer.redraw(); return; }
+  const add = (seg, o) => { viewer.overlayLines(seg, o); viewer.g.overlay.children[viewer.g.overlay.children.length - 1].name = 'editPlan'; };
+  // сети рядом с трассой — тоже по земле, своим цветом: точка и чужая труба видны в одной плоскости, без сдвига перспективы
+  const near = new Map();
+  for (const s of S.route.segs) for (let i = 0; i + 1 < s.pts.length; i++) for (const e of S.model.utilsNear(s.pts[i], s.pts[i + 1], 25)) near.set(e, true);
+  const by = {};
+  for (const e of near.keys()) (by[e.type] ||= []).push(e.a[0], e.a[1], 0.25, e.b[0], e.b[1], 0.25);
+  for (const [t, seg] of Object.entries(by)) add(seg, {color: UTILITIES[t]?.color || '#888', width: 1.5});
   const seg = [];
   for (const s of S.route.segs) for (let i = 0; i + 1 < s.pts.length; i++) seg.push(s.pts[i][0], s.pts[i][1], 0.3, s.pts[i + 1][0], s.pts[i + 1][1], 0.3);
-  viewer.overlayLines(seg, {width: 3});
-  viewer.g.overlay.children[viewer.g.overlay.children.length - 1].name = 'editPlan';
+  add(seg, {width: 3});
 }
 // положение точек на экране — каждый кадр, после отрисовки сцены
 function editPlace() {
@@ -1975,54 +1988,65 @@ function editDraw(r, V) {
   let svg = '';
   if (E.drag?.guide?.length) svg += E.drag.guide.map(([a, b]) => { const A = scr(a), B = scr(b); return A && B ? `<polyline class="snap" points="${f(A)} ${f(B)}"/>` : ''; }).join('');
   if (N && !notes.hidden) {
-    const els = [...notes.children], placed = [];
-    // занятые места: точки правки
-    for (const el of E.handles.values()) if (el.style.display !== 'none') { const m = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(el.style.transform); if (m) placed.push([+m[1] - 12, +m[2] - 12, 24, 24]); }
-    // и плавающие панели поверх сцены: правка, легенда, масштаб глубины
-    for (const sel of ['#editBar', '#legend', '#exChip']) { const e = $(sel); if (!e || e.hidden) continue; const q = e.getBoundingClientRect(), vr = $('#view').getBoundingClientRect(); if (q.width) placed.push([q.left - vr.left - 4, q.top - vr.top - 4, q.width + 8, q.height + 8]); }
+    const els = [...notes.children], placed = [], vr = $('#view').getBoundingClientRect(), touch = matchMedia('(pointer: coarse)').matches;
+    // занятые места: точки правки (с зоной захвата), подписи сцены (камеры, пересечения), плавающие панели
+    const hs = touch ? 40 : 22;
+    for (const el of E.handles.values()) if (el.style.display !== 'none') { const m = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(el.style.transform); if (m) placed.push([+m[1] - hs / 2, +m[2] - hs / 2, hs, hs]); }
+    for (const el of document.querySelectorAll('#view .labels .lbl')) { const q = el.getBoundingClientRect(); if (q.width && q.right > vr.left && q.left < vr.right && q.bottom > vr.top && q.top < vr.bottom) placed.push([q.left - vr.left, q.top - vr.top, q.width, q.height]); }
+    for (const sel of ['#editBar', '#legend', '#exChip', '#navR .toolbar', '#cube']) { const e = $(sel); if (!e || e.hidden) continue; const q = e.getBoundingClientRect(); if (q.width) placed.push([q.left - vr.left - 4, q.top - vr.top - 4, q.width + 8, q.height + 8]); }
     const hit = (x, y, w, h) => placed.some(([px, py, pw, ph]) => x < px + pw && px < x + w && y < py + ph && py < y + h);
-    // подпись встаёт у своей точки: сначала в сторону dir, потом по кругу и чуть дальше — первое свободное место
+    // подпись встаёт у своей точки: сначала в сторону dir, потом по кругу и дальше — первое свободное место;
+    // важная (нарушение, на грани) встаёт всегда, второстепенная (длина звена, норма с запасом) без места прячется
     const DIRS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
-    const tb = $('#navR .toolbar').getBoundingClientRect(), vr = $('#view').getBoundingClientRect(), maxR = Math.min(r.width, tb.left - vr.left - 8);
-    const put = (el, c, dir) => {
+    const put = (el, c, dir, must) => {
+      if (!el) return;
       if (!c) { el.style.display = 'none'; return; }
+      el.style.display = '';
       const w = el.offsetWidth || 120, h = el.offsetHeight || 20;
-      const at = (d, k) => { const x = c[0] + d[0] * k - (d[0] < 0 ? w : d[0] === 0 ? w / 2 : 0), y = c[1] + d[1] * k - (d[1] < 0 ? h : d[1] === 0 ? h / 2 : 0); return [Math.max(4, Math.min(maxR - w, x)), Math.max(4, Math.min(r.height - h - 4, y))]; };
-      let x, y;
-      search: for (const k of [8, 22, 40]) for (const d of [dir, ...DIRS]) { [x, y] = at(d, k); if (!hit(x, y, w, h)) break search; [x, y] = at(dir, 8); }
-      placed.push([x, y, w, h]);
-      el.style.display = ''; el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+      const at = (d, k) => { const x = c[0] + d[0] * k - (d[0] < 0 ? w : d[0] === 0 ? w / 2 : 0), y = c[1] + d[1] * k - (d[1] < 0 ? h : d[1] === 0 ? h / 2 : 0); return [Math.max(4, Math.min(r.width - w - 4, x)), Math.max(4, Math.min(r.height - h - 4, y))]; };
+      let pos = null;
+      search: for (const k of [8, 20, 34, 52]) for (const d of [dir, ...DIRS]) { const q = at(d, k); if (!hit(q[0], q[1], w, h)) { pos = q; break search; } }
+      if (!pos) { if (!must) { el.style.display = 'none'; return; } pos = at(dir, 8); }
+      placed.push([pos[0], pos[1], w, h]);
+      el.style.transform = `translate(${pos[0].toFixed(1)}px, ${pos[1].toFixed(1)}px)`;
     };
-    const Pc = scr(N.P);
-    let k = 0;
-    for (const i of N.items) {
-      const el = els[k++], A = scr(i.p), B = scr(i.q);
-      if (!A || !B) { if (el) el.style.display = 'none'; continue; }
+    const Pc = scr(N.P), nI = N.items.length, nD = N.dims.length;
+    N.items.forEach((i, k) => {
+      const el = els[k], A = scr(i.p), B = scr(i.q);
+      if (!A || !B) { if (el) el.style.display = 'none'; return; }
       svg += `<polyline class="cl ${i.level}" points="${f(A)} ${f(B)}"/><circle class="ce ${i.level}" cx="${B[0].toFixed(1)}" cy="${B[1].toFixed(1)}" r="3"/>`;
       // подпись — по ту сторону объекта, куда смотрит выноска
       const dx = B[0] - A[0], dy = B[1] - A[1], l = Math.hypot(dx, dy);
-      put(el, B, l > 4 ? [Math.sign(Math.round(dx / l * 2)), Math.sign(Math.round(dy / l * 2))] : [1, 1]);
-    }
-    for (const d of N.dims) {
-      const el = els[k++], A = scr(d.a), B = scr(d.b);
-      if (!A || !B || Math.hypot(B[0] - A[0], B[1] - A[1]) < 36) { if (el) el.style.display = 'none'; continue; }
+      put(el, B, l > 4 ? [Math.sign(Math.round(dx / l * 2)), Math.sign(Math.round(dy / l * 2))] : [1, 1], i.level === 'bad' || i.level === 'near');
+    });
+    // угол — над точкой (палец и курсор снизу), потом длины звеньев
+    const ae = els[nI + nD];
+    if (ae) put(ae, Pc, [0, -1], ae.classList.contains('bad'));
+    N.dims.forEach((d, j) => {
+      const el = els[nI + j], A = scr(d.a), B = scr(d.b);
+      if (!A || !B || Math.hypot(B[0] - A[0], B[1] - A[1]) < 36) { if (el) el.style.display = 'none'; return; }
       const m = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2], l = Math.hypot(B[0] - A[0], B[1] - A[1]);
-      const nx = -(B[1] - A[1]) / l, ny = (B[0] - A[0]) / l;
-      // размер — сбоку от звена, с той стороны, где нет активной точки и ближе к верху экрана
-      const sgn = ny > 0 ? -1 : 1;
-      put(el, [m[0] + nx * sgn * 6, m[1] + ny * sgn * 6], [Math.sign(Math.round(nx * sgn * 2)), Math.sign(Math.round(ny * sgn * 2))]);
-    }
-    const ae = els[k];
-    if (ae) put(ae, Pc, [0, 1]);
+      const nx = -(B[1] - A[1]) / l, ny = (B[0] - A[0]) / l, sgn = ny > 0 ? -1 : 1;
+      put(el, [m[0] + nx * sgn * 6, m[1] + ny * sgn * 6], [Math.sign(Math.round(nx * sgn * 2)), Math.sign(Math.round(ny * sgn * 2))], false);
+    });
   }
   g.innerHTML = svg;
   g.hidden = !svg;
   const tip = $('#editTip');
   if (!tip.hidden && E.drag) {
-    const vr = $('#view').getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
-    // палец закрывает место под собой — плашка над ним; мышь — справа снизу от курсора
-    let x = E.drag.cx - vr.left + 18, y = E.drag.touch ? E.drag.cy - vr.top - h - 48 : E.drag.cy - vr.top + 22;
-    if (x + w > vr.width - 8) x = E.drag.cx - vr.left - w - 18;
+    const vr = $('#view').getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight, bar = $('#editBar').getBoundingClientRect(), tb = $('#navR .toolbar').getBoundingClientRect();
+    let x, y;
+    if (E.drag.touch) {
+      // под пальцем не видно, а рядом с ним плашка прыгает: на сенсорном экране — на месте, вверху свободной части сцены
+      const right = tb.left - vr.left - 8, top = bar.top < vr.top + vr.height / 2;
+      x = Math.max(8, (vr.width - w) / 2); y = 8;
+      if (top && x < bar.right - vr.left + 8) x = bar.right - vr.left + 8;
+      if (x + w > right) { x = Math.max(8, Math.min(right - w, (vr.width - w) / 2)); if (top) y = bar.bottom - vr.top + 8; }
+    } else {
+      // мышь — справа снизу от курсора
+      x = E.drag.cx - vr.left + 18; y = E.drag.cy - vr.top + 22;
+      if (x + w > vr.width - 8) x = E.drag.cx - vr.left - w - 18;
+    }
     y = Math.max(8, Math.min(vr.height - h - 8, y));
     tip.style.transform = `translate(${Math.max(8, x).toFixed(0)}px, ${y.toFixed(0)}px)`;
   }
@@ -2034,13 +2058,13 @@ function editDown(e) {
   e.stopPropagation(); e.preventDefault();
   if (t.lock) { E.sel = null; toast(t.lock + '. Двигать её нельзя.', 'info', 3000); editHandles(true); return; }
   el.setPointerCapture(e.pointerId);
-  E.drag = {t, x: e.clientX, y: e.clientY, moved: false, guide: null};
+  E.drag = {t, x: e.clientX, y: e.clientY, moved: false, guide: null, id: e.pointerId, key0: t.key, touch: e.pointerType === 'touch'};
   el.onpointermove = editMove;
   el.onpointerup = el.onpointercancel = ev => editUp(ev, el);
 }
 function editMove(e) {
   const D0 = E.drag; if (!D0) return;
-  if (!D0.moved && Math.hypot(e.clientX - D0.x, e.clientY - D0.y) < 4) return;
+  if (!D0.moved && Math.hypot(e.clientX - D0.x, e.clientY - D0.y) < (D0.touch ? 8 : 4)) return;
   const P = planAt(e); if (!P) return;
   const t = D0.t;
   if (!D0.moved) {
@@ -2087,11 +2111,30 @@ function editMove(e) {
   afterGeom(S.v, changed, {light: true});
   if (!E.raf) E.raf = requestAnimationFrame(() => { E.raf = 0; editRedraw({light: true}); });
 }
+function editCancel() {
+  const D0 = E.drag; if (!D0) return;
+  const el = E.handles.get(D0.key0);
+  if (el) el.onpointermove = el.onpointerup = el.onpointercancel = null;
+  document.body.classList.remove('dragging');
+  E.drag = null;
+  $('#editTip').hidden = true;
+  if (D0.moved) { restoreGeom(S.v, E.undo.pop()); E.sel = null; editRedraw(); }
+}
+addEventListener('pointerdown', e => { if (E.drag && e.pointerType === 'touch' && e.pointerId !== E.drag.id) editCancel(); }, true);
 function editUp(e, el) {
   el.onpointermove = el.onpointerup = el.onpointercancel = null;
   document.body.classList.remove('dragging');
   const D0 = E.drag; E.drag = null;
   if (!D0) return;
+  if (!D0.moved && D0.t.kind === 'm') {
+    const t = D0.t;
+    beginChange(); remember(S.v, [t.seg]);
+    t.seg.pts.splice(t.i + 1, 0, t.p.slice());
+    E.sel = {kind: 'v', seg: t.seg, i: t.i + 1, key: `v:${t.seg.id}:${t.i + 1}`};
+    afterGeom(S.v, [t.seg]); editRedraw();
+    toast('Поворот добавлен на середину звена — потяните его, чтобы сдвинуть', 'info', 3000);
+    return;
+  }
   if (!D0.moved) {
     E.sel = D0.t.kind === 'm' ? null : D0.t;
     if (el.dataset.more && el._zoomTo && D0.t.p) { const P = new THREE.Vector3(D0.t.p[0], D0.t.p[1], 0), d = rig.pos.distanceTo(P); if (el._zoomTo < d * 0.95) rig.lookAtFrom(P, rig.yaw, rig.pitch, Math.max(5, el._zoomTo), 450); }

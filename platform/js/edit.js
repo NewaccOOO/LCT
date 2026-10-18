@@ -183,7 +183,8 @@ export function extraBends(scene, s, own = null, keep = [], opts = {}) {
     const q = s.pts[i];
     if (keep.some(k => dist(k, q) < 1e-3)) continue;
     const t = turnAngle(s.pts[i - 1], q, s.pts[i + 1]);
-    if (t < 1 || t > 90.5) continue;   // круче 90° — уже нарушение, его и показываем
+    if (t > 90.5) continue;   // круче 90° — уже нарушение, его и показываем
+    if (t < 1) { out.push({level: 'warn', text: 'точка без поворота лишняя: сдвиньте её или удалите', x: q[0], y: q[1], seg: s, i}); continue; }
     if (planIssues(scene, {pts: [s.pts[i - 1], s.pts[i + 1]], p: s.p, special: s.special}, own, {lines: true, ...opts}).length) continue;
     out.push({level: 'warn', text: `поворот ${Math.round(t)}° лишний: напрямую между соседними точками нарушений нет — уберите его`, x: q[0], y: q[1], seg: s, i});
   }

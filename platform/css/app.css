@@ -296,7 +296,7 @@ body.flying #legend, body.flying .exchip { display: none; }
 .eh.m::after { content: "+"; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font: 600 11px/1 var(--font); }
 .eh.m:hover { opacity: 1; }
 /* рядом спрятаны точки — «+N»: коснитесь, и карта приблизится */
-.eh[data-more]::after { content: attr(data-more); position: absolute; left: calc(100% + 3px); bottom: calc(100% - 2px); padding: 0 4px; border-radius: 7px; background: var(--accent); color: #fff; font: 600 10px/14px var(--font); white-space: nowrap; pointer-events: none; }
+.eh[data-more]::after { content: attr(data-more); position: absolute; left: calc(100% + 3px); bottom: calc(100% - 2px); padding: 0 4px; border-radius: 7px; background: var(--accent); color: #fff; font: 600 10px/14px var(--font); white-space: nowrap; }
 body.editing .labels .lbl.depth { display: none; }
 /* панель правки — слева вверху сцены, чтобы трасса в центре оставалась видна */
 .editbar { left: var(--gap); top: var(--gap); width: min(420px, calc(100% - 2 * var(--gap) - 70px)); padding: 8px 10px 10px; display: grid; gap: 6px; z-index: 8; }
@@ -318,6 +318,9 @@ body.editing .labels .lbl.depth { display: none; }
 .lg.g { width: 16px; height: 0; border-radius: 0; box-shadow: none; background: none; border-top: 2px dashed var(--muted); }
 .editbar .eb-m i { font-style: normal; } .editbar .eb-m i.up { color: var(--bad-t); } .editbar .eb-m i.down { color: var(--ok-t); }
 .editbar .eb-a { display: flex; flex-wrap: wrap; gap: 6px; }
+.editbar .eb-selp { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; font-size: 13px; color: var(--text2); background: var(--soft); border-radius: var(--r-s); padding: 4px 4px 4px 8px; }
+.editbar .eb-selp > span { flex: 1; min-width: 0; }
+.editbar .eb-selp button { min-height: 30px; padding: 3px 10px; font-size: 13px; background: var(--float); }
 .editbar .eb-a button { min-height: 30px; padding: 3px 10px; font-size: 13px; }
 .editbar .eb-sum { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 3px 8px; font-size: 13px; box-shadow: none; justify-self: start; text-align: left; }
 .editbar .eb-sum.bad { background: var(--bad-s); color: var(--bad-t); } .editbar .eb-sum.warn { background: var(--warn-s); color: var(--warn-t); }
@@ -469,7 +472,10 @@ table.wrap td:last-child { white-space: normal; }
   .coach { left: 8px; right: 8px; width: auto; top: 8px; padding: 10px 12px; }
   .coach .cg { grid-template-columns: auto 1fr; font-size: 12.5px; gap: 4px 10px; margin: 6px 0 8px; }
   .exchip { left: 8px; bottom: 30px; }
-  .editbar { left: 8px; right: 8px; width: auto; top: 8px; }
+  /* телефон и планшет вертикально: панель правки снизу — под большой палец, верх сцены свободен; карточка не нужна */
+  .editbar { left: 8px; right: 8px; width: auto; top: auto; bottom: 8px; max-height: 42vh; overflow: auto; overscroll-behavior: contain; }
+  .editbar .eb-p { max-height: 20vh; }
+  body.editing #props { display: none !important; }
   .variants button { display: none; }
   #varSel { display: block; }
   body.flying #profile { display: none; }
@@ -532,6 +538,11 @@ dialog[open]::backdrop { animation: fadeIn .2s ease-out; }
   .eh.m::after { font-size: 14px; }
   .eh::before { inset: -14px; }
   .eh[data-more]::after { font-size: 12px; line-height: 16px; padding: 0 5px; }
+  /* кнопки правки под палец: не ниже 40 px, отмена и возврат — 44 px с промежутком */
+  .editbar .eb-a button, .editbar .eb-selp button, .editbar .eb-sum, .editbar .iss { min-height: 40px; }
+  .editbar .eb-h .icon { width: 44px; min-height: 44px; } .editbar .eb-h .primary { min-height: 44px; }
+  .editbar .eb-h { gap: 8px; }
+  .editbar .eb-a { gap: 8px; }
   #legend > button { min-height: 40px; }
   #legend { bottom: 76px; }
 }
