@@ -112,15 +112,30 @@ export function objectsNear(scene, a, b, dn, {own = null, tied = null, R = 15} =
   }
   return out;
 }
-// часть трассы у спецперехода может подойти к его объекту ближе нормы — в круге «норма + 0,1 м» у его конца (check18, B10)
-const nearSpecial = (o, ends, dn) => ends?.some(e => dist(e, o.p) < o.need + dnRow(dn).w / 2 + 0.1 + 0.5);
+// часть трассы у спецперехода может подойти к его объекту ближе нормы — только в круге «норма + 0,1 м» вокруг точки,
+// где соседний спецпереход пересекает этот объект (check18, B10); specials — геометрия соседних спецпереходов
+function crossPoints(pts, obj) {
+  const out = [];
+  for (let i = 0; i + 1 < pts.length; i++) {
+    if (obj.a) { const x = segX(pts[i], pts[i + 1], obj.a, obj.b); if (x) out.push([x[1], x[2]]); continue; }
+    const r = obj.ring; if (!r) continue;
+    for (let k = 0, j = r.length - 1; k < r.length; j = k++) { const x = segX(pts[i], pts[i + 1], r[j], r[k]); if (x) out.push([x[1], x[2]]); }
+  }
+  return out;
+}
+const nearSpecial = (o, specials, dn) => (specials || []).some(sp => crossPoints(sp, o.obj).some(x => dist(x, o.p) < o.need + (o.ext ?? dnRow(dn).w / 2) + 0.1 + 0.2));
+// угол пересечения звена ab с линией e, градусы (0–90)
+function crossAngle(a, b, e) {
+  const u = [b[0] - a[0], b[1] - a[1]], v = [e.b[0] - e.a[0], e.b[1] - e.a[1]];
+  return Math.acos(Math.min(1, Math.abs(u[0] * v[0] + u[1] * v[1]) / (Math.hypot(...u) * Math.hypot(...v) || 1))) * 180 / Math.PI;
+}
 
 /**
  * Размеры вокруг правки, как в CAD: от звеньев pieces ([[a, b], …]) до ближайших объектов в радиусе R —
  * [{key, name, d, need, level: 'ok'|'near'|'bad'|'info', p (на трубе), q (на объекте), note}]. Самое близкое из каждого вида.
- * d и need — от стенки канала. special — участок уже спецпереход; ends — его концы у спецпереходов (см. nearSpecial).
+ * d и need — от стенки канала. special — участок уже спецпереход; specials — соседние спецпереходы (см. nearSpecial).
  */
-export function surroundings(scene, pieces, dn, {own = null, R = 15, tied = null, special = false, ends = null} = {}) {
+export function surroundings(scene, pieces, dn, {own = null, R = 15, tied = null, special = false, specials = null} = {}) {
   const best = new Map(), rank = {bad: 0, near: 1, info: 2, ok: 3};
   for (const [a, b] of pieces) for (const o of objectsNear(scene, a, b, dn, {own, tied, R})) {
     if (o.mine) continue;
@@ -128,11 +143,12 @@ export function surroundings(scene, pieces, dn, {own = null, R = 15, tied = null
     if (o.kind !== 'line') level = o.d < o.need - 0.05 ? 'bad' : o.d < o.need + 1 ? 'near' : 'ok';
     else if (special) {
       const along = o.obj?.a ? alongZone(a, b, o.obj, o.need + o.ext) : 0, cap = 2 * (o.need + (o.ext || 0)) / Math.sin(Math.PI / 4) + 1;
-      level = (o.cross && o.ang != null && o.ang < 44.5) || along > cap ? 'bad' : 'info';
-      note = along > cap ? `спецпереход вдоль сети ${m1(along)} м` : o.cross && o.ang != null ? `спецпереход под углом ${Math.round(o.ang)}°` : 'спецпереход';
+      const ang = o.cross ? (o.ang ?? (o.obj?.a ? crossAngle(a, b, o.obj) : null)) : null;
+      level = (ang != null && ang < 44.5) || along > cap ? 'bad' : 'info';
+      note = along > cap ? `спецпереход вдоль сети ${m1(along)} м` : ang != null ? `спецпереход под углом ${Math.round(ang)}°${ang < 44.5 ? ', нужно ≥ 45°' : ''}` : 'спецпереход';
     }
     else if (o.cross) { level = 'bad'; note = o.ang != null ? `под углом ${Math.round(o.ang)}°, нужен спецпереход` : 'нужен спецпереход'; }
-    else if (o.d < o.need - 0.05) { if (nearSpecial(o, ends, dn)) { level = 'info'; note = 'у спецперехода'; } else { level = 'bad'; note = 'нужен спецпереход'; } }
+    else if (o.d < o.need - 0.05) { if (nearSpecial(o, specials, dn)) { level = 'info'; note = 'у спецперехода'; } else { level = 'bad'; note = 'нужен спецпереход'; } }
     else level = o.d < o.need + 0.5 ? 'near' : 'ok';
     const it = {key: o.key, obj: o.obj, name: NAME[o.key]?.[0] || o.key, d: o.d, need: o.need, cross: o.cross, line: o.kind === 'line', p: o.p, q: o.q, level, note};
     const was = best.get(o.key);
@@ -160,9 +176,9 @@ export function relen(s) {
 /**
  * Проблемы плана у участка s: [{level: 'bad'|'warn', text, x, y, seg, obj, d}].
  * own — здание, в которое входит участок; lines — проверять отступы от дорог и сетей вне спецперехода (у участков,
- * которые правил человек: исходную трассу сервис уже проложил спецпереходами); tied, ends — как у surroundings.
+ * которые правил человек: исходную трассу сервис уже проложил спецпереходами); tied, specials — как у surroundings.
  */
-export function planIssues(scene, s, own = null, {lines = false, tied = null, ends = null} = {}) {
+export function planIssues(scene, s, own = null, {lines = false, tied = null, specials = null} = {}) {
   const out = [], dn = s.p.diameter || 50, seen = new Set();
   const add = (level, text, p, o) => { if (seen.has(text)) return; seen.add(text); out.push({level, text, x: p[0], y: p[1], seg: s, obj: o?.obj, d: o?.d}); };
   for (let i = 0; i + 1 < s.pts.length; i++) {
@@ -182,6 +198,8 @@ export function planIssues(scene, s, own = null, {lines = false, tied = null, en
       }
       // переход дороги — одним прямым участком под углом не меньше 45° к её краю
       if (o.cross && o.ang != null && o.ang < 45 - 0.5) add('bad', `пересекает ${thr} под углом ${Math.round(o.ang)}°, нужно не меньше 45°`, o.p, o);
+      // сеть спецпереход тоже пересекает не острее 45° (СП 124.13330: под прямым углом, допускается до 45°)
+      if (o.cross && o.obj?.a && s.special && lines) { const ang = crossAngle(a, b, o.obj); if (ang < 45 - 0.5) add('bad', `пересекает ${thr} под углом ${Math.round(ang)}°, нужно не меньше 45°`, o.p, o); }
       // спецпереход пересекает сеть поперёк: внутри её зоны звено не длиннее перехода под 45° (с запасом 1 м)
       if (s.special && lines && o.obj?.a) {
         const zone = o.need + o.ext, inside = alongZone(a, b, o.obj, zone), cap = 2 * zone / Math.sin(Math.PI / 4) + 1;
@@ -189,7 +207,7 @@ export function planIssues(scene, s, own = null, {lines = false, tied = null, en
       }
       if (s.special || !lines) continue;
       if (o.cross) add('bad', `пересекает ${thr} обычной прокладкой: нужен спецпереход, его ставит пересчёт на сервере`, o.p, o);
-      else if (o.d < o.need - 0.05 && !nearSpecial(o, ends, dn)) add('bad', `ближе ${String(o.need).replace('.', ',')} м к ${to} вне спецперехода: ${m1(o.d)} м`, o.p, o);
+      else if (o.d < o.need - 0.05 && !nearSpecial(o, specials, dn)) add('bad', `ближе ${String(o.need).replace('.', ',')} м к ${to} вне спецперехода: ${m1(o.d)} м`, o.p, o);
     }
   }
   for (let i = 1; i + 1 < s.pts.length; i++) {

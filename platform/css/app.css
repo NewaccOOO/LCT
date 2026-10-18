@@ -302,7 +302,7 @@ body.editing #legBody { max-height: 34vh; overflow: auto; }
 .eh.m::after { content: "+"; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font: 600 11px/1 var(--font); }
 .eh.m:hover { opacity: 1; }
 /* рядом спрятаны точки — «+N», своя кнопка поодаль от точки: касание приближает, точку не выбирает */
-.emore { position: absolute; left: 0; top: 0; z-index: 3; margin: -24px 0 0 9px; min-height: 0; padding: 0 5px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; box-shadow: 0 0 0 1.5px var(--float); font: 600 10px/16px var(--font); white-space: nowrap; cursor: zoom-in; pointer-events: auto; }
+.emore { position: absolute; left: 0; top: 0; z-index: 3; margin: -28px 0 0 12px; min-height: 0; padding: 0 5px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; box-shadow: 0 0 0 1.5px var(--float); font: 600 10px/16px var(--font); white-space: nowrap; cursor: zoom-in; pointer-events: auto; }
 .emore::before { content: ""; position: absolute; inset: -8px; }
 .emore:hover { background: var(--accent-h); }
 body.pinching .eh { pointer-events: none; }
@@ -357,6 +357,12 @@ body.editing .labels .lbl.cx:not(.bad), body.editing #legend { display: none; }
 .editbar .eb-hint .more { margin-top: 6px; color: var(--text2); background: var(--card); border-radius: var(--r-s); padding: 8px 10px; }
 body.editing .coach, body.editing .camchip { display: none !important; }
 body.dragging .editbar *, body.dragging .eh { animation: none !important; }
+/* пока тянут точку, панель не растёт и не накрывает её: список, выбор и справка — после отпускания */
+body.dragging .editbar :is(.eb-p, .eb-selp, .eb-conf, .eb-leg, .eb-hint, .eb-else) { display: none; }
+/* ручка панели на сенсорном экране: коснуться или смахнуть — свернуть до строки кнопок */
+.editbar .eb-grip { order: -1; justify-self: center; width: 64px; min-height: 22px !important; padding: 0; margin: -6px 0 -2px; box-shadow: none; background: none; display: grid; place-items: center; }
+.editbar .eb-grip span { width: 40px; height: 4px; border-radius: 2px; background: var(--card2); }
+.editbar.mini > :not(.eb-h):not(.eb-grip) { display: none; }
 body.dragging .eh { cursor: grabbing; }
 
 /* ---------- подписи в 3D ---------- */
@@ -556,8 +562,10 @@ dialog[open]::backdrop { animation: fadeIn .2s ease-out; }
   .eh { width: 16px; height: 16px; margin: -8px 0 0 -8px; } .eh.n { width: 16px; height: 16px; margin: -8px 0 0 -8px; } .eh.m { width: 18px; height: 18px; margin: -9px 0 0 -9px; opacity: .7; }
   .eh.m::after { font-size: 14px; }
   .eh::before { inset: -14px; }
-  .emore { font-size: 12px; line-height: 20px; padding: 0 7px; border-radius: 10px; margin: -34px 0 0 14px; min-height: 0; }
-  .emore::before { inset: -10px; }
+  /* значок «+N» — поодаль от точки, чтобы промах пальца по точке не приближал карту */
+  .emore { font-size: 12px; line-height: 20px; padding: 0 7px; border-radius: 10px; margin: -46px 0 0 22px; min-height: 0; }
+  .emore::before { inset: -6px; }
+  .editbar .eb-hint .link { min-height: 32px; padding: 0 8px; }
   /* кнопки правки под палец: не ниже 40 px, отмена и возврат — 44 px с промежутком */
   .editbar .eb-a button, .editbar .eb-selp button, .editbar .eb-sum, .editbar .iss { min-height: 40px; }
   .editbar .eb-h .icon { width: 44px; min-height: 44px; } .editbar .eb-h .primary { min-height: 44px; }
@@ -566,3 +574,5 @@ dialog[open]::backdrop { animation: fadeIn .2s ease-out; }
   #legend > button { min-height: 40px; }
   #legend { bottom: 76px; }
 }
+/* планшет горизонтально: панель правки уже, сцене больше места */
+@media (pointer: coarse) and (min-width: 901px) { .editbar { width: min(380px, calc(100% - 2 * var(--gap) - 70px)); } }

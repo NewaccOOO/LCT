@@ -57,7 +57,13 @@ test('planIssues: здание, зона запрета, дорога, пово�
   // вдоль дороги ближе 1,5 м от стенки — нарушение вне спецперехода; у конца спецперехода — допустимо
   const along = seg([[-20, 4.5], [20, 4.5]]);
   assert.match(planIssues(stub({zones: [road]}), along, null, {lines: true})[0].text, /ближе 1,5 м к дороге вне спецперехода: 1,1 м/);
-  assert.deepEqual(planIssues(stub({zones: [road]}), seg([[0, 4.5], [0, 20]]), null, {lines: true, ends: [[0, 4.5]]}), []);
+  // у конца спецперехода, который пересекает дорогу, — допустимо; вдали от точки пересечения — нет
+  assert.deepEqual(planIssues(stub({zones: [road]}), seg([[0, 4.5], [0, 20]]), null, {lines: true, specials: [[[0, -4.5], [0, 4.5]]]}), []);
+  assert.equal(planIssues(stub({zones: [road]}), seg([[-20, 4.5], [20, 4.5]]), null, {lines: true, specials: [[[0, -4.5], [0, 4.5]]]}).length, 1);
+  // спецпереход через газопровод — не острее 45°
+  const gas0 = {type: 'gas_pipeline', id: 'g0', a: [-30, 0], b: [30, 0]};
+  assert.deepEqual(planIssues(stub({utils: [gas0]}), seg([[0, -3], [0, 3]], 150, {special: true}), null, {lines: true}), []);
+  assert.match(planIssues(stub({utils: [gas0]}), seg([[-3, -1], [3, 1]], 150, {special: true}), null, {lines: true})[0].text, /пересекает газопровод под углом 18°, нужно не меньше 45°/);
   // газопровод: пересечение обычной прокладкой и сближение
   const gas = {type: 'gas_pipeline', id: 'g', a: [-30, 0], b: [30, 0]};
   assert.match(planIssues(stub({utils: [gas]}), seg([[0, -10], [0, 10]]), null, {lines: true})[0].text, /пересекает газопровод обычной прокладкой/);

@@ -258,7 +258,7 @@ export class CameraRig {
       if (t2.mode === 'tilt') this.rotateAround(t2.P, 0, -dy / r.height * Math.PI * 0.45);
       else {
         if (Math.abs(zoom - 1) > 0.002) this.zoomTo(t2.P, zoom);
-        if (Math.abs(dAng) > 0.002) this.rotateAround(t2.P, -dAng, 0);
+        if (Math.abs(dAng) > 0.002 && !this.lockYaw) this.rotateAround(t2.P, -dAng, 0);   // в плане правки север не теряем
       }
       t2.a = {...a}; t2.b = {...b};
     };

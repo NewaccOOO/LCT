@@ -1668,9 +1668,8 @@ function editIssues() {
 }
 // для проверок отступов от дорог и сетей: труба, в которую участок врезается, и его концы у спецпереходов
 function lineOpts(s) {
-  const ends = [];
-  for (const [id, p] of [[s.from, s.pts[0]], [s.to, s.pts[s.pts.length - 1]]]) if (S.v.segs.some(x => x !== s && x.special && (x.from === id || x.to === id))) ends.push(p);
-  return {tied: S.model.tiedOf(s), ends};
+  const specials = S.v.segs.filter(x => x !== s && x.special && [x.from, x.to].some(id => id === s.from || id === s.to)).map(x => x.pts);
+  return {tied: S.model.tiedOf(s), specials};
 }
 // повороты на пути точки через узлы и камеры ids: каждый входящий участок с каждым выходящим
 function jointsAt(ids) {
@@ -1687,6 +1686,7 @@ function jointsAt(ids) {
 function issWhere(i) {
   const parts = [];
   if (i.seg?.id) parts.push(segName(i.seg).replace('Участок', 'уч.'));
+  if (i.seg && S.route && !S.route.segs.includes(i.seg)) { const ids = segOks(S.v).get(i.seg) || []; if (ids.length) parts.push(`ветка к ${ids.slice(0, 3).map(shortName).join(', ')}${ids.length > 3 ? '…' : ''}`); }
   if (i.obj && BUILDING_KEYS.has(i.obj.type)) {
     const ends = new Set(S.route ? [S.route.end] : segOks(S.v).get(i.seg) || []);
     const o = S.model.oks.find(x => x.building && sameBuilding(i.obj, x.building)), nm = o?.label || i.obj.p?.address || i.obj.p?.name;
@@ -1742,7 +1742,7 @@ function editPanel() {
   const elsewhere = editAffected(v).filter(a => a.id !== R?.end && !others.some(o => o.id === a.id));
   const unit = s => `${segName(s).replace('Участок', 'уч.')}: Ду ${s.p.diameter}, ${rub(s.p.cost / Math.max(0.01, s.len))}/м${s.special ? ', спецпереход' : ''}`;
   const selp = E.sel?.kind === 'n' ? `${nodeName(E.sel.node, S.model)}${E.sel.node.type === 'technical_node' ? ' — узел, стык участков' : ''}` : E.sel?.kind === 'v' ? `излом · ${unit(E.sel.seg)}` : '';
-  const html = `<div class="eb-h"><b>Правка трассы</b><span class="mut">${R ? esc(R.endName || nodeLabel(R.end)) : 'выберите здание или трубу'}</span><span class="sp"></span>
+  const html = `${compact ? `<button id="ebGrip" class="eb-grip" aria-expanded="${!E.mini}" title="${E.mini ? 'Развернуть панель правки' : 'Свернуть панель правки'}"><span></span></button>` : ''}<div class="eb-h"><b>Правка трассы</b><span class="mut">${R ? esc(R.endName || nodeLabel(R.end)) : 'выберите здание или трубу'}</span><span class="sp"></span>
       <button id="ebUndo" class="icon" ${E.undo.length ? '' : 'disabled'} title="Отменить (Ctrl Z)" aria-label="Отменить"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
       <button id="ebRedo" class="icon" ${E.redo.length ? '' : 'disabled'} title="Вернуть (Ctrl Shift Z)" aria-label="Вернуть"><svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
       <button id="ebDone" class="primary" title="Закончить правку (Esc). Правки сохраняются в браузере">Готово</button></div>
@@ -1755,7 +1755,7 @@ function editPanel() {
       : '<div class="iss ok"><span class="dot"></span>Нарушений правил на трассе нет</div>') : ''}
     ${selp ? `<div class="eb-selp"><span>Выбрано: <b>${esc(selp)}</b></span>${E.sel?.kind === 'v' ? '<button id="ebDel" title="Удалить выбранный поворот (Delete)">Удалить поворот</button>' : ''}${E.sel?.kind === 'n' && canStraighten(E.sel) ? '<button id="ebDel" title="Поставить узел на прямую между соседними точками (Delete)">Убрать излом</button>' : ''}</div>` : ''}
     ${E.confirm === 'reset' ? `<div class="eb-conf"><span>Вернуть как построил сервис:</span><button id="ebRR" ${R && R.segs.some(s => s.edited) ? '' : 'disabled'}>эту трассу (${R ? R.segs.filter(s => s.edited).length : 0} уч.)</button><button id="ebRA">весь вариант (${n} уч.)</button><button id="ebRC" class="link">отмена</button></div>` : ''}
-    <div class="eb-a"><button id="ebReset" ${n ? '' : 'disabled'} title="Вернуть трассу или весь вариант как построил сервис">Сбросить правки…</button>
+    <div class="eb-a"><button id="ebReset" ${n ? '' : 'disabled'} title="Вернуть трассу или весь вариант как построил сервис">Сбросить правки${mineEdited.length && mineEdited.length === n ? '' : '…'}</button>
       <button id="ebSave" ${n ? '' : 'disabled'} title="GeoJSON в формате сервиса с вашими правками (WGS84)">Скачать с правками</button>
       <button id="ebDxf" title="Трассы для AutoCAD/Civil 3D: DXF в метрах UTM 37N, как у сервиса">DXF</button></div>
     ${!compact || E.help ? '<div class="eb-leg" aria-label="Обозначения"><span><i class="lg n"></i>узел: стык участков (поворот, камера)</span><span><i class="lg v"></i>излом внутри участка</span><span><i class="lg l"></i>закреплено</span><span><i class="lg m"></i>добавить поворот</span><span><i class="lg g"></i>как было</span><span><i class="lg c ok"></i>норма</span><span><i class="lg c near"></i>запас &lt; 1 м</span><span><i class="lg c bad"></i>нарушение</span><span><i class="lg c info"></i>справочно</span></div>' : ''}
@@ -1767,6 +1767,15 @@ function editPanel() {
   E.panelHtml = html;
   el.innerHTML = html;
   $('#ebDone').onclick = () => setEdit(false);
+  el.classList.toggle('mini', !!E.mini && compact);
+  if ($('#ebGrip')) {
+    const g = $('#ebGrip');
+    g.onclick = () => { E.mini = !E.mini; E.panelHtml = null; editPanel(); };
+    // смахнуть вниз — свернуть, вверх — развернуть
+    g.onpointerdown = ev => { g._y = ev.clientY; g.setPointerCapture(ev.pointerId); };
+    g.onpointerup = ev => { const dy = ev.clientY - (g._y ?? ev.clientY); g._y = null; if (Math.abs(dy) > 24) { E.mini = dy > 0; E.panelHtml = null; editPanel(); ev.preventDefault(); g._skip = true; setTimeout(() => { g._skip = false; }, 0); } };
+    g.addEventListener('click', ev => { if (g._skip) ev.stopImmediatePropagation(); }, true);
+  }
   $('#ebHelp').onclick = () => { E.help = !E.help; editPanel(); };
   $('#ebUndo').onclick = () => editUndo();
   $('#ebRedo').onclick = () => editRedo();
@@ -1795,7 +1804,7 @@ function setEdit(on) {
     E.help = false;
     E.listOpen = null;
     stopFly(); setMeasure(false);
-    rig.noContext = true;
+    rig.noContext = true; rig.lockYaw = true;
     // план без перспективного сдвига: трубы и сети на глубине рисуются почти у земли, там же, где точки правки
     // (глубину показывает профиль); на выходе вертикальный масштаб возвращается
     E.ex0 = viewer.ex;
@@ -1808,7 +1817,7 @@ function setEdit(on) {
     if (E.auto) setMapOnly(true);
   } else {
     viewer.marker('selpt', null);
-    rig.noContext = false;
+    rig.noContext = false; rig.lockYaw = false;
     if (E.ex0 != null) { viewer.setExaggeration(E.ex0); E.ex0 = null; setMinZ(); updateScale(); refreshHighlight(); }
     if (E.bld0) { viewer.opts.buildings = E.bld0; E.bld0 = null; }
     viewer.opts.plan = false; viewer.applyOpts();
@@ -1929,12 +1938,15 @@ function editPlace() {
   // «+» — только на звене длиннее 40 px на экране; приблизьте — появятся все
   // под палец точки стоят не теснее зоны касания (44 px), под мышь — 18 px; спрятанные считаются у ближайшей видимой: «+N»
   const touch = matchMedia('(pointer: coarse)').matches, gap = touch ? 40 : 18, mgap = touch ? 84 : 44;
+  // под панелью правки и плашками точки не видны — значит, и не хватаются пальцем, который тянется к панели
+  const cover = ['#editBar', '#exChip', '#cube', '#navR .toolbar'].map(q => $(q)).filter(e => e && !e.hidden).map(e => e.getBoundingClientRect()).filter(q => q.width).map(q => [q.left - r.left - 14, q.top - r.top - 14, q.right - r.left + 14, q.bottom - r.top + 14]);
+  const under = c => cover.some(([x0, y0, x1, y1]) => c[0] > x0 && c[0] < x1 && c[1] > y0 && c[1] < y1);
   const order = [...E.targets].sort((p, q) => (q.key === E.sel?.key) - (p.key === E.sel?.key) || 'nvm'.indexOf(p.kind) - 'nvm'.indexOf(q.kind));
   const shown = [];
   for (const t of order) {
     const el = E.handles.get(t.key); if (!el) continue;
     const c = scr(t.p);
-    let show = c && c[0] > -10 && c[1] > -10 && c[0] < r.width + 10 && c[1] < r.height + 10, near = null;
+    let show = c && c[0] > -10 && c[1] > -10 && c[0] < r.width + 10 && c[1] < r.height + 10 && (E.drag?.t.key === t.key || !under(c)), near = null;
     if (show && t.kind === 'm') { const a = scr(t.seg.pts[t.i]), b = scr(t.seg.pts[t.i + 1]); show = a && b && Math.hypot(a[0] - b[0], a[1] - b[1]) > mgap; }
     const must = E.drag?.t.key === t.key || E.sel?.key === t.key;
     if (show && !must) {
@@ -2078,6 +2090,7 @@ function editDraw(r, V) {
     for (const el of E.handles.values()) if (el.style.display !== 'none') { const m = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(el.style.transform); if (m) placed.push([+m[1] - hs / 2, +m[2] - hs / 2, hs, hs]); }
     for (const el of document.querySelectorAll('#view .labels .lbl')) { const q = el.getBoundingClientRect(); if (q.width && q.right > vr.left && q.left < vr.right && q.bottom > vr.top && q.top < vr.bottom) placed.push([q.left - vr.left, q.top - vr.top, q.width, q.height]); }
     for (const sel of ['#editBar', '#legend', '#exChip', '#navR .toolbar', '#cube']) { const e = $(sel); if (!e || e.hidden) continue; const q = e.getBoundingClientRect(); if (q.width) placed.push([q.left - vr.left - 4, q.top - vr.top - 4, q.width + 8, q.height + 8]); }
+    if (E.drag?.touch && E.drag.cx != null) placed.push([E.drag.cx - vr.left - 45, E.drag.cy - vr.top - 30, 90, 200]);
     const hit = (x, y, w, h) => placed.some(([px, py, pw, ph]) => x < px + pw && px < x + w && y < py + ph && py < y + h);
     // подпись встаёт у своей точки: сначала в сторону dir, потом по кругу и дальше — первое свободное место;
     // важная (нарушение, на грани) встаёт всегда, второстепенная (длина звена, норма с запасом) без места прячется
@@ -2089,7 +2102,8 @@ function editDraw(r, V) {
       const w = el.offsetWidth || 120, h = el.offsetHeight || 20;
       const at = (d, k) => { const x = c[0] + d[0] * k - (d[0] < 0 ? w : d[0] === 0 ? w / 2 : 0), y = c[1] + d[1] * k - (d[1] < 0 ? h : d[1] === 0 ? h / 2 : 0); return [Math.max(4, Math.min(r.width - w - 4, x)), Math.max(4, Math.min(r.height - h - 4, y))]; };
       let pos = null;
-      search: for (const k of [8, 20, 34, 52]) for (const d of [dir, ...DIRS]) { const q = at(d, k); if (!hit(q[0], q[1], w, h)) { pos = q; break search; } }
+      const dirs = E.drag?.touch ? [...DIRS.filter(d => d[1] < 0), dir, ...DIRS] : [dir, ...DIRS];
+      search: for (const k of [8, 20, 34, 52]) for (const d of dirs) { const q = at(d, k); if (!hit(q[0], q[1], w, h)) { pos = q; break search; } }
       if (!pos) { if (!must) { el.style.display = 'none'; return; } pos = at(dir, 8); }
       placed.push([pos[0], pos[1], w, h]);
       el.style.transform = `translate(${pos[0].toFixed(1)}px, ${pos[1].toFixed(1)}px)`;
@@ -2203,6 +2217,7 @@ function editMove(e) {
     }
   }
   D0.changed = new Set([...(D0.changed || []), ...changed]);
+  editEdgePan(e);
   D0.cx = e.clientX; D0.cy = e.clientY; D0.touch = e.pointerType === 'touch';
   afterGeom(S.v, changed, {light: true});
   if (!E.raf) E.raf = requestAnimationFrame(() => { E.raf = 0; editRedraw({light: true}); });
@@ -2218,6 +2233,25 @@ function editCtx(t) {
   box._armed = false;
   box.onpointerdown = () => { box._armed = true; };
   box.onclick = e => { const b = e.target.closest('button'); if (!b || !box._armed) return; box.hidden = true; if (b.dataset.a === 'del') editDelete(t); if (b.dataset.a === 'undo') editUndo(); };
+}
+// тащат к краю свободной части сцены — карта подъезжает (как при перетаскивании в картах), точка остаётся под пальцем
+function editEdgePan(e) {
+  const f = editFree(), x = e.clientX - f.r.left, y = e.clientY - f.r.top, m = 36;
+  const dx = x < f.left + m ? -1 : x > f.right - m ? 1 : 0, dy = y < f.top + m ? -1 : y > f.bottom - m ? 1 : 0;
+  if (!dx && !dy) return;
+  const step = metersPerPx(e) * 10, c = Math.cos(rig.yaw), sn = Math.sin(rig.yaw);
+  // экран вправо — (cos yaw, −sin yaw), экран вниз — (−sin yaw, −cos yaw)
+  rig.translate(new THREE.Vector3(dx * c * step - dy * sn * step, -dx * sn * step - dy * c * step, 0));
+}
+// точка на виду: если под панелью или у края — карта сдвигается, масштаб тот же
+function editReveal(p) {
+  const f = editFree(), V = new THREE.Vector3(p[0], p[1], 0.15).project(viewer.camera), x = (V.x + 1) / 2 * f.r.width, y = (1 - V.y) / 2 * f.r.height, m = 40;
+  const ox = x < f.left + m ? x - (f.left + m) : x > f.right - m ? x - (f.right - m) : 0, oy = y < f.top + m ? y - (f.top + m) : y > f.bottom - m ? y - (f.bottom - m) : 0;
+  if (!ox && !oy) return;
+  const P = rig.onPlane(f.r.width / 2, f.r.height / 2, 0, 1e6), Q = rig.onPlane(f.r.width / 2 + ox, f.r.height / 2 + oy, 0, 1e6);
+  if (!P || !Q) return;
+  const d = new THREE.Vector3(Q.x - P.x, Q.y - P.y, 0);
+  rig.animateTo({pos: rig.pos.clone().add(d), yaw: rig.yaw, pitch: rig.pitch}, 350);
 }
 function editCancel() {
   const D0 = E.drag; if (!D0) return;
@@ -2256,8 +2290,7 @@ function editUp(e, el) {
     t.seg.pts.splice(t.i + 1, 0, t.p.slice());
     E.sel = {kind: 'v', seg: t.seg, i: t.i + 1, key: `v:${t.seg.id}:${t.i + 1}`};
     afterGeom(S.v, [t.seg]); editRedraw();
-    const f = editFree(), V = new THREE.Vector3(t.p[0], t.p[1], 0.15).project(viewer.camera), x = (V.x + 1) / 2 * f.r.width, y = (1 - V.y) / 2 * f.r.height;
-    if (x < f.left || x > f.right || y < f.top || y > f.bottom) editGoto({x: t.p[0], y: t.p[1]});
+    editReveal(t.p);
     toast('Поворот добавлен на середину звена — потяните его, чтобы сдвинуть', 'info', 3000);
     return;
   }
@@ -2270,6 +2303,8 @@ function editUp(e, el) {
   $('#editTip').hidden = true;
   afterGeom(S.v, [...D0.changed]);
   editRedraw();
+  const pt = D0.t.kind === 'n' ? D0.t.node.xy : D0.t.seg?.pts[D0.t.i];
+  if (pt) requestAnimationFrame(() => editReveal(pt));
 }
 // узел между двумя участками (одна труба входит, одна выходит) с изломом — его можно поставить на прямую
 function straightPair(t) {
@@ -2412,7 +2447,7 @@ async function start() {
     // на телефоне и планшете — жесты, а не кнопки мыши
     $('#coachAll').textContent = 'Справка';
     $('#coach .cg').innerHTML = '<span class="k">Один палец</span><span>двигать</span><span class="k">Щипок</span><span>приблизить</span>' +
-      '<span class="k">Повернуть двумя</span><span>вращать</span><span class="k">Два пальца вверх-вниз</span><span>наклонить</span><span class="k">Двойное касание</span><span>приблизить сюда</span><span class="k">Долгое нажатие</span><span>меню точки</span>';
+      '<span class="k">Повернуть двумя</span><span>вращать</span><span class="k">Два пальца вверх-вниз</span><span>наклонить</span><span class="k">Двойное касание</span><span>приблизить сюда</span><span class="k">Двойное касание и вниз-вверх</span><span>масштаб одной рукой</span><span class="k">Долгое нажатие</span><span>меню точки</span>';
   }
   if (!store.get('coach', 0)) $('#coach').hidden = false;
   // легенда раскрыта при первом знакомстве (после подсказки управления), дальше — как оставил пользователь
