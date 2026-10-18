@@ -13,7 +13,7 @@
 [![проверщик](https://img.shields.io/badge/%D0%BF%D1%80%D0%BE%D0%B2%D0%B5%D1%80%D1%89%D0%B8%D0%BA-check18-22c55e?style=for-the-badge)](tools/validator/check18.py)
 
 [Быстрый старт](#быстрый-старт) ·
-[Платформа](#платформа-инженера) ·
+[Платформа](#платформа-инженера-доп) ·
 [Как считает](#как-считает) ·
 [Глубина](#глубина) ·
 [API](#api) ·
@@ -65,7 +65,7 @@ make run IN=data/samples/small-1.geojson OUT=data/out/small-1.geojson
 
 Swagger UI — `http://localhost:8080/swagger-ui/index.html`, все команды — `make help`.
 
-## Платформа инженера
+## Платформа инженера (доп)
 
 <img src="docs/assets/platform/city.jpg" alt="Тепломаршрут: район Москвы в 3D с новыми зданиями и новой сетью" width="100%">
 
