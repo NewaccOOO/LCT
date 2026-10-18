@@ -301,8 +301,13 @@ body.editing #legBody { max-height: 34vh; overflow: auto; }
 .eh.m { width: 12px; height: 12px; margin: -6px 0 0 -6px; background: var(--accent); box-shadow: 0 0 0 1.5px var(--float); opacity: .55; }
 .eh.m::after { content: "+"; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font: 600 11px/1 var(--font); }
 .eh.m:hover { opacity: 1; }
-/* рядом спрятаны точки — «+N»: коснитесь, и карта приблизится */
-.eh[data-more]::after { content: attr(data-more); position: absolute; left: calc(100% + 3px); bottom: calc(100% - 2px); padding: 0 4px; border-radius: 7px; background: var(--accent); color: #fff; font: 600 10px/14px var(--font); white-space: nowrap; }
+/* рядом спрятаны точки — «+N», своя кнопка поодаль от точки: касание приближает, точку не выбирает */
+.emore { position: absolute; left: 0; top: 0; z-index: 3; margin: -24px 0 0 9px; min-height: 0; padding: 0 5px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; box-shadow: 0 0 0 1.5px var(--float); font: 600 10px/16px var(--font); white-space: nowrap; cursor: zoom-in; pointer-events: auto; }
+.emore::before { content: ""; position: absolute; inset: -8px; }
+.emore:hover { background: var(--accent-h); }
+body.pinching .eh { pointer-events: none; }
+.editctx { position: absolute; left: 0; top: 0; z-index: 30; min-width: 200px; }
+.editctx .h { padding: 6px 12px 2px; font-size: 12px; color: var(--muted); }
 body.editing .labels .lbl.depth { display: none; }
 /* в правке: подписи пересечений без проблем и общая легенда уступают место выноскам и панели */
 body.editing .labels .lbl.cx:not(.bad), body.editing #legend { display: none; }
@@ -326,7 +331,7 @@ body.editing .labels .lbl.cx:not(.bad), body.editing #legend { display: none; }
 .lg { display: inline-block; width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--accent); background: var(--float); }
 .lg.n { border-radius: 2px; } .lg.l { border-radius: 2px; box-shadow: 0 0 0 1.5px var(--muted); background: var(--card2); }
 .lg.m { background: var(--accent); opacity: .6; box-shadow: none; width: 10px; height: 10px; }
-.lg.g { width: 16px; height: 0; border-radius: 0; box-shadow: none; background: none; border-top: 2px dashed var(--muted); }
+.lg.g { width: 16px; height: 0; border-radius: 0; box-shadow: none; background: none; border-top: 2px solid var(--text2); }
 .editbar .eb-m i { font-style: normal; } .editbar .eb-m i.up { color: var(--bad-t); } .editbar .eb-m i.down { color: var(--ok-t); }
 .editbar .eb-a { display: flex; flex-wrap: wrap; gap: 6px; }
 .editbar .eb-selp { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; font-size: 13px; color: var(--text2); background: var(--soft); border-radius: var(--r-s); padding: 4px 4px 4px 8px; }
@@ -487,6 +492,8 @@ table.wrap td:last-child { white-space: normal; }
   /* телефон и планшет вертикально: панель правки снизу — под большой палец, верх сцены свободен; карточка не нужна */
   .editbar { left: 8px; right: 8px; width: auto; top: auto; bottom: 8px; max-height: 42vh; overflow: auto; overscroll-behavior: contain; }
   .editbar .eb-p { max-height: 20vh; }
+  /* кнопки «Отменить», «Вернуть», «Готово» — у нижнего края, на месте, сколько бы ни выросла панель */
+  .editbar .eb-h { order: 99; position: sticky; bottom: -10px; background: var(--float); padding: 4px 0 2px; }
   body.editing #props { display: none !important; }
   .variants button { display: none; }
   #varSel { display: block; }
@@ -549,7 +556,8 @@ dialog[open]::backdrop { animation: fadeIn .2s ease-out; }
   .eh { width: 16px; height: 16px; margin: -8px 0 0 -8px; } .eh.n { width: 16px; height: 16px; margin: -8px 0 0 -8px; } .eh.m { width: 18px; height: 18px; margin: -9px 0 0 -9px; opacity: .7; }
   .eh.m::after { font-size: 14px; }
   .eh::before { inset: -14px; }
-  .eh[data-more]::after { font-size: 12px; line-height: 16px; padding: 0 5px; }
+  .emore { font-size: 12px; line-height: 20px; padding: 0 7px; border-radius: 10px; margin: -34px 0 0 14px; min-height: 0; }
+  .emore::before { inset: -10px; }
   /* кнопки правки под палец: не ниже 40 px, отмена и возврат — 44 px с промежутком */
   .editbar .eb-a button, .editbar .eb-selp button, .editbar .eb-sum, .editbar .iss { min-height: 40px; }
   .editbar .eb-h .icon { width: 44px; min-height: 44px; } .editbar .eb-h .primary { min-height: 44px; }

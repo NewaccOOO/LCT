@@ -186,6 +186,8 @@ export class CameraRig {
       if (ptrs.size > 2) return;
       const buttons = e.pointerType === 'mouse' ? e.buttons : 1;
       g = {x, y, x0: x, y0: y, on: false, buttons, touch: e.pointerType !== 'mouse', btn: e.button, shift: e.shiftKey};
+      // двойное касание с протяжкой — масштаб одним пальцем (вниз — ближе, вверх — дальше), как в мобильных картах
+      if (g.touch && performance.now() - lastTap < 320 && Math.hypot(x - this._tapXY[0], y - this._tapXY[1]) < 30) { g.dz = true; clearTimeout(this._click); clearTimeout(this._lp); return; }
       if (g.touch) {
         const gg = g;
         clearTimeout(this._lp);
@@ -199,6 +201,12 @@ export class CameraRig {
       this.hooks.onHover?.(x, y, e, !!(g?.on || t2));
       if (t2 && ptrs.size === 2) { twoFinger(); return; }
       if (!g) return;
+      if (g.dz) {
+        if (!g.on) { if (Math.abs(y - g.y0) < 8) return; g.on = true; g.P = this.pivotAt(g.x0, g.y0); g.y = g.y0; }
+        this.zoomTo(g.P, Math.exp(-(y - g.y) * 0.006));
+        g.y = y;
+        return;
+      }
       if (!g.on) {
         if (Math.hypot(x - g.x0, y - g.y0) < (g.touch ? 6 : 3)) return;
         g.on = true;
@@ -263,6 +271,7 @@ export class CameraRig {
       g = null;
       clearTimeout(this._lp);
       if (!wasG) return;
+      if (wasG.dz && wasG.on) { lastTap = 0; return; }
       if (wasG.mode === 'orbit') this.hooks.onPivot?.(null);
       if (!wasG.on && !wasG.long && e.type === 'pointerup') {
         // щелчок без перетаскивания; одиночный ждёт 250 мс — вдруг это двойной (тогда только приблизить, как в Картах)
