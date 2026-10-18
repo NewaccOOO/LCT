@@ -1875,7 +1875,7 @@ function editPlace() {
   // точки не слипаются: ближе 14 px к уже показанной — прячется (выбранная и тащимая — всегда видны),
   // «+» — только на звене длиннее 40 px на экране; приблизьте — появятся все
   // под палец точки стоят не теснее зоны касания (44 px), под мышь — 18 px; спрятанные считаются у ближайшей видимой: «+N»
-  const touch = matchMedia('(pointer: coarse)').matches, gap = touch ? 40 : 18, mgap = touch ? 100 : 50;
+  const touch = matchMedia('(pointer: coarse)').matches, gap = touch ? 40 : 18, mgap = touch ? 84 : 44;
   const order = [...E.targets].sort((p, q) => (q.key === E.sel?.key) - (p.key === E.sel?.key) || 'nvm'.indexOf(p.kind) - 'nvm'.indexOf(q.kind));
   const shown = [];
   for (const t of order) {
