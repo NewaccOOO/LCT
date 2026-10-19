@@ -700,6 +700,19 @@ public final class VariantEnumerator {
                 }
             }
         }
+        for (int i = 0; i < shaped.size(); i++) {
+            List<Tree> trees = entered(shaped.get(i).trees, true);
+            if (!trees.equals(shaped.get(i).trees)) {
+                List<FutureOks> unconnected = missing(trees);
+                try {
+                    Variant variant = assembler.assemble(shaped.get(i).variant.getId(), i + 1, trees, unconnected);
+                    shaped.set(i, new Draft(trees, unconnected, variant));
+                    picked.set(i, shaped.get(i));
+                } catch (IllegalStateException | IllegalArgumentException e) {
+                    log.info("entered corner: вариант {} не собран: {}", i + 1, e.getMessage());
+                }
+            }
+        }
         List<Variant> variants = shaped.stream().map(draft -> draft.variant).collect(Collectors.toList());
         // ранг 1 — наименьший score (п. 7.2): доводка после поиска меняет S, и порядок черновиков мог разойтись с ним
         List<Integer> order = Scorer.rank(variants.stream().map(Variant::getSummary).collect(Collectors.toList()));
@@ -4826,6 +4839,10 @@ public final class VariantEnumerator {
      * сравнивается: вход задаёт правило.
      */
     private List<Tree> entered(List<Tree> trees) {
+        return entered(trees, false);
+    }
+
+    private List<Tree> entered(List<Tree> trees, boolean corner) {
         long started = System.nanoTime();
         List<Tree> result = new ArrayList<>(trees);
         int taken = 0;
@@ -4838,8 +4855,8 @@ public final class VariantEnumerator {
                 Tree.Edge edge = tree.edges.get(e);
                 ExistingOks building = edge.to.kind == Tree.Kind.CONNECTION
                         ? buildingByConnection.get(edge.to.connection.getId()) : null;
-                if (building == null || edge.line.getNumPoints() < 3
-                        && Double.isNaN(TreeBuilder.farEntry(building.getGeometry(), edge.line.getCoordinates()))) {
+                if (building == null || (corner ? edge.line.getNumPoints() < 4 : edge.line.getNumPoints() < 3
+                        && Double.isNaN(TreeBuilder.farEntry(building.getGeometry(), edge.line.getCoordinates())))) {
                     continue;
                 }
                 tried++;
@@ -4871,11 +4888,17 @@ public final class VariantEnumerator {
                         before = c[c.length - 2];
                     }
                 }
-                Coordinate[] line = builder.entered(building, edge.line.getCoordinates(), zones, tree.tie.getIgnored(),
-                        before, apart, edge.from == tree.root);
-                Coordinate[] straight = builder.straightened(building, line != null ? line : edge.line.getCoordinates(),
-                        zones, tree.tie.getIgnored(), before, apart, edge.from == tree.root);
-                line = straight != null ? straight : line;
+                Coordinate[] line;
+                if (corner) {
+                    line = builder.cornered(building, edge.line.getCoordinates(), zones, tree.tie.getIgnored(), before,
+                            apart, edge.from == tree.root);
+                } else {
+                    line = builder.entered(building, edge.line.getCoordinates(), zones, tree.tie.getIgnored(),
+                            before, apart, edge.from == tree.root);
+                    Coordinate[] straight = builder.straightened(building, line != null ? line : edge.line.getCoordinates(),
+                            zones, tree.tie.getIgnored(), before, apart, edge.from == tree.root);
+                    line = straight != null ? straight : line;
+                }
                 if (line == null) {
                     continue;
                 }
@@ -4894,8 +4917,10 @@ public final class VariantEnumerator {
                     attempt.add(other == tree ? changed : other);
                 }
                 if (changed == null || !apart(sharp.values(), result, tree) || !compatible(changed, others)
-                        || Double.isNaN(unitScore(attempt)) || worse(tree, unit, changed, attempt)) {
-                    log.info("entered: вход точки {} не перенесён", edge.to.connection.getId());
+                        || Double.isNaN(unitScore(attempt)) || worse(tree, unit, changed, attempt)
+                        || corner && (changed.edges.get(e).line.getNumPoints() >= edge.line.getNumPoints()
+                        || unitScore(attempt) > unitScore(unit) + UNKINK_EPS)) {
+                    log.info("entered: вход точки {} не перенесён{}", edge.to.connection.getId(), corner ? " к углу" : "");
                     continue;
                 }
                 result.set(t, changed);
@@ -4903,7 +4928,8 @@ public final class VariantEnumerator {
                 taken++;
             }
         }
-        log.info("entered: tried={} moves={} elapsed={}ms", tried, taken, (System.nanoTime() - started) / 1_000_000);
+        log.info("entered{}: tried={} moves={} elapsed={}ms", corner ? " corner" : "", tried, taken,
+                (System.nanoTime() - started) / 1_000_000);
         return result;
     }
 

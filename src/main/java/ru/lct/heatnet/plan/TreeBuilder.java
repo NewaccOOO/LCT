@@ -101,6 +101,8 @@ final class TreeBuilder {
      * от ближайшей точки контура: это допуск B8 у check18.py ({@link #straightened}).
      */
     private static final double ENTRY_NEAR_M = 0.1;
+    static final double CORNER_M = 1.0;
+    private static final double CORNER_RIGHT_DEG = 80;
     /** Зона отступа графа шире отступа на столько (ObstacleSet.SIMPLIFY_M): выход финального участка лежит за ней. */
     private static final double SIMPLIFY_M = 0.05;
     /** Проходы срезки углов рёбер, см. {@link #cut}. */
@@ -637,6 +639,40 @@ final class TreeBuilder {
         return result;
     }
 
+    Coordinate[] cornered(ExistingOks building, Coordinate[] coords, ObstacleSet zones, Set<String> ignored,
+            Coordinate before, List<LineSegment> apart, boolean fromRoot) {
+        int n = coords.length;
+        Coordinate cp = coords[n - 1];
+        Geometry polygon = building.getGeometry();
+        double limit = nearestWall(polygon, cp) + CORNER_M;
+        List<Coordinate> entries = new ArrayList<>();
+        for (int g = 0; g < polygon.getNumGeometries(); g++) {
+            Coordinate[] ring = ((org.locationtech.jts.geom.Polygon) polygon.getGeometryN(g)).getExteriorRing().getCoordinates();
+            for (int k = 0; k + 1 < ring.length; k++) {
+                Coordinate entry = new LineSegment(ring[k], ring[k + 1]).closestPoint(cp);
+                if (cp.distance(entry) < limit) {
+                    entries.add(entry);
+                }
+            }
+        }
+        entries.sort(Comparator.comparingDouble(cp::distance));
+        for (int keep = 1; keep <= n - 3; keep++) {
+            boolean right = false;
+            for (int v = Math.max(1, keep - 1); v < n - 1; v++) {
+                right |= Router.deflectionDeg(coords[v - 1], coords[v], coords[v + 1]) >= CORNER_RIGHT_DEG;
+            }
+            Coordinate[] trimmed = Arrays.copyOf(coords, keep + 2);
+            trimmed[keep] = coords[n - 2];
+            trimmed[keep + 1] = cp;
+            Coordinate[] line = relinked(building, trimmed, zones, ignored, before, apart, fromRoot, entries, false, false,
+                    right ? CORNER_RIGHT_DEG : MIN_TURN_DEG);
+            if (line != null) {
+                return line;
+            }
+        }
+        return null;
+    }
+
     /**
      * Вход в здание polygon прямого звена от вершины ребра coords перед последней к точке, если он не дальше
      * ENTRY_NEAR_M от ближайшей к точке точки внешнего контура; null — ребро из одного звена или вход дальше.
@@ -680,6 +716,12 @@ final class TreeBuilder {
     private Coordinate[] relinked(ExistingOks building, Coordinate[] coords, ObstacleSet zones, Set<String> ignored,
             Coordinate before, List<LineSegment> apart, boolean fromRoot, List<Coordinate> entries, boolean straight,
             boolean across) {
+        return relinked(building, coords, zones, ignored, before, apart, fromRoot, entries, straight, across, MIN_TURN_DEG);
+    }
+
+    private Coordinate[] relinked(ExistingOks building, Coordinate[] coords, ObstacleSet zones, Set<String> ignored,
+            Coordinate before, List<LineSegment> apart, boolean fromRoot, List<Coordinate> entries, boolean straight,
+            boolean across, double minTurn) {
         int n = coords.length;
         Coordinate cp = coords[n - 1];
         List<Coordinate[]> rings = rings(building.getGeometry());
@@ -714,7 +756,7 @@ final class TreeBuilder {
                     break;
                 }
                 double turn = Router.deflectionDeg(a, exit, cp);
-                if (!straight && (a.distance(exit) < Router.CUT_PIECE_M || turn < MIN_TURN_DEG || turn > Router.MAX_TURN_DEG)
+                if (!straight && (a.distance(exit) < Router.CUT_PIECE_M || turn < minTurn || turn > Router.MAX_TURN_DEG)
                         || pre != null && Router.deflectionDeg(pre, a, exit) > Router.MAX_TURN_DEG) {
                     continue;
                 }
@@ -796,6 +838,13 @@ final class TreeBuilder {
     static double farEntry(Geometry polygon, Coordinate[] coords) {
         int n = coords.length;
         Coordinate cp = coords[n - 1];
+        double nearest = nearestWall(polygon, cp);
+        double length = coords[n - 2].distance(cp);
+        double[] out = crossings(rings(polygon), cp, (coords[n - 2].x - cp.x) / length, (coords[n - 2].y - cp.y) / length, length);
+        return out.length > 0 && out[0] > nearest + ENTRY_TOL_M ? out[0] : Double.NaN;
+    }
+
+    static double nearestWall(Geometry polygon, Coordinate cp) {
         double nearest = Double.POSITIVE_INFINITY;
         for (int g = 0; g < polygon.getNumGeometries(); g++) {
             Coordinate[] ring = ((org.locationtech.jts.geom.Polygon) polygon.getGeometryN(g)).getExteriorRing().getCoordinates();
@@ -803,9 +852,7 @@ final class TreeBuilder {
                 nearest = Math.min(nearest, new LineSegment(ring[k], ring[k + 1]).distance(cp));
             }
         }
-        double length = coords[n - 2].distance(cp);
-        double[] out = crossings(rings(polygon), cp, (coords[n - 2].x - cp.x) / length, (coords[n - 2].y - cp.y) / length, length);
-        return out.length > 0 && out[0] > nearest + ENTRY_TOL_M ? out[0] : Double.NaN;
+        return nearest;
     }
 
     /** Внешние контуры и дырки частей полигона. */

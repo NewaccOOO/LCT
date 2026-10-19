@@ -41,7 +41,7 @@ import ru.lct.heatnet.rules.Rules;
  * Менять константу только при намеренной смене качества.
  */
 class OrganizerDatasetRegressionTest {
-    private static final double ORGANIZER_RANK1_SCORE = 12.7841;
+    private static final double ORGANIZER_RANK1_SCORE = 12.6962;
     private static final int TURNS_BEFORE_AXES = 26;
 
     @Test
@@ -56,8 +56,8 @@ class OrganizerDatasetRegressionTest {
         // с общим правилом выхода из здания (B19, 28.09.2026) черновик с точкой 4 отдельной частью проходит проверки и
         // отличается от первого по устройству: второй вариант (S 13,1835 до ортогональной формы); первый прежний
         assertEquals(3, result.getVariants().size());
-        // 12,9981 на исходном датасете; 13,0943 — второй вариант скорректированного датасета (ТЗ), не этого файла
-        assertEquals(12.9981, result.getVariants().get(1).getSummary().getScore(), 1e-6);
+        // 12,9102 на исходном датасете; 13,0064 — второй вариант скорректированного датасета (ТЗ), не этого файла
+        assertEquals(12.9102, result.getVariants().get(1).getSummary().getScore(), 1e-6);
         assertTrue(turns(best) <= TURNS_BEFORE_AXES, "поворотов " + turns(best));
     }
 

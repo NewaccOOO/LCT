@@ -88,6 +88,7 @@ ENTRY_STEP_M = 0.05
 # звено от врезки не пересекает её сеть дальше TIE_TOUCH_M от врезки (TieInFinder.TOUCH_M)
 TIE_TOUCH_M = 0.5
 ENTRY_TOL_M = 0.1
+CORNER_M = 1.0
 APPROACH_M = 0.05
 APPROACH_ENTRY_M = 0.03
 ZONE_WIDER_M = 0.05
@@ -1552,6 +1553,9 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
             if q is None:
                 rep.add("i  финальный участок не от ближайшей точки контура: ближе допустимого входа нет",
                         f"{sid} вход {inside:.2f} м, до границы {to_edge:.2f} м: {dict(reasons)}")
+            elif corner_entry(LineString(c[-2:]), cg, og, shells, to_edge):
+                rep.add(f"i  вход у угла не дальше {CORNER_M:.0f} м от ближайшей точки контура (разъяснения 15, 17)",
+                        f"{sid} вход {inside:.2f} м, ближайший допустимый {q.distance(cg):.2f} м")
             else:
                 rep.add("B8 финальный участок не от ближайшего допустимого входа",
                         f"{sid} ДУ{p['diameter']} вход {inside:.2f} м, допустимый {q.distance(cg):.2f} м")
@@ -2213,6 +2217,21 @@ def trees_for(inp):
         "chambers_near": lambda g, d: [ch_ids[i] for i in t_ch.query(g, predicate="dwithin", distance=d)] if t_ch else [],
         "chamber_links": chamber_links,
     }
+
+
+def corner_entry(piece, cg, og, shells, to_edge):
+    hit = piece.intersection(og.boundary)
+    e = min((Point(pt) for g in getattr(hit, "geoms", [hit]) for pt in g.coords), key=cg.distance, default=None)
+    if e is None:
+        return False
+    for sh in shells:
+        ring = list(sh.coords)
+        for a, b in zip(ring, ring[1:]):
+            side = LineString([a, b])
+            if side.distance(cg) <= to_edge + CORNER_M and side.distance(e) <= LINE_TOL_M \
+                    and shapely.ops.nearest_points(side, cg)[0].distance(e) <= ENTRY_TOL_M:
+                return True
+    return False
 
 
 def divergence(a, b):

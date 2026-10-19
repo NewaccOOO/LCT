@@ -459,6 +459,28 @@ class TreeBuilderTest {
         assertEquals(null, TreeBuilder.straightEntry(building, new Coordinate[] {exit, cp}));
     }
 
+    @Test
+    void hookAroundCornerBecomesRightAngleEntryThroughAdjacentWall() {
+        Geometry building = PlanFixture.rect(100, 50, 120, 60);
+        PlanFixture fixture = PlanFixture.trunk();
+        fixture.oks.add(new FutureOks("o-1", building, 5, 1.0));
+        fixture.connections.add(new ConnectionPoint("cp-o-1", point(119, 50.5), "o-1"));
+        fixture.existing.add(new ExistingOks("b-1", building));
+        InputData input = fixture.input();
+        TreeBuilder builder = builder(input, new TieInFinder(input, rules), VariantEnumerator.buildings(input));
+        Coordinate[] hook = {new Coordinate(140, 110), new Coordinate(127, 90), new Coordinate(127, 43),
+                new Coordinate(119, 43), new Coordinate(119, 50.5)};
+
+        Coordinate[] line = builder.cornered(fixture.existing.get(0), hook,
+                new Router(input, rules, AREA, DN).obstacles(), Set.of(), null, List.of(), false);
+
+        assertTrue(line.length < hook.length, "вершин " + line.length);
+        int n = line.length;
+        assertTrue(Router.deflectionDeg(line[n - 3], line[n - 2], line[n - 1]) >= 80);
+        double inside = PlanFixture.line(line[n - 2].x, line[n - 2].y, 119, 50.5).intersection(building).getLength();
+        assertTrue(inside > 0.5 && inside <= 0.5 + TreeBuilder.CORNER_M, "вход " + inside);
+    }
+
     private TreeBuilder builder(InputData input, TieInFinder finder) {
         return builder(input, finder, Map.of());
     }

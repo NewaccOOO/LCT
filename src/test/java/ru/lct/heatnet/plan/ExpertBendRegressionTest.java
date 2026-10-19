@@ -12,7 +12,7 @@ class ExpertBendRegressionTest {
 
     @Test
     void pairWithInvalidExtensionCornerIsReplacedByOneVertex() {
-        assertEquals(13.3153, score("e4-combined", 0), 1e-6);
+        assertEquals(13.2275, score("e4-combined", 0), 1e-6);
     }
 
     @Test

@@ -3,7 +3,7 @@ import os
 import sys
 
 import pytest
-from shapely.geometry import Point, Polygon
+from shapely.geometry import LineString, Point, Polygon
 
 sys.path.insert(0, os.path.dirname(__file__))
 import check18
@@ -43,3 +43,13 @@ def test_turn_with_same_side_turn_over_short_link_is_one_turn():
 
     assert check18.path_turn(path(1.5), 1)[0] == pytest.approx(120)
     assert check18.path_turn(path(2.5), 1)[0] == pytest.approx(80)
+
+
+def test_corner_entry_only_at_nearest_point_of_adjacent_side():
+    own = Polygon([(0, 0), (20, 0), (20, 10), (0, 10)])
+    cg = Point(19, 0.5)
+    shells = [own.exterior]
+
+    assert check18.corner_entry(LineString([(26, 0.5), (19, 0.5)]), cg, own, shells, 0.5)
+    assert not check18.corner_entry(LineString([(26, 3), (19, 0.5)]), cg, own, shells, 0.5)
+    assert not check18.corner_entry(LineString([(23, -6), (19, 0.5)]), cg, own, shells, 0.5)
