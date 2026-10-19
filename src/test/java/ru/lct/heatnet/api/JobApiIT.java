@@ -30,6 +30,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Answers;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -73,7 +74,7 @@ class JobApiIT {
     JobRepository jobs;
     @Autowired
     JobWorker worker;
-    @MockBean
+    @MockBean(answer = Answers.CALLS_REAL_METHODS)
     Pipeline pipeline;
 
     @AfterAll
