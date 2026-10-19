@@ -287,10 +287,11 @@ const CMP = [
 ];
 // сравнение: строки — показатели, столбцы — варианты; так таблица помещается в узкую панель и на планшет
 function cmpTable(M, v) {
-  const rows = [['Показатель S', x => x.score ?? Infinity, q => fmt(q, 2)], ['Стоимость', ...CMP[0].slice(1)], ['Новых труб', ...CMP[1].slice(1)],
+  const big = M.variants.some(x => x.summary.calculated_cost >= 1e9);
+  const rows = [['Показатель S', x => x.score ?? Infinity, q => fmt(q, 2)], [big ? 'Стоимость, млрд ₽' : 'Стоимость, млн ₽', CMP[0][1], q => fmt(q / (big ? 1e9 : 1e6), big ? 2 : 1)], ['Новых труб, км', CMP[1][1], q => fmt(q / 1000, 2)],
     ['Не подключено', ...CMP[2].slice(1)], ['Проблем по высоте', ...CMP[3].slice(1)], ['Спецпереходов', ...CMP[4].slice(1)]];
   const bestS = Math.min(...M.variants.map(x => x.score ?? Infinity));
-  return `<table class="cmp"><tr><th></th>${M.variants.map(x => `<th class="click ${x === v ? 'cur' : ''}" data-v="${esc(x.id)}">Вар. ${esc(x.id)}${x.score === bestS ? '<small>лучший</small>' : ''}</th>`).join('')}</tr>
+  return `<table class="cmp"><tr><th></th>${M.variants.map(x => `<th class="click ${x === v ? 'cur' : ''}" data-v="${esc(x.id)}"><span class="vp">Вар. </span>${esc(x.id)}${x.score === bestS ? '<small>лучший</small>' : ''}</th>`).join('')}</tr>
     ${rows.map(([name, f, t]) => { const vals = M.variants.map(x => f(x, M)), best = Math.min(...vals), differ = vals.some(q => q !== best);
       return `<tr><td${name === 'Показатель S' ? ` title="${S_FORMULA}"` : ''}>${name}</td>${vals.map((q, i) => `<td class="${q === best && differ ? 'best' : ''} ${M.variants[i] === v ? 'cur' : ''}">${t(q)}</td>`).join('')}</tr>`; }).join('')}</table>`;
 }
@@ -317,7 +318,7 @@ function renderSummary() {
   const len = sm.new_network_length ?? v.segs.reduce((a, s) => a + s.len, 0);
   el.innerHTML = `<h2>Вариант ${esc(v.id)}${v.rank === 1 && M.variants.length > 1 ? ' · лучший' : v.rank && M.variants.length > 1 ? ` · ${v.rank}-й по показателю S` : ''}</h2>
     <div class="kpi">
-      <div title="${S_FORMULA}"><b>${fmt(sm.score, 2)}</b><span>показатель S, меньше — лучше <span class="q">?</span></span></div>
+      <div title="${S_FORMULA}"><b>${fmt(sm.score, 2)}</b><span>показатель S <span class="q">?</span></span></div>
       <div><b>${rub(sm.calculated_cost)}</b><span>полная стоимость</span></div>
       <div><b>${meters(len)}</b><span>новых труб</span></div>
       <div class="${unc ? 'bad' : 'ok'}"><b>${unc} из ${M.oks.length}</b><span>зданий не подключено</span></div>
@@ -360,13 +361,13 @@ function renderSummary() {
   };
 }
 function dataInfo() {
-  const M = S.model, u = Object.entries(M.utilities).map(([k, l]) => `${UTILITIES[k].name.toLowerCase()} ${fmt(l.length)}`).join(', ');
-  return `<table class="wrap"><tr><td>Объектов в исходных данных</td><td>${fmt(M.stats.input)}</td></tr>
-    ${S.ds?.attribution ? `<tr><td>Источник карты</td><td style="white-space:normal">${esc(S.ds.attribution)}</td></tr>` : ''}
+  const M = S.model, u = Object.entries(M.utilities).map(([k, l]) => [UTILITIES[k].name, l.length]);
+  return `<table><tr><td>Объектов в исходных данных</td><td>${fmt(M.stats.input)}</td></tr>
     <tr><td>Зданий к подключению</td><td>${fmt(M.oks.length)}</td></tr>
-    <tr><td>Коммуникации</td><td style="white-space:normal">${u || '—'}</td></tr>
-    <tr><td>Глубины новых труб</td><td>${M.hasDepth ? 'подобраны при трассировке' : M.hasOutput ? 'в результате нет, трубы показаны на глубине 3,0 м' : '—'}</td></tr>
-    ${M.skipped.map(([w, k]) => `<tr><td>Пропущено: ${esc(w)}</td><td>${fmt(k)}</td></tr>`).join('')}</table>`;
+    ${u.length ? `<tr><th colspan="2" class="grp">Коммуникации, объектов</th></tr>${u.map(([name, n]) => `<tr><td>${name}</td><td>${fmt(n)}</td></tr>`).join('')}` : ''}
+    <tr><td>Глубины новых труб</td><td>${M.hasDepth ? 'подобраны' : M.hasOutput ? 'условно 3,0 м' : '—'}</td></tr>
+    ${M.skipped.map(([w, k]) => `<tr><td>Пропущено: ${esc(w)}</td><td>${fmt(k)}</td></tr>`).join('')}</table>
+    ${S.ds?.attribution ? `<p class="mut src">Карта: ${esc(S.ds.attribution)}</p>` : ''}`;
 }
 function longestTour() {
   if (!S.v) return;
@@ -1339,7 +1340,7 @@ function openDlg(tab) {
   if (!dl.open) dl.showModal();
   if (tab === 'srv') refreshJobs();
 }
-function setOpenTab(t) { $$('#openTabs button').forEach(b => b.classList.toggle('on', b.dataset.ot === t)); $$('#openDlg [data-op]').forEach(p => { p.hidden = p.dataset.op !== t; }); }
+function setOpenTab(t) { $$('#openTabs button').forEach(b => b.classList.toggle('on', b.dataset.ot === t)); $$('#openDlg [data-op]').forEach(p => { p.hidden = p.dataset.op !== t; }); $('#fGo').hidden = t !== 'files'; $('#jGo').hidden = t !== 'srv'; }
 $('#openTabs').onclick = e => { const b = e.target.closest('button'); if (b) { setOpenTab(b.dataset.ot); if (b.dataset.ot === 'srv') refreshJobs(); } };
 $('#demoList').onclick = e => { const b = e.target.closest('[data-n]'); if (!b) return; $('#openDlg').close(); history.replaceState(null, '', location.pathname + '?ds=' + encodeURIComponent(b.dataset.n)); loadDemo(demos.find(d => d.name === b.dataset.n)); };
 $('#fGo').onclick = () => { const f = [$('#fIn').files[0], $('#fOut').files[0]].filter(Boolean); if (!f.length) return; $('#openDlg').close(); loadFiles(f); };
@@ -1537,6 +1538,30 @@ function toggleLeft() {
   if (isMobile()) document.body.classList.toggle('leftOpen');
   else { document.body.classList.toggle('leftHidden'); store.set('leftHidden', document.body.classList.contains('leftHidden')); }
   layout();
+}
+{
+  const g = $('#leftGrip'), root = document.documentElement.style, MIN = 280;
+  const maxW = () => Math.min(640, Math.round(innerWidth * 0.5));
+  const setW = w => { if (w) root.setProperty('--left', Math.max(MIN, Math.min(maxW(), w)) + 'px'); else root.removeProperty('--left'); };
+  setW(store.get('leftW', 0));
+  addEventListener('resize', () => setW(store.get('leftW', 0)));
+  const save = () => store.set('leftW', parseInt(root.getPropertyValue('--left')) || 0);
+  g.onpointerdown = e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    g.setPointerCapture(e.pointerId);
+    const x0 = e.clientX, w0 = $('#left').offsetWidth;
+    let raw = w0;
+    document.body.classList.add('resizing');
+    g.onpointermove = ev => { raw = w0 + ev.clientX - x0; setW(Math.round(raw)); };
+    g.onpointerup = g.onpointercancel = () => {
+      g.onpointermove = g.onpointerup = g.onpointercancel = null;
+      document.body.classList.remove('resizing');
+      if (raw < MIN - 100) { setW(w0); toggleLeft(); } else save();
+    };
+  };
+  g.ondblclick = () => { setW(0); save(); };
+  g.onkeydown = e => { const d = {ArrowLeft: -16, ArrowRight: 16}[e.key]; if (d) { e.preventDefault(); setW($('#left').offsetWidth + d); save(); } };
 }
 function toggleCard() {
   if (!S.sel) return;

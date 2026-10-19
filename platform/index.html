@@ -23,10 +23,12 @@ document.documentElement.dataset.theme = t === 'system' ? (matchMedia('(prefers-
       <button role="menuitem" data-act="run" class="srv">Новый расчёт на сервере…</button>
       <button role="menuitem" data-act="jobs" class="srv">История расчётов…</button>
       <hr>
-      <button role="menuitem" data-act="png">Сохранить снимок экрана (PNG)</button>
-      <button role="menuitem" data-act="geojson">Скачать результат сервиса, без правок (GeoJSON, WGS84)</button>
-      <button role="menuitem" data-act="geojson-edit">Скачать результат с ручными правками (GeoJSON, WGS84)</button>
-      <button role="menuitem" data-act="dxf">Скачать трассы для AutoCAD (DXF, UTM, м)</button>
+      <div class="lbl">Скачать</div>
+      <button role="menuitem" data-act="png">Снимок экрана<small>PNG</small></button>
+      <button role="menuitem" data-act="geojson" title="Как вернул сервис, без ручных правок. GeoJSON в WGS84">Результат сервиса без правок<small>GeoJSON</small></button>
+      <button role="menuitem" data-act="geojson-edit" title="GeoJSON в WGS84">Результат с ручными правками<small>GeoJSON</small></button>
+      <button role="menuitem" data-act="dxf" title="DXF в UTM, метры">Трассы для AutoCAD<small>DXF</small></button>
+      <hr>
       <button role="menuitem" data-act="link">Скопировать ссылку на этот вид</button>
     </div>
   </div>
@@ -61,6 +63,7 @@ document.documentElement.dataset.theme = t === 'system' ? (matchMedia('(prefers-
     <section id="t-oks" class="pane" hidden></section>
     <section id="t-cx" class="pane" hidden></section>
     <section id="t-lay" class="pane" hidden></section>
+    <div id="leftGrip" class="vgrip" role="separator" aria-orientation="vertical" aria-label="Ширина панели" tabindex="0" title="Потяните, чтобы изменить ширину. Двойной щелчок — обычная ширина"></div>
   </aside>
 
   <div id="stage">
@@ -184,7 +187,7 @@ document.documentElement.dataset.theme = t === 'system' ? (matchMedia('(prefers-
 
 <dialog id="openDlg" aria-labelledby="openH">
   <form method="dialog" class="dlg wide">
-    <h2 id="openH">Открыть данные</h2>
+    <h2 id="openH" tabindex="-1" autofocus>Открыть данные</h2>
     <nav class="tabs small" id="openTabs"><button type="button" data-ot="demo" class="on">Демо-наборы</button><button type="button" data-ot="files">Свои файлы</button><button type="button" data-ot="srv" class="srv">Сервер</button></nav>
     <div data-op="demo"><div id="demoList" class="list"></div></div>
     <div data-op="files" hidden>
@@ -199,19 +202,15 @@ document.documentElement.dataset.theme = t === 'system' ? (matchMedia('(prefers-
         <p>Это тот же файл, который принимает сервис трассировки. Его обычно готовят из ГИС или выгрузки сетей.</p>
         <p>Результат трассировки — файл, который вернул сервис (<code>variant_summary</code>, участки <code>heat_network</code> с <code>variant_id</code>). Объекты без <code>object_type</code> пропускаются, их число будет в отчёте.
         Пример исходных данных: <a href="demo/small-1.in.geojson" download="пример-исходных-данных.geojson">скачать small-1</a>.</p></details>
-      <div class="row end"><button type="button" class="primary" id="fGo" disabled>Открыть</button></div>
     </div>
     <div data-op="srv" hidden>
-      <div class="newjob">
-        <div class="pick"><span class="lbl">Новый расчёт: исходные данные GeoJSON</span><label class="btn" for="jIn">Выбрать файл…</label><span class="fname" id="jInN">не выбран</span><input type="file" id="jIn" accept=".geojson,.json"></div>
-        <button type="button" class="primary" id="jGo">Отправить на расчёт</button>
-      </div>
-      <label class="tog"><input type="checkbox" id="jDepth" checked> С учётом глубины: сервис подберёт глубину каждого участка и обойдёт сети по высоте. Расчёт идёт дольше</label>
+      <div class="pick"><span class="lbl">Новый расчёт: исходные данные GeoJSON</span><label class="btn" for="jIn">Выбрать файл…</label><span class="fname" id="jInN">не выбран</span><input type="file" id="jIn" accept=".geojson,.json"></div>
+      <label class="tog top"><input type="checkbox" id="jDepth" checked><span>С учётом глубины<small>Сервис подберёт глубину каждого участка и обойдёт сети по высоте. Расчёт идёт дольше</small></span></label>
       <div id="jobState" class="mut"></div>
       <h3>История расчётов</h3>
       <div id="jobList" class="list"></div>
     </div>
-    <div class="row end"><button value="cancel">Закрыть</button></div>
+    <div class="row end"><button value="cancel">Закрыть</button><button type="button" class="primary" id="fGo" disabled hidden>Открыть</button><button type="button" class="primary srv" id="jGo" hidden>Отправить на расчёт</button></div>
   </form>
 </dialog>
 
