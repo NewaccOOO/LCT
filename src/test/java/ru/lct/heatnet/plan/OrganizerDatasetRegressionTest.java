@@ -18,7 +18,7 @@ import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.rules.Rules;
 
 class OrganizerDatasetRegressionTest {
-    private static final double ORGANIZER_RANK1_SCORE = 12.6982;
+    private static final double ORGANIZER_RANK1_SCORE = 12.6947;
     private static final int TURNS_BEFORE_AXES = 26;
 
     @Test

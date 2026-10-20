@@ -8,8 +8,8 @@
 [![Spring Boot](https://img.shields.io/badge/Spring_Boot-2.6.3-6DB33F?style=for-the-badge&logo=springboot&logoColor=white)](pom.xml)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](docker-compose.yml)
 <br>
-[![версия](https://img.shields.io/badge/%D0%B2%D0%B5%D1%80%D1%81%D0%B8%D1%8F-v0.12.0-0ea5e9?style=for-the-badge)](CHANGELOG.md)
-[![S на датасете](https://img.shields.io/badge/S_%D0%BD%D0%B0_%D0%B4%D0%B0%D1%82%D0%B0%D1%81%D0%B5%D1%82%D0%B5-12%2C696-0ea5e9?style=for-the-badge)](CHANGELOG.md)
+[![версия](https://img.shields.io/badge/%D0%B2%D0%B5%D1%80%D1%81%D0%B8%D1%8F-v0.13.0-0ea5e9?style=for-the-badge)](CHANGELOG.md)
+[![S на датасете](https://img.shields.io/badge/S_%D0%BD%D0%B0_%D0%B4%D0%B0%D1%82%D0%B0%D1%81%D0%B5%D1%82%D0%B5-12%2C695-0ea5e9?style=for-the-badge)](CHANGELOG.md)
 [![проверщик](https://img.shields.io/badge/%D0%BF%D1%80%D0%BE%D0%B2%D0%B5%D1%80%D1%89%D0%B8%D0%BA-check18-22c55e?style=for-the-badge)](tools/validator/check18.py)
 
 [Быстрый старт](#быстрый-старт) ·
@@ -144,7 +144,7 @@ uv run --project tools python tools/validator/depth_bound.py <вход> <вых�
 <img src="docs/assets/versions.svg" alt="S варианта 1 на датасете организаторов по версиям с правил 18.09.2026" width="760">
 </div>
 
-Текущая версия **v0.12.0** (19.10.2026): на датасете организаторов S вариантов 12,6962 / 12,9102 / 13,0306, стоимость варианта 1 — 259,4 млн руб., все 17 точек подключены, `check18` без замечаний, расчёт около 12 с на ноутбуке. Все версии, замеры и что менялось — в [CHANGELOG.md](CHANGELOG.md).
+Текущая версия **v0.13.0** (20.10.2026): на датасете организаторов S вариантов 12,6947 / 12,929, стоимость варианта 1 — 259,4 млн руб., все 17 точек подключены, `check18` без замечаний, расчёт около 17 с на ноутбуке. Все версии, замеры и что менялось — в [CHANGELOG.md](CHANGELOG.md).
 
 ## API
 
