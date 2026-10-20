@@ -67,7 +67,7 @@ public final class VariantEnumerator {
     private static final double OTHER_TIE_M = 20;
     private static final double SAME_ROUTE_SHARE = 0.9;
     private static final double SAME_ROUTE_M = 10.0;
-    private static final double BALLAST_RATIO = Double.parseDouble(System.getProperty("heatnet.variants.ratio", "1.3"));
+    static final String BALLAST_PROPERTY = "heatnet.variants.ratio";
     private static final double DRAFT_ROUTE_M = 1.0;
     private static final boolean SCAN = Boolean.parseBoolean(System.getProperty("heatnet.search.scan", "true"));
     private static final double SCAN_RADIUS_M = 150;
@@ -1332,11 +1332,12 @@ public final class VariantEnumerator {
 
     private List<Variant> distinct(List<Variant> variants, List<List<Tree>> trees) {
         List<Variant> kept = new ArrayList<>();
+        double ballast = Double.parseDouble(System.getProperty(BALLAST_PROPERTY, "1.3"));
         for (int i : distinctIndices(variants, trees)) {
             Variant variant = variants.get(i);
-            if (!kept.isEmpty() && variant.getSummary().getScore() > BALLAST_RATIO * kept.get(0).getSummary().getScore()) {
+            if (!kept.isEmpty() && variant.getSummary().getScore() > ballast * kept.get(0).getSummary().getScore()) {
                 log.info("variants: вариант {} с S {} дороже лучшего ({}) больше чем в {} раза и не выдаётся", variant.getId(),
-                        variant.getSummary().getScore(), kept.get(0).getSummary().getScore(), BALLAST_RATIO);
+                        variant.getSummary().getScore(), kept.get(0).getSummary().getScore(), ballast);
                 continue;
             }
             String id = String.valueOf(kept.size() + 1);
