@@ -126,7 +126,7 @@ h3 { font-size: 14px; margin: 14px 0 6px; font-weight: 500; }
 .kpi { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .kpi > div { background: var(--card); border-radius: var(--r); padding: 10px 12px; }
 .kpi b { display: block; font-size: 20px; line-height: 24px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.kpi span { font-size: 12.5px; color: var(--muted); }
+.kpi > div > span { font-size: 12.5px; color: var(--muted); }
 .kpi .bad b { color: var(--bad-t); } .kpi .ok b { color: var(--ok-t); }
 table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 td, th { padding: 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
@@ -469,7 +469,7 @@ details.fmt { margin: 8px 0; font-size: 13px; color: var(--muted); }
 details.fmt summary { cursor: pointer; color: var(--accent); }
 details.fmt code { color: var(--text); font-size: 12px; }
 details.fmt a { color: var(--accent); }
-.q { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--muted); font-size: 10px; margin-left: 3px; cursor: help; }
+.q { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--muted); font-size: 10px; line-height: 1; vertical-align: 1px; margin-left: 3px; cursor: help; }
 .tblwrap { overflow-x: auto; }
 table.cmp { table-layout: fixed; }
 table.cmp th, table.cmp td { font-size: 12.5px; white-space: nowrap; }
