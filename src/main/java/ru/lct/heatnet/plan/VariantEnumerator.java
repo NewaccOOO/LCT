@@ -64,7 +64,7 @@ public final class VariantEnumerator {
     private static final double GROUP_DISTANCE_M = 300;
     private static final double AREA_MARGIN_M = 150;
     private static final double WIDE_AREA_MARGIN_M = 600;
-    private static final double OTHER_TIE_M = 20;
+    private static final int ALONG_FACTOR = 2;
     private static final double SAME_ROUTE_SHARE = 0.9;
     private static final double SAME_ROUTE_M = 10.0;
     private static final double DRAFT_ROUTE_M = 1.0;
@@ -2392,7 +2392,7 @@ public final class VariantEnumerator {
             }
             List<Option> options = options(subset, slide);
             int rank = alternative.applyAsInt(subset);
-            int start = rank > 0 ? alternativeIndex(options, rank) : 0;
+            int start = rank > 0 ? alternativeIndex(options, rank, otherTieM()) : 0;
             Tree chosen = null;
             for (int k = 0; k < options.size() && chosen == null; k++) {
                 Option option = options.get((start + k) % options.size());
@@ -2575,11 +2575,11 @@ public final class VariantEnumerator {
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
         List<Option> plain = plain(options);
-        if (!plain.isEmpty() && alternativeIndex(plain) == 0) {
-            List<TieCandidate> along = finder.along(plain.get(0).tree.tie, blockDn, OTHER_TIE_M);
+        if (!plain.isEmpty() && alternativeIndex(plain, 1, otherTieM()) == 0) {
+            List<TieCandidate> along = finder.along(plain.get(0).tree.tie, blockDn, ALONG_FACTOR * otherTieM());
             options.addAll(options(region, blockDn, region.area, subset, false, along, false, slide));
             options.sort(Comparator.comparingDouble(option -> option.score));
-            if (alternativeIndex(plain(options)) == 0) {
+            if (alternativeIndex(plain(options), 1, otherTieM()) == 0) {
                 options.addAll(options(region, blockDn, region.area, subset, false, along, false, false));
                 options.sort(Comparator.comparingDouble(option -> option.score));
             }
@@ -5234,11 +5234,11 @@ public final class VariantEnumerator {
         return rules.restriction(OKS_EXISTING).clearanceM(dn) + rules.diameter(dn).getWidthM() / 2;
     }
 
-    private static int alternativeIndex(List<Option> options) {
-        return alternativeIndex(options, 1);
+    private double otherTieM() {
+        return rules.chamberRule().getMaxDistM();
     }
 
-    private static int alternativeIndex(List<Option> options, int rank) {
+    private static int alternativeIndex(List<Option> options, int rank, double otherTieM) {
         List<TieCandidate> seen = new ArrayList<>();
         if (!options.isEmpty()) {
             seen.add(options.get(0).tree.tie);
@@ -5246,7 +5246,7 @@ public final class VariantEnumerator {
         for (int i = 1; i < options.size(); i++) {
             TieCandidate other = options.get(i).tree.tie;
             boolean distinct = seen.stream().allMatch(tie -> !tie.getExistingObjectId().equals(other.getExistingObjectId())
-                    || tie.getPoint().distance(other.getPoint()) > OTHER_TIE_M);
+                    || tie.getPoint().distance(other.getPoint()) > otherTieM);
             if (distinct) {
                 seen.add(other);
                 if (seen.size() - 1 == rank) {
