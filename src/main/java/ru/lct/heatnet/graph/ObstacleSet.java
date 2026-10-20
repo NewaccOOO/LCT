@@ -50,6 +50,9 @@ public final class ObstacleSet {
     private static final double DEPARTURE_RAY_M = 0.01;
     private static final double DEPARTURE_GAP_RAD = Math.toRadians(120);
     private static final double DEPARTURE_SAME_RAD = Math.toRadians(1);
+    private static final double CROSSING_DEPARTURE_STEP_M = 0.25;
+    private static final double CROSSING_DEPARTURE_MAX_M = 40;
+    private static final double[] CROSSING_DEPARTURE_TURNS_DEG = {0, -15, 15, -30, 30};
     private static final double ANGLE_MARGIN_DEG = 0.01;
     private static final double CROSSING_STEP_M = 20;
     private static final int MARGIN_QUADRANT_SEGMENTS = 16;
@@ -62,7 +65,7 @@ public final class ObstacleSet {
     private static final double GATE_OFFSET_M = 0.08;
     private static final double GATE_BEYOND_M = 0.05;
     private static final double GATE_SHIFT_M = 0.5;
-    private static final double GATE_REACH_M = 10;
+    private static final double GATE_REACH_M = 40;
     private static final String ZONE_KEY = "zone";
     private static final double HALVES_MIN_TURN_DEG = 20;
     private static final double HALVES_MAX_TURN_DEG = 120;
@@ -852,11 +855,10 @@ public final class ObstacleSet {
             STRtree margins) {
         for (double t = offset; t <= offset + GATE_REACH_M; t += GATE_SHIFT_M) {
             Coordinate c = new Coordinate(at.x + nx * t, at.y + ny * t);
-            if (!area.contains(c) || inside != null && !inside.intersects(factory.createPoint(c)) || forbidGrid.covers(c)
-                    || insideAny(margins, c)) {
+            if (!area.contains(c) || inside != null && !inside.intersects(factory.createPoint(c)) || forbidGrid.covers(c)) {
                 return null;
             }
-            if (!insideSpecialZone(c)) {
+            if (!insideAny(margins, c) && !insideSpecialZone(c)) {
                 return c;
             }
         }
@@ -1257,6 +1259,43 @@ public final class ObstacleSet {
     }
 
     public List<Coordinate> departures(Coordinate c, Set<String> ignored) {
+        List<Coordinate> result = new ArrayList<>();
+        for (Coordinate d : rays(c, ignored)) {
+            if (!insideAnyZone(d) && !insideAny(margins, d)) {
+                result.add(d);
+            }
+        }
+        return result;
+    }
+
+    public List<Coordinate> crossingDepartures(Coordinate c, Set<String> ignored) {
+        List<Coordinate> result = new ArrayList<>();
+        for (Coordinate d : rays(c, ignored)) {
+            if (!insideAnyZone(d) && !insideAny(margins, d)) {
+                continue;
+            }
+            double start = c.distance(d);
+            double heading = Math.atan2(d.y - c.y, d.x - c.x);
+            for (double turn : CROSSING_DEPARTURE_TURNS_DEG) {
+                double ux = Math.cos(heading + Math.toRadians(turn));
+                double uy = Math.sin(heading + Math.toRadians(turn));
+                for (double along = start + CROSSING_DEPARTURE_STEP_M; along <= CROSSING_DEPARTURE_MAX_M;
+                        along += CROSSING_DEPARTURE_STEP_M) {
+                    Coordinate p = new Coordinate(c.x + ux * along, c.y + uy * along);
+                    if (!area.contains(p) || forbidGrid.covers(p)) {
+                        break;
+                    }
+                    if (!insideSpecialZone(p) && !insideAny(margins, p)) {
+                        result.add(p);
+                        break;
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    private List<Coordinate> rays(Coordinate c, Set<String> ignored) {
         if (ignored.isEmpty()) {
             return List.of();
         }
@@ -1276,13 +1315,7 @@ public final class ObstacleSet {
                 }
             }
         }
-        List<Coordinate> result = new ArrayList<>();
-        for (Coordinate d : departures(c, sides, reach)) {
-            if (!insideAnyZone(d) && !insideAny(margins, d)) {
-                result.add(d);
-            }
-        }
-        return result;
+        return departures(c, sides, reach);
     }
 
     public static List<Coordinate> departures(Coordinate c, List<LineSegment> sides, double reach) {

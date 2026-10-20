@@ -750,6 +750,12 @@ public final class Router {
                     result.add(new Stub(d, weight));
                 }
             }
+            for (Coordinate d : obstacles.crossingDepartures(c, ignored)) {
+                double weight = obstacles.edgeWeight(c, d, ignored, false, false);
+                if (!Double.isNaN(weight)) {
+                    result.add(new Stub(d, weight));
+                }
+            }
             return result.toArray(new Stub[0]);
         });
     }

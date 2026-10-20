@@ -2605,7 +2605,7 @@ public final class VariantEnumerator {
         Router router = region.router(dn, area);
         List<TieCandidate> left = new ArrayList<>();
         Set<String> ignored = new HashSet<>();
-        for (TieCandidate candidate : finder.around(connection.getGeometry(), dn, radius, SCAN_STEP_M)) {
+        for (TieCandidate candidate : finder.around(connection.getGeometry(), dn, radius, SCAN_STEP_M, !district)) {
             Coordinate at = candidate.getPoint().getCoordinate();
             if (area.contains(at) && (region.corridor() == null || region.corridor().covers(candidate.getPoint()))
                     && !router.obstacles().insideForbid(at)) {

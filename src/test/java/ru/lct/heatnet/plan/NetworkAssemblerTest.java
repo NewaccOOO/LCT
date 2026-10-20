@@ -2,6 +2,7 @@ package ru.lct.heatnet.plan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Comparator;
 import java.util.List;
@@ -81,11 +82,15 @@ class NetworkAssemblerTest {
     }
 
     @Test
-    void overlapOfZonesTooShortForOwnPieceAndTooLongToShareCutIsRejected() {
+    void overlapOfZonesTooShortForOwnPieceAndTooLongToShareCutIsWidenedToVisiblePiece() {
         PlanFixture fixture = PlanFixture.trunk()
                 .restriction("gas-1", PlanFixture.line(250, 74.97, 450, 74.97), "gas_pipeline");
 
-        assertThrows(IllegalStateException.class, () -> assemble(fixture, 90, 10));
+        List<NewSegment> special = specials(assemble(fixture, 90, 10));
+
+        assertEquals(3, special.size());
+        assertTrue(special.stream().allMatch(segment -> segment.getLength() >= 0.105), "участки " + special.stream()
+                .map(NewSegment::getLength).collect(Collectors.toList()));
     }
 
     private Variant assemble(PlanFixture fixture, double deg, double flow) {

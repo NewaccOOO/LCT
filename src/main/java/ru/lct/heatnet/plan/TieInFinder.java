@@ -204,6 +204,10 @@ final class TieInFinder {
     }
 
     List<TieCandidate> around(Point point, int dn, double radius, double step) {
+        return around(point, dn, radius, step, false);
+    }
+
+    List<TieCandidate> around(Point point, int dn, double radius, double step, boolean inBand) {
         Map<String, TieCandidate> byKey = new LinkedHashMap<>();
         Envelope window = new Envelope(point.getCoordinate());
         window.expandBy(radius);
@@ -223,6 +227,10 @@ final class TieInFinder {
                 TieCandidate candidate = pipeCandidate(segment, at, dn);
                 if (candidate != null) {
                     byKey.putIfAbsent(candidate.nodeKey(), candidate);
+                }
+                TieCandidate banded = inBand ? bandCandidate(segment, at, dn) : null;
+                if (banded != null) {
+                    byKey.putIfAbsent(banded.nodeKey(), banded);
                 }
             }
         }
@@ -324,6 +332,17 @@ final class TieInFinder {
                     ? free(indexed, bands(segment), from, gap, length - gap, dn) : from);
         }
         return candidateAt(segment, factory.createPoint(indexed.extractPoint(position)));
+    }
+
+    private TieCandidate bandCandidate(NetworkSegment segment, double at, int dn) {
+        LineString line = segment.getGeometry();
+        double length = line.getLength();
+        double gap = endGap(segment, dn);
+        if (length <= 2 * gap || at < gap || at > length - gap || !inBand(bands(segment), at)) {
+            return null;
+        }
+        Coordinate c = new LengthIndexedLine(line).extractPoint(at);
+        return forbidden(c, dn) ? null : candidateAt(segment, factory.createPoint(c));
     }
 
     private TieCandidate candidateAt(NetworkSegment segment, Point tie) {
