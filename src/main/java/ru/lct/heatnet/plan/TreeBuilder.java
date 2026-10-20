@@ -56,6 +56,7 @@ final class TreeBuilder {
     private static final double PORTAL_EXTRA_M = 0.3;
     private static final double PORTAL_STEP_M = 0.5;
     private static final double PORTAL_MAX_M = 30;
+    private static final double ACROSS_STEP_M = 0.25;
     private static final int PORTAL_TRIES = 8;
     private static final double SIDE_APART_M = 2.0;
     private static final double ENTRY_STEP_M = 0.05;
@@ -880,6 +881,30 @@ final class TreeBuilder {
                     return new Exit(exit, branchRouter, PORTAL_TRIES + 1 + i, cp.distance(entries.get(i)) > near);
                 }
             }
+            if (after == 0) {
+                int side = 0;
+                Coordinate previous = null;
+                for (Coordinate anchor : anchors) {
+                    if (previous != null && anchor.distance(previous) < MIN_PIECE_M) {
+                        continue;
+                    }
+                    previous = anchor;
+                    if (side++ >= PORTAL_TRIES) {
+                        break;
+                    }
+                    double r = cp.distance(anchor);
+                    if (r < 1e-6) {
+                        continue;
+                    }
+                    double ux = (anchor.x - cp.x) / r;
+                    double uy = (anchor.y - cp.y) / r;
+                    Coordinate exit = across(zones, building, cp, ux, uy, r + zones.oksClearance() + PORTAL_EXTRA_M, own);
+                    if (exit != null) {
+                        log.debug("portal: {} across side {} at {} m", connection.getId(), side, cp.distance(exit));
+                        return new Exit(exit, branchRouter, side, cp.distance(anchor) > near);
+                    }
+                }
+            }
             return NO_EXIT;
         }
 
@@ -949,6 +974,20 @@ final class TreeBuilder {
 
         boolean clearOfSpecials(ObstacleSet zones, Coordinate cp, Coordinate exit, Set<String> own) {
             return zones.spans(factory.createLineString(new Coordinate[] {cp, exit}), own).isEmpty();
+        }
+
+        Coordinate across(ObstacleSet zones, ExistingOks building, Coordinate cp, double ux, double uy, double along,
+                Set<String> own) {
+            for (double at = along + ACROSS_STEP_M; at <= along + PORTAL_MAX_M; at += ACROSS_STEP_M) {
+                Coordinate exit = new Coordinate(cp.x + ux * at, cp.y + uy * at);
+                if (!area.contains(exit) || zones.insideForbid(exit)) {
+                    continue;
+                }
+                if (!Double.isNaN(zones.edgeWeight(cp, exit, own)) && leavesOnce(building, cp, exit, zones.oksClearance())) {
+                    return exit;
+                }
+            }
+            return null;
         }
 
         double beyondSpecial(ObstacleSet zones, Coordinate cp, double ux, double uy, double along, Set<String> own) {
