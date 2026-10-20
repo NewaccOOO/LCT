@@ -64,7 +64,7 @@ public final class VariantEnumerator {
     private static final double GROUP_DISTANCE_M = 300;
     private static final double AREA_MARGIN_M = 150;
     private static final double WIDE_AREA_MARGIN_M = 600;
-    private static final int ALONG_STEPS = 2;
+    private static final int ALONG_FACTOR = 2;
     private static final double SAME_ROUTE_SHARE = 0.9;
     private static final double SAME_ROUTE_M = 10.0;
     private static final double DRAFT_ROUTE_M = 1.0;
@@ -2567,10 +2567,7 @@ public final class VariantEnumerator {
         options.sort(Comparator.comparingDouble(option -> option.score));
         List<Option> plain = plain(options);
         if (!plain.isEmpty() && alternativeIndex(plain, 1, otherTieM()) == 0) {
-            List<TieCandidate> along = new ArrayList<>();
-            for (int times = plain.get(0).tree.tie.isChamber() ? ALONG_STEPS : 1; times <= ALONG_STEPS; times++) {
-                along.addAll(finder.along(plain.get(0).tree.tie, blockDn, times * otherTieM()));
-            }
+            List<TieCandidate> along = finder.along(plain.get(0).tree.tie, blockDn, ALONG_FACTOR * otherTieM());
             options.addAll(options(region, blockDn, region.area, subset, false, along, false, slide));
             options.sort(Comparator.comparingDouble(option -> option.score));
             if (alternativeIndex(plain(options), 1, otherTieM()) == 0) {
