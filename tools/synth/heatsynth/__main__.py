@@ -45,7 +45,6 @@ SUB_BRANCH_PROBABILITY = 0.7
 EXTRA_CHAMBER_PROBABILITY = 0.3
 LOCAL_FLOW_MTPH = (300, 2500)
 OKS_FLOW_MTPH = (5000, 40000)
-# точка подключения внутри здания, у стены к сети: так датасет организаторов связывает ОКС с его точкой
 CP_INSET_M = 1.0
 BUILDING = "oks"
 PAD_ID_BASE = 10_000_000
@@ -69,9 +68,6 @@ PAD_SIDE_M = 60.0
 PAD_ROW = 1000
 BYTES_PER_MB = 1024 * 1024
 SUPPORT_SHIFT_M = 1.0
-# Order matters in the OKS obstacle cycles: small presets put a forbid obstacle on OKS 0-2 and a crossing
-# on OKS 2 only, so types outside the TZ table sit where those OKS pick them; filtering by --types keeps
-# the old order of the default eight.
 FORBID_TYPES = ("metro", "power_line_support", "park", "social_area", "prohibited_site", "water")
 CROSSING_TYPES = ("road", "tram_tracks", "railway")
 LINE_TYPES = ("gas_pipeline", "power_cable", "water_supply", "sewer")
@@ -229,7 +225,6 @@ class Scene:
             self.cells[key].append(geom)
 
     def zone(self, kind: str, geom: BaseGeometry) -> BaseGeometry:
-        """The obstacle grown by its extra reach; gap checks and the grid use it instead of the obstacle."""
         extra = self.extra.get(kind, 0.0)
         return geom.buffer(extra) if extra else geom
 
@@ -240,7 +235,6 @@ class Scene:
         return self.node_tree.query(geom, predicate="dwithin", distance=distance).size > 0
 
     def is_road_misplaced(self, road: Polygon) -> bool:
-        """A road may cross the network, but not cover a chamber or run along a segment."""
         if self.near_nodes(road, NODE_GAP_M):
             return True
         crossed = self.network_tree.query(road, predicate="intersects")
@@ -317,7 +311,6 @@ class Scene:
         return None
 
     def _support_obstacle(self, kind: str, approach: LineString, pending: list[BaseGeometry]) -> Point | None:
-        """A point a metre or less off the straight approach, so its clearance blocks the straight route."""
         rng = self.rng
         (px, py), (tx, ty) = approach.coords
         ex, ey = (tx - px) / approach.length, (ty - py) / approach.length
@@ -409,7 +402,6 @@ class Scene:
 
 
 def restriction_budget(total: int, types: list[str]) -> dict[str, int]:
-    # fsum keeps the weight of the default eight at exactly 1.0, so their budget stays byte for byte
     weight = math.fsum(RESTRICTION_SHARES[kind] for kind in types)
     budget = {kind: max(1, int(total * RESTRICTION_SHARES[kind] / weight)) for kind in types}
     budget[types[0]] = max(1, budget[types[0]] + total - sum(budget.values()))
@@ -426,8 +418,6 @@ def generate(preset: Preset, seed: int, rules: dict[str, Any], types: list[str])
     rng = random.Random(seed)
     table = sorted(rules["diameters"], key=lambda row: row["dn"])
     capacities = [round(row["capacity_tph"] * 1000) for row in table]
-    # The gaps below were tuned for the TZ table; a type that keeps the route farther away
-    # (clearance or special zone) grows its obstacles by the difference, so a detour stays open.
     reach = {
         kind: max(rules["restrictions"][kind]["clearance_m"], rules["restrictions"][kind].get("margin_m", 0.0))
         for kind in {*DEFAULT_TYPES, *types}
@@ -444,9 +434,6 @@ def generate(preset: Preset, seed: int, rules: dict[str, Any], types: list[str])
     def diameter(flow: int) -> int:
         return next(row["dn"] for row, capacity in zip(table, capacities) if capacity >= flow)
 
-    # ОКС ставится у участка, который его расход выводит за пропускную способность: так генератор делал сцены
-    # с реконструкциями до правил 18.09. Ключ existing_flow из rules.json убран в v0.5.0; share 0.0 — его последнее
-    # значение, с ним сцены тех же сидов побайтово как раньше (medium-1 даёт S 23,758, как в docs/performance.md).
     share = rules.get("existing_flow", {}).get("share", 0.0)
     min_flows = []
     for flow in net.flows:
@@ -472,7 +459,6 @@ def generate(preset: Preset, seed: int, rules: dict[str, Any], types: list[str])
     for kind in lines:
         for number in range(budget[kind]):
             scene.place_line(kind, number % 2 == 0, cp_tree, building_tree)
-    # формат датасета организаторов: числовые id, у сети только диаметр, здания — ограничения oks
     ids = itertools.count(1)
     features: list[Feature] = [(Point(center), {"id": next(ids), "object_type": "source"})]
     for segment in range(len(net.segments)):
@@ -490,7 +476,6 @@ def generate(preset: Preset, seed: int, rules: dict[str, Any], types: list[str])
 
 
 def pad_features(bounds: Bounds, to_wgs: Transformer, prefix: str) -> Iterator[dict[str, Any]]:
-    """Endless far-away parks on a grid, generated row by row to keep memory flat."""
     x0 = bounds[2] + PAD_DISTANCE_M
     y0 = bounds[1]
     number = 0
@@ -517,7 +502,6 @@ def with_prefix(prefix: str, number: int) -> int | str:
 
 
 def write_collection(out: Path, features: list[Feature], bounds: Bounds, pad_mb: float, prefix: str) -> None:
-    """Writes features, turning every id into a prefixed string when a prefix is given, then pads the file up to pad_mb."""
     to_wgs = Transformer.from_crs("EPSG:32637", "EPSG:4326", always_xy=True)
     out.parent.mkdir(parents=True, exist_ok=True)
     limit = pad_mb * BYTES_PER_MB

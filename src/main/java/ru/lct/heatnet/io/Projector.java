@@ -9,9 +9,7 @@ import org.locationtech.proj4j.CoordinateTransform;
 import org.locationtech.proj4j.CoordinateTransformFactory;
 import org.locationtech.proj4j.ProjCoordinate;
 
-/** Перевод геометрии между EPSG:4326 (x = долгота, y = широта) и EPSG:32637. */
 public class Projector {
-    // Трансформы proj4j хранят изменяемое состояние, поэтому у каждого потока своя пара.
     private static final ThreadLocal<CoordinateTransform> TO_UTM = ThreadLocal.withInitial(() -> transform("EPSG:4326", "EPSG:32637"));
     private static final ThreadLocal<CoordinateTransform> TO_WGS = ThreadLocal.withInitial(() -> transform("EPSG:32637", "EPSG:4326"));
 

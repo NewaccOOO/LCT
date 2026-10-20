@@ -39,6 +39,7 @@ Pygments — BSD; pyproj, pytest, pluggy, iniconfig — MIT; pillow — MIT-CMU;
 | Данные | Где | Условия |
 |---|---|---|
 | OpenStreetMap | демо `platform/demo/spb-kupchino.*`, входы `data/cities/*` | © участники OpenStreetMap, [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/); производные базы — на тех же условиях. Подпись показывается в платформе рядом со сценой |
-| Синтетика `heatsynth` | `data/samples/`, демо `small-1` | создана генератором команды |
+| Скорректированный датасет организаторов от 18.09.2026 | `data/samples/small-1.geojson`, демо `platform/demo/small-1.*`, набор `data/samples/expert/e4-combined.geojson` | передан организаторами конкурса участникам для решения кейса |
+| Синтетика `heatsynth` и сцены команды | остальные входы `data/samples/` | созданы командой |
 
-Датасет организаторов в репозиторий не входит: его кладут в `data/real/` сами.
+Исходный датасет организаторов `dataset.geojson` кладут в `data/real/` сами.

@@ -11,7 +11,6 @@ import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
 
-/** Оценки длины трассы в полосе другой охватывают длину по буферу JTS, и сравнение R-11 отвечает как по буферу. */
 class RouteBandTest {
     private static final double WIDTH = 1.0;
     private final GeometryFactory factory = new GeometryFactory();
@@ -22,7 +21,6 @@ class RouteBandTest {
         int decided = 0;
         for (int round = 0; round < 300; round++) {
             List<LineString> base = polylines(1 + random.nextInt(6));
-            // другая трасса: те же линии, сдвинутые у полосы, часть своих и часть новых
             List<LineString> other = new ArrayList<>();
             double shift = random.nextInt(4) == 0 ? 0 : 0.5 + random.nextDouble();
             for (LineString line : base) {

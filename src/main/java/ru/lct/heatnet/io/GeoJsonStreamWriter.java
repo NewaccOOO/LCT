@@ -21,23 +21,13 @@ import ru.lct.heatnet.model.TechnicalNode;
 import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.model.VariantSummary;
 
-/**
- * Потоковая запись результата в GeoJSON по разделу 7 технического приложения от 18.09.2026: одна фича за раз, файл
- * подменяется атомарно. Ссылки на объекты входа с числовым id пишутся числом.
- */
 public class GeoJsonStreamWriter {
     private static final int COORDINATE_SCALE = 9;
-    /**
-     * Режим с глубиной: координаты до ~0,01 мкм. Профиль режет участки на куски от 1 см, и при 9 знаках (~0,1 мм) длина
-     * куска по геометрии расходится с length на доли процента — уклон по геометрии выходил круче 0,10.
-     */
     private static final int DEPTH_COORDINATE_SCALE = 13;
     private static final int MONEY_SCALE = 2;
     private static final int LENGTH_SCALE = 2;
     private static final int FLOW_SCALE = 3;
-    /** Глубина до мм. */
     private static final int DEPTH_SCALE = 6;
-    /** score с четырьмя знаками, как в примере п. 7.3 приложения 18.09 (0,6913). */
     private static final int SCORE_SCALE = 4;
 
     private static final JsonFactory JSON = new JsonFactory();
@@ -74,10 +64,8 @@ public class GeoJsonStreamWriter {
             json.writeNumberField("diameter", chamber.getDiameter());
             decimal(json, "cost", chamber.getCost(), MONEY_SCALE);
             if (chamber.getDepth() != null) {
-                // режим с глубиной: все трубы входят в камеру на этой глубине; не 3,0 м — сдвиг, без него профиль с
-                // уклоном 0,10 не помещается (эксперты 16.10: в камеру — на заданной глубине)
                 decimal(json, "depth_m", chamber.getDepth(), DEPTH_SCALE);
-                if (Math.abs(chamber.getDepth() - 3.0) > 0.0105) {
+                if (Math.abs(chamber.getDepth() - 3.0) > 0.0505) {
                     json.writeBooleanField("depth_shifted", true);
                 }
             }
@@ -89,10 +77,8 @@ public class GeoJsonStreamWriter {
             id(json, "end_node_id", segment.getEndNodeId(), numericIds);
             decimal(json, "flow_tph", segment.getFlowTph(), FLOW_SCALE);
             json.writeNumberField("diameter", segment.getDiameter());
-            // в режиме с глубиной длина до микрона: уклон по атрибутам length и depth_* не круче 0,10 и на коротком куске
             decimal(json, "length", segment.getLength(), segment.getDepthStart() != null ? DEPTH_SCALE : LENGTH_SCALE);
             json.writeStringField("laying_method", segment.getLayingMethod());
-            // Глубина относится к дополнительному режиму, в 2D-выходе всегда явный null.
             depth(json, "depth_start", segment.getDepthStart());
             depth(json, "depth_end", segment.getDepthEnd());
             decimal(json, "cost", segment.getCost(), MONEY_SCALE);
@@ -150,7 +136,6 @@ public class GeoJsonStreamWriter {
         }
     }
 
-    /** Ссылка на узел: число, если так был записан id объекта входа. */
     private static void id(JsonGenerator json, String field, String value, Set<String> numericIds) throws IOException {
         json.writeFieldName(field);
         if (numericIds.contains(value)) {
@@ -183,11 +168,9 @@ public class GeoJsonStreamWriter {
     private static void end(JsonGenerator json) throws IOException {
         json.writeEndObject();
         json.writeEndObject();
-        // фича на строке: выход города в гигабайты читается построчно, без разбора файла целиком
         json.writeRaw('\n');
     }
 
-    // В выходной модели только Point и LineString.
     private static void geometry(JsonGenerator json, Geometry wgs, int scale) throws IOException {
         json.writeObjectFieldStart("geometry");
         json.writeStringField("type", wgs.getGeometryType());
@@ -216,7 +199,6 @@ public class GeoJsonStreamWriter {
         json.writeNumber(round(value, scale));
     }
 
-    // Десятичное HALF_UP от кратчайшей записи double: 1.005 даёт 1.01, а Math.round дал бы 1.00.
     private static String round(double value, int scale) {
         return BigDecimal.valueOf(value).setScale(scale, RoundingMode.HALF_UP).toPlainString();
     }

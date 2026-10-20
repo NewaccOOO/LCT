@@ -75,8 +75,6 @@ class TreeBuilderTest {
 
     @Test
     void extraBranchMovesFromFullTieChamberToTrunk() {
-        // у hc-1 три существующих участка: в камеру можно подключить только один новый. Ближайшая к o-2 точка
-        // дерева после подключения o-1 — сама камера, поэтому ответвление должно уйти на ствол.
         PlanFixture fixture = PlanFixture.trunk()
                 .pipe("hn-4", 200, 0, 200, -150, DN, 10, "hc-1")
                 .oks("o-1", 140, 60, 5).oks("o-2", 260, 40, 5);
@@ -96,7 +94,6 @@ class TreeBuilderTest {
 
     @Test
     void branchPassesAsideConnectionPointLyingOnItsRoute() {
-        // точки подключения на одном перпендикуляре к трубе: прямой маршрут к дальней идёт через ближнюю
         PlanFixture fixture = PlanFixture.trunk().oks("o-near", 300, 30, 1).oks("o-far", 300, 60, 1);
         InputData input = fixture.input();
         TieInFinder finder = new TieInFinder(input, rules);
@@ -117,7 +114,6 @@ class TreeBuilderTest {
 
     @Test
     void finalPieceLeavesOwnBuildingOnceEvenWhenNearestSideFacesCourtyard() {
-        // П-образное здание: точка в левом крыле у стены двора; луч через ближайшую точку контура пересёк бы правое крыло
         Geometry building = PlanFixture.rect(150, 50, 180, 60)
                 .union(PlanFixture.rect(150, 60, 160, 120)).union(PlanFixture.rect(170, 60, 180, 120));
         PlanFixture fixture = PlanFixture.trunk();
@@ -144,8 +140,6 @@ class TreeBuilderTest {
 
     @Test
     void branchFromBuildingAlongPipeReachesTieAtPerpendicular() {
-        // здание стеной вдоль трубы и повёрнутое на 2°: маршрут от выхода идёт почти по прямой финального участка, и
-        // поворот в выходе меньше 3° отбрасывал ветку к врезке у перпендикуляра, точка оставалась без сети (проба P1)
         for (double deg : new double[] {0, 2}) {
             Geometry building = AffineTransformation.rotationInstance(Math.toRadians(deg), 150, 85)
                     .transform(PlanFixture.rect(140, 80, 160, 100));
@@ -168,8 +162,6 @@ class TreeBuilderTest {
 
     @Test
     void finalPieceDoesNotComeBackIntoOwnClearanceZone() {
-        // луч вышел из зоны отступа стены y=10 и проходит в 3,58 м от крюка того же здания: при отступе 5,3 м он
-        // входит в зону снова, как у ОКС 10 датасета, при 3,5 м нет
         Geometry building = PlanFixture.rect(0, 0, 30, 10).union(PlanFixture.rect(25, 10, 30, 30))
                 .union(PlanFixture.rect(13.58, 25, 30, 30));
         Coordinate cp = new Coordinate(10, 8);
@@ -182,8 +174,6 @@ class TreeBuilderTest {
 
     @Test
     void finalPieceDoesNotApproachAnotherWallInsideClearanceZone() {
-        // луч от стены y=10 к крылу x=20 того же здания в зоне отступа подходит к нему, как у ОКС 10 датасета при
-        // входе между стенами: такой вход недопустим; луч прямо от стены удаляется от здания
         Geometry building = PlanFixture.rect(0, 0, 30, 10).union(PlanFixture.rect(20, 10, 30, 30));
         Coordinate cp = new Coordinate(10, 8);
 
@@ -193,8 +183,6 @@ class TreeBuilderTest {
 
     @Test
     void rayThroughInnerCornerOfLShapedBuildingIsNotAnExit() {
-        // oks-w857530905 СПб (18.09, сдвиг на 22580; 6665720): луч от точки через вершину внутреннего угла выходит из
-        // соседней стены в 1,2 м и в зоне отступа идёт к углу до 0,13 м — подход к другой стене (B19)
         Geometry building = new GeometryFactory().createPolygon(new Coordinate[] {
                 new Coordinate(15.044, 32.387), new Coordinate(33.428, 19.505), new Coordinate(26.834, 10.125),
                 new Coordinate(23.141, 12.710), new Coordinate(20.785, 9.356), new Coordinate(9.834, 17.038),
@@ -206,7 +194,6 @@ class TreeBuilderTest {
 
     @Test
     void exitLinkSplitsTurnSteeperThan90IntoTwoAllowedTurns() {
-        // маршрут от выхода уходит назад к стене на 0,41° круче перпендикуляра, как у точки 4 датасета
         Coordinate cp = new Coordinate(0, 0);
         Coordinate exit = new Coordinate(0, 10);
         Coordinate next = new Coordinate(-20, 10 - 20 * Math.tan(Math.toRadians(0.41)));
@@ -226,8 +213,6 @@ class TreeBuilderTest {
 
     @Test
     void exitFacesNeighbourByDiameterOfOwnPieceNotOfTreeGraph() {
-        // сосед в 12 м за ближней (южной) стеной, до восточной 5 м: по графу Ду500 (отступ 7,835 м) выход лёг бы в его зону, по Ду
-        // участка точки (5 т/ч, отступ около 5,2 м) проход есть, и финальный участок идёт от ближней стены
         Geometry building = PlanFixture.rect(140, 40, 180, 80);
         PlanFixture fixture = PlanFixture.trunk();
         fixture.oks.add(new FutureOks("o-1", building, 5, 1.0));
@@ -277,7 +262,6 @@ class TreeBuilderTest {
 
     @Test
     void cutTreeKeepsEdgeFromTieInRoot() {
-        // ствол с прямым углом вдали от препятствий: срезка и форма спрямляют угол, ребро должно остаться у узла врезки
         PlanFixture fixture = PlanFixture.trunk().oks("o-1", 300, 60, 5);
         InputData input = fixture.input();
         TieInFinder finder = new TieInFinder(input, rules);
@@ -296,8 +280,6 @@ class TreeBuilderTest {
 
     @Test
     void junctionMovesToStraightenKinkedBranch() {
-        // ствол идёт вверх через камеру, ветка к o-2 ломается в 3,6 м от камеры: камера переносится туда, откуда
-        // ветка прямая, например на продолжение её дальнего звена в 2,33 м выше по стволу
         PlanFixture fixture = PlanFixture.trunk().oks("o-1", 300, 200, 5).oks("o-2", 362, 143, 5);
         InputData input = fixture.input();
         TieInFinder finder = new TieInFinder(input, rules);
@@ -330,8 +312,6 @@ class TreeBuilderTest {
 
     @Test
     void tieSlidesAlongPipeToDropVertexNotNeededForClearance() {
-        // ветка от врезки на трубе ломается на 10,5° в 1,5 м перед поворотом на 80°: прямая от врезки к дальней вершине
-        // дала бы там 90,3°, а от места на 0,8 м левее по трубе — не круче 89,9° и короче прежней ветки
         PlanFixture fixture = PlanFixture.trunk().oks("o-1", 340, 96, 5);
         InputData input = fixture.input();
         TieInFinder finder = new TieInFinder(input, rules);
@@ -363,8 +343,6 @@ class TreeBuilderTest {
 
     @Test
     void branchLinkBendsAtJunctionSoPathTurnIsNotSteeperThan90() {
-        // ветка к o-2 уходит от камеры назад, на 116,6° к стволу: звено у камеры поворачивается, и путь точки к врезке
-        // поворачивает в камере не круче 89,9°
         PlanFixture fixture = PlanFixture.trunk().oks("o-1", 340, 100, 5).oks("o-2", 240, 30, 5);
         InputData input = fixture.input();
         TieInFinder finder = new TieInFinder(input, rules);
@@ -413,8 +391,6 @@ class TreeBuilderTest {
 
     @Test
     void branchesSpreadingWiderThanOneBendAllowBendAtJunctionTogether() {
-        // ветки к o-1 и o-2 уходят от камеры назад по обе стороны ствола, на 99,5° к нему: излома одного ребра мало,
-        // гнутся обе, и путь каждой точки к врезке поворачивает в камере не круче 89,9°
         PlanFixture fixture = PlanFixture.trunk().oks("o-1", 240, 50, 5).oks("o-2", 360, 50, 5);
         InputData input = fixture.input();
         TieInFinder finder = new TieInFinder(input, rules);
@@ -447,7 +423,6 @@ class TreeBuilderTest {
 
     @Test
     void vertexBeforeFinalPieceIsExtraOnlyWhenStraightLinkEntersNearNearestPoint() {
-        // точка в 0,06 м от стены y=10: прямое звено от (40, 30) входит в 0,09 м от ближайшей точки, от (60, 30) — в 0,15 м
         Geometry building = PlanFixture.rect(0, 0, 20, 10);
         Coordinate cp = new Coordinate(10, 9.94);
         Coordinate exit = new Coordinate(10, 20);

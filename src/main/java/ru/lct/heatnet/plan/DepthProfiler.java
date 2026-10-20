@@ -22,60 +22,22 @@ import ru.lct.heatnet.model.VariantSummary;
 import ru.lct.heatnet.rules.DepthRules;
 import ru.lct.heatnet.rules.Rules;
 
-/**
- * Режим с учётом глубины (приложение 18.09, §5): продольный профиль поверх готового 2D-варианта. Трасса в плане не
- * меняется (§5 разрешает не перестраивать маршрут), меняются только глубины, деление участков и стоимость.
- * <p>
- * Цепочка — участки от камеры или точки подключения до следующей камеры или точки подключения через технические
- * узлы. В камерах, точках подключения и врезках сначала обычная глубина, 3,0 м (§5 о глубине в узлах молчит); если
- * пересечение ближе к узлу, чем нужно на спуск, глубина узла сдвигается (см. free), а затем узлы получают глубину, при
- * которой их цепочки дешевле всего (см. cheaperNodes): «над» объектом у самого узла вместо «под» с Kгл > 1.
- * Специальный участок с пересечением газа, кабеля или существующей теплосети (зона по 2 м с каждой стороны от точки
- * пересечения, табл. 2) лежит на постоянной глубине выше или ниже объекта с просветом табл. 2. Под дорогой и трамваем
- * постоянная глубина не требуется, только верх не мельче 1,0 и 1,2 м: там профиль может спускаться и подниматься, и
- * это условие проверяется по всему профилю. Спуски и подъёмы с уклоном не круче max_slope, ближе к 3,0 м при первой
- * возможности (глубже 3,0 м дороже, Kгл). Глубина каждой зоны пересечения выбирается перебором по цепочке (динамика
- * по зонам): самый дешёвый профиль, в котором выполнимы все уклоны и глубины под дорогами. Между отрезками не глубже 3,0 м — прямая без возврата к обычной глубине (§5 разрешает сохранять
- * изменённую глубину между близкими препятствиями). Излом профиля и переход через 3,0 м делят участок техническим узлом.
- */
 final class DepthProfiler {
-    /**
-     * Уклон с запасом на округление: глубины пишутся до микрона, и уклон по записанным глубинам не круче 0,10 на любом
-     * куске от 1 см (0,0998 + 2·0,5 мкм / 1 см < 0,1). Узел ближе SNAP_M к концу участка переносится в конец.
-     */
     private static final double SLOPE_SLACK = Double.parseDouble(System.getProperty("heatnet.depth.slack", "0.998"));
-    /** Причина технического узла, который ставит профиль (излом или переход через 3,0 м), для проверки по плану. */
     static final String PROFILE_NODE = "depth_profile";
-    /** Кандидатов глубины узла в move() для пары узлов: их квадрат, на каждое сочетание решаются все цепочки узлов. */
     private static final int MOVE_CANDIDATES = 24;
-    /**
-     * Допуск «заданной глубины» камеры (эксперты 16.10: трубы входят в камеру на заданной глубине, 3,0 м): ±1 см, меньше
-     * строительного допуска. Внутри — по стоимости: иначе запас уклона на пределе 0,10 уводит участок «под» (случай 16).
-     */
-    private static final double CHAMBER_TOL_M = 0.01;
-    /** Рублей на метр отхода сдвинутой камеры от 3,0 м: больше нескольких изломов, на порядки меньше разницы Kгл. */
+    private static final double CHAMBER_TOL_M = 0.05;
     private static final double CHAMBER_RUB_M = 50;
-    /** Камеры варианта и камеры в допуске ±CHAMBER_TOL_M (заполняет cheaperNodes для move). */
     private Set<String> chamberNodes = Set.of();
     private Set<String> boundedNodes = Set.of();
     private static final double SNAP_M = 0.1;
-    /** Знаков градуса в координатах 2D-выхода (GeoJsonStreamWriter.COORDINATE_SCALE). */
     private static final int WGS_SCALE = 9;
-    /** Кратчайший кусок у точного края зоны: на 1 см округление координат и глубин меняет уклон меньше чем на 0,02 %. */
     private static final double MIN_PIECE_M = 0.01;
-    /** Зазор между отрезками постоянной глубины короче этого связывается прямой, без излома. */
     private static final double MIN_BEND_M = 1.0;
-    /** Точка касания трассы с сетью ближе этого к концу участка — врезка, а не пересечение. */
     private static final double TOUCH_M = 0.05;
     private static final double EPS = 1e-9;
-    /**
-     * Выбор из равных по стоимости (выше 3,0 м Kгл = 1): сначала меньше изломов профиля — эксперты 16.10: «одну глубину
-     * для прохождения двух коммуникаций, сокращение числа поворотов», — потом ближе к 3,0 м. Рубли условные, на порядки
-     * меньше любой разницы в Kгл: стоимость остаётся первым критерием.
-     */
     private static final double BEND_RUB = 1;
     private static final double TIE_RUB_M = 0.001;
-    /** Между двумя отрезками не глубже обычной — прямая без возврата к 3,0 м (меньше изломов профиля). */
     private static final boolean STRAIGHT = Boolean.parseBoolean(System.getProperty("heatnet.depth.straight", "true"));
 
     private final Rules rules;
@@ -83,10 +45,10 @@ final class DepthProfiler {
     private final SpecialObjects specials;
     private final GeometryFactory factory = new GeometryFactory();
 
-    /** Участки, для которых профиль не нашёлся: id участков по вариантам, для отчёта. */
     final Map<String, List<String>> conflicts = new HashMap<>();
+    private Set<String> relaxed = new HashSet<>();
+    private final Set<String> manualSegments = new HashSet<>();
 
-    /** id точек подключения ОКС из входа: они не камеры, их глубина свободна. */
     private final Set<String> oks;
 
     DepthProfiler(Rules rules, SpecialObjects specials) {
@@ -103,7 +65,6 @@ final class DepthProfiler {
         this.specials = specials;
     }
 
-    /** Допустимые глубины: объединение отрезков [lo, hi]. */
     private static final class Range {
         final List<double[]> parts;
 
@@ -136,12 +97,10 @@ final class DepthProfiler {
         }
     }
 
-    /** Отрезок цепочки на постоянной глубине из range: специальный участок или узел на концах. */
     private static final class Pin {
         final double from;
         final double to;
         final Range range;
-        /** Края зоны по правилу (±2 м от пересечения); from/to могут быть дотянуты до границы участка ближе SNAP_M. */
         final double exactFrom;
         final double exactTo;
 
@@ -157,10 +116,6 @@ final class DepthProfiler {
             this.exactTo = exactTo;
         }
 
-        /**
-         * Зона по точным краям: узлы в сантиметрах от границы участка, но без лишней постоянной глубины. Край ближе
-         * MIN_PIECE_M к границе остаётся на ней: кусок спуска в миллиметры уклоном по геометрии не проверить.
-         */
         Pin exact() {
             return new Pin(from + (exactFrom - from >= MIN_PIECE_M ? exactFrom - from : 0),
                     to - (to - exactTo >= MIN_PIECE_M ? to - exactTo : 0), range);
@@ -168,6 +123,18 @@ final class DepthProfiler {
     }
 
     Variant profile(Variant variant) {
+        relaxed = new HashSet<>();
+        while (true) {
+            conflicts.remove(variant.getId());
+            manualSegments.clear();
+            Variant result = profileOnce(variant);
+            if (!relaxed.addAll(manualSegments)) {
+                return result;
+            }
+        }
+    }
+
+    private Variant profileOnce(Variant variant) {
         if (variant.getSegments().isEmpty()) {
             return variant;
         }
@@ -207,8 +174,6 @@ final class DepthProfiler {
                 List<Cross> group = (List<Cross>) spill[2];
                 for (Chain other : byNode.get((String) spill[0])) {
                     if (other != chain) {
-                        // ponytail: остаток длиннее соседней цепочки дальше её узла не продолжается (зона 2 м, цепочки
-                        // короче 2 м за камерой у пересечения редки; G7 в check18 это ловит)
                         other.spill((String) spill[0], (Double) spill[1], group);
                     }
                 }
@@ -218,8 +183,6 @@ final class DepthProfiler {
         for (Chain chain : chains) {
             chain.solve(nodeDepth);
         }
-        // узел ближе спуска к пересечению: глубина в узле меняется, если все цепочки узла с ней выполнимы. Сначала
-        // точки подключения ОКС, потом камеры ветвления, последней — камера врезки (у неё существующая сеть на 3,0 м)
         Set<String> chambers = new HashSet<>();
         for (Chain chain : chains) {
             for (String node : List.of(chain.from(), chain.to())) {
@@ -228,6 +191,7 @@ final class DepthProfiler {
                 }
             }
         }
+        this.chamberNodes = chambers;
         for (int pass = 0; pass < 3; pass++) {
             for (Chain chain : chains) {
                 for (String node : List.of(chain.to(), chain.from())) {
@@ -238,21 +202,26 @@ final class DepthProfiler {
                 }
             }
         }
-        // цепочка из одних спецучастков между двумя узлами (перекрёсток улиц): оба узла на одной глубине
         for (Chain chain : chains) {
             if (chain.chosen == null && !nodeDepth.containsKey(chain.from()) && !nodeDepth.containsKey(chain.to())) {
                 free(List.of(chain.from(), chain.to()), chain, byNode, nodeDepth);
             }
         }
-        cheaperNodes(chains, byNode, nodeDepth, ends, chambers);
-        chains.forEach(chain -> chain.exactZones(nodeDepth));
+        boolean exact = true;
+        while (exact) {
+            cheaperNodes(chains, byNode, nodeDepth, ends, chambers);
+            exact = false;
+            for (Chain chain : chains) {
+                exact |= chain.exactZones(nodeDepth);
+            }
+        }
         List<NewSegment> segments = new ArrayList<>();
         List<TechnicalNode> nodes = new ArrayList<>(variant.getNodes());
         for (Chain chain : chains) {
             boolean manual = chain.chosen == null;
             if (manual) {
-                // профиль с уклоном не помещается: глубина объектов выдерживается, уклон круче (ручная проработка)
                 conflicts.computeIfAbsent(variant.getId(), key -> new ArrayList<>()).add(chain.segments.get(0).getId());
+                chain.segments.forEach(segment -> manualSegments.add(segment.getId()));
                 chain.chosen = closest(chain.pins(nodeDepth));
             }
             List<Pin> pins = chain.pins(nodeDepth);
@@ -263,7 +232,6 @@ final class DepthProfiler {
                     profile.addAll(gap(pins.get(k - 1).to, chain.chosen[k - 1], pin.from, chain.chosen[k], true,
                             chain.floors));
                 }
-                // край зоны — обязательный излом: его нельзя переносить к концу участка, зона станет непостоянной
                 profile.add(new double[] {pin.from, chain.chosen[k], 1});
                 profile.add(new double[] {pin.to, chain.chosen[k], 1});
             }
@@ -296,32 +264,19 @@ final class DepthProfiler {
         return new Variant(variant.getId(), segments, withDepth, nodes, summary);
     }
 
-    /**
-     * Глубины узлов по стоимости. Узел на 3,0 м заставляет спецучасток у самого узла уходить «под» (спуск на 0,4 м
-     * короче подъёма на 1 м и больше), хотя «над» Kгл = 1: выше обычной глубины прокладка не дороже. Узел (камера,
-     * точка подключения) получает глубину, при которой его цепочки в сумме дешевле всего; кандидаты — глубины
-     * ближайших спецучастков и глубины, с которых до них ровно хватает уклона. Камера врезки тоже (как и в free;
-     * -Dheatnet.depth.tieFree=false — только на 3,0 м). Покоординатный спуск по узлам и парам концов цепочки, пока
-     * стоимость падает.
-     */
     private void cheaperNodes(List<Chain> chains, Map<String, List<Chain>> byNode, Map<String, Double> nodeDepth,
             Set<String> ends, Set<String> chambers) {
         if (!Boolean.parseBoolean(System.getProperty("heatnet.depth.cheaperNodes", "true"))) {
             return;
         }
-        // камеры — на заданной глубине (эксперты 16.10: трубы входят в камеру на заданной глубине); по стоимости
-        // движутся только точки подключения ОКС. -Dheatnet.depth.chambers=free — и камеры (прежнее поведение)
         boolean chambersFree = "free".equals(System.getProperty("heatnet.depth.chambers", "fixed"));
         boolean tieFree = chambersFree && Boolean.parseBoolean(System.getProperty("heatnet.depth.tieFree", "true"));
-        // камеру, которую пришлось сдвинуть ради выполнимого профиля (free), — на самую дешёвую допустимую глубину,
-        // ближе к 3,0 м; несдвинутая камера — в допуске ±CHAMBER_TOL_M от 3,0 м
         Set<String> shifted = new HashSet<>();
         nodeDepth.forEach((node, h) -> {
             if (chambers.contains(node) && Math.abs(h - depth.getNormalM()) > CHAMBER_TOL_M) {
                 shifted.add(node);
             }
         });
-        this.chamberNodes = chambers;
         this.boundedNodes = new HashSet<>();
         if (!chambersFree) {
             chambers.stream().filter(n -> !shifted.contains(n)).forEach(boundedNodes::add);
@@ -340,8 +295,6 @@ final class DepthProfiler {
                         groups.add(List.of(node));
                     }
                 }
-                // короткая цепочка между двумя узлами у спецпрохода: поодиночке узел не поднять, уклон до соседа
-                // не помещается, — оба конца сразу, каждому своя глубина
                 if (pairs && deep(chain) && movable.test(chain.from()) && movable.test(chain.to())) {
                     groups.add(List.of(chain.from(), chain.to()));
                 }
@@ -355,44 +308,18 @@ final class DepthProfiler {
         }
     }
 
-    /**
-     * Глубины узлов group (каждому своя, перебор сочетаний кандидатов), при которых их цепочки в сумме дешевле
-     * текущего; true — глубины сменились.
-     */
     private boolean move(List<String> group, Map<String, List<Chain>> byNode, Map<String, Double> nodeDepth) {
         Set<Chain> set = new java.util.LinkedHashSet<>();
         group.forEach(node -> set.addAll(byNode.get(node)));
         List<Chain> incident = new ArrayList<>(set);
-        // глубже 3,0 м — ради стоимости, с зонами пересечений — ради меньшего числа изломов
         if (incident.stream().noneMatch(c -> deep(c) || !c.inner.isEmpty())) {
             return false;
         }
-        double slope = depth.getMaxSlope() * SLOPE_SLACK;
         double current = chamberPenalty(group, nodeDepth);
         for (Chain other : incident) {
             current += other.cost;
         }
-        // кандидаты всех узлов группы общие: в переборе есть и «оба на одной глубине»
-        TreeSet<Double> own = new TreeSet<>();
-        own.add(depth.getNormalM());
-        for (String node : group) {
-            for (Chain other : byNode.get(node)) {
-                Pin pin = other.nearest(node);
-                if (pin == null) {
-                    continue;
-                }
-                double d = other.distance(node, pin);
-                for (double h : values(pin, other.inner)) {
-                    own.add(h);
-                    own.add(h + slope * d);
-                    own.add(Math.max(depth.getMinM(), h - slope * d));
-                }
-            }
-        }
-        own.add(depth.getNormalM() - CHAMBER_TOL_M);
-        own.add(depth.getNormalM() + CHAMBER_TOL_M);
-        // ponytail: пара узлов — не больше MOVE_CANDIDATES ближайших к текущей глубине (перебор квадратичен); одиночный
-        // узел перебирает всё, иначе сдвинутая камера не дойдёт до дешёвой глубины «над» далеко от 3,0 м
+        TreeSet<Double> own = nodeValues(group, byNode);
         double current0 = nodeDepth.getOrDefault(group.get(0), depth.getNormalM());
         List<double[]> candidates = new ArrayList<>();
         for (String node : group) {
@@ -446,7 +373,29 @@ final class DepthProfiler {
         return bestH != null;
     }
 
-    /** Отход камер группы от 3,0 м в условных рублях: камера ближе к заданной глубине, если стоимость та же. */
+    private TreeSet<Double> nodeValues(List<String> group, Map<String, List<Chain>> byNode) {
+        double slope = depth.getMaxSlope() * SLOPE_SLACK;
+        TreeSet<Double> own = new TreeSet<>();
+        own.add(depth.getNormalM());
+        for (String node : group) {
+            for (Chain other : byNode.get(node)) {
+                Pin pin = other.nearest(node);
+                if (pin == null) {
+                    continue;
+                }
+                double d = other.distance(node, pin);
+                for (double h : values(pin, other.inner)) {
+                    own.add(h);
+                    own.add(h + slope * d);
+                    own.add(Math.max(depth.getMinM(), h - slope * d));
+                }
+            }
+        }
+        own.add(depth.getNormalM() - CHAMBER_TOL_M);
+        own.add(depth.getNormalM() + CHAMBER_TOL_M);
+        return own;
+    }
+
     private double chamberPenalty(List<String> group, Map<String, Double> nodeDepth) {
         double sum = 0;
         for (String node : group) {
@@ -457,7 +406,6 @@ final class DepthProfiler {
         return sum;
     }
 
-    /** Цепочка с участком глубже обычной (Kгл > 1) или без профиля. */
     private boolean deep(Chain chain) {
         if (chain.chosen == null) {
             return true;
@@ -470,10 +418,6 @@ final class DepthProfiler {
         return false;
     }
 
-    /**
-     * Глубина узла node, при которой выполнима цепочка chain и остальные цепочки узла: ближайшая к обычной из глубин
-     * отрезков цепочки. Не нашлась — узел остаётся на обычной глубине.
-     */
     private void free(List<String> nodes, Chain chain, Map<String, List<Chain>> byNode, Map<String, Double> nodeDepth) {
         Set<Chain> incident = new java.util.LinkedHashSet<>();
         nodes.forEach(node -> incident.addAll(byNode.get(node)));
@@ -482,37 +426,42 @@ final class DepthProfiler {
         for (Pin pin : chain.inner) {
             candidates.addAll(values(pin, chain.inner));
         }
+        candidates.addAll(nodeValues(nodes, byNode));
+        boolean chamber = nodes.stream().anyMatch(chamberNodes::contains);
+        double best = Double.POSITIVE_INFINITY;
+        Double bestH = null;
         for (double h : candidates) {
-            nodes.forEach(node -> nodeDepth.put(node, h));
-            boolean ok = true;
-            for (Chain other : incident) {
-                ok &= other.solve(nodeDepth) != null;
+            if (chamber && bestH != null && Math.abs(h - depth.getNormalM()) > CHAMBER_TOL_M + EPS
+                    && Math.abs(bestH - depth.getNormalM()) <= CHAMBER_TOL_M + EPS) {
+                break;
             }
-            if (ok) {
-                return;
+            nodes.forEach(node -> nodeDepth.put(node, h));
+            double sum = chamberPenalty(nodes, nodeDepth);
+            for (Chain other : incident) {
+                sum += other.solve(nodeDepth) == null ? Double.POSITIVE_INFINITY : other.cost;
+            }
+            if (sum < best - 1e-6) {
+                best = sum;
+                bestH = h;
             }
         }
-        nodes.forEach(nodeDepth::remove);
+        if (bestH != null) {
+            double h = bestH;
+            nodes.forEach(node -> nodeDepth.put(node, h));
+        } else {
+            nodes.forEach(nodeDepth::remove);
+        }
         incident.forEach(other -> other.solve(nodeDepth));
     }
 
-    /** Цепочка участков между узлами (камера, точка подключения) через технические узлы. */
     private final class Chain {
         final List<NewSegment> segments;
         final double[] start;
-        /** Зоны пересечений: специальные участки на постоянной глубине. */
         final List<Pin> inner = new ArrayList<>();
-        /** Под дорогой и трамваем: [от, до, наименьшая глубина верха] по всему профилю. */
         final List<double[]> floors = new ArrayList<>();
-        /** Точки пересечений по цепочке, для зон и для выхода. */
         final List<Cross> crosses = new ArrayList<>();
-        /** Зоны, которые выходят за конец цепочки: {узел, остаток длины, пересечения зоны}. */
         final List<Object[]> spills = new ArrayList<>();
 
-        /**
-         * Остаток зоны length от узла node в этой цепочке: отрезок на постоянной глубине у её конца, с условиями
-         * пересечений group; перекрытый с зоной цепочки — одна зона.
-         */
         @SuppressWarnings("unchecked")
         void spill(String node, double length, List<Cross> group) {
             double total = start[segments.size()];
@@ -526,7 +475,6 @@ final class DepthProfiler {
                     to = Math.max(to, b);
                 }
             }
-            // остаток короче 1 см — до 1 см: кусок в миллиметры уклоном не проверить
             if (to - from < MIN_PIECE_M) {
                 if (node.equals(from())) {
                     to = Math.min(total, from + MIN_PIECE_M);
@@ -552,7 +500,6 @@ final class DepthProfiler {
             merge();
         }
         double[] chosen;
-        /** Стоимость профиля chosen по цепочке (с Kгл); бесконечность — профиля нет. */
         double cost;
 
         Chain(List<NewSegment> segments, Set<String> technical) {
@@ -572,7 +519,6 @@ final class DepthProfiler {
                 points.addAll(crossings(segment, start[i], technical));
             }
             points.sort(java.util.Comparator.comparingDouble(c -> c.at));
-            // пересечение в техническом узле видят оба его участка: одна точка на объект того же типа
             for (int j = points.size() - 1; j > 0; j--) {
                 for (int i = j - 1; i >= 0 && points.get(j).at - points.get(i).at < 2 * TOUCH_M; i--) {
                     if (points.get(j).type.equals(points.get(i).type)) {
@@ -582,9 +528,8 @@ final class DepthProfiler {
                 }
             }
             crosses.addAll(points);
+            points.removeIf(c -> c.relaxed);
             points.sort(java.util.Comparator.comparingDouble(c -> c.lo));
-            // зона постоянной глубины — по margin (2 м) по трассе с каждой стороны от точки пересечения (табл. 2,
-            // Доп. разъяснение №14); перекрытые зоны — одна зона на одной глубине
             int k = 0;
             while (k < points.size()) {
                 List<Cross> group = new ArrayList<>(List.of(points.get(k)));
@@ -595,7 +540,6 @@ final class DepthProfiler {
                 }
                 double head = group.stream().mapToDouble(c -> c.lo).min().getAsDouble();
                 double from = Math.max(0, head);
-                // зона за концом цепочки продолжается за узлом во все его ветви (табл. 2: 2 м по трассе), см. spill
                 if (head < -EPS) {
                     spills.add(new Object[] {from(), -head, group});
                 }
@@ -605,8 +549,6 @@ final class DepthProfiler {
                 to = Math.min(start[n], to);
                 double exactFrom = from;
                 double exactTo = to;
-                // край зоны у самой границы участка — до границы: узел не ставится в сантиметрах от неё (у зоны
-                // глубже 3,0 м края потом возвращаются к точным, если так дешевле, см. exactZones)
                 for (double b : start) {
                     if (Math.abs(from - b) < SNAP_M) {
                         from = Math.min(from, b);
@@ -620,7 +562,6 @@ final class DepthProfiler {
             merge();
         }
 
-        /** Зоны, налезшие друг на друга после дотягивания краёв, — одна зона с условиями обеих. */
         void merge() {
             for (int k = inner.size() - 1; k > 0; k--) {
                 Pin a = inner.get(k - 1);
@@ -633,7 +574,6 @@ final class DepthProfiler {
             }
         }
 
-        /** Допустимые глубины зоны [from, to]: условия табл. 2 всех её пересечений и наибольший пол участков зоны. */
         private Range range(double from, double to, List<Cross> group) {
             double floor = depth.getMinM();
             for (double[] f : floors) {
@@ -682,13 +622,9 @@ final class DepthProfiler {
             return chosen;
         }
 
-        /**
-         * Зоны глубже 3,0 м — по точным краям ±2 м, если так дешевле: дотянутый до границы участка край держит
-         * лишние сантиметры на глубине с Kгл > 1. У мелких зон Kгл = 1, и узел в сантиметрах от границы не нужен.
-         */
-        void exactZones(Map<String, Double> nodeDepth) {
+        boolean exactZones(Map<String, Double> nodeDepth) {
             if (chosen == null) {
-                return;
+                return false;
             }
             List<Pin> before = new ArrayList<>(inner);
             double[] chosenBefore = chosen;
@@ -706,10 +642,11 @@ final class DepthProfiler {
                 inner.addAll(before);
                 chosen = chosenBefore;
                 cost = costBefore;
+                return false;
             }
+            return changed;
         }
 
-        /** Ближайший к узлу node специальный участок и расстояние до него по цепочке; null — спецучастков нет. */
         Pin nearest(String node) {
             return inner.isEmpty() ? null : node.equals(from()) ? inner.get(0) : inner.get(inner.size() - 1);
         }
@@ -719,10 +656,6 @@ final class DepthProfiler {
         }
     }
 
-    /**
-     * Пересечение трассы с объектом с вертикальными требованиями (газ, кабель, существующая сеть без врезки, табл. 2):
-     * место по цепочке, верх и высота габарита объекта, просвет, зона постоянной глубины, высота габарита новой сети.
-     */
     private static final class Cross {
         final String type;
         final double at;
@@ -731,12 +664,12 @@ final class DepthProfiler {
         final double clear;
         final double margin;
         final double newHeight;
-        /** Где габариты в плане налегают у этой точки (по цепочке): там тоже нужен вертикальный просвет. */
         final double lo;
         final double hi;
+        final boolean relaxed;
 
         Cross(String type, double at, double top, double height, double clear, double margin, double newHeight,
-                double lo, double hi) {
+                double lo, double hi, boolean relaxed) {
             this.type = type;
             this.at = at;
             this.top = top;
@@ -746,13 +679,11 @@ final class DepthProfiler {
             this.newHeight = newHeight;
             this.lo = Math.min(lo, at - margin);
             this.hi = Math.max(hi, at + margin);
+            this.relaxed = relaxed;
         }
     }
 
-    /** Точки, где специальный участок пересекает газ, кабель или существующую сеть (не врезка в своём конце). */
     private List<Cross> crossings(NewSegment segment, double offset, Set<String> technical) {
-        // и обычный участок: у камеры врезки 2D иногда выводит трубу вдоль существующей и пересекает её без
-        // спецпрохода (Москва, 3 участка) — вертикальный просвет нужен и там
         List<Cross> result = new ArrayList<>();
         LineString line = segment.getGeometry();
         LengthIndexedLine indexed = new LengthIndexedLine(line);
@@ -762,15 +693,12 @@ final class DepthProfiler {
             if (crossing == null || special.polygon) {
                 continue;
             }
-            // врезка бывает только в существующую сеть: касание газа или кабеля у камеры — пересечение
             boolean network = special.network;
             List<Coordinate> points = crossPoints(line, special, !network || technical.contains(segment.getStartNodeId()),
                     !network || technical.contains(segment.getEndNodeId()));
             if (points.isEmpty()) {
                 continue;
             }
-            // габариты в плане налегают: новая труба идёт над или под объектом и дальше 2 м от точки (у камеры врезки
-            // 2D выводит трубу почти вдоль существующей сети) — зона постоянной глубины на всё налегание
             double reach = rules.diameter(segment.getDiameter()).getWidthM() / 2 + special.halfWidth;
             Geometry near = special.geometry.intersection(line.getEnvelope().buffer(reach + 1));
             Geometry overlap = line.intersection(near.buffer(reach));
@@ -781,7 +709,6 @@ final class DepthProfiler {
                 for (int g = 0; g < overlap.getNumGeometries(); g++) {
                     Geometry piece = overlap.getGeometryN(g);
                     if (piece.getDimension() == 1 && piece.distance(factory.createPoint(c)) < 1e-6) {
-                        // ponytail: налегание в пределах своего участка; через узел зону продолжает spill на 2 м
                         for (Coordinate e : piece.getCoordinates()) {
                             double t = indexed.indexOf(e);
                             lo = Math.min(lo, t);
@@ -791,13 +718,13 @@ final class DepthProfiler {
                 }
                 result.add(new Cross(special.rule.getType(), offset + at, crossing.getTopM(),
                         crossing.getHeightM() != null ? crossing.getHeightM() : special.height, crossing.getClearM(),
-                        special.rule.getMarginM(), newHeight, offset + lo, offset + hi));
+                        special.rule.getMarginM(), newHeight, offset + lo, offset + hi,
+                        crossing.isSoft() && relaxed.contains(segment.getId())));
             }
         }
         return result;
     }
 
-    /** Наименьшая глубина верха на участке: под дорогой 1,0 м, под трамваем 1,2 м (табл. 2), иначе 0,7 м (§5). */
     private double floor(NewSegment segment) {
         double floor = depth.getMinM();
         if (!NetworkAssembler.SPECIAL.equals(segment.getLayingMethod())) {
@@ -813,10 +740,6 @@ final class DepthProfiler {
         return floor;
     }
 
-    /**
-     * Точки, где участок пересекает линию объекта. Касание в конце участка у камеры или точки подключения — врезка, а
-     * не пересечение; у технического узла (граница зоны 2D) — пересечение: техузел трассу не прерывает.
-     */
     private List<Coordinate> crossPoints(LineString line, SpecialObjects.Special special, boolean startTechnical,
             boolean endTechnical) {
         List<Coordinate> result = new ArrayList<>();
@@ -834,7 +757,6 @@ final class DepthProfiler {
         return result;
     }
 
-    /** Самая дешёвая выполнимая глубина каждого отрезка pins; null — профиля с уклоном нет. */
     private double[] solve(List<NewSegment> chain, double[] start, List<Pin> pins, List<double[]> floors,
             double[] total) {
         int m = pins.size();
@@ -895,10 +817,6 @@ final class DepthProfiler {
         return chosen;
     }
 
-    /**
-     * Глубины-кандидаты отрезка pin: ближайшая к обычной в каждой части допустимого и границы частей, а также
-     * кандидаты соседей, если они допустимы (смежные специальные участки на одной глубине).
-     */
     private TreeSet<Double> values(Pin pin, List<Pin> pins) {
         TreeSet<Double> all = new TreeSet<>();
         double slope = depth.getMaxSlope() * SLOPE_SLACK;
@@ -912,8 +830,6 @@ final class DepthProfiler {
                 own.add(part[0]);
             }
             all.addAll(own);
-            // глубина, с которой до соседа ровно хватает уклона: без неё зона между двумя глубокими соседями
-            // берёт ближайшую границу диапазона, а не нужную промежуточную глубину
             double d = other.from >= pin.to ? other.from - pin.to : pin.from >= other.to ? pin.from - other.to : -1;
             if (d > EPS) {
                 for (double v : own) {
@@ -928,7 +844,6 @@ final class DepthProfiler {
         return all;
     }
 
-    /** Без выполнимого профиля: у каждого отрезка глубина, ближайшая к обычной. */
     private double[] closest(List<Pin> pins) {
         double[] chosen = new double[pins.size()];
         for (int k = 0; k < pins.size(); k++) {
@@ -944,18 +859,12 @@ final class DepthProfiler {
         return chosen;
     }
 
-    /**
-     * Изломы профиля между концом одного отрезка (a, ha) и началом следующего (b, hb): возврат к обычной глубине при
-     * первой возможности, иначе встреча двух уклонов. Пустой список — прямая; null — уклоном не связать. force —
-     * связать прямой, даже если уклон круче (для участков ручной проработки).
-     */
     private List<double[]> gap(double a, double ha, double b, double hb, boolean force, List<double[]> floors) {
         List<double[]> result = gap(a, ha, b, hb, STRAIGHT);
         if (result != null && fits(a, ha, result, b, hb, floors)) {
             return result;
         }
         if (STRAIGHT) {
-            // прямая между мелкими отрезками проходит под дорогой мельче нормы: возврат к 3,0 м её обходит
             List<double[]> back = gap(a, ha, b, hb, false);
             if (back != null && fits(a, ha, back, b, hb, floors)) {
                 return back;
@@ -968,14 +877,12 @@ final class DepthProfiler {
             result = new ArrayList<>();
             double normal = depth.getNormalM();
             if ((ha - normal) * (hb - normal) < 0) {
-                // прямая ручной проработки проходит 3,0 м: в этой точке технический узел (§5)
                 result.add(new double[] {a + (b - a) * (ha - normal) / (ha - hb), normal});
             }
         }
         return result;
     }
 
-    /** Профиль от (a, ha) через points до (b, hb) не мельче глубины floors (дорога, трамвай) там, где они есть. */
     private static boolean fits(double a, double ha, List<double[]> points, double b, double hb, List<double[]> floors) {
         List<double[]> line = new ArrayList<>();
         line.add(new double[] {a, ha});
@@ -987,7 +894,6 @@ final class DepthProfiler {
             if (to < from - EPS) {
                 continue;
             }
-            // профиль линеен между точками: наименьшая глубина — в концах отрезка floor или в изломах внутри
             List<Double> at = new ArrayList<>(List.of(from, to));
             line.forEach(point -> {
                 if (point[0] > from && point[0] < to) {
@@ -1003,7 +909,6 @@ final class DepthProfiler {
         return true;
     }
 
-    /** Изломы между отрезками без проверки глубины под дорогой; straight — прямая, если обе глубины не глубже 3,0 м. */
     private List<double[]> gap(double a, double ha, double b, double hb, boolean straight) {
         double slope = depth.getMaxSlope() * SLOPE_SLACK;
         double normal = depth.getNormalM();
@@ -1012,9 +917,16 @@ final class DepthProfiler {
         double db = Math.abs(hb - normal) / slope;
         List<double[]> result = new ArrayList<>();
         if (straight && ha <= normal + EPS && hb <= normal + EPS && Math.abs(ha - hb) <= slope * g + EPS) {
-            return result; // §5: между близкими препятствиями изменённая глубина сохраняется, выше 3,0 м Kгл = 1
+            return result;
         }
         if (da + db <= g + EPS) {
+            if (straight && (ha - normal) * (hb - normal) < 0) {
+                double run = Math.abs(ha - hb) / slope;
+                if (g - run > EPS) {
+                    result.add(ha > normal ? new double[] {a + run, hb} : new double[] {b - run, ha});
+                }
+                return result;
+            }
             if (da > EPS) {
                 result.add(new double[] {a + da, normal});
             }
@@ -1026,9 +938,8 @@ final class DepthProfiler {
         boolean sameSide = (ha - normal) * (hb - normal) >= 0;
         if (sameSide && Math.abs(ha - hb) <= slope * g + EPS) {
             if (g < MIN_BEND_M) {
-                return result; // короткий зазор — прямая: узел ради сантиметров глубины не нужен
+                return result;
             }
-            // обе глубины по одну сторону от обычной: уклоны навстречу друг другу до точки встречи
             double sign = ha > normal || hb > normal ? -1 : 1;
             double at = (ha - hb) * -sign / (2 * slope) + (a + b) / 2;
             at = Math.max(a, Math.min(b, at));
@@ -1040,7 +951,6 @@ final class DepthProfiler {
         return null;
     }
 
-    /** Изломы профиля на переходе между двумя отрезками постоянной глубины (до и после — горизонталь). */
     private static int bends(List<double[]> piece) {
         int bends = 0;
         double before = 0;
@@ -1056,7 +966,6 @@ final class DepthProfiler {
         return bends + (Math.abs(before) > 1e-9 ? 1 : 0);
     }
 
-    /** Стоимость части цепочки по точкам профиля (s, h), линейного между точками, по участкам цепочки. */
     private double cost(List<NewSegment> chain, double[] start, List<double[]> profile) {
         double sum = 0;
         for (int p = 0; p + 1 < profile.size(); p++) {
@@ -1075,28 +984,21 @@ final class DepthProfiler {
                 NewSegment segment = chain.get(i);
                 sum += (to - from) * rules.diameter(segment.getDiameter()).getNewRubM() * kSpecial(segment)
                         * (k(ha) + k(hb)) / 2;
-                // выше обычной глубины Kгл = 1 и стоимость одна: из равных берётся ближе к 3,0 м, со спусками короче
                 sum += (to - from) * TIE_RUB_M * (Math.abs(ha - depth.getNormalM()) + Math.abs(hb - depth.getNormalM())) / 2;
             }
         }
         return sum;
     }
 
-    /**
-     * Kгл куска, где глубина меняется линейно от h0 до h1. Профиль делится в точке обычной глубины, так что кусок
-     * не переходит через неё, и среднее Kгл концов точное (§5).
-     */
     private double k(double h) {
         return depth.k(h);
     }
 
-    /** Kспец участка из его 2D-стоимости: L · c(Ду) · Kспец, округлённо до копеек. */
     private double kSpecial(NewSegment segment) {
         double base = CostCalculator.round2(segment.getLength()) * rules.diameter(segment.getDiameter()).getNewRubM();
         return base == 0 ? 1 : Math.round(segment.getCost() / base * 10000) / 10000.0;
     }
 
-    /** Режет участки цепочки в изломах профиля и пишет глубины концов. */
     private void split(Chain owner, List<double[]> profile, boolean manual, String prefix, int[] numbers,
             List<NewSegment> out, List<TechnicalNode> nodes) {
         List<NewSegment> chain = owner.segments;
@@ -1106,15 +1008,16 @@ final class DepthProfiler {
             NewSegment segment = chain.get(i);
             double length = start[i + 1] - start[i];
             TreeSet<Double> cuts = new TreeSet<>();
-            for (double[] point : profile) {
+            for (int p = 0; p < profile.size(); p++) {
+                double[] point = profile.get(p);
                 double at = point[0] - start[i];
-                // излом у самого конца участка переносится в конец, кроме края зоны: там постоянная глубина
                 double snap = point.length > 2 ? EPS : SNAP_M;
-                if (at > snap && at < length - snap) {
+                if (at > snap && at < length - snap && bend(profile, p)
+                        && !(at < MIN_PIECE_M && Math.abs(point[1] - at(profile, start[i])) <= EPS)
+                        && !(length - at < MIN_PIECE_M && Math.abs(point[1] - at(profile, start[i + 1])) <= EPS)) {
                     cuts.add(at);
                 }
             }
-            // кусок, который проходит 3,0 м, делится в этой точке (§5); точка у конца участка не переносится
             for (boolean added = true; added; ) {
                 added = false;
                 double prev = 0;
@@ -1123,7 +1026,7 @@ final class DepthProfiler {
                 for (double to : ends0) {
                     double h0 = at(profile, start[i] + prev);
                     double h1 = at(profile, start[i] + to);
-                    if ((h0 - normal) * (h1 - normal) < -EPS * EPS) {
+                    if ((h0 - normal) * (h1 - normal) < 0 && Math.abs(h0 - normal) > EPS && Math.abs(h1 - normal) > EPS) {
                         double cut = Double.NaN;
                         for (double[] point : profile) {
                             double at = point[0] - start[i];
@@ -1162,7 +1065,6 @@ final class DepthProfiler {
                     coords[coords.length - 1] = segment.getGeometry().getCoordinateN(segment.getGeometry().getNumPoints() - 1);
                 }
                 LineString line = factory.createLineString(coords);
-                // длина до микрона: на кусках короче метра округление до см делает уклон по атрибуту length круче 0,10
                 double len = mm(line.getLength());
                 double d0 = mm(at(profile, start[i] + from));
                 double d1 = mm(at(profile, start[i] + to));
@@ -1178,27 +1080,41 @@ final class DepthProfiler {
         }
     }
 
-    /** Пересечения участка на глубине h для выхода: над или под объектом и вертикальный просвет между гранями. */
+    private static boolean bend(List<double[]> profile, int p) {
+        double[] point = profile.get(p);
+        int before = p - 1;
+        while (before >= 0 && profile.get(before)[0] > point[0] - EPS) {
+            before--;
+        }
+        int after = p + 1;
+        while (after < profile.size() && profile.get(after)[0] < point[0] + EPS) {
+            after++;
+        }
+        if (before < 0 || after == profile.size()) {
+            return true;
+        }
+        double[] a = profile.get(before);
+        double[] b = profile.get(after);
+        return Math.abs((point[1] - a[1]) / (point[0] - a[0]) - (b[1] - point[1]) / (b[0] - point[0])) > 1e-9;
+    }
+
     private List<DepthCrossing> crossings(Chain chain, List<double[]> profile, double from, double to, double total) {
         List<DepthCrossing> result = new ArrayList<>();
         for (Cross c : chain.crosses) {
-            // точка на разрезе — в следующем куске, в конце цепочки — в последнем
             if (c.at < from - EPS || c.at >= to - EPS && to < total - EPS) {
                 continue;
             }
             double h = mm(at(profile, c.at));
             double over = c.top - (h + c.newHeight);
             double under = h - (c.top + c.height);
+            if (c.relaxed && Math.max(over, under) < c.clear - 1e-6) {
+                continue;
+            }
             result.add(new DepthCrossing(c.type, over >= under ? "over" : "under", mm(Math.max(over, under))));
         }
         return result.isEmpty() ? null : result;
     }
 
-    /**
-     * Вариант на сетке выхода: вершины трассы так, как их пишет 2D (9 знаков градуса), в метрах. Профиль, длины и
-     * разрезы считаются на той же геометрии, которую увидит проверка: вершины плана совпадают с 2D-выходом, а куски
-     * в сантиметры не расходятся с length на доли миллиметра (иначе уклон по геометрии выходил круче 0,10).
-     */
     private static Variant written(Variant variant) {
         List<NewSegment> segments = new ArrayList<>();
         for (NewSegment s : variant.getSegments()) {
@@ -1229,7 +1145,6 @@ final class DepthProfiler {
         return ru.lct.heatnet.io.Projector.toUtm(wgs);
     }
 
-    /** Глубина профиля в точке s цепочки. */
     private static double at(List<double[]> profile, double s) {
         for (int p = 0; p + 1 < profile.size(); p++) {
             double[] a = profile.get(p);
@@ -1241,12 +1156,10 @@ final class DepthProfiler {
         return profile.get(profile.size() - 1)[1];
     }
 
-    /** Глубина до микрона: при мм округление на коротком куске делает уклон круче 0,10 (СПб: 0,1005 на 0,16 м). */
     private static double mm(double h) {
         return Math.round(h * 1_000_000) / 1_000_000.0;
     }
 
-    /** Префикс ID варианта: начало ID участков до «seg_». */
     private static String prefix(Variant variant) {
         String id = variant.getSegments().get(0).getId();
         return id.substring(0, id.lastIndexOf("seg_"));

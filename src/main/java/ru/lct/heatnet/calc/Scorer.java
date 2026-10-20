@@ -9,7 +9,6 @@ public final class Scorer {
     private Scorer() {
     }
 
-    /** Индексы сводок по возрастанию score, при равенстве — по возрастанию calculatedCost. */
     public static List<Integer> rank(List<VariantSummary> summaries) {
         List<Integer> order = new ArrayList<>();
         for (int i = 0; i < summaries.size(); i++) {

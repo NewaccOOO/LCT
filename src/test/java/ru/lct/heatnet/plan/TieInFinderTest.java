@@ -23,7 +23,6 @@ class TieInFinderTest {
 
     @Test
     void projectionWithinTenMetresOfChamberWithRoomBecomesChamberTieIn() {
-        // hc-1 в (200, 0) с двумя участками; проекция на hn-2 в (205, 0) в 5 м от неё
         TieInFinder finder = new TieInFinder(PlanFixture.trunk().input(), rules);
 
         List<TieCandidate> candidates = finder.find(List.of(point(205, 40)), DN);
@@ -39,8 +38,6 @@ class TieInFinderTest {
 
     @Test
     void chamberTieGetsNoNewChamberJustBeyondMaxDistOnItsPipes() {
-        // разъяснение 9 от 29.09: правило 10 м запрещает строить новую камеру рядом с существующей, поэтому за
-        // пределом max_dist_m на трубах камеры новая камера не пробуется
         TieInFinder finder = new TieInFinder(PlanFixture.trunk().input(), rules);
         TieCandidate chamber = finder.find(List.of(point(205, 40)), DN).stream().filter(TieCandidate::isChamber)
                 .findFirst().orElseThrow();
@@ -98,7 +95,6 @@ class TieInFinderTest {
 
     @Test
     void pointAtPipeGetsTieInFartherThanMetre() {
-        // точка в 1 м от hn-3 (400..600, 0): врезка по перпендикуляру дала бы отрезок короче метра с округлением
         TieInFinder finder = new TieInFinder(PlanFixture.trunk().input(), rules);
 
         TieCandidate pipe = finder.find(List.of(point(450, 1)), DN).stream()
@@ -115,7 +111,6 @@ class TieInFinderTest {
         assertEquals("hc-2", chamberNearTwoHundredNine(finder).getExistingObjectId());
     }
 
-    /** Кандидат вдоль hn-2 на 91 м от врезки в (300, 0), то есть в (209, 0), где в 10 м две камеры. */
     private TieCandidate chamberNearTwoHundredNine(TieInFinder finder) {
         TieCandidate tie = finder.find(List.of(point(300, 60)), DN).stream()
                 .filter(c -> !c.isChamber() && c.getExistingObjectId().equals("hn-2")).findFirst().orElseThrow();
@@ -138,7 +133,6 @@ class TieInFinderTest {
 
     @Test
     void pipeTieInLeavesRoadBandTowardNearestEdge() {
-        // дорога x 295..310 поперёк hn-2, её полоса 3 м — x 292..313; проекция (300, 60) в полосе
         TieInFinder finder = new TieInFinder(PlanFixture.trunk()
                 .restriction("road-1", PlanFixture.rect(295, -20, 310, 20), "road").input(), rules);
 
@@ -162,7 +156,6 @@ class TieInFinderTest {
 
     @Test
     void nearestByWindowMatchesFullSort() {
-        // решётка даёт равные расстояния, их порядок — порядок входа; точки и линии вперемешку, далеко и близко
         Random random = new Random(11);
         for (int round = 0; round < 200; round++) {
             List<Geometry> items = new ArrayList<>();
@@ -183,7 +176,6 @@ class TieInFinderTest {
             index.build();
             for (int k = 0; k < 50; k++) {
                 Point at = point(random.nextInt(80) * 25.0 - 250, random.nextInt(80) * 25.0 - 250);
-                // номера, а не сами геометрии: на решётке бывают одинаковые объекты с разными номерами
                 List<Integer> order = new ArrayList<>();
                 for (int i = 0; i < items.size(); i++) {
                     order.add(i);

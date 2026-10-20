@@ -18,44 +18,24 @@ import org.locationtech.jts.geom.Point;
 import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.rules.Rules;
 
-/**
- * Кратчайшие маршруты по visibility graph одной области и диаметра. Граф узлов строится в конструкторе один раз;
- * точки запроса в граф не добавляются: их веса до узлов считаются (и кэшируются) отдельно, а Дейкстра идёт по
- * массивам смежности от виртуального источника. Поворот в вершине не круче {@link #MAX_TURN_DEG}: ребро, которое
- * ломает путь к вершине сильнее, при релаксации пропускается (приложение 18.09, п. 2.1).
- */
 public final class Router {
     private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(Router.class);
-    /**
-     * Допустимый поворот — до 90° включительно (п. 2.1): ортогональная трасса ({@link #square}) поворачивает ровно на
-     * 90°, запас — на ошибку double. Округление координат выхода до 9 знаков градуса сдвигает угол на тысячные доли
-     * градуса у отрезков от метра.
-     */
     public static final double MAX_TURN_DEG = 90 + 1e-6;
     private static final double MIN_TURN_DEG = 3;
     private static final double MIN_PIECE_M = 1;
-    /** Излом после сдвига вершины с запасом к 3°: соседние вершины при сдвиге тоже меняют излом. */
     private static final double PUSH_TURN_DEG = 6;
     private static final double[] PUSH_STEPS_M = {0.5, 1, 2, 4, 8};
     private static final int MAX_PUSHES = 20;
-    /** Срезка углов, см. cutPass: проходы, шаги поиска наибольшего среза и зазор хорды до других рёбер дерева. */
     private static final int CUT_PASSES = 2;
     private static final int CUT_STEPS = 6;
     private static final double CUT_APART_M = 0.5;
-    /** Запас формы к отступу: сборка может поднять Ду по длине на ступень, см. ObstacleSet#plain. */
     public static final double CUT_MARGIN_M = 0.15;
-    /** Запас хорды срезки к отступу, как у зоны узлов графа, см. {@link #chord}. */
     private static final double CHORD_MARGIN_M = 0.2;
-    /** Подотрезок после срезки не короче метра с запасом: check18 видит 1,00 м после округления координат как 0,999. */
     public static final double CUT_PIECE_M = 1.05;
-    /** Короткое звено между поворотами, см. {@link #sharpen}: 10 м с запасом на округление координат выхода. */
     private static final double SHORT_LINK_M = 10.05;
-    /** Сколько средних прямых окна может остаться при замене поворотов, см. {@link #sharpenWindow}. */
     private static final int SHARPEN_LINES = 3;
     private static final double SHARPEN_EPS = 1e-9;
-    /** Точность поворота лучей в {@link #bend}: 0,3 мм поперёк звена 30 м. */
     private static final double BEND_EPS_RAD = 1e-5;
-    /** Предел поочерёдных поворотов лучей в {@link #bend}: они сходятся за несколько кругов. */
     private static final int BEND_ROUNDS = 20;
     private static final int BEND_GRID = 20;
     private static final double BEND_GRID_MIN_M = 0.02;
@@ -66,51 +46,32 @@ public final class Router {
     private static final double PAIR_MIN_DEG = 60;
     private static final double PAIR_MAX_DEG = 120;
     private static final double PAIR_LINK_M = 30;
-    /** Вершина ближе этого к границе специальной части стоит на ней, см. {@link #drop}. */
     private static final double SPAN_EPS_M = 1e-3;
     private static final double CROSS_END_M = 0.01;
-    /**
-     * Мелкий излом — поворот меньше MIN_TURN_DEG, у которого конец короткого плеча уходит с прямой хотя бы на MICRO_M:
-     * так он не путается с округлением координат выхода до 9 знаков (десятые доли миллиметра), см. {@link #micro}.
-     */
     public static final double MICRO_M = 0.001;
     private static final double UNKNOWN = Double.NEGATIVE_INFINITY;
-    /** Предел состояний точного поиска: дальше перебор считается безнадёжным и маршрут не ищется. */
     private static final int EXACT_STATES = 100_000;
     private static final double HYPOT_TOL = 1e-15;
-    /** Запас предела перебора в routeToAny: на порядки больше ошибки округления суммы весов. */
     private static final double CAP_TOL = 1e-9;
     private static final double MAX_TURN_COS = Math.cos(Math.toRadians(MAX_TURN_DEG));
     private static final double TURN_COS_TOL = 1e-9;
-    /** Запас к порогу расстояния при отсеве пар отрезков по рамкам, см. apart. */
     private static final double GAP_EPS_M = 1e-6;
 
     private final ObstacleSet obstacles;
     private final GeometryFactory factory = new GeometryFactory();
     private final List<Coordinate> nodes;
-    /** Координаты узлов подряд (x, y): оценка через узел в routeToAny перебирает все узлы на каждую цель. */
     private final double[] nodeXY;
     private final int[][] adjacency;
     private final double[][] adjacencyWeight;
-    /** Номер первого ребра узла в сквозной нумерации рёбер adjacency, последний элемент — число рёбер. */
     private final int[] edgeStart;
-    // веса точек запроса и таблицы Дейкстры: одни и те же точки запрашиваются десятки и сотни раз за расчёт
     private final RouteCache cache;
     private final java.util.concurrent.atomic.AtomicLong tableRequests = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong tableHits = new java.util.concurrent.atomic.AtomicLong();
 
-    /**
-     * Таблица Дейкстры от точки запроса: расстояния до узлов, предшественники и узлы по возрастанию расстояния.
-     * Считается по мере надобности, см. {@link #settle}: choose на наборах доходит до 20–40 % узлов. Шаги поиска те же,
-     * что у полного расчёта, только с паузами, поэтому первые settled узлов в order, их dist и pred совпадают с полной
-     * таблицей. Узел, попавший в order, больше не меняется: веса рёбер не отрицательны, и более короткого пути до него
-     * поиск уже не найдёт.
-     */
     private final class Table {
         final double[] dist;
         final int[] pred;
         final int[] order;
-        // копия координат, а не ссылка на Coordinate: вызывающий может изменить точку, а поиск продолжится позже
         private final double sourceX;
         private final double sourceY;
         private int settled;
@@ -135,7 +96,6 @@ public final class Router {
             }
         }
 
-        /** Продолжает поиск, пока узлов в order меньше count и есть куда идти; возвращает число узлов в order. */
         synchronized int settle(int count) {
             while (settled < count && heap != null) {
                 if (heap.isEmpty()) {
@@ -155,8 +115,6 @@ public final class Router {
                 for (int k = 0; k < adjacency[v].length; k++) {
                     int w = adjacency[v][k];
                     double candidate = dist[v] + adjacencyWeight[v][k];
-                    // ponytail: поворот считается по предшественнику узла, а не по состоянию (узел, направление): путь
-                    // может быть не кратчайшим среди путей с поворотами до 90°, зато таблица остаётся O(узлов)
                     if (candidate < dist[w]
                             && turnAllowed(beforeX, beforeY, nodeXY[2 * v], nodeXY[2 * v + 1], nodeXY[2 * w], nodeXY[2 * w + 1])) {
                         dist[w] = candidate;
@@ -181,7 +139,6 @@ public final class Router {
         this(index, rules, area, dn, cache, null);
     }
 
-    /** С коридором: узлы и препятствия только внутри полигона corridor, см. {@link ObstacleSet}. */
     public Router(ObstacleIndex index, Rules rules, Envelope area, int dn, RouteCache cache, org.locationtech.jts.geom.Geometry corridor) {
         this.cache = cache;
         long started = System.nanoTime();
@@ -194,9 +151,6 @@ public final class Router {
             nodeXY[2 * i] = nodes.get(i).x;
             nodeXY[2 * i + 1] = nodes.get(i).y;
         }
-        // перебор O(n²) пар, но геометрия проверяется только у рёбер, касательных к зонам в обоих концах; пары
-        // считаются параллельно по i в ObstacleSet.PARTS, каждая нить пишет только свою строку рёбер к j < i,
-        // симметричные рёбра добавляются потом
         int[][] rowTo = new int[n][];
         double[][] rowWeight = new double[n][];
         ObstacleSet.PARTS.submit(() -> java.util.stream.IntStream.range(0, n).parallel().forEach(i -> {
@@ -219,7 +173,6 @@ public final class Router {
             rowTo[i] = Arrays.copyOf(to, count);
             rowWeight[i] = Arrays.copyOf(weight, count);
         })).join();
-        // у узла сначала рёбра к меньшим номерам по возрастанию, затем к большим по возрастанию
         int[] degree = new int[n];
         for (int i = 0; i < n; i++) {
             degree[i] += rowTo[i].length;
@@ -254,47 +207,31 @@ public final class Router {
         return obstacles;
     }
 
-    /** Значение по ключу key этого маршрутизатора из общего кэша расчёта или посчитанное compute, см. {@link RouteCache}. */
     public <T> T cached(List<Object> key, long bytes, java.util.function.Supplier<T> compute) {
         List<Object> own = new ArrayList<>(key);
         own.add(0, this);
         return cache.computeIfAbsent(own, bytes, compute);
     }
 
-    /** Кратчайший по весу маршрут или {@code null}, если пути нет. */
     public Route route(Point from, Point to, Set<String> ignored) {
         return routeToAny(from, List.of(to), ignored);
     }
 
-    /**
-     * Кратчайший маршрут до ближайшей по весу цели или {@code null}, если ни одна цель не достижима. Если в
-     * {@code userData} цели лежит {@link Double}, это надбавка к её весу в метрах (например, стоимость камеры,
-     * которую придётся построить в этой точке); вес маршрута возвращается с надбавкой выбранной цели. Вызывается
-     * из нескольких нитей: зоны только читаются (JTS 1.20 готовит индексы под замком), кэш синхронизирован, а
-     * ленивые веса до узлов при гонке пишутся одинаковыми.
-     */
     public Route routeToAny(Point from, Collection<Point> targets, Set<String> ignored) {
         return routeToAny(from, targets, ignored, false);
     }
 
-    /** То же; {@code cut} — срезать углы пути у вершин зон, см. {@link #cutPass}. */
     public Route routeToAny(Point from, Collection<Point> targets, Set<String> ignored, boolean cut) {
         Choice choice = choose(from.getCoordinate(), targets, ignored, Double.POSITIVE_INFINITY);
         return choice == null ? null : route(from, choice, ignored, cut);
     }
 
-    /**
-     * Цель, которую выбирает {@link #routeToAny}: точка цели, узел графа перед ней (-1 — прямой отрезок) и вес с
-     * надбавкой. {@code tied} — другая цель списка дала тот же вес или могла его дать: при равенстве выбор зависит от
-     * порядка целей.
-     */
     public static final class Choice {
         final Coordinate target;
         final int via;
         final double weight;
         final double extra;
         final boolean tied;
-        /** Предшественники таблицы Дейкстры, по которым строится путь до via. */
         final int[] pred;
 
         Choice(Coordinate target, int via, double weight, double extra, boolean tied, int[] pred) {
@@ -323,10 +260,6 @@ public final class Router {
         }
     }
 
-    /**
-     * Цель с наименьшим весом с надбавкой среди тех, чей вес меньше bound, при равенстве — первая по порядку; null —
-     * такой нет. Вес цели от других целей не зависит, поэтому выбор по части списка сравним с выбором по всему.
-     */
     public Choice choose(Coordinate source, Collection<Point> targets, Set<String> ignored, double bound) {
         Table table = table(source, ignored);
         double[] dist = table.dist;
@@ -341,8 +274,6 @@ public final class Router {
         for (Point target : targets) {
             Coordinate t = target.getCoordinate();
             double extra = target.getUserData() instanceof Double ? (Double) target.getUserData() : 0;
-            // вес не меньше расстояния по прямой: цель дальше уже найденного веса не может выиграть, её веса до узлов
-            // не считаются (это самая дорогая часть: цели дерева меняются с каждым черновиком и в кэш не попадают)
             double lower = t.distance(source) + extra;
             if (lower >= bestWeight) {
                 tied |= lower == bestWeight && bestTarget != null;
@@ -350,9 +281,6 @@ public final class Router {
             }
             double direct = obstacles.edgeWeight(t, source, ignored, false, false);
             double weight = Double.isNaN(direct) ? Double.POSITIVE_INFINITY : direct;
-            // цель выигрывает, только если её вес с надбавкой меньше лучшего, поэтому узлы дальше этого веса (с запасом
-            // на округление) не перебираются: без предела цель без прямой видимости обходила все узлы графа. Узел и
-            // цель выбираются те же, что без предела
             double cap = bestWeight - extra;
             cap += CAP_TOL * (1 + Math.abs(cap));
             boolean capped = weight > cap;
@@ -362,16 +290,11 @@ public final class Router {
             int via = -1;
             double[] toNodes = partialWeights(t, ignored);
             ObstacleSet.Hint hint = ObstacleSet.hint();
-            // узлы по возрастанию веса от источника: дальше текущего веса они не выиграют. Выбор тот же, что у
-            // перебора по номерам: наименьший вес, при равенстве — прямой отрезок, затем меньший номер узла. Таблица
-            // досчитывается до очередного узла, только когда перебор до него дошёл
             for (int i = 0; i < ready || (ready = table.settle(i + 1)) > i; i++) {
                 int v = order[i];
                 if (dist[v] > weight) {
                     break;
                 }
-                // нижняя оценка через узел: до него по графу плюс по прямой; вес до узла считается только если она не
-                // хуже текущего
                 if (beyond(dist[v], nodeXY[2 * v], nodeXY[2 * v + 1], t, weight)) {
                     continue;
                 }
@@ -458,7 +381,6 @@ public final class Router {
         return result;
     }
 
-    /** Маршрут до цели choice, выбранной {@link #choose} из точки from. */
     public Route route(Point from, Choice choice, Set<String> ignored, boolean cut) {
         List<Coordinate> path = new ArrayList<>();
         for (int v = choice.via; v >= 0; v = choice.pred[v]) {
@@ -469,7 +391,6 @@ public final class Router {
         return shaped(from, path, ignored, cut, choice.extra);
     }
 
-    /** Ломаная маршрута после спрямления и срезки углов и её специальные части. */
     private static final class Shape {
         final Coordinate[] coords;
         final List<SpecialSpan> spans;
@@ -480,11 +401,6 @@ public final class Router {
         }
     }
 
-    /**
-     * Маршрут по пути path графа: спрямление, срезка углов при cut, специальные части. Форма зависит только от пути, а
-     * путь до той же цели дерево запрашивает на каждом шаге, поэтому она берётся из кэша. Массив линии у каждого
-     * маршрута свой: вызывающий может заменить в нём вершины.
-     */
     private Route shaped(Point from, List<Coordinate> path, Set<String> ignored, boolean cut, double extra) {
         Shape shape = cache.computeIfAbsent(List.of(this, "route", path, ignored, cut), 96L * path.size(), () -> {
             List<Coordinate> coords = new ArrayList<>(path);
@@ -499,26 +415,13 @@ public final class Router {
         return new Route(line, line.getLength(), ObstacleSet.weight(line.getLength(), shape.spans) + extra, shape.spans);
     }
 
-    /**
-     * Маршрут с точным правилом поворотов: состояние поиска — узел и то, откуда в него пришли. Обычный поиск держит
-     * один предшественник на узел и не находит путь, в который нужно войти с другой стороны. Перебор дороже, поэтому
-     * вызывается только для точки, которая иначе остаётся без сети (п. 2.5). {@code null} — пути нет или перебор
-     * дошёл до предела состояний.
-     */
     public Route routeExact(Point start, Collection<Point> targets, Set<String> ignored, Coordinate incoming, boolean cut) {
         Coordinate source = start.getCoordinate();
-        // состояния зависят только от точки выхода и направления, а кандидатов врезки у точки несколько
         Exact search = cache.computeIfAbsent(List.of(this, "exact", source.x, source.y, ignored, incoming.x, incoming.y),
                 64L * nodes.size(), () -> exactStates(source, ignored, incoming));
-        // даже без состояний цель бывает видна из точки выхода напрямую
         return exactBest(start, targets, ignored, incoming, search, cut);
     }
 
-    /**
-     * Состояния точного поиска: ключи пар «узел, предшественник» (см. {@link #state}) и веса до них в порядке, в
-     * котором их обходила HashMap&lt;Long, Double&gt; прежнего поиска, и путь к ним: came по номеру состояния (см.
-     * {@link #stateIndex}) — ключ состояния, из которого пришли, -1 — из точки запроса.
-     */
     private static final class Exact {
         final long[] keys;
         final double[] weights;
@@ -534,10 +437,6 @@ public final class Router {
     private Exact exactStates(Coordinate source, Set<String> ignored, Coordinate incoming) {
         int n = nodes.size();
         double[] toNode = nodeWeights(source, ignored);
-        // веса в массиве по номеру состояния: (w, v) — ребро графа v→w, номер edgeStart[v] + k; начальное (v, -1) —
-        // номер edges + v. exactBest перебирает состояния в порядке обхода HashMap, в которую их раньше клали по мере
-        // нахождения (при равных весах выбор зависит от порядка), поэтому ключи пишутся в порядке первого веса, а
-        // порядок обхода считается в конце, см. hashOrder: сама HashMap<Long, Double> была половиной времени поиска
         int edges = edgeStart[n];
         double[] known = new double[edges + n];
         Arrays.fill(known, Double.POSITIVE_INFINITY);
@@ -546,9 +445,6 @@ public final class Router {
         long[] keys = new long[edges + n];
         int[] found = new int[edges + n];
         int count = 0;
-        // ребро, уже достигнутое из узла, легче не станет: веса рёбер неотрицательны, и состояния узла приходят из кучи
-        // по возрастанию веса. Поэтому у узла v перебираются только ещё не достигнутые рёбра, их k по возрастанию
-        // лежат в pending с edgeStart[v], left[v] — сколько их
         int[] pending = new int[edges];
         int[] left = new int[n];
         for (int v = 0; v < n; v++) {
@@ -610,13 +506,6 @@ public final class Router {
         return new Exact(ordered, weights, came);
     }
 
-    /**
-     * Порядок обхода HashMap&lt;Long, V&gt;, созданной без параметров, после вставки keys[0..count) по порядку без
-     * удалений: номера ключей в keys. У HashMap JDK 8–21 это корзины hash(key) &amp; (ёмкость - 1) по возрастанию, в
-     * корзине — порядок вставки: таблица с 16 корзин удваивается, когда ключей больше трёх четвертей ёмкости, и при
-     * удвоении список корзины делится с сохранением порядка. Корзина, в которой список дорос бы до дерева
-     * (TREEIFY_THRESHOLD = 8), обходится иначе, тогда порядок берётся у настоящей HashMap.
-     */
     static int[] hashOrder(long[] keys, int count) {
         int capacity = 16;
         int[] load = new int[capacity];
@@ -636,7 +525,6 @@ public final class Router {
                 }
             }
         }
-        // устойчивая сортировка подсчётом по корзине
         int[] start = new int[capacity + 1];
         for (int i = 0; i < count; i++) {
             start[(spread(keys[i]) & (capacity - 1)) + 1]++;
@@ -651,13 +539,11 @@ public final class Router {
         return order;
     }
 
-    /** hash(key) у HashMap для Long: старшие биты hashCode подмешаны к младшим. */
     private static int spread(long key) {
         int h = Long.hashCode(key);
         return h ^ (h >>> 16);
     }
 
-    /** Лучшая цель по состояниям точного поиска и маршрут до неё. */
     private Route exactBest(Point start, Collection<Point> targets, Set<String> ignored, Coordinate incoming,
             Exact search, boolean cut) {
         int n = nodes.size();
@@ -713,14 +599,8 @@ public final class Router {
         return shaped(start, coords, ignored, cut, bestExtra);
     }
 
-    /**
-     * Двоичная куча на массивах для Дейкстры и точного поиска: те же сравнения и перестановки, что у PriorityQueue с
-     * компаратором по весу (JDK 11), поэтому порядок извлечения при равных весах тот же, но без массива на каждое
-     * добавление. poll кладёт извлечённое в key, node, pred, id.
-     */
     static final class Heap {
         private double[] keys = new double[64];
-        /** По три числа на элемент: node, pred, id. */
         private int[] values = new int[3 * 64];
         private int size;
         double key;
@@ -791,7 +671,6 @@ public final class Router {
         }
     }
 
-    /** Номер состояния с ключом key в сквозной нумерации рёбер: ребро p→v или edges + v у начального (v, -1). */
     private int stateIndex(long key, int n) {
         int v = (int) (key / (n + 1));
         int p = (int) (key % (n + 1));
@@ -805,12 +684,10 @@ public final class Router {
         return edgeStart[p] + k;
     }
 
-    /** Состояние точного поиска: узел и предшественник (n — пришли из точки запроса). */
     private static long state(int node, int pred, int n) {
         return (long) node * (n + 1) + (pred < 0 ? n : pred);
     }
 
-    /** Таблица Дейкстры от точки запроса, из кэша по координате и набору пропускаемых объектов. */
     private Table table(Coordinate source, Set<String> ignored) {
         tableRequests.incrementAndGet();
         List<Object> key = List.of(this, "table", source.x, source.y, ignored);
@@ -820,22 +697,14 @@ public final class Router {
             return cached;
         }
         Table table = new Table(source, nodeWeights(source, ignored).clone());
-        // dist, pred и order — 16 байт на узел; куча приостановленного поиска на плотных наборах добавляет около 30
         cache.put(key, table, 48L * nodes.size());
         return table;
     }
 
-    /** Сколько таблиц Дейкстры запрошено и сколько из них взято из кэша. */
     public long[] tableStats() {
         return new long[] {tableRequests.get(), tableHits.get()};
     }
 
-    /**
-     * Веса от точки запроса до узлов графа, NaN — отрезок недопустим. Не зависят от других точек запроса, поэтому
-     * кэшируются по координате и набору пропускаемых объектов. Считаются последовательно: параллельный расчёт над
-     * общими геометриями JTS изредка давал разные трассы на одном входе.
-     */
-    /** Веса от цели до узлов, считаются лениво по мере надобности; UNKNOWN — ещё не считался. Кэш отдельный от полных. */
     private double[] partialWeights(Coordinate c, Set<String> ignored) {
         return cache.computeIfAbsent(List.of(this, "partial", c.x, c.y, ignored), 8L * nodes.size(), () -> {
             double[] weights = new double[nodes.size()];
@@ -855,8 +724,6 @@ public final class Router {
         });
     }
 
-    // Убирает вершины с отклонением меньше 3° и подотрезки короче 1 м вне специальных частей, если спрямлённый
-    // отрезок остаётся допустимым.
     private void straighten(List<Coordinate> coords, Set<String> ignored) {
         boolean changed = true;
         int pushes = 0;
@@ -886,54 +753,22 @@ public final class Router {
         }
     }
 
-    /**
-     * Срезка углов маршрута: до CUT_PASSES проходов {@link #cutPass}, второй срезает углы хорд первого; затем форма
-     * доводится {@link #sharpen}.
-     */
     private void cutCorners(List<Coordinate> coords, Set<String> ignored) {
         for (int pass = 0; pass < CUT_PASSES && cutPass(obstacles, coords, ignored, null, null); pass++) {
-            // проход уже заменил вершины в coords
         }
-        // повторы того же пути отсекает кэш формы маршрута в shaped, своего кэша доводке не нужно
         sharpen(obstacles, coords, ignored, null, null);
     }
 
-    /**
-     * Строгая форма ломаной (приложение 18.09, разд. 5: прямые отрезки с поворотами, без необоснованных изломов,
-     * зигзагов и ступенек). Пока что-то меняется: (А) убирается вершина, если её соседей по обычному участку можно
-     * соединить прямой, см. {@link #drop}; (В) так же убираются две вершины со звеном короче SHORT_LINK_M между ними;
-     * (Б) повороты подряд в одну сторону со звеньями короче SHORT_LINK_M заменяются наименьшим числом поворотов в
-     * пересечениях продолженных отрезков, см. {@link #sharpenWindow}; (Г) у готовых вариантов два соседних поворота в
-     * одну сторону при звене любой длины заменяет одна вершина, если путь не длиннее, а у пары с суммой поворотов
-     * от PAIR_MIN_DEG до PAIR_MAX_DEG и звеном короче PAIR_LINK_M — длиннее не больше чем на BEND_EXTRA_M, см.
-     * {@link #bend}. Замена
-     * проверяется по зонам zones (Ду графа или ребра дерева) как хорда {@link #cutPass}: область, где взяты
-     * препятствия, отступы с запасом CUT_MARGIN_M, без спецпрохода, не ближе CUT_APART_M к apart (отрезкам других
-     * рёбер дерева) и к своей ломаной, повороты до MAX_TURN_DEG, звенья от CUT_PIECE_M. Вершины убираются раньше
-     * замены поворотов: так трасса короче. Вершина
-     * {@code keep} (точка выхода из здания) остаётся на месте: финальный участок идёт от ближайшей границы;
-     * спецпроход остаётся прежним прямым участком. Каждый шаг уменьшает число вершин вне границ специальных частей,
-     * поэтому цикл конечен. true — coords заменены.
-     */
     public boolean sharpen(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
             List<LineSegment> apart) {
         return sharpen(zones, coords, ignored, keep, apart, null, List.of());
     }
 
-    /**
-     * {@link #sharpen} у ребра дерева: before — вершина перед началом ломаной на пути точки к врезке (null — нет),
-     * after — вершины после её конца (пусто — нет). Убранная вершина не делает поворот в концах круче MAX_TURN_DEG
-     * (п. 2.1, разъяснение 5), замена поворотов крайние отрезки не поворачивает.
-     */
     public boolean sharpen(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
             List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
         return sharpen(zones, coords, ignored, keep, apart, before, after, false);
     }
 
-    /**
-     * {@link #sharpen} у ребра дерева, при {@code bends} — и с шагом (Г), см. {@link #bend}. Шаг (Г) делает только
-     * проход готовых вариантов: на каждом маршруте и дереве поиска он стоил бы времени, а длину только уменьшает.
-     */
     public boolean sharpen(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
             List<LineSegment> apart, Coordinate before, List<Coordinate> after, boolean bends) {
         List<LineSegment> others = apart == null ? List.of() : apart;
@@ -952,18 +787,11 @@ public final class Router {
         return changed;
     }
 
-    /**
-     * Есть вершина, которую {@link #sharpen} оставил, хотя без неё одной соседей можно соединить прямой по тем же
-     * проверкам: тогда излом соседа меньше MIN_TURN_DEG, а без соседа прямая уже не проходит. Проверщик формы
-     * считает такую вершину лишней. Аргументы — как у {@link #sharpen}; вершина keep и вершины в специальных частях
-     * не проверяются.
-     */
     public boolean loose(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
             List<LineSegment> apart) {
         return loose(zones, coords, ignored, keep, apart, null, List.of());
     }
 
-    /** {@link #loose} у ребра дерева с вершинами соседних рёбер before и after, как у {@link #sharpen}. */
     public boolean loose(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
             List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
         List<LineSegment> others = apart == null ? List.of() : apart;
@@ -983,16 +811,6 @@ public final class Router {
         return false;
     }
 
-    /**
-     * Убирает вершину на границе специальной части с изломом меньше MIN_TURN_DEG ({@link #micro}): {@link #sharpen}
-     * такие вершины не трогает, специальная часть там остаётся прямой, а обычный участок за узлом чуть ломается. Соседи
-     * соединяются прямой через объект специального прохода, если она пересекает его по правилам
-     * ({@link ObstacleSet#crossable}); соседи с изломом меньше MIN_TURN_DEG после этого уходят тоже, кроме keep. Прямая
-     * держит запасы строгой формы, как у {@link #sharpen}: звено от CUT_PIECE_M, повороты на концах, в том числе к
-     * before и after, до MAX_TURN_DEG, CUT_APART_M до apart и своей ломаной; специальные части на ней целиком, от концов
-     * не ближе MIN_PIECE_M или от самого конца. Изломов меньше MIN_TURN_DEG на ломаной и на её концах становится
-     * меньше. Повторяется, пока что-то меняется; true — coords заменены.
-     */
     public boolean even(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
             List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
         boolean changed = false;
@@ -1032,7 +850,6 @@ public final class Router {
         return changed;
     }
 
-    /** На at начинается или кончается специальная часть. */
     private static boolean spanEnd(List<SpecialSpan> spans, double at) {
         for (SpecialSpan span : spans) {
             if (Math.abs(span.getFromM() - at) <= SPAN_EPS_M || Math.abs(span.getToM() - at) <= SPAN_EPS_M) {
@@ -1042,7 +859,6 @@ public final class Router {
         return false;
     }
 
-    /** Изломы меньше MIN_TURN_DEG ({@link #micro}) в вершинах ломаной и на её концах к before и after. */
     private static int microCount(List<Coordinate> coords, Coordinate before, List<Coordinate> after) {
         int n = coords.size();
         int count = before != null && micro(before, coords.get(0), coords.get(1)) ? 1 : 0;
@@ -1055,7 +871,6 @@ public final class Router {
         return count;
     }
 
-    /** Новый отрезок join ломаной shape через специальную часть годится, см. {@link #even}. */
     private boolean crossFits(ObstacleSet zones, List<Coordinate> shape, int join, Set<String> ignored,
             List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
         int n = shape.size();
@@ -1091,7 +906,6 @@ public final class Router {
         return apart(new LineSegment(a, b), own);
     }
 
-    /** Вершины, которые замена поворотов не двигает: keep и вершины ближе MIN_PIECE_M к специальным частям. */
     private static boolean[] held(List<Coordinate> coords, Coordinate keep, List<SpecialSpan> spans) {
         boolean[] held = new boolean[coords.size()];
         double at = 0;
@@ -1102,15 +916,6 @@ public final class Router {
         return held;
     }
 
-    /**
-     * Убирает count вершин подряд (две — только со звеном короче SHORT_LINK_M между ними), соединяя прямой соседей
-     * по обычному участку; из подходящих — с наибольшим выигрышем длины. Сосед — вершина или граница специальной
-     * части на соседнем отрезке: там сборка ставит технический узел, граница становится вершиной, а специальная часть
-     * остаётся на прежней прямой (узлы для пересечения дорог стоят в сантиметрах от полосы margin_m, и вершина у узла
-     * иначе осталась бы лишней). Сосед, у которого после этого излом меньше MIN_TURN_DEG, убирается вместе с ними,
-     * если он не на границе специальной части. Вершина keep и вершины в специальных частях и на их границах не
-     * убираются. true — coords заменены.
-     */
     private boolean drop(ObstacleSet zones, List<Coordinate> coords, int count, Coordinate keep,
             List<SpecialSpan> spans, Set<String> ignored, List<LineSegment> apart, Coordinate before,
             List<Coordinate> after) {
@@ -1138,7 +943,6 @@ public final class Router {
         return false;
     }
 
-    /** Ломаная без убранных вершин: новый отрезок начинается в её вершине join, трасса короче на saving. */
     private static final class Removal {
         final List<Coordinate> shape;
         final int join;
@@ -1151,7 +955,6 @@ public final class Router {
         }
     }
 
-    /** Ломаная без вершин lo..hi, см. {@link #drop}, или null — их убрать нельзя. */
     private static Removal removal(List<Coordinate> coords, double[] at, List<SpecialSpan> spans, Coordinate keep,
             int lo, int hi) {
         int n = coords.size();
@@ -1161,7 +964,6 @@ public final class Router {
                     return null;
                 }
             }
-            // граница специальной части на отрезке перед lo и после hi
             double from = at[lo - 1];
             double to = at[hi + 1];
             for (SpecialSpan span : spans) {
@@ -1176,7 +978,6 @@ public final class Router {
             boolean end = to < at[hi + 1] - SPAN_EPS_M;
             Coordinate a = start ? toward(coords.get(lo), coords.get(lo - 1), at[lo] - from) : coords.get(lo - 1);
             Coordinate b = end ? toward(coords.get(hi), coords.get(hi + 1), to - at[hi]) : coords.get(hi + 1);
-            // сосед с изломом меньше MIN_TURN_DEG, кроме границы и узла на ней, уходит вместе с вершинами
             if (!start && lo >= 2 && !overlapsSpan(spans, at[lo - 1] - SPAN_EPS_M, at[lo - 1] + SPAN_EPS_M)
                     && deflectionDeg(coords.get(lo - 2), a, b) < MIN_TURN_DEG) {
                 lo--;
@@ -1200,11 +1001,6 @@ public final class Router {
         }
     }
 
-    /**
-     * Новый отрезок join ломаной shape годится, см. {@link #sharpen}: он обычный (специальные части ломаной до него
-     * и после не заходят в него), а повороты на его концах, в том числе к вершинам соседних рёбер before и after, не
-     * круче MAX_TURN_DEG.
-     */
     private boolean removalFits(ObstacleSet zones, List<Coordinate> shape, int join, Set<String> ignored,
             List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
         int n = shape.size();
@@ -1218,18 +1014,15 @@ public final class Router {
         return pieceFits(zones, shape, join, ignored, apart);
     }
 
-    /** Поворот к вершине before соседнего ребра в начале нового отрезка join не круче MAX_TURN_DEG. */
     private static boolean startFits(List<Coordinate> shape, int join, Coordinate before) {
         return join != 0 || before == null || turnAllowed(before, shape.get(0), shape.get(1));
     }
 
-    /** Повороты к вершинам after соседних рёбер в конце нового отрезка join не круче MAX_TURN_DEG. */
     private static boolean endFits(List<Coordinate> shape, int join, List<Coordinate> after) {
         int n = shape.size();
         return join + 2 != n || after.stream().allMatch(c -> turnAllowed(shape.get(n - 2), shape.get(n - 1), c));
     }
 
-    /** Проверки нового отрезка join из {@link #removalFits} без поворотов. */
     private boolean pieceFits(ObstacleSet zones, List<Coordinate> shape, int join, Set<String> ignored,
             List<LineSegment> apart) {
         int n = shape.size();
@@ -1258,11 +1051,6 @@ public final class Router {
         return apart(new LineSegment(a, b), own);
     }
 
-    /**
-     * Новый отрезок join ломаной shape у её конца идёт вдоль объекта врезки из ignored. Отрезок, который один
-     * составляет ломаную, касается объекта врезки одним концом, и проверка от другого конца всегда находит касание:
-     * вдоль он идёт, только если его находят проверки от обоих концов.
-     */
     private static boolean along(ObstacleSet zones, List<Coordinate> shape, int join, Set<String> ignored) {
         int n = shape.size();
         Coordinate a = shape.get(join);
@@ -1273,11 +1061,6 @@ public final class Router {
         return join == 0 && zones.alongIgnored(a, b, ignored) || join + 2 == n && zones.alongIgnored(b, a, ignored);
     }
 
-    /**
-     * Заменяет первую цепочку поворотов в одну сторону со звеньями короче SHORT_LINK_M, которую удаётся заменить
-     * меньшим числом поворотов, см. {@link #sharpenWindow}; у длинной цепочки, где перебор прямых ограничен, — хотя
-     * бы пару поворотов одним. Удерживаемые вершины цепочку разрывают. true — coords заменены.
-     */
     private boolean merge(ObstacleSet zones, List<Coordinate> coords, boolean[] held, List<SpecialSpan> spans,
             Set<String> ignored, List<LineSegment> apart) {
         for (int[] chain : chains(coords, turns(coords), held)) {
@@ -1295,17 +1078,6 @@ public final class Router {
         return false;
     }
 
-    /**
-     * (Г) Два соседних поворота в одну сторону при звене любой длины заменяет одна вершина в лучшей точке, если путь с
-     * ней не длиннее прежнего, а у пары с суммой поворотов от PAIR_MIN_DEG до PAIR_MAX_DEG и звеном короче PAIR_LINK_M
-     * — длиннее не больше чем на extraM (толкование п. 5): такой двойной поворот ничем не обоснован. Вершина —
-     * пересечение лучей из соседей пары, которые поворачиваются от прежних отрезков к хорде между соседями: путь от
-     * этого только короче, а звено луча, который стоит на месте, лишь укорачивается от своего конца, и его проверки
-     * {@link #removalFits} не ломаются. Лучи поворачиваются по очереди до края допустимого, пока поворот растёт;
-     * поворот в новой вершине — сумма пары без поворотов лучей, он проверяется в конце и не меньше MIN_TURN_DEG. Сосед
-     * пары — вершина или граница специальной части, как у {@link #drop}. Удерживаемые вершины не заменяются, пары у
-     * специальных частей не трогаются. true — coords заменены.
-     */
     private boolean bend(ObstacleSet zones, List<Coordinate> coords, boolean[] held, List<SpecialSpan> spans,
             Set<String> ignored, List<LineSegment> apart, Coordinate before, List<Coordinate> after, double extraM) {
         int n = coords.size();
@@ -1319,7 +1091,6 @@ public final class Router {
                     || turns[j] * turns[j + 1] <= 0) {
                 continue;
             }
-            // сосед пары — вершина или граница специальной части на соседнем отрезке, как у drop
             double from = at[j - 1];
             double to = at[j + 2];
             for (SpecialSpan span : spans) {
@@ -1345,7 +1116,6 @@ public final class Router {
                 shape.add(toward(coords.get(j + 1), coords.get(j + 2), to - at[j + 1]));
             }
             shape.addAll(coords.subList(j + 2, n));
-            // сосед внутри участка остаётся поворотом от MIN_TURN_DEG; у узла и границы специальной части излом любой
             boolean[] kept = {!start && j >= 2 && !overlapsSpan(spans, from - SPAN_EPS_M, from + SPAN_EPS_M),
                 !end && j + 3 < n && !overlapsSpan(spans, to - SPAN_EPS_M, to + SPAN_EPS_M)};
             double total = Math.abs(turns[j] + turns[j + 1]);
@@ -1360,11 +1130,6 @@ public final class Router {
         return false;
     }
 
-    /**
-     * Ставит в shape на место x (между соседями пары) вершину в лучшей точке, см. {@link #bend}; false — такой
-     * вершины нет или путь с ней длиннее length (прежний путь между соседями через вершины пары p и q). kept — у
-     * какого соседа излом остаётся не меньше MIN_TURN_DEG, total — сумма поворотов пары, градусы.
-     */
     private boolean bent(ObstacleSet zones, List<Coordinate> shape, int x, Coordinate p, Coordinate q, boolean[] kept,
             double total, double length, Set<String> ignored, List<LineSegment> apart, Coordinate before,
             List<Coordinate> after) {
@@ -1484,11 +1249,6 @@ public final class Router {
                 && linkFits(zones, shape, x, 1, kept, ignored, apart, before, after);
     }
 
-    /**
-     * Вершина на пересечении лучей из ends с поворотами turn от направлений base к хорде (знак room) ставится в
-     * shape на место x, и звено side (0 — от ends[0], 1 — к ends[1]) годится по {@link #removalFits}, а излом соседа
-     * на его конце не меньше MIN_TURN_DEG, если так сказано в kept.
-     */
     private boolean bendFits(ObstacleSet zones, List<Coordinate> shape, int x, int side, boolean[] kept, Coordinate[] ends,
             double[] base, double[] room, double[] turn, Set<String> ignored, List<LineSegment> apart,
             Coordinate before, List<Coordinate> after) {
@@ -1513,7 +1273,6 @@ public final class Router {
     private boolean linkFits(ObstacleSet zones, List<Coordinate> shape, int x, int side, boolean[] kept,
             Set<String> ignored, List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
         int join = x - 1 + side;
-        // поворот в новой вершине убывает с поворотом лучей и проверяется в конце, см. bent
         boolean outer = side == 0 ? join < 1 || turnAllowed(shape.get(join - 1), shape.get(join), shape.get(x))
                 && (!kept[0] || deflectionDeg(shape.get(join - 1), shape.get(join), shape.get(x)) >= MIN_TURN_DEG)
                 : join + 2 >= shape.size() || turnAllowed(shape.get(x), shape.get(join + 1), shape.get(join + 2))
@@ -1522,15 +1281,10 @@ public final class Router {
                 && pieceFits(zones, shape, join, ignored, apart);
     }
 
-    /** Направление от a к b, радианы. */
     private static double heading(Coordinate a, Coordinate b) {
         return Math.atan2(b.y - a.y, b.x - a.x);
     }
 
-    /**
-     * Цепочки {первая, последняя вершина} из двух и больше поворотов (от MIN_TURN_DEG) подряд в одну сторону со
-     * звеньями короче SHORT_LINK_M между ними; held — вершины, которые цепочку разрывают (null — таких нет).
-     */
     static List<int[]> chains(List<Coordinate> coords, double[] turns, boolean[] held) {
         int n = coords.size();
         List<int[]> chains = new ArrayList<>();
@@ -1549,7 +1303,6 @@ public final class Router {
         return chains;
     }
 
-    /** В ломаной есть два соседних поворота от MIN_TURN_DEG в одну сторону, см. {@link #bend}. */
     public static boolean paired(Coordinate[] coords) {
         double[] turns = turns(Arrays.asList(coords));
         for (int v = 1; v + 2 < coords.length; v++) {
@@ -1571,7 +1324,6 @@ public final class Router {
         return count;
     }
 
-    /** Повороты ломаной в вершинах со знаком (плюс — влево), 0 у концов; для {@link #chains}. */
     static double[] turns(List<Coordinate> coords) {
         double[] turns = new double[coords.size()];
         for (int v = 1; v + 1 < coords.size(); v++) {
@@ -1580,15 +1332,6 @@ public final class Router {
         return turns;
     }
 
-    /**
-     * Замена поворотов окна вершин i..j меньшим числом: из прямых отрезков i-1 (вход), j (выход) и части средних
-     * остаются продолжения до пересечения соседних, поворот в пересечении — сумма поворотов между ними. Один поворот —
-     * пересечение входа и выхода, два — через продолжение одной средней прямой, и так до SHARPEN_LINES средних.
-     * Варианты идут по числу поворотов, при равном — по длине. Вариант годится, если повороты от MIN_TURN_DEG до
-     * MAX_TURN_DEG, звенья не короче CUT_PIECE_M, убранные части прежних отрезков не ближе MIN_PIECE_M к специальным
-     * частям, а куски за пределами прежних отрезков лежат в области графа, обычные с запасом CUT_MARGIN_M и не ближе
-     * CUT_APART_M к apart и к своей ломаной. true — coords заменены первым годным.
-     */
     private boolean sharpenWindow(ObstacleSet zones, List<Coordinate> coords, int i, int j, List<SpecialSpan> spans,
             Set<String> ignored, List<LineSegment> apart) {
         for (int k = i - 1; k <= j; k++) {
@@ -1632,7 +1375,6 @@ public final class Router {
         return false;
     }
 
-    /** Наборы прямых окна: kept[0] — вход, дальше средние из next..j-1 по возрастанию, последним — выход j. */
     private static void keptLines(int next, int j, int[] kept, int at, List<int[]> out) {
         if (at == kept.length - 1) {
             kept[at] = j;
@@ -1645,10 +1387,6 @@ public final class Router {
         }
     }
 
-    /**
-     * Ломаная с окном i..j, замененным пересечениями соседних прямых kept (у смежных прямых — их общая вершина), или
-     * null — прямые параллельны или поворот вне MIN_TURN_DEG..MAX_TURN_DEG.
-     */
     private static List<Coordinate> merged(List<Coordinate> coords, int i, int j, int[] kept) {
         List<Coordinate> shape = new ArrayList<>(coords.subList(0, i));
         for (int t = 0; t + 1 < kept.length; t++) {
@@ -1666,10 +1404,6 @@ public final class Router {
         return shape;
     }
 
-    /**
-     * Длина нового окна shape или NaN, если звено идёт против своей прямой или короче CUT_PIECE_M (крайнее — короче
-     * прежнего, если прежнее было короче).
-     */
     private static double windowLength(List<Coordinate> coords, List<Coordinate> shape, int i, int[] kept) {
         double length = 0;
         for (int t = 0; t < kept.length; t++) {
@@ -1687,10 +1421,8 @@ public final class Router {
         return length;
     }
 
-    /** Проверки окна shape, которые дороже формы: специальные части и новые куски, см. {@link #sharpenWindow}. */
     private boolean fits(ObstacleSet zones, List<Coordinate> coords, List<Coordinate> shape, int i, int j, int[] kept,
             List<SpecialSpan> spans, Set<String> ignored, List<LineSegment> apart, Map<List<Integer>, Boolean> pieces) {
-        // убранные части прежних отрезков окна не ближе MIN_PIECE_M к специальным частям: те остаются прежними
         double at = 0;
         for (int k = 0; k + 1 < i; k++) {
             at += coords.get(k).distance(coords.get(k + 1));
@@ -1754,7 +1486,6 @@ public final class Router {
         return true;
     }
 
-    /** Куски отрезка a–b на прямой отрезка p–q за пределами p–q: они новые, остальное — прежний отрезок. */
     private static List<Coordinate[]> beyond(Coordinate a, Coordinate b, Coordinate p, Coordinate q) {
         double length = p.distance(q);
         double dx = (q.x - p.x) / length;
@@ -1771,13 +1502,8 @@ public final class Router {
         return parts;
     }
 
-    /**
-     * Отрезок не ближе CUT_APART_M к others. Отрезки из общего конца (узла дерева) расходятся от него, поэтому у них
-     * зазор проверяется у дальних концов.
-     */
     public static boolean apart(LineSegment segment, List<LineSegment> others) {
         for (LineSegment other : others) {
-            // у отрезков с общим концом рамки пересекаются, так что отсев не мешает проверке дальних концов
             if (apart(segment.p0, segment.p1, other.p0, other.p1, CUT_APART_M)) {
                 continue;
             }
@@ -1799,7 +1525,6 @@ public final class Router {
         return true;
     }
 
-    /** Поворот от направления a0→a1 к направлению b0→b1, градусы со знаком: плюс — влево. */
     private static double turnDeg(Coordinate a0, Coordinate a1, Coordinate b0, Coordinate b1) {
         double ux = a1.x - a0.x;
         double uy = a1.y - a0.y;
@@ -1808,17 +1533,6 @@ public final class Router {
         return Math.toDegrees(Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy));
     }
 
-    /**
-     * Один проход срезки углов ломаной. Узлы графа — вершины зон с углами JOIN_MITRE: у угла здания узел стоит на
-     * d·√2 от него, а отступ меряется до самого здания. Вершина заменяется хордой между точками на соседних
-     * отрезках, самой далёкой от вершины, при которой хорда допустима и не пересекает объектов специального прохода.
-     * Вершина берёт не больше половины соседних отрезков, поэтому срезки не перекрываются, а подотрезки остаются не
-     * короче метра; вершины у специальных частей не трогаются: спецпроход — один прямой участок. Два поворота у
-     * короткой хорды {@link #sharpen} потом заменит одним, если он годится. {@code zones} — зоны Ду, по которым
-     * проверяется хорда: графа или ребра дерева; {@code keep} — вершина, которую не трогать, или null; {@code apart} —
-     * отрезки других рёбер дерева, к которым хорда, как и к своей ломаной вне вершины, не ближе CUT_APART_M; без
-     * apart срез кэшируется по тройке вершин. true — что-то срезано, coords заменены.
-     */
     public boolean cutPass(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
             List<LineSegment> apart) {
         if (coords.size() < 3) {
@@ -1869,7 +1583,6 @@ public final class Router {
         return true;
     }
 
-    /** Наибольший срез от least до room, при котором хорда годится; 0 — даже least не годится. */
     private double longestCut(ObstacleSet zones, Coordinate prev, Coordinate cur, Coordinate next, double least,
             double room, Set<String> ignored, List<LineSegment> apart) {
         if (chord(zones, cur, prev, next, room, ignored, apart)) {
@@ -1891,10 +1604,6 @@ public final class Router {
         return low;
     }
 
-    /**
-     * Хорда среза cut у вершины cur обычная (без спецпрохода), держит отступы с запасом CHORD_MARGIN_M и не ближе
-     * CUT_APART_M к отрезкам apart.
-     */
     private boolean chord(ObstacleSet zones, Coordinate cur, Coordinate prev, Coordinate next, double cut,
             Set<String> ignored, List<LineSegment> apart) {
         Coordinate a = toward(cur, prev, cut);
@@ -1916,11 +1625,6 @@ public final class Router {
         return new Coordinate(from.x + (to.x - from.x) * share, from.y + (to.y - from.y) * share);
     }
 
-    /**
-     * Излом меньше 3° запрещён, а убрать вершину нельзя: хорда задевает зону. Так бывает у малого препятствия
-     * на прямой (опора, точка), где обход по углам зоны почти прямой. Вершина сдвигается от хорды, пока излом
-     * не станет не меньше PUSH_TURN_DEG, а оба отрезка допустимыми.
-     */
     private boolean pushOut(List<Coordinate> coords, int i, Set<String> ignored) {
         Coordinate prev = coords.get(i - 1);
         Coordinate cur = coords.get(i);
@@ -1944,12 +1648,6 @@ public final class Router {
         return false;
     }
 
-    /**
-     * {@code dist + node.distance(t) > weight} для узла (x, y) без Math.hypot в большинстве случаев: на Java 11 он
-     * программный и был седьмой частью расчёта. Корень из суммы квадратов отличается от hypot не больше чем на
-     * 4 ulp (если квадраты не уходят в денормалы), поэтому с запасом 1e-15 он решает сравнение так же; сложение
-     * монотонно. Спорные случаи считаются через hypot.
-     */
     static boolean beyond(double dist, double x, double y, Coordinate t, double weight) {
         double dx = x - t.x;
         double dy = y - t.y;
@@ -1963,16 +1661,10 @@ public final class Router {
         return dist + Math.hypot(dx, dy) > weight;
     }
 
-    /**
-     * {@code deflectionDeg(a, b, c) <= MAX_TURN_DEG} без двух atan2 (на Java 11 они программные) в большинстве
-     * случаев: поворот сравнивается через косинус по скалярному произведению. Ошибка обоих способов меньше 1e-12,
-     * поэтому при косинусе дальше TURN_COS_TOL от порога ответ тот же; ближе к порогу считает deflectionDeg.
-     */
     static boolean turnAllowed(Coordinate a, Coordinate b, Coordinate c) {
         return turnAllowed(a.x, a.y, b.x, b.y, c.x, c.y);
     }
 
-    /** {@link #turnAllowed(Coordinate, Coordinate, Coordinate)} для точек (ax, ay), (bx, by), (cx, cy). */
     private static boolean turnAllowed(double ax, double ay, double bx, double by, double cx, double cy) {
         double ux = bx - ax;
         double uy = by - ay;
@@ -1991,24 +1683,17 @@ public final class Router {
         return deflectionDeg(new Coordinate(ax, ay), new Coordinate(bx, by), new Coordinate(cx, cy)) <= MAX_TURN_DEG;
     }
 
-    /**
-     * Рамки отрезков p–q и r–s разнесены по x или y больше чем на limit с запасом на округление: тогда и расстояние
-     * между отрезками, и от конца одного до другого больше limit, и его не нужно считать. Проверки зазоров
-     * перебирают все пары отрезков, а почти все пары далеко.
-     */
     public static boolean apart(Coordinate p, Coordinate q, Coordinate r, Coordinate s, double limit) {
         double gap = limit + GAP_EPS_M;
         return Math.min(r.x, s.x) - Math.max(p.x, q.x) > gap || Math.min(p.x, q.x) - Math.max(r.x, s.x) > gap
                 || Math.min(r.y, s.y) - Math.max(p.y, q.y) > gap || Math.min(p.y, q.y) - Math.max(r.y, s.y) > gap;
     }
 
-    /** В b мелкий излом пути a–b–c: поворот меньше MIN_TURN_DEG, конец короткого плеча дальше MICRO_M от прямой. */
     public static boolean micro(Coordinate a, Coordinate b, Coordinate c) {
         double turn = deflectionDeg(a, b, c);
         return turn < MIN_TURN_DEG && Math.min(a.distance(b), b.distance(c)) * Math.sin(Math.toRadians(turn)) >= MICRO_M;
     }
 
-    /** Изменение направления в вершине b пути a–b–c, градусы; 0 — по прямой. */
     public static double deflectionDeg(Coordinate a, Coordinate b, Coordinate c) {
         if (a.equals2D(b) || b.equals2D(c)) {
             return 0;
@@ -2025,40 +1710,16 @@ public final class Router {
         return false;
     }
 
-    /** Отрезок ломаной уже идёт по оси, см. {@link #square}: отклонение от axis или axis + 90° меньше этого. */
     public static final double SQUARE_TOL_RAD = Math.toRadians(0.5);
-    /**
-     * Поворот между оставленным прежним отрезком и участком по осям, см. {@link #square}: мельче этого — лишняя вершина
-     * (мелкий излом, как SMALL_BEND_DEG у TreeBuilder).
-     */
     private static final double SQUARE_KEPT_DEG = 30;
-    /** Финальный участок задаёт ось ребра к выходу из здания, если отходит от неё меньше этого, см. {@link #squarePath}. */
     private static final double SQUARE_EXIT_DEG = 15;
-    /** Прямые сетки ближе этого друг к другу сливаются, см. {@link #squarePath}: звено не короче CUT_PIECE_M. */
     private static final double SQUARE_MERGE_M = 1.5;
-    /**
-     * Звено из конца участка не идёт вдоль объекта врезки: луч от SQUARE_LEAVE_M до SQUARE_PROBE_M по звену дальше
-     * SQUARE_LEAVE_TOL_M от него — так звено уходит от трубы под углом от ~20°. ObstacleSet#alongIgnored короткие
-     * звенья сетки не ловит, а плановые отступы к объекту врезки не проверяются.
-     */
     private static final double SQUARE_LEAVE_M = 1.5;
     private static final double SQUARE_PROBE_M = 4;
     private static final double SQUARE_LEAVE_TOL_M = 0.5;
-    /** Звено сетки из конца участка не идёт по соседнему ребру из той же точки: угол между ними от этого. */
     private static final double SQUARE_FAN_RAD = Math.toRadians(10);
-    /** Запас сетки за крайними вершинами участка: обход стены на шаг в сторону. */
     private static final double SQUARE_MARGIN_M = 3;
 
-    /**
-     * Ортогональная форма (замечание экспертов 16.10.2026: трасса прямыми вдоль застройки, один поворот 90° вместо
-     * двух по 45°, без зигзагов; п. 2.1 приложения): обычные участки ломаной между неподвижными вершинами — концами,
-     * keep и вершинами у специальных частей ({@link #held}) — перекладываются по прямым вдоль axis и axis + 90°
-     * ({@link #squarePath}). Новый участок берётся, если он не длиннее ratio старого, вершин и соседних поворотов в одну
-     * сторону у ломаной не больше, чем было, ни одну её вершину нельзя убрать прямой ({@link #removable}), двух соседних
-     * поворотов в одну сторону не заменяет одна вершина ({@link #bend}), а ломаная проходит те же
-     * проверки, что после {@link #sharpen}: зоны и отступы, CUT_APART_M до apart и своих отрезков, повороты до
-     * MAX_TURN_DEG, в том числе к before и after, без изломов меньше MIN_TURN_DEG. true — coords заменены.
-     */
     public boolean square(ObstacleSet zones, List<Coordinate> coords, Set<String> ignored, Coordinate keep,
             List<LineSegment> apart, Coordinate before, List<Coordinate> after, double axis, double ratio, double turnM) {
         int n = coords.size();
@@ -2077,15 +1738,12 @@ public final class Router {
         }
         anchors.add(n - 1);
         boolean changed = false;
-        // с конца: замена участка не сдвигает вершины и длины до него
         for (int k = anchors.size() - 2; k >= 0; k--) {
             int i0 = anchors.get(k);
             int j0 = anchors.get(k + 1);
             if (overlapsSpan(spans, at[i0] + SPAN_EPS_M, at[j0] - SPAN_EPS_M)) {
                 continue;
             }
-            // весь участок, затем без первого или последнего прежнего отрезка: у врезки на изломе существующей сети
-            // и у камеры прямая по оси упирается в отступ, а прежний отрезок там годится
             int[][] tries = {{i0, j0}, {i0 + 1, j0}, {i0, j0 - 1}, {i0 + 1, j0 - 1}};
             for (int[] range : tries) {
                 int i = range[0];
@@ -2096,7 +1754,6 @@ public final class Router {
                 List<Coordinate> path = squarePath(zones, coords, i, j, ignored, apart, before, after, axis, turnM,
                         keep != null && coords.get(j) == keep && j + 1 < coords.size());
                 if (path == null) {
-                    debug(coords, i, j, "нет пути по сетке");
                     continue;
                 }
                 double length = 0;
@@ -2104,8 +1761,6 @@ public final class Router {
                     length += path.get(v - 1).distance(path.get(v));
                 }
                 if (length > ratio * (at[j] - at[i])) {
-                    debug(coords, i, j, String.format(java.util.Locale.ROOT, "путь %.1f м длиннее %.1f × %.1f м", length, ratio,
-                            at[j] - at[i]), path);
                     continue;
                 }
                 List<Coordinate> shape = new ArrayList<>(coords.subList(0, i));
@@ -2117,10 +1772,8 @@ public final class Router {
                         || j < j0 && deflectionDeg(shape.get(hi - 1), shape.get(hi), shape.get(hi + 1)) < SQUARE_KEPT_DEG
                         || i > i0 && removable(zones, shape, i, ignored, apart, before, after)
                         || j < j0 && removable(zones, shape, hi, ignored, apart, before, after)) {
-                    debug(coords, i, j, "форма не прошла проверки (отступы, соседние рёбра, повороты)", path);
                     continue;
                 }
-                // концы участка, через которые ломаная идёт прямо: отрезки по обе стороны уже проверены по отдельности
                 for (int v : new int[] {hi, i}) {
                     if (v > 0 && v + 1 < shape.size()
                             && deflectionDeg(shape.get(v - 1), shape.get(v), shape.get(v + 1)) < Math.toDegrees(SQUARE_TOL_RAD)) {
@@ -2129,8 +1782,6 @@ public final class Router {
                 }
                 if (shape.size() > coords.size() || pairs(shape.toArray(new Coordinate[0])) > pairs(coords.toArray(new Coordinate[0]))
                         || bendable(zones, shape, keep, ignored, apart, before, after)) {
-                    debug(coords, i, j, String.format(java.util.Locale.ROOT, "вершин %d против %d", shape.size() - 2,
-                            coords.size() - 2), path);
                     continue;
                 }
                 coords.clear();
@@ -2142,10 +1793,6 @@ public final class Router {
         return changed;
     }
 
-    /**
-     * Отрезок k ломаной coords годится как новый ({@link #pieceFits}), а повороты на его концах внутри ломаной — от
-     * MIN_TURN_DEG до MAX_TURN_DEG. Так проверяется отрезок у перенесённой камеры (VariantEnumerator#squared).
-     */
     public boolean pieceFitsAt(ObstacleSet zones, List<Coordinate> coords, int k, Set<String> ignored, List<LineSegment> apart) {
         int n = coords.size();
         for (int v = Math.max(1, k); v <= Math.min(n - 2, k + 1); v++) {
@@ -2159,10 +1806,6 @@ public final class Router {
         return pieceFits(zones, coords, k, ignored, apart);
     }
 
-    /**
-     * Вершину v ломаной shape можно убрать: соседей соединяет прямая, годная как у {@link #sharpen} ({@link #removalFits}).
-     * Такую вершину на стыке оставленного прежнего отрезка и участка по осям {@link #square} не создаёт.
-     */
     public boolean removable(ObstacleSet zones, List<Coordinate> shape, int v, Set<String> ignored, List<LineSegment> apart,
             Coordinate before, List<Coordinate> after) {
         if (v <= 0 || v + 1 >= shape.size()) {
@@ -2186,25 +1829,6 @@ public final class Router {
         return bend(zones, probe, held, spans, ignored, apart, before, after, 0);
     }
 
-    /** Отладка {@link #square} (свойство heatnet.square.debug): почему участок не лёг по осям. */
-    private static final boolean SQUARE_DEBUG = Boolean.getBoolean("heatnet.square.debug");
-
-    private static void debug(List<Coordinate> coords, int i, int j, String why) {
-        debug(coords, i, j, why, null);
-    }
-
-    private static void debug(List<Coordinate> coords, int i, int j, String why, List<Coordinate> path) {
-        if (SQUARE_DEBUG) {
-            StringBuilder line = new StringBuilder();
-            for (Coordinate c : path == null ? List.<Coordinate>of() : path) {
-                line.append(String.format(java.util.Locale.ROOT, " %.2f %.2f", c.x, c.y));
-            }
-            System.err.printf(java.util.Locale.ROOT, "SQUARE %.1f,%.1f..%.1f,%.1f [%d..%d из %d]: %s |%s%n", coords.get(i).x,
-                    coords.get(i).y, coords.get(j).x, coords.get(j).y, i, j, coords.size(), why, line);
-        }
-    }
-
-    /** Все отрезки coords от i до j идут вдоль axis или axis + 90°. */
     private static boolean squared(List<Coordinate> coords, int i, int j, double axis) {
         for (int v = i; v < j; v++) {
             double off = Math.abs(Math.IEEEremainder(heading(coords.get(v), coords.get(v + 1)) - axis, Math.PI / 2));
@@ -2215,14 +1839,6 @@ public final class Router {
         return true;
     }
 
-    /**
-     * Кратчайшая с штрафом turnM за поворот ломаная от coords[i] до coords[j] по сетке прямых вдоль axis и axis + 90°
-     * через вершины участка (и середины между ними, и с запасом SQUARE_MARGIN_M за крайними), или null. Звено сетки
-     * годится, если оно в зонах, не задевает отступы и объекты специального прохода и держит CUT_APART_M до apart;
-     * поворот в начале к предыдущей вершине (или before) и в конце к следующей (или after) — до MAX_TURN_DEG и не
-     * мелкий излом. exit — coords[j] точка выхода из здания перед финальным участком. Концы — те же объекты
-     * Coordinate, что в coords: keep сравнивается по ссылке.
-     */
     private List<Coordinate> squarePath(ObstacleSet zones, List<Coordinate> coords, int i, int j, Set<String> ignored,
             List<LineSegment> apart, Coordinate before, List<Coordinate> after, double axis, double turnM, boolean exit) {
         Coordinate in = i > 0 ? coords.get(i - 1) : before;
@@ -2320,11 +1936,6 @@ public final class Router {
         Coordinate q = coords.get(j);
         Coordinate in = i > 0 ? coords.get(i - 1) : before;
         List<Coordinate> outs = j + 1 < coords.size() ? List.of(coords.get(j + 1)) : after;
-        // финальный участок к точке в здании перпендикулярен его стене и задаёт ось ребра, если близок к ней: иначе
-        // у выхода остаётся излом в несколько градусов, и вершина выхода лишняя
-        // соседний отрезок почти по оси задаёт её точно: иначе продолжение прямо через узел — излом меньше MIN_TURN_DEG
-        // первым — отрезок, из которого выходит участок: поворот в камере от него ровно 90°, а не 90,05°, иначе он
-        // круче MAX_TURN_DEG; почти прямой подход к выходу потом убирает вершину выхода
         List<Double> near = new ArrayList<>();
         List<Double> limit = new ArrayList<>();
         if (in != null) {
@@ -2356,7 +1967,6 @@ public final class Router {
             vs[v - i] = -coords.get(v).x * s + coords.get(v).y * c;
             box.expandToInclude(coords.get(v));
         }
-        // углы зон у участка (узлы графа): по прямым через них трасса обходит стену вплотную к отступу
         box.expandBy(SQUARE_MARGIN_M);
         List<double[]> corners = new ArrayList<>();
         for (int k = 0; k < nodes.size(); k++) {
@@ -2381,8 +1991,6 @@ public final class Router {
         }
         node[start] = p;
         node[end] = q;
-        // отрезки с общим концом участка проверяются на ломаной целиком ({@link #squareFits}): короткое звено сетки
-        // у камеры подходит к соседнему ребру ближе CUT_APART_M там, где длинный отрезок по той же прямой годится
         List<LineSegment> far = new ArrayList<>();
         List<Coordinate[]> fan = new ArrayList<>();
         for (LineSegment other : apart) {
@@ -2395,7 +2003,6 @@ public final class Router {
                 far.add(other);
             }
         }
-        // состояние — узел и направление прихода: 0 +u, 1 +v, 2 -u, 3 -v
         int states = 4 * nu * nw;
         double[] cost = new double[states];
         int[] pred = new int[states];
@@ -2403,7 +2010,6 @@ public final class Router {
         Arrays.fill(pred, -1);
         Map<Long, Boolean> link = new HashMap<>();
         java.util.PriorityQueue<double[]> queue = new java.util.PriorityQueue<>(Comparator.comparingDouble(e -> e[0]));
-        // длина звена сетки: состояние — узел и направление прихода, и звено из узла релаксируется до 4 раз
         double[] lengths = new double[states];
         Arrays.fill(lengths, Double.NaN);
         int[] du = {1, 0, -1, 0};
@@ -2431,7 +2037,6 @@ public final class Router {
                 Coordinate from = node[pred[state] < 0 ? -1 - pred[state] : pred[state] / 4];
                 boolean fits = true;
                 for (Coordinate out : outs) {
-                    // почти прямо через выход — вершина выхода потом уходит ({@link #square})
                     fits &= turnAllowed(from, q, out) && (!micro(from, q, out)
                             || exit && deflectionDeg(from, q, out) < Math.toDegrees(SQUARE_TOL_RAD));
                 }
@@ -2455,35 +2060,9 @@ public final class Router {
                 }
             }
         }
-        String dumpAt = System.getProperty("heatnet.square.dump");
-        if (dumpAt != null) {
-            String[] xy = dumpAt.split(",");
-            if (p.distance(new Coordinate(Double.parseDouble(xy[0]), Double.parseDouble(xy[1]))) < 0.5) {
-                for (int a = 0; a < nu * nw; a++) {
-                    for (int d = 0; d < 4; d++) {
-                        Boolean ok = link.get(4L * a + d);
-                        int nx = step(a, d, nu, nw, du, dw);
-                        if (ok != null && nx >= 0) {
-                            System.err.printf(java.util.Locale.ROOT, "DUMP %.2f %.2f %.2f %.2f %b%n", node[a].x, node[a].y,
-                                    node[nx].x, node[nx].y, ok);
-                        }
-                    }
-                }
-                System.err.printf(java.util.Locale.ROOT, "DUMPPQ %.2f %.2f %.2f %.2f best=%d%n", p.x, p.y, q.x, q.y, best);
-            }
-        }
         if (best < 0) {
-            if (SQUARE_DEBUG) {
-                int open = 0;
-                for (int k = 0; k < states; k++) {
-                    open += cost[k] < Double.POSITIVE_INFINITY ? 1 : 0;
-                }
-                System.err.printf(java.util.Locale.ROOT, "SQUARE   сетка %dx%d, достижимых состояний %d, ось %.1f°%n", nu, nw, open,
-                        Math.toDegrees(axis));
-            }
             return null;
         }
-        // путь от конца к началу, вершины только в поворотах
         List<Coordinate> path = new ArrayList<>();
         path.add(q);
         for (int state = best; ; ) {
@@ -2501,10 +2080,6 @@ public final class Router {
         return path;
     }
 
-    /**
-     * Сетка по значениям координаты: сами значения, углы зон (координата axis из corners), середины между ними и
-     * запас по краям; прямые ближе SQUARE_MERGE_M — одна.
-     */
     private static double[] lines(double[] values, List<double[]> corners, int axis) {
         java.util.TreeSet<Double> raw = new java.util.TreeSet<>();
         for (double value : values) {
@@ -2517,7 +2092,6 @@ public final class Router {
         }
         raw.add(sorted[0] - SQUARE_MARGIN_M);
         raw.add(sorted[sorted.length - 1] + SQUARE_MARGIN_M);
-        // значения концов и вершин остаются точными: binarySearch находит концы участка
         List<Double> kept = new ArrayList<>();
         for (double value : values) {
             kept.add(value);
@@ -2539,17 +2113,12 @@ public final class Router {
         return length;
     }
 
-    /** Соседний узел сетки от at в направлении d или -1 за краем. */
     private static int step(int at, int d, int nu, int nw, int[] du, int[] dw) {
         int a = at / nw + du[d];
         int b = at % nw + dw[d];
         return a < 0 || a >= nu || b < 0 || b >= nw ? -1 : a * nw + b;
     }
 
-    /**
-     * Звено сетки от a к b годится, см. {@link #squarePath}; fan — соседние рёбра из концов участка (точка и дальний
-     * конец отрезка), вдоль которых звено не идёт. Ответы по узлу и направлению в link.
-     */
     private boolean open(ObstacleSet zones, Coordinate a, Coordinate b, int at, int d, Set<String> ignored,
             List<LineSegment> apart, List<Coordinate[]> fan, Coordinate p, Coordinate q, Map<Long, Boolean> link) {
         long key = 4L * at + d;
@@ -2575,11 +2144,6 @@ public final class Router {
         return known;
     }
 
-    /**
-     * Ломаная shape с новыми вершинами lo..hi годится: отрезки lo..hi-1 — как новый отрезок {@link #pieceFits},
-     * повороты в вершинах lo..hi и к before и after до MAX_TURN_DEG, изломов меньше MIN_TURN_DEG нет, а отрезки от
-     * CUT_PIECE_M.
-     */
     private boolean squareFits(ObstacleSet zones, List<Coordinate> shape, int lo, int hi, Set<String> ignored,
             List<LineSegment> apart, Coordinate before, List<Coordinate> after) {
         int n = shape.size();
@@ -2588,7 +2152,6 @@ public final class Router {
             Coordinate b = shape.get(v);
             Coordinate c = shape.get(v + 1);
             double turn = deflectionDeg(a, b, c);
-            // на конце участка прямая может продолжить соседний отрезок: вершину потом убирает square
             boolean through = (v == lo || v == hi) && turn < Math.toDegrees(SQUARE_TOL_RAD);
             if (!turnAllowed(a, b, c) || turn < MIN_TURN_DEG && !through) {
                 return false;
@@ -2599,7 +2162,6 @@ public final class Router {
                 || after.stream().anyMatch(x -> micro(shape.get(n - 2), shape.get(n - 1), x)))) {
             return false;
         }
-        // ступенька: два поворота в разные стороны через звено короче SHORT_LINK_M (п. 2.1: без ступенчатых фрагментов)
         for (int v = Math.max(1, lo); v + 1 <= Math.min(n - 2, hi + 1); v++) {
             if (v + 1 > n - 2 || v - 1 < 0) {
                 continue;

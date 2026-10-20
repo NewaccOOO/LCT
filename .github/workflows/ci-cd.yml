@@ -1,10 +1,8 @@
 name: CI/CD
 
 on:
-  # деплой только вручную: Actions → CI/CD → Run workflow → ветка main
   workflow_dispatch:
 
-# два деплоя подряд не накладываются друг на друга
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -28,15 +26,12 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
 
-      # .env на сервере хранит его настройки (куча JVM, порт БД только на localhost) и не перезаписывается
       - name: Выкладка кода
         run: |
           rsync -az --delete --exclude .git --exclude .env \
             -e "ssh -i ~/.ssh/deploy_key -o BatchMode=yes" \
             ./ "$DEPLOY_USER@$DEPLOY_HOST:/opt/lct/"
 
-      # docker-compose 1.29.2 из ТЗ со свежим Docker падает при пересоздании контейнера ('ContainerConfig'),
-      # поэтому образ собирается отдельно, контейнер приложения удаляется и создаётся заново; база не трогается
       - name: Перезапуск и проверка
         run: |
           ssh -i ~/.ssh/deploy_key -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" '

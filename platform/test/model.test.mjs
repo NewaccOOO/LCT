@@ -1,4 +1,3 @@
-// node --test platform/test — модель сцены на демо-наборах
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -17,9 +16,9 @@ test('геометрия и таблицы', () => {
   assert.equal(kDepth(2), 1);
 });
 
-test('small-1: два варианта, все здания подключены, трасса до здания', async () => {
+test('small-1: три варианта, все здания подключены, трасса до здания', async () => {
   const sc = await buildScene(demo('small-1.in.geojson'), demo('small-1.out.geojson'));
-  assert.equal(sc.variants.length, 2);
+  assert.equal(sc.variants.length, 3);
   assert.equal(sc.oks.length, 17);
   const v = sc.variants[0];
   assert.equal(v.id, '1');
@@ -36,18 +35,16 @@ test('spb-kupchino: глубины, пересечения и неподключ
   const sc = await buildScene(demo('spb-kupchino.in.geojson'), demo('spb-kupchino.out.geojson'));
   assert.ok(sc.hasDepth);
   const v = sc.variants[0];
-  assert.equal(v.segs.length, 258);
+  assert.equal(v.segs.length, 222);
   assert.equal(sc.oks.length - v.connected.size, v.summary.unconnected_oks_ids.length);
   assert.ok(v.crossings.length > 0);
   for (const c of v.crossings) if (c.type !== 'segment') assert.ok(Number.isFinite(c.gap));
-  // те же пересечения, что считает scripts/ui3d/prep.py: 68, из них 3 с теплосетью без нужного зазора;
-  // уклон 0,100 из округлённых до мм глубин нарушением не считаем
   const cx = v.crossings.filter(c => c.type !== 'segment');
-  assert.equal(cx.length, 68);
-  assert.equal(cx.filter(c => c.ok === false && c.type === 'heat_network').length, 3);
+  assert.equal(cx.length, 58);
+  assert.equal(cx.filter(c => c.ok === false).length, 0);
   assert.equal(v.crossings.filter(c => c.type === 'segment').length, 0);
-  // подсказка «как обойти»: опуститься — не мельче верх + габарит + зазор
-  const c = cx.find(c => c.ok === false);
+  const c = cx.find(c => c.type === 'sewer');
+  assert.equal(c.need, 0.2);
   assert.ok(Math.abs(c.below - (c.top + c.eh + c.need)) < 1e-9);
 });
 

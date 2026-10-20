@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""Иллюстрации к docs/architecture/ARCHITECTURE.md: как строится граф, растёт дерево, считаются спецпереход,
-реконструкция и ходы локального поиска.
-
-Запуск из корня: uv run --project tools python scripts/docs_assets.py
-Пишет SVG в docs/assets/. Сцены учебные, в метрах, без датасета организаторов; граф, касательные рёбра,
-кратчайший путь и раскладка по 45° считаются здесь тем же способом, что в ObstacleSet и Router.
-"""
 import heapq
 import html
 import math
@@ -23,7 +16,6 @@ STYLE = (f"<style>.h{{font:600 16px {FONT};fill:{TEXT}}}.t{{font:13px {FONT};fil
 
 
 class Panel:
-    """Прямоугольник холста с мировыми координатами в метрах, ось y вверх."""
 
     def __init__(self, x, y, w, h, world, title, pad=26, sub=None):
         self.x, self.y, self.w, self.h, self.title, self.sub = x, y, w, h, title, sub
@@ -93,8 +85,6 @@ def save(name, content):
     print(f"docs/assets/{name}")
 
 
-# ---------- 1. Граф видимости ----------
-
 def cross(o, a, b):
     return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
 
@@ -109,7 +99,6 @@ DEFAULT_PARKS = [Polygon([(78, 112), (122, 118), (116, 146), (82, 142)])]
 
 def graph_scene(start=(52, 12), buildings=DEFAULT_BUILDINGS, parks=DEFAULT_PARKS, target=(190, 150),
                 pipe=((140, 150), (205, 150))):
-    """Учебная сцена графа видимости: препятствия, зоны, узлы, рёбра, порядок Дейкстры, путь и его раскладка по 45°."""
     obstacles = list(buildings) + list(parks)
     clearance = 7.0
     zones = unary_union([o.buffer(clearance, join_style=2, mitre_limit=2.0) for o in obstacles])
@@ -122,7 +111,7 @@ def graph_scene(start=(52, 12), buildings=DEFAULT_BUILDINGS, parks=DEFAULT_PARKS
         n = len(coords)
         for i, v in enumerate(coords):
             prev, nxt = coords[i - 1], coords[(i + 1) % n]
-            if cross(prev, v, nxt) > 0:  # против часовой: левый поворот — выпуклая наружу вершина
+            if cross(prev, v, nxt) > 0:
                 nodes.append(v)
                 rings.append((prev, nxt))
     inner = zones.buffer(-0.05)
@@ -163,7 +152,6 @@ def graph_scene(start=(52, 12), buildings=DEFAULT_BUILDINGS, parks=DEFAULT_PARKS
         v = pred[v]
     path = [start] + list(reversed(path))
 
-    # раскладка по направлениям через 45° от самого длинного отрезка, как Router.octilinearize
     longest = max(range(len(path) - 1), key=lambda k: math.dist(path[k], path[k + 1]))
     base = math.atan2(path[longest + 1][1] - path[longest][1], path[longest + 1][0] - path[longest][0])
     frame = [(math.cos(base + math.radians(45 * k)), math.sin(base + math.radians(45 * k))) for k in range(8)]
@@ -251,8 +239,6 @@ def graph_steps(start=(52, 12), dry=False):
     save("graph-steps.svg", document(2 * w + 3 * gap, 2 * h + 3 * gap, panels, "Как строится граф видимости и маршрут"))
 
 
-# ---------- 2. Рост дерева ----------
-
 def tree_growth():
     tie, p1, p2, p3 = (40, 0), (40, 150), (130, 110), (110, 40)
     j1, j2 = (40, 110), (40, 40)
@@ -293,8 +279,6 @@ def tree_growth():
         p.text(*tie, "врезка", dx=12, dy=20)
     save("tree-growth.svg", document(3 * w + 4 * gap, h + 2 * gap, panels, "Рост дерева врезки эвристикой Такахаши–Мацуямы"))
 
-
-# ---------- 3. Специальные переходы ----------
 
 def special_crossing():
     w, h, gap = 620, 430, 20
@@ -339,8 +323,6 @@ def special_crossing():
     save("special-crossing.svg", document(2 * w + 3 * gap, h + 2 * gap, [left, right], "Специальные переходы дороги и газопровода"))
 
 
-# ---------- 4. Реконструкция ----------
-
 def reconstruction():
     w, h, gap = 1260, 430, 20
     p = Panel(gap, gap, w, h, (-20, -190, 520, 40), "Реконструкция: добавленный расход идёт к источнику")
@@ -373,8 +355,6 @@ def reconstruction():
     p.text(-10, -165, "Реконструируется только часть от врезки к источнику, по ставке реконструкции, без Kспец.", "m")
     save("reconstruction.svg", document(w + 2 * gap, h + 2 * gap, [p], "Реконструкция существующей сети"))
 
-
-# ---------- 5. Ходы локального поиска ----------
 
 def local_search():
     pts = [(10, 60), (22, 72), (18, 48), (58, 66), (66, 52), (54, 44)]

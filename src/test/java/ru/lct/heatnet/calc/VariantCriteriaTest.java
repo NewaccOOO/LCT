@@ -34,7 +34,6 @@ class VariantCriteriaTest {
 
     @Test
     void countsCrossingsTurnsSurchargeAndUnitCost() {
-        // врезка в (0, 0), переход дороги x 40..60 спецучастком между узлами, в конце излом 53° к точке подключения
         Restriction road = new Restriction("road-1", factory.toGeometry(new Envelope(40, 60, -100, 100)), "road");
         Restriction gas = new Restriction("gas-1", line(-100, 200, 300, 200), "gas_pipeline");
         NetworkSegment pipe = new NetworkSegment("hn-1", line(-50, 0, 0, 0), 100, 10.0, "src");
@@ -67,7 +66,6 @@ class VariantCriteriaTest {
         assertEquals(Map.of("road", 1), criteria.get("crossed_objects"));
         assertEquals(1, criteria.get("turns"));
         assertEquals(new BigDecimal("53.1"), criteria.get("max_turn_deg"));
-        // надбавка: 26 м × 0,6 за спецпереход и 77 м × 0,5 у последнего участка, посчитанного с коэффициентом 1,5
         assertEquals(BigDecimal.valueOf(26 * rub * 0.6 + 77 * rub * 0.5).setScale(2, java.math.RoundingMode.HALF_UP),
                 criteria.get("surcharge_cost"));
         assertEquals(BigDecimal.valueOf(construction + 8_000_000).setScale(2, java.math.RoundingMode.HALF_UP),
@@ -76,7 +74,6 @@ class VariantCriteriaTest {
 
     @Test
     void explainsWhyOksIsUnconnected() {
-        // ОКС a в кольце воды, точка b внутри парка, у c нет точки подключения, d на открытом месте
         Restriction water = new Restriction("water-1", factory.toGeometry(new Envelope(-50, 50, -50, 50))
                 .difference(factory.toGeometry(new Envelope(-20, 20, -20, 20))), "water");
         Restriction park = new Restriction("park-1", factory.toGeometry(new Envelope(200, 260, -30, 30)), "park");
@@ -100,7 +97,6 @@ class VariantCriteriaTest {
 
     @Test
     void coincidentPointNamesItsConnectedTwin() {
-        // b в той же координате, что подключённая a; c и d совпадают, но без сети обе — причина у них обычная
         List<FutureOks> oks = List.of(oks("oks-a"), oks("oks-b"), oks("oks-c"), oks("oks-d"));
         List<ConnectionPoint> points = List.of(point("oks-a", 0, 0), point("oks-b", 0, 0.004), point("oks-c", 600, 0),
                 point("oks-d", 600, 0));
@@ -120,7 +116,6 @@ class VariantCriteriaTest {
 
     @Test
     void nestedRingsAndFarZonesKeepEnclosure() {
-        // точка в кольце воды, оно в кольце парка; парк справа от луча, вода — у самой точки; дальняя вода не на луче
         Restriction inner = new Restriction("water-1", factory.toGeometry(new Envelope(-50, 50, -50, 50))
                 .difference(factory.toGeometry(new Envelope(-20, 20, -20, 20))), "water");
         Restriction outer = new Restriction("park-1", factory.toGeometry(new Envelope(-200, 200, -200, 200))
@@ -134,14 +129,12 @@ class VariantCriteriaTest {
         Map<String, Object> reason = ((List<Map<String, Object>>) new VariantCriteria(input, rules)
                 .of(new Variant("1", List.of(), List.of(), List.of(), summary)).get("unconnected_reasons")).get(0);
 
-        // два кольца: решает полное объединение, как раньше, и берёт одно из них целиком
         assertEquals("enclosed", reason.get("reason"));
         assertTrue(List.of(List.of("water-1"), List.of("park-1")).contains(reason.get("object_ids")));
     }
 
     @Test
     void openFindsRingOfSeveralZones() {
-        // четыре стороны вместе окружают точку, без верхней — буква П: рамка группы точку содержит, контур нет
         List<Geometry> sides = List.of(factory.toGeometry(new Envelope(-30, -20, -30, 30)),
                 factory.toGeometry(new Envelope(20, 30, -30, 30)), factory.toGeometry(new Envelope(-30, 30, -30, -20)),
                 factory.toGeometry(new Envelope(-30, 30, 20, 30)));

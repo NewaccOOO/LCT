@@ -74,25 +74,16 @@ import ru.lct.heatnet.model.Source;
 import ru.lct.heatnet.rules.RestrictionRule;
 import ru.lct.heatnet.rules.Rules;
 
-/**
- * Потоковое чтение входного GeoJSON (раздел 12 CONSTRAINTS.md и формат датасета организаторов,
- * docs/interpretation.md): файл читается блоками, фичи разбирают нити пула, в памяти одновременно только блоки
- * в работе; геометрия сразу переводится в EPSG:32637. Чего нет во входе датасета (направление сети, текущий расход,
- * диаметр камеры, перспективные ОКС), выводится после чтения. Ошибки данных возвращаются диагностиками.
- */
 public class GeoJsonStreamReader {
     private static final String SOURCE = "source";
     private static final String HEAT_NETWORK = "heat_network";
     private static final String HEAT_CHAMBER = "heat_chamber";
     private static final String OKS_FUTURE = "oks_future";
-    /** Полигон oks_future — ещё и препятствие (здание ОКС); heatnet.future.obstacle=false — как в v0.9.0. */
     private static final boolean FUTURE_OBSTACLE = Boolean.parseBoolean(System.getProperty("heatnet.future.obstacle", "true"));
     private static final String CONNECTION_POINT = "oks_connection_point";
     private static final String OKS_EXISTING = "oks_existing";
     private static final String RESTRICTION = "restriction";
-    // здание в датасете организаторов: перспективный ОКС, если в полигоне лежит точка подключения, иначе существующий
     private static final String BUILDING = "oks";
-    // конец участка совпадает с источником, камерой или концом другого участка (A-9)
     private static final double JOINT_M = 0.5;
     private static final String FILE_ID = "#0";
     private static final List<String> OBJECT_TYPES = List.of(
@@ -102,20 +93,15 @@ public class GeoJsonStreamReader {
     private static final List<String> LINE = List.of("LineString");
     private static final List<String> LINES = List.of("LineString", "MultiLineString");
     private static final List<String> POLYGONS = List.of("Polygon", "MultiPolygon");
-    // Приложение 18.09, п. 1.1: ограничение любого типа приходит линией или полигоном; правило дальше применяется
-    // по размерности геометрии.
     private static final List<String> ANY_RESTRICTION = List.of(
             "Point", "LineString", "MultiLineString", "Polygon", "MultiPolygon");
     private static final List<String> UPSTREAM_TYPES = List.of(HEAT_NETWORK, HEAT_CHAMBER, SOURCE);
 
     private static final Logger log = LoggerFactory.getLogger(GeoJsonStreamReader.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    // Упакованная XY-последовательность хранит точку в 16 байтах вместо объекта Coordinate в 40 байт.
     private static final PackedCoordinateSequenceFactory PACKED = PackedCoordinateSequenceFactory.DOUBLE_FACTORY;
     private static final GeometryFactory GEOMETRY = new GeometryFactory(PACKED);
     private static final Rules RULES = Rules.load();
-    // Точка на стене своего здания после перевода в UTM оказывается в долях миллиметра снаружи. Дальше допуск не
-    // растёт: разъяснение 3 снимает отступ только для полигона, содержащего точку.
     private static final double OWN_REACH_M = 0.01;
     private static final Map<Integer, String> INVALID_REASONS = Map.ofEntries(
             Map.entry(TopologyValidationError.REPEATED_POINT, "повторяющаяся точка"),
@@ -130,24 +116,19 @@ public class GeoJsonStreamReader {
             Map.entry(TopologyValidationError.INVALID_COORDINATE, "недопустимая координата"),
             Map.entry(TopologyValidationError.RING_NOT_CLOSED, "контур не замкнут"));
     private static final Locale RUSSIAN = new Locale("ru");
-    /** Фич в пачке чтения и в задаче пула, см. Scan.features. */
     private static final int BATCH = 8192;
     private static final int CHUNK = 512;
-    // главный поток при чтении строками только читает блоки и сливает части, ядро ему не нужно
     private static final int THREADS = Runtime.getRuntime().availableProcessors();
     private static final ExecutorService POOL = Executors.newFixedThreadPool(THREADS, task -> {
         Thread thread = new Thread(task, "geojson-geometry");
         thread.setDaemon(true);
         return thread;
     });
-    /** Блок файла, который главный поток режет на куски; фич в куске срезов; кусков разом в пуле. См. Scan.lines. */
     private static final int BLOCK = 1 << 20;
     private static final int SLICE = 2048;
     private static final int IN_FLIGHT = 4 * THREADS;
-    /** Строка длиннее — файл не по строкам, см. Scan.lines. */
     private static final int LINE_LIMIT = 16 << 20;
     private static final byte[] REST_PREFIX = "{\"features\":[]".getBytes(StandardCharsets.UTF_8);
-    /** Степени десяти, точные в double, как SMALL_10_POW в jdk.internal.math.FloatingDecimal, см. decimal. */
     private static final double[] TENS = {
         1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
         1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22};
@@ -157,22 +138,10 @@ public class GeoJsonStreamReader {
         return scan(path, () -> new Scan(false, null, expected));
     }
 
-    /**
-     * Сколько фич ждать по размеру файла, чтобы общие таблицы id не перестраивались по ходу чтения: фича города
-     * около 500 байт. Мельче — таблица дорастёт сама, крупнее — останутся пустые слоты.
-     */
     private static int expectedFeatures(Path path) {
         return (int) Math.min(1 << 26, path.toFile().length() / 512);
     }
 
-    /**
-     * Чтение в два прохода без дальних препятствий. Первый проход берёт всё, кроме зданий и ограничений, и по нему
-     * {@code obstacleExtent} считает прямоугольник, вне которого препятствия на расчёт не влияют; null — оставить
-     * все. Второй проход проверяет каждое здание и ограничение как обычно, но кладёт в память только пересекающие
-     * прямоугольник. Остальные объекты второй проход берёт из первого: без диагностик в первом проходе они и их
-     * проверки те же. Если диагностики есть, второй проход читает и проверяет всё заново, как чтение в один
-     * проход. На городе, где ОКС в одном районе, куча не растёт с числом зданий.
-     */
     public static InputData read(Path path, Function<InputData, Envelope> obstacleExtent) {
         long started = System.nanoTime();
         int expected = expectedFeatures(path);
@@ -195,13 +164,8 @@ public class GeoJsonStreamReader {
         return input;
     }
 
-    /** Как читается массив features: строками в пуле, срезами по границам фич или деревьями на главном потоке. */
     private enum Mode { LINES, SLICES, TREE }
 
-    /**
-     * Чтение строками (см. Scan.lines); если фичи переходят через перевод строки — срезами (см. Scan.sliced); если
-     * срезы не сошлись с разбором, файл читается деревьями на главном потоке, как без пула.
-     */
     private static InputData scan(Path path, Supplier<Scan> scans) {
         try {
             try {
@@ -225,7 +189,6 @@ public class GeoJsonStreamReader {
             scan.read(parser);
         } catch (JsonProcessingException e) {
             if (sliced) {
-                // место ошибки в файле даёт только чтение без срезов
                 throw new SliceMismatch(e.getOriginalMessage());
             }
             JsonLocation at = e.getLocation();
@@ -282,7 +245,6 @@ public class GeoJsonStreamReader {
         }
     }
 
-    /** Точка подключения датасета: без oks_id, со своим расходом. */
     private static final class Consumer {
         final String id;
         final Point geometry;
@@ -305,34 +267,24 @@ public class GeoJsonStreamReader {
         final List<ExistingOks> existingOks = new ArrayList<>();
         final List<Restriction> restrictions = new ArrayList<>();
         final List<Diagnostic> diagnostics = new ArrayList<>();
-        /** Общие с частями чтения, см. sliced. */
         final Map<String, String> typeById;
-        /** Числовые id точек подключения и камер: в выходе ссылки на них пишутся числом. */
         final Set<String> numericIds;
         final Map<String, String> upstreamById = new LinkedHashMap<>();
         final Map<String, Integer> unknownRestrictionTypes = new LinkedHashMap<>();
         final Map<String, Integer> unknownObjectTypes = new LinkedHashMap<>();
         final List<Ref> refs = new ArrayList<>();
-        /** Байт «]» массива features, как только его нашёл главный поток при чтении строками, см. region. */
         volatile long featuresEnd = Long.MAX_VALUE;
-        /** Первый байт самого дальнего куска строк, который начал разбор фич, см. region. */
         final AtomicLong farthestPart = new AtomicLong(-1);
         final boolean skipObstacles;
-        /** Второй проход после чистого первого: читаются только препятствия, id уже проверены, см. read. */
         final boolean obstaclesOnly;
         final Envelope extent;
-        /** Геометрия текущей фичи, построенная в пуле, см. features; null — строится на месте. */
         Parsed prepared;
-        /** Геометрия текущей фичи из быстрого разбора, см. part; null — строится из дерева или байтов. */
         Shape shape;
-        /** Байты geometry текущей фичи, которую быстрый разбор отложил или не осилил, см. Fast.feature. */
         byte[] geometryBytes;
         int geometryFrom;
         int geometryTo;
-        /** Файл для чтения строками или срезами, см. lines и sliced; null — чтение деревьями на главном потоке. */
         FileChannel channel;
         boolean lines;
-        /** Источники с верной геометрией в порядке файла; sources — все фичи source, и с ошибкой геометрии. */
         final List<Source> sourcePoints = new ArrayList<>();
         int sources;
         int ordinal;
@@ -342,12 +294,10 @@ public class GeoJsonStreamReader {
             this(skipObstacles, false, extent, new ConcurrentHashMap<>(expected), ConcurrentHashMap.newKeySet(expected / 2));
         }
 
-        /** Часть чтения для куска фич в пуле: свои списки, общие typeById и numericIds. */
         Scan(Scan whole) {
             this(whole.skipObstacles, whole.obstaclesOnly, whole.extent, whole.typeById, whole.numericIds);
         }
 
-        /** Второй проход после первого без диагностик: всё, кроме препятствий, из первого. */
         Scan(Scan first, Envelope extent) {
             this(false, true, extent, first.typeById, first.numericIds);
             rawSegments.addAll(first.rawSegments);
@@ -371,10 +321,6 @@ public class GeoJsonStreamReader {
             this.numericIds = numericIds;
         }
 
-        /**
-         * Препятствие нужно расчёту: пересекает прямоугольник или extent не задан. ID на «v» остаются всегда: по ним
-         * сборщик выбирает префикс выходных ID, см. NetworkAssembler.
-         */
         boolean keep(String id, Geometry geometry) {
             return extent == null || id.startsWith("v") || geometry.getEnvelopeInternal().intersects(extent);
         }
@@ -434,7 +380,6 @@ public class GeoJsonStreamReader {
             }
             String objectType = string(props, featureId, "object_type");
             if (objectType != null && OBJECT_TYPES.contains(objectType)) {
-                // Своя строка типа у каждой фичи стоит десятки мегабайт на входе из миллионов объектов.
                 objectType = objectType.intern();
             }
             if (id != null && !obstaclesOnly && typeById.putIfAbsent(id, objectType == null ? "" : objectType) != null) {
@@ -447,7 +392,6 @@ public class GeoJsonStreamReader {
             }
             switch (objectType) {
                 case SOURCE: {
-                    // источников может быть несколько: у каждой системы города свой (приложение 18.09, п. 1.1)
                     sources++;
                     Geometry geometry = geometry(node, featureId, POINT);
                     if (diagnostics.size() == before) {
@@ -479,7 +423,6 @@ public class GeoJsonStreamReader {
                 }
                 case OKS_FUTURE: {
                     Double flow = flow(props, featureId);
-                    // справочный атрибут (CONSTRAINTS §12), в расчёте не участвует
                     Double heatLoad = present(props, "heat_load") ? number(props, featureId, "heat_load") : null;
                     Geometry geometry = geometry(node, featureId, POLYGONS);
                     if (diagnostics.size() == before) {
@@ -561,15 +504,11 @@ public class GeoJsonStreamReader {
             List<Chamber> chambers = new ArrayList<>();
             List<String> warnings = new ArrayList<>();
             network(segments, chambers, warnings);
-            // списки прочитанного не меняются: по ним второй проход, см. read
             List<FutureOks> future = new ArrayList<>(futureOks);
             List<ConnectionPoint> points = new ArrayList<>(connectionPoints);
             List<ExistingOks> existing = new ArrayList<>(existingOks);
             consumers(future, points, existing);
             if (FUTURE_OBSTACLE) {
-                // приложение 18.09, п. 2.2: все полигоны ОКС — препятствия, и здание с точкой тоже. Полигон oks_future
-                // формата раздела 12 становится зданием; тот же объект геометрии делает его «своим» зданием точки
-                // (VariantEnumerator.buildings). Здания точек формата датасета уже в existing
                 Set<Geometry> known = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
                 existing.forEach(oks -> known.add(oks.getGeometry()));
                 for (FutureOks oks : future) {
@@ -585,13 +524,6 @@ public class GeoJsonStreamReader {
                     diagnostics, warnings, numericIds);
         }
 
-        /**
-         * Направление сети обходом от источников, диаметры камер и текущий расход там, где их нет во входе. Участок и
-         * камера, до которых обход не дошёл, остаются в сети без upstream: приложение не требует связи сети с
-         * источником (п. 1.1 — у heat_network обязательны id, object_type и diameter; п. 2.4 — расход сети не
-         * считается; разъяснение 11 — врезка в любой допустимой точке heat_network), а направление расчёт не читает.
-         * О таких объектах предупреждает одна строка warnings.
-         */
         void network(List<NetworkSegment> segments, List<Chamber> chambers, List<String> warnings) {
             if (!sourcePoints.isEmpty() && (rawSegments.stream().anyMatch(r -> r.upstream == null)
                     || rawChambers.stream().anyMatch(r -> r.upstream == null))) {
@@ -602,7 +534,6 @@ public class GeoJsonStreamReader {
             int lonelyChambers = 0;
             for (RawSegment raw : rawSegments) {
                 apartSegments += raw.upstream == null ? 1 : 0;
-                // текущий расход существующей сети в расчёте не участвует (приложение 18.09, п. 2.4)
                 double flow = raw.flow != null ? raw.flow : 0.0;
                 segments.add(new NetworkSegment(raw.id, raw.geometry, raw.diameter, flow, raw.upstream));
             }
@@ -615,7 +546,6 @@ public class GeoJsonStreamReader {
                     }
                 }
                 if (diameter == null) {
-                    // камера на неразрезанной трубе: ДУ этой трубы
                     for (RawSegment segment : rawSegments) {
                         if (segment.geometry.isWithinDistance(raw.geometry, JOINT_M)) {
                             diameter = Math.max(diameter == null ? 0 : diameter, segment.diameter);
@@ -639,9 +569,6 @@ public class GeoJsonStreamReader {
             }
         }
 
-        // Обход в ширину сразу от всех источников: участок получает следующим к источнику объектом камеру в точке
-        // стыка или участок, от дальнего конца которого до него дошли; камера — участок, который первым дошёл до неё.
-        // Сеть каждой системы города так направляется от своего источника.
         void traverse() {
             STRtree ends = endIndex();
             STRtree chamberIndex = new STRtree();
@@ -678,7 +605,6 @@ public class GeoJsonStreamReader {
                     break;
                 }
             }
-            // камера на середине пройденного участка без разреза тоже в сети
             for (RawChamber chamber : rawChambers) {
                 if (chamber.upstream != null) {
                     continue;
@@ -704,7 +630,6 @@ public class GeoJsonStreamReader {
             return true;
         }
 
-        /** Участки по рамкам, расширенным на JOINT_M: запрос точкой находит участки не дальше JOINT_M от неё. */
         STRtree lineIndex() {
             STRtree index = new STRtree();
             for (int i = 0; i < rawSegments.size(); i++) {
@@ -715,12 +640,6 @@ public class GeoJsonStreamReader {
             return index;
         }
 
-        /**
-         * Т-стыки: участок, до которого обход по концам не дошёл, связан с пройденным, если конец одного лежит на
-         * другом не дальше JOINT_M, а разреза там нет; так же — участок, на середине которого стоит источник.
-         * Выгрузки рабочих систем (разъяснение 17) так пишут ответвление от середины трубы. Ищутся, только когда
-         * очередь обхода кончилась, а пройдены не все участки; false — связанных так не нашлось.
-         */
         boolean tees(STRtree lines, boolean[] reached, List<int[]> queue) {
             int before = queue.size();
             for (int i = 0; i < reached.length; i++) {
@@ -730,7 +649,6 @@ public class GeoJsonStreamReader {
                 LineString line = rawSegments.get(i).geometry;
                 Source on = sourceOn(line);
                 if (on != null) {
-                    // источник на середине участка: обход идёт от обоих его концов
                     reach(new int[] {i, 0}, on.getId(), reached, queue);
                     queue.add(new int[] {i, 1});
                     continue;
@@ -742,13 +660,11 @@ public class GeoJsonStreamReader {
                     }
                     LineString other = rawSegments.get(j).geometry;
                     for (int k = 0; k < 2 && !reached[i]; k++) {
-                        // конец участка i на участке j: обход идёт дальше от другого конца i
                         if (Distance.pointToSegmentString(endpoint(line, k), other.getCoordinates()) <= JOINT_M) {
                             reach(new int[] {i, k}, rawSegments.get(j).id, reached, queue);
                         }
                     }
                     for (int k = 0; k < 2 && !reached[i]; k++) {
-                        // конец участка j на середине участка i: обход идёт от обоих концов i
                         if (Distance.pointToSegmentString(endpoint(other, k), line.getCoordinates()) <= JOINT_M) {
                             reach(new int[] {i, 0}, rawSegments.get(j).id, reached, queue);
                             queue.add(new int[] {i, 1});
@@ -759,9 +675,7 @@ public class GeoJsonStreamReader {
             return queue.size() > before;
         }
 
-        /** Первый источник не дальше JOINT_M от участка; null — такого нет. */
         Source sourceOn(LineString line) {
-            // ponytail: перебор всех источников на каждый непройденный участок; индекс источников — если их тысячи
             for (Source source : sourcePoints) {
                 Coordinate at = source.getGeometry().getCoordinate();
                 if (line.getEnvelopeInternal().distance(new Envelope(at)) <= JOINT_M
@@ -822,20 +736,13 @@ public class GeoJsonStreamReader {
             return best;
         }
 
-        /**
-         * Точки подключения датасета становятся перспективными ОКС. Здание с точкой внутри — геометрия такого ОКС
-         * (по ней строится финальный прямой участок), и оно же остаётся препятствием, как все полигоны ОКС
-         * (приложение 18.09, п. 2.2).
-         */
         void consumers(List<FutureOks> futureOks, List<ConnectionPoint> connectionPoints, List<ExistingOks> existingOks) {
             long started = System.nanoTime();
             STRtree index = new STRtree();
             for (int i = 0; i < buildings.size(); i++) {
                 index.insert(buildings.get(i).getGeometry().getEnvelopeInternal(), i);
             }
-            // дерево строится до параллельных запросов: ленивая сборка при первом запросе не потокобезопасна
             index.build();
-            // здание каждой точки ищется параллельно: точки друг от друга не зависят, а их на городе миллионы
             int[] buildingOf = new int[consumers.size()];
             IntStream.range(0, consumers.size()).parallel().forEach(k -> {
                 Consumer consumer = consumers.get(k);
@@ -848,7 +755,6 @@ public class GeoJsonStreamReader {
                     }
                 }
                 if (building < 0) {
-                    // точка на стене своего здания: иначе оно чужое, и финальный участок упирается в его зону
                     Envelope reach = consumer.geometry.getEnvelopeInternal().copy();
                     reach.expandBy(OWN_REACH_M);
                     double best = OWN_REACH_M;
@@ -875,11 +781,6 @@ public class GeoJsonStreamReader {
             }
         }
 
-        /**
-         * Точка внутри полигона здания или на его границе, как Geometry.covers. covers идёт через RelateOp, а
-         * SimplePointInAreaLocator копирует упакованные координаты в кэш: на городе в миллионы зданий первое занимало
-         * минуты, второе — гигабайты кучи.
-         */
         static boolean covers(Geometry area, Coordinate point) {
             for (int i = 0; i < area.getNumGeometries(); i++) {
                 Polygon polygon = (Polygon) area.getGeometryN(i);
@@ -901,7 +802,6 @@ public class GeoJsonStreamReader {
             return false;
         }
 
-        // Расчёт реконструкции идёт по upstream_object_id до source, на цикле он зациклится.
         void checkUpstreamCycles() {
             Set<String> checked = new HashSet<>();
             for (String start : upstreamById.keySet()) {
@@ -928,7 +828,6 @@ public class GeoJsonStreamReader {
             return upstream;
         }
 
-        /** MultiLineString участка сети — одна линия, если части сливаются стыками; иначе диагностика. */
         Geometry line(Geometry geometry, String featureId) {
             if (!(geometry instanceof org.locationtech.jts.geom.MultiLineString)) {
                 return geometry;
@@ -953,7 +852,6 @@ public class GeoJsonStreamReader {
                 return null;
             }
             int dn = (int) value.doubleValue();
-            // ДУ существующей сети вне таблицы 1 (350, 32) — ближайший табличный не меньше, иначе наибольший
             return RULES.diameters().stream().mapToInt(d -> d.getDn()).filter(d -> d >= dn).min()
                     .orElse(RULES.diameters().get(RULES.diameters().size() - 1).getDn());
         }
@@ -984,11 +882,6 @@ public class GeoJsonStreamReader {
             return value != null && !value.isNull();
         }
 
-        /**
-         * Идентификатор: непустая строка или любое число JSON, в том числе 11.0 и 11.5 (приложение 18.09, разд. 1: id
-         * «могут быть строковыми или числовыми» и «не интерпретируется по его формату»). Число становится строкой
-         * Jackson с тем же значением (11.0 остаётся 11.0) и так же пишется в выход, см. numericIds.
-         */
         String identifier(JsonNode props, String featureId, String field) {
             JsonNode value = required(props, featureId, field);
             if (value == null) {
@@ -1045,11 +938,6 @@ public class GeoJsonStreamReader {
             return parsed.geometry;
         }
 
-        /**
-         * Фичи массива features пачками: главный поток разбирает JSON и применяет фичи по порядку, а пул заранее
-         * строит их геометрию (разбор координат, проверка валидности, перевод в UTM), пока разбирается следующая
-         * пачка. Геометрия не зависит от состояния чтения, поэтому диагностики и порядок объектов те же.
-         */
         void features(JsonParser parser) throws IOException {
             List<JsonNode> batch = new ArrayList<>();
             List<JsonNode> pendingNodes = List.of();
@@ -1068,17 +956,9 @@ public class GeoJsonStreamReader {
             apply(batch, prepare(batch));
         }
 
-        /**
-         * Фичи массива features срезами файла. Главный поток читает файл блоками и находит границы фич по скобкам
-         * с учётом строк, пул разбирает куски фич (см. part) и применяет их к своей части чтения, главный поток
-         * сливает части по порядку. Синтаксис фич проверяет разбор в пуле. Всё, в чём части могут разойтись с
-         * чтением подряд (не объект в массиве, ошибка JSON, повтор id), — SliceMismatch: файл
-         * читается заново без срезов, и диагностики те же. Возвращает разбор корня после массива.
-         */
         JsonParser sliced(JsonParser parser) throws IOException {
             long open = parser.getTokenLocation().getByteOffset();
             if (open < 0) {
-                // UTF-16 и UTF-32: байтовых смещений нет
                 features(parser);
                 return parser;
             }
@@ -1111,7 +991,6 @@ public class GeoJsonStreamReader {
                     }
                     int end = start < length ? objectEnd(block, start, length) : -1;
                     if (end < 0) {
-                        // фича не уместилась в блок: кусок уходит в пул, недочитанный хвост переносится в новый блок
                         submit(parts, block, bounds, count, ordinal + total - count);
                         count = 0;
                         int tail = length - at;
@@ -1144,15 +1023,6 @@ public class GeoJsonStreamReader {
             return rest(offset);
         }
 
-        /**
-         * Фичи массива features строками: главный поток читает файл блоками и режет их по последнему переводу строки,
-         * нить пула сама находит фичи в своём куске строк (см. region) и разбирает их, главный поток сливает части по
-         * порядку и сверяет запятые на стыках (см. Joint). Сырого перевода строки внутри строки JSON не бывает,
-         * поэтому кусок, первый байт которого между фичами, начинается вне строки; следующий кусок начинается между
-         * фичами, если ни одна фича предыдущего не перешла через его конец. Иначе (JSON с отступами, строка длиннее
-         * LINE_LIMIT) или пул начал разбор строк за концом массива — LinesMismatch, и файл читается срезами, см. sliced.
-         * Возвращает разбор корня после массива.
-         */
         JsonParser lines(JsonParser parser) throws IOException {
             long open = parser.getTokenLocation().getByteOffset();
             if (open < 0) {
@@ -1173,7 +1043,6 @@ public class GeoJsonStreamReader {
                 while (joint.close < 0 && !(eof && at == length)) {
                     int cut = eof ? length : lastLine(block, at, length);
                     if (cut < 0) {
-                        // в блоке нет конца строки: хвост переносится в новый блок, при нужде больший
                         int tail = length - at;
                         if (tail >= LINE_LIMIT) {
                             throw new LinesMismatch("строка длиннее " + LINE_LIMIT + " байт, байт " + (offset + at));
@@ -1214,12 +1083,6 @@ public class GeoJsonStreamReader {
             return rest(joint.close + 1);
         }
 
-        /**
-         * Кусок строк массива features с первого байта между фичами: фичи по скобкам, запятые между ними, конец
-         * массива, затем разбор фич, как в part. Номера фич куску неизвестны, поэтому part считает их с нуля, а
-         * Joint не берёт часть, у которой номер попал в диагностику. Кусок, который кончается внутри фичи или
-         * начинается не между фичами, — LinesMismatch.
-         */
         Region region(byte[] block, int from, int to, long offset) throws IOException {
             Region region = new Region(offset);
             int[] bounds = new int[256];
@@ -1261,9 +1124,6 @@ public class GeoJsonStreamReader {
                 region.after = commas;
             }
             region.features = count;
-            // Кусок за концом features пул может взять раньше, чем главный поток найдёт «]», а part пишет в общие
-            // typeById и numericIds. Кусок сначала отмечается, потом сверяется с концом массива: либо он видит конец
-            // и не разбирается, либо главный поток видит его отметку и читает файл заново срезами, см. lines.
             if (count > 0) {
                 farthestPart.accumulateAndGet(offset + from, Math::max);
                 if (offset + from > featuresEnd) {
@@ -1274,7 +1134,6 @@ public class GeoJsonStreamReader {
             return region;
         }
 
-        /** Слияние кусков строк по порядку: запятые на стыках, число фич и конец массива features. */
         final class Joint {
             int features;
             int commas;
@@ -1301,10 +1160,6 @@ public class GeoJsonStreamReader {
             }
         }
 
-        /**
-         * Остаток корня после массива features разбирает Jackson с байта offset, перед ним пустой массив на месте
-         * прочитанного. Второй массив features, если он есть, читается деревьями на главном потоке.
-         */
         JsonParser rest(long offset) throws IOException {
             FileChannel file = channel;
             channel = null;
@@ -1317,7 +1172,6 @@ public class GeoJsonStreamReader {
             return rest;
         }
 
-        /** Дочитывает блок с места pos; конец файла внутри массива features — срез не сходится с файлом. */
         int fill(byte[] block, int pos, long fileOffset) throws IOException {
             int read = channel.read(ByteBuffer.wrap(block, pos, block.length - pos), fileOffset);
             if (read <= 0) {
@@ -1326,7 +1180,6 @@ public class GeoJsonStreamReader {
             return read;
         }
 
-        /** Кусок фич блока в пул; готовые части сливаются по порядку, не больше IN_FLIGHT частей в работе. */
         void submit(ArrayDeque<Future<Scan>> parts, byte[] block, int[] bounds, int count, int first) throws IOException {
             if (count > 0) {
                 int[] mine = Arrays.copyOf(bounds, 2 * count);
@@ -1337,10 +1190,6 @@ public class GeoJsonStreamReader {
             }
         }
 
-        /**
-         * Фичи куска по порядку в своей части чтения; first — сколько элементов features перед куском. Фича
-         * разбирается байтами (см. Fast), а если она не в быстром виде, — деревом Jackson, как раньше.
-         */
         Scan part(byte[] block, int[] bounds, int first) throws IOException {
             Scan part = new Scan(this);
             part.ordinal = first;
@@ -1351,7 +1200,6 @@ public class GeoJsonStreamReader {
             return part;
         }
 
-        /** Результат задачи пула; её SliceMismatch и LinesMismatch бросаются как есть. */
         <T> T take(Future<T> future) throws IOException {
             try {
                 return future.get();
@@ -1364,10 +1212,6 @@ public class GeoJsonStreamReader {
             }
         }
 
-        /**
-         * Часть в общее чтение. Повтор id между частями видит только общий typeById, и диагностика досталась бы
-         * части, которая успела позже; такой файл читается подряд.
-         */
         void merge(Scan part) {
             if (part.duplicates > 0) {
                 throw new SliceMismatch("повтор id");
@@ -1415,7 +1259,6 @@ public class GeoJsonStreamReader {
                     Thread.currentThread().interrupt();
                     throw new IOException("Чтение прервано", e);
                 } catch (ExecutionException e) {
-                    // геометрия этой пачки посчитается на месте, как без пула
                     parsed = new Parsed[Math.min(CHUNK, nodes.size() - next)];
                 }
                 for (Parsed one : parsed) {
@@ -1431,7 +1274,6 @@ public class GeoJsonStreamReader {
         }
     }
 
-    /** Кусок строк массива features: часть чтения, число фич, запятые до первой и после последней, конец массива. */
     private static final class Region {
         final long offset;
         Scan part;
@@ -1445,21 +1287,18 @@ public class GeoJsonStreamReader {
         }
     }
 
-    /** Фичи файла не по строкам: он читается срезами, см. Scan.lines. */
     private static final class LinesMismatch extends SliceMismatch {
         LinesMismatch(String message) {
             super(message);
         }
     }
 
-    /** Срез файла не совпал с фичей: кодировка или BOM сдвинули байтовые смещения разбора. */
     private static class SliceMismatch extends RuntimeException {
         SliceMismatch(String message) {
             super(message);
         }
     }
 
-    /** Геометрия фичи из потокового разбора: type и геометрия в WGS 84 по нему, ещё без проверки валидности. */
     private static final class Shape {
         final String type;
         final Geometry geometry;
@@ -1470,7 +1309,6 @@ public class GeoJsonStreamReader {
         }
     }
 
-    /** Геометрия фичи или текст ошибки для диагностики поля geometry. */
     private static final class Parsed {
         final List<String> allowed;
         final Geometry geometry;
@@ -1483,10 +1321,6 @@ public class GeoJsonStreamReader {
         }
     }
 
-    /**
-     * Фича байтовым разбором без Jackson (см. Fast), геометрия — в part.shape или байтами в part.geometryBytes;
-     * null — фича не в быстром виде, и её разбирает Jackson.
-     */
     static JsonNode fast(Scan part, byte[] bytes, int from, int to) {
         part.shape = null;
         part.geometryBytes = null;
@@ -1499,7 +1333,6 @@ public class GeoJsonStreamReader {
         }
     }
 
-    /** Узел фичи из байтов быстрым разбором, как в чтении за один проход; null — не в быстром виде. Для тестов. */
     static JsonNode fastFeature(byte[] bytes) {
         int from = space(bytes, 0, bytes.length);
         int to = objectEnd(bytes, from, bytes.length);
@@ -1507,7 +1340,6 @@ public class GeoJsonStreamReader {
                 : fast(new Scan(false, null, 0), bytes, from, to);
     }
 
-    /** Геометрия из байтов значения geometry быстрым разбором; null — пусть разберёт дерево. */
     private static Shape shape(byte[] bytes, int from, int to) {
         try {
             Fast fast = new Fast(bytes, from, to);
@@ -1519,7 +1351,6 @@ public class GeoJsonStreamReader {
         }
     }
 
-    /** Фича не в том виде, который разбирает Fast. Без стека: на обычных входах не бросается. */
     private static final class NotFast extends RuntimeException {
         NotFast() {
             super(null, null, false, false);
@@ -1527,7 +1358,6 @@ public class GeoJsonStreamReader {
     }
 
     private static final NotFast NOT_FAST = new NotFast();
-    /** Частые ключи и значения: быстрый разбор отдаёт эти строки вместо новых, см. Fast.string. */
     private static final List<String> KNOWN = List.of("type", "Feature", "geometry", "properties", "coordinates",
             "Point", "LineString", "Polygon", "MultiLineString", "MultiPolygon", "id", "object_type", "restriction_type",
             "flow_tph", "diameter", "upstream_object_id", "oks_id", "heat_load", SOURCE, HEAT_NETWORK, HEAT_CHAMBER,
@@ -1535,12 +1365,6 @@ public class GeoJsonStreamReader {
     private static final byte[][] KNOWN_BYTES = KNOWN.stream()
             .map(known -> known.getBytes(StandardCharsets.US_ASCII)).toArray(byte[][]::new);
 
-    /**
-     * Фича в частом виде без Jackson: ключи и строки ASCII без экранирования, числа по грамматике JSON, в properties
-     * и других ключах фичи — скаляры, geometry — объект с type до coordinates из чисел, разбор которого по дереву
-     * удался бы. Принимает только корректный JSON и строит те же узлы и геометрию, что readTree и parse с
-     * настройками MAPPER; на остальном бросает NOT_FAST. Исключение — отложенная геометрия первого прохода, см. feature.
-     */
     private static final class Fast {
         final byte[] bytes;
         final int end;
@@ -1552,7 +1376,6 @@ public class GeoJsonStreamReader {
             this.end = end;
         }
 
-        /** Узел фичи без geometry. В первом проходе геометрия откладывается байтами, см. Scan.geometry. */
         ObjectNode feature(Scan part) {
             ObjectNode node = MAPPER.createObjectNode();
             boolean geometry = false;
@@ -1578,8 +1401,6 @@ public class GeoJsonStreamReader {
                     }
                 }
                 if (part.skipObstacles && at < end && (bytes[at] == '{' || bytes[at] == '[')) {
-                    // первому проходу хватает конца геометрии по скобкам: синтаксис той, что он не разберёт,
-                    // проверит второй проход, он читает каждую фичу целиком
                     at = objectEnd(bytes, at, end);
                     if (at < 0) {
                         throw NOT_FAST;
@@ -1673,7 +1494,6 @@ public class GeoJsonStreamReader {
             return GEOMETRY.createPolygon(rings.get(0), rings.subList(1, rings.size()).toArray(new LinearRing[0]));
         }
 
-        /** Позиции в упакованную XY-последовательность, как фабрика GEOMETRY строит её из Coordinate[]. */
         CoordinateSequence positions(int min) {
             double[] xy = new double[16];
             int size = 0;
@@ -1691,7 +1511,6 @@ public class GeoJsonStreamReader {
             return PACKED.create(Arrays.copyOf(xy, 2 * size), 2);
         }
 
-        /** [долгота, широта, числа...] в допустимом диапазоне — в xy[i], xy[i + 1]. */
         void position(double[] xy, int i) {
             expect('[');
             double lon = coordinate();
@@ -1708,7 +1527,6 @@ public class GeoJsonStreamReader {
             xy[i + 1] = lat;
         }
 
-        /** Число как doubleValue узла дерева. */
         double coordinate() {
             space();
             int from = at;
@@ -1722,7 +1540,6 @@ public class GeoJsonStreamReader {
             return value;
         }
 
-        /** Скаляр или объект из скаляров, как узел readTree. */
         JsonNode value() {
             space();
             if (at >= end) {
@@ -1772,7 +1589,6 @@ public class GeoJsonStreamReader {
             }
         }
 
-        /** Любое значение JSON с проверкой синтаксиса. */
         void skip() {
             space();
             if (at >= end) {
@@ -1815,7 +1631,6 @@ public class GeoJsonStreamReader {
             }
         }
 
-        /** Число по грамматике JSON с at; true — целое, без дроби и степени. */
         boolean number() {
             if (at < end && bytes[at] == '-') {
                 at++;
@@ -1856,7 +1671,6 @@ public class GeoJsonStreamReader {
             return at - from;
         }
 
-        /** Целое с from до at, до 18 цифр — точно в long; длиннее — пусть читает Jackson. */
         long integer(int from) {
             boolean negative = bytes[from] == '-';
             int i = negative ? from + 1 : from;
@@ -1897,7 +1711,6 @@ public class GeoJsonStreamReader {
             return new String(bytes, from, to - from, StandardCharsets.ISO_8859_1);
         }
 
-        /** Строка ASCII без экранирования и управляющих символов; остальное читает Jackson. */
         void stringEnd() {
             if (at >= end || bytes[at] != '"') {
                 throw NOT_FAST;
@@ -1908,7 +1721,6 @@ public class GeoJsonStreamReader {
                     at++;
                     return;
                 }
-                // отрицательные байты — не ASCII
                 if (c < 0x20 || c == '\\') {
                     throw NOT_FAST;
                 }
@@ -1935,7 +1747,6 @@ public class GeoJsonStreamReader {
             at = GeoJsonStreamReader.space(bytes, at, end);
         }
 
-        /** Разбор дошёл ровно до конца среза. */
         void end() {
             space();
             if (at != end) {
@@ -1944,11 +1755,6 @@ public class GeoJsonStreamReader {
         }
     }
 
-    /**
-     * Double.parseDouble числа JSON из байтов [from, to) там, где JDK считает одной операцией: до 15 значащих цифр и
-     * степень десяти не больше 22 по модулю — мантисса умножается или делится на точную степень десяти, как в
-     * FloatingDecimal. Иначе NaN, и число читает Jackson.
-     */
     static double decimal(byte[] text, int from, int to) {
         int i = from;
         boolean negative = text[i] == '-';
@@ -1973,7 +1779,6 @@ public class GeoJsonStreamReader {
                 fraction++;
             }
             if (c == '0') {
-                // нули после значащей цифры войдут в мантиссу, только если за ними будет ещё значащая
                 if (digits > 0) {
                     zeros++;
                 }
@@ -1990,7 +1795,6 @@ public class GeoJsonStreamReader {
         }
         int exponent = 0;
         if (i < to) {
-            // e или E, знак и не больше трёх цифр
             i++;
             boolean minus = text[i] == '-';
             if (minus || text[i] == '+') {
@@ -2021,7 +1825,6 @@ public class GeoJsonStreamReader {
         return negative ? -value : value;
     }
 
-    /** Геометрия по дереву значения geometry фичи; null — ключа нет. */
     private static Parsed parseGeometry(JsonNode raw, List<String> allowed) {
         if (raw == null || raw.isNull()) {
             return new Parsed(allowed, null, "нет геометрии");
@@ -2030,7 +1833,6 @@ public class GeoJsonStreamReader {
         return checked(type, () -> parse(type, raw.path("coordinates")), allowed);
     }
 
-    /** Тип, валидность и перевод в UTM геометрии, которую строит geometry; ошибки разбора — IllegalArgumentException. */
     private static Parsed checked(String type, Supplier<Geometry> geometry, List<String> allowed) {
         if (type == null || !allowed.contains(type)) {
             return new Parsed(allowed, null, "ожидается геометрия " + String.join(" или ", allowed) + ", получено " + type);
@@ -2050,10 +1852,6 @@ public class GeoJsonStreamReader {
         }
     }
 
-    /**
-     * Какую геометрию запросит Scan.feature у этой фичи, по тем же полям; null — никакую. Если догадка разойдётся
-     * с feature, геометрия просто построится на месте: Scan.geometry сверяет список допустимых типов.
-     */
     private static List<String> expectedGeometry(JsonNode node, boolean skipObstacles) {
         JsonNode props = node.get("properties");
         if (props == null || !props.isObject()) {
@@ -2089,7 +1887,6 @@ public class GeoJsonStreamReader {
         }
     }
 
-    /** Индекс за последним переводом строки в [from, to) или -1. */
     private static int lastLine(byte[] bytes, int from, int to) {
         for (int i = to - 1; i >= from; i--) {
             if (bytes[i] == '\n') {
@@ -2099,7 +1896,6 @@ public class GeoJsonStreamReader {
         return -1;
     }
 
-    /** Первый байт с from, который не пробельный символ JSON. */
     private static int space(byte[] bytes, int from, int limit) {
         while (from < limit && (bytes[from] == ' ' || bytes[from] == '\n' || bytes[from] == '\r' || bytes[from] == '\t')) {
             from++;
@@ -2107,10 +1903,6 @@ public class GeoJsonStreamReader {
         return from;
     }
 
-    /**
-     * Конец объекта с bytes[from] = '{' по глубине скобок с учётом строк: индекс за закрывающей скобкой или -1, если
-     * до limit объект не закрылся. Виды скобок не сверяются, это делает разбор среза.
-     */
     private static int objectEnd(byte[] bytes, int from, int limit) {
         int depth = 0;
         boolean string = false;

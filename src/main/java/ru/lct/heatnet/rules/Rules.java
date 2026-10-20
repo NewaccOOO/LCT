@@ -90,23 +90,17 @@ public final class Rules {
         Map<String, DepthRules.Crossing> crossings = new HashMap<>();
         node.required("crossings").fields().forEachRemaining(field -> crossings.put(field.getKey(), new DepthRules.Crossing(
                 number(field.getValue(), "top_m"), optionalNumber(field.getValue(), "height_m"),
-                number(field.getValue(), "clear_m"))));
+                number(field.getValue(), "clear_m"), field.getValue().path("soft").asBoolean(false))));
         Map<String, Double> minTop = new HashMap<>();
         node.required("min_top_m").fields().forEachRemaining(field -> minTop.put(field.getKey(), field.getValue().doubleValue()));
         return new DepthRules(number(node, "normal_m"), number(node, "min_m"), number(node, "max_slope"),
                 number(node, "k_per_m"), Map.copyOf(crossings), Map.copyOf(minTop));
     }
 
-    /** Правила режима с учётом глубины; null — в файле правил их нет. */
     public DepthRules depth() {
         return depth;
     }
 
-    /**
-     * Правила расчёта. Файл задаётся свойством {@code heatnet.rules} или переменной {@code HEATNET_RULES}: путь на диске
-     * или {@code classpath:/…} для файла внутри jar. Без них — {@code rules.json} кейса тепловых сетей. Так тот же
-     * сервис считает другой ресурс, например водопровод, без изменения кода.
-     */
     public static Rules load() {
         String source = System.getProperty(RULES_PROPERTY, System.getenv(RULES_ENV));
         if (source == null || source.isBlank()) {
@@ -137,7 +131,6 @@ public final class Rules {
         throw new IllegalArgumentException("Расход " + flowTph + " т/ч больше пропускной способности наибольшего диаметра");
     }
 
-    /** Наименьший диаметр, предельная длина которого не меньше lengthM; null — таких нет. */
     public Diameter diameterForLength(double lengthM) {
         for (Diameter diameter : diameters) {
             if (diameter.getMaxLengthM() >= lengthM) {
@@ -186,7 +179,6 @@ public final class Rules {
         return penaltyFixed + penaltyPerTph * flowTph;
     }
 
-    /** Правило типа ограничения; тип, которого нет в справочнике, получает правило {@code _fallback}. */
     public RestrictionRule restriction(String type) {
         return restrictions.getOrDefault(type, fallback);
     }
@@ -199,10 +191,6 @@ public final class Rules {
         return chamberRule;
     }
 
-    /**
-     * Сколько рублей стоимости весит один метр длины в S: (w_length / length_base) / (w_cost / cost_base). Нужен,
-     * чтобы переводить разовые расходы в метры трассы при сравнении присоединений.
-     */
     public double lengthWorthRub() {
         return (scoreWLength / scoreLengthBaseM) / (scoreWCost / scoreCostBase);
     }

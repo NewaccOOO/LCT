@@ -20,8 +20,6 @@ class DirectTiesTest {
 
     @Test
     void pointAtPipeInsideItsBuildingGetsTieShiftedAlongPipe() {
-        // точка в метре от hn-2 внутри своего здания, по которому идёт труба; врезка у проекции (299,34; 0) ближе
-        // отступа к концу соседней трубы hn-q, левее она касается hn-q, сдвинутая на полметра вправо проходит
         PlanFixture fixture = PlanFixture.trunk()
                 .pipe("hn-q", 250, -0.3, 298.2, -0.3, 50, 0, "hn-1")
                 .oks("1", 300, 1, 10);
@@ -46,8 +44,6 @@ class DirectTiesTest {
 
     @Test
     void pointDoesNotLeaveThroughFarSideWhenNearSideIsOpen() {
-        // точка в метре от верхней стороны здания, сеть снизу: от ближней стороны к трубе поворот круче 90°, а звено
-        // после выхода задевает своё здание; через дальнюю нижнюю сторону прямой участок нарушил бы п. 2.2
         PlanFixture fixture = PlanFixture.trunk().oks("1", 300, 59, 10);
         Geometry building = PlanFixture.rect(290, 20, 310, 60);
         fixture.existing.add(new ExistingOks("b-1", building));
@@ -64,7 +60,6 @@ class DirectTiesTest {
 
     @Test
     void secondPointDoesNotReuseLineOfFirst() {
-        // обе точки над одной точкой трубы: участок второй лёг бы на участок первой из той же камеры (п. 5)
         PlanFixture fixture = PlanFixture.trunk().oks("1", 300, 30, 10).oks("2", 300, 60, 10);
         InputData input = fixture.input();
         Map<String, FutureOks> oksById = Map.of("1", fixture.oks.get(0), "2", fixture.oks.get(1));

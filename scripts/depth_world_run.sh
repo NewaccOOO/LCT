@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Стресс режима глубины: случайные миры seed from..to — jar, сертификат depth_bound (по правилу и --impl), строгая
-# проверка depth_strict и check18 --depth. Строка на мир.
 JAR=$1; FROM=$2; TO=$3; D=${4:-data/depth/stress/world}
 mkdir -p $D
 for s in $(seq $FROM $TO); do

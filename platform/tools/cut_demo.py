@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""Демо-набор для платформы: вырезать вход вокруг новой сети и положить пару «вход + выход» в platform/demo.
-
-    python3 platform/tools/cut_demo.py ВХОД ВЫХОД --name spb-kupchino --title "СПб, Купчино" [--margin 250]
-
-Из входа остаются объекты, чей охват пересекает охват новой сети с запасом margin метров, координаты
-округляются до 1e-6° (~0,1 м). Выход копируется как есть. Список наборов — platform/demo/index.json.
-"""
 import argparse
 import json
 import math
@@ -58,7 +51,6 @@ def main():
         if not cs:
             continue
         if max(p[0] for p in cs) < lon0 or min(p[0] for p in cs) > lon1 or max(p[1] for p in cs) < lat0 or min(p[1] for p in cs) > lat1:
-            # источник и точки подключения нужны всегда: без них сцена теряет смысл
             if (f.get("properties") or {}).get("object_type") not in ("source", "oks_connection_point"):
                 continue
         g = dict(g, coordinates=rnd(g["coordinates"]))

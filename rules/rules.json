@@ -35,7 +35,8 @@
     "crossings": {
       "gas_pipeline": {"top_m": 2.8, "height_m": 0.40, "clear_m": 0.2},
       "power_cable": {"top_m": 2.7, "height_m": 0.20, "clear_m": 0.5},
-      "heat_network": {"top_m": 3.0, "clear_m": 0.5, "_comment": "высота габарита — по Ду из таблицы 1"}
+      "heat_network": {"top_m": 3.0, "clear_m": 0.5, "_comment": "высота габарита — по Ду из таблицы 1"},
+      "sewer": {"top_m": 3.5, "height_m": 0.40, "clear_m": 0.2, "soft": true, "_comment": "дополнительный тип: глубина условная, просвет по СП 124.13330 табл. А.1"}
     },
     "min_top_m": {"road": 1.0, "tram_tracks": 1.2}
   },

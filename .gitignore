@@ -12,29 +12,11 @@ __pycache__/
 .pytest_cache/
 .unlazy/
 .unlazy-hook-state.json
-.claude/*
-!.claude/settings.json
-!.claude/hooks/
-!.claude/CLAUDE.md
+.claude/
 build/
 .gradle/
 # файлы больше 50 МБ (весь Нижний Новгород) пересобираются scripts/city_geojson.py build nnovgorod
 data/cities/nnovgorod/input*.geojson
-# прогоны и разборы: в репозитории скрипты, сводки и отчёты, выходы и jar — нет
-data/cities/runs/**/*.geojson
-data/cities/runs/**/*.json
-data/cities/runs/**/*.log
-data/cities/runs/**/*.err
-data/cities/runs/**/*.txt
-!data/cities/runs/*/summary.txt
-data/cities/runs/jars/
-data/cities/runs/.locks/
-data/cities/problems/**/*.geojson
-data/cities/problems/**/*.log
-data/cities/problems/**/*.err
-data/cities/problems/**/*.json
-data/cities/problems/**/*.txt
-data/cities/problems/**/runs/
 data/cities/raw/**/*.csv.gz
 bin/
 scripts/ui3d/data/

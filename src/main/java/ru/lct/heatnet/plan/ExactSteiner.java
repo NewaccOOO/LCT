@@ -35,14 +35,9 @@ final class ExactSteiner {
     final java.util.concurrent.atomic.AtomicLong extendNanos = new java.util.concurrent.atomic.AtomicLong();
     final java.util.concurrent.atomic.AtomicLong liveCount = new java.util.concurrent.atomic.AtomicLong();
     private final float[] rest;
-    // ponytail: нижняя оценка остатка дерева (MST/2 по метрическому замыканию на непокрытых точках и врезке);
-    // отсекает только состояния, которые дороже bound при любом достраивании: если оптимум не дороже bound, он и его
-    // argmin те же. Иначе прежний счёт отдаёт дерево у врезки из неотсечённых m2 — его повторяют без отсечения (prune)
     private static final boolean LOWER_BOUND = Boolean.parseBoolean(System.getProperty("heatnet.exact.lb", "true"));
     private final float[] remaining;
     private final double trial;
-    // ponytail: оценка по месту v: путь v→врезка несёт расход d (не меньше r_d·cd(v, root)), а каждая непокрытая
-    // точка t доходит до этого пути (не меньше (cd(t,v) + cd(t,root) − cd(v,root)) / 2); detour[t][v] — эта разность
     private static final boolean PLACE_BOUND = Boolean.parseBoolean(System.getProperty("heatnet.exact.placeLb", "true"));
     private float[][] detour;
     private int[][] byDetour;
@@ -58,8 +53,6 @@ final class ExactSteiner {
             DoubleUnaryOperator chamber, int root, double bound, double trial, boolean prune) {
         this.k = leaf.length;
         this.n = weight.length;
-        // места по удалённости от врезки: живые места подмножества идут почти одним отрезком, и слияния идут только
-        // по пересечению отрезков частей; при восстановлении места перебираются в исходном порядке
         perm = order(weight, root);
         inv = new int[n];
         for (int p = 0; p < n; p++) {
@@ -93,9 +86,6 @@ final class ExactSteiner {
             rest[d] = (float) (leaves - inside);
         }
         remaining = new float[full];
-        // прежнее правило r·w(v, root) > bound (веса маршрутов не метрика, но так считал и прежний счёт) остаётся с
-        // прежней границей, а пробная граница trial сравнивается только с оценками по метрическому замыканию: тогда
-        // оставшиеся состояния — часть прежних, и прежний ответ, если он не дороже trial, среди них
         this.trial = prune ? trial : Double.POSITIVE_INFINITY;
         if (prune && LOWER_BOUND && root >= 0 && Double.isFinite(trial)) {
             lowerBounds(leaf, flows, rate, root);
@@ -226,8 +216,6 @@ final class ExactSteiner {
         }
     }
 
-    // Math.min вместо тернарника: на Java 11 arm64 он векторизуется (в разы быстрее), а при неотрицательных
-    // значениях без NaN и -0.0 даёт тот же бит.
     private float[][] merge(int d) {
         float[] two = new float[n];
         float[] three = new float[n];
@@ -241,7 +229,6 @@ final class ExactSteiner {
                 int b = d ^ a;
                 float[] ea = e[a];
                 float[] eb = e[b];
-                // вне пересечения отрезков одна из частей ровно INF: сумма не меньше INF и минимум не меняет
                 if (Integer.bitCount(b) >= 2) {
                     pairs(ea, eb, m2[b], two, three, Math.max(eLo[a], Math.min(eLo[b], mLo[b])),
                             Math.min(eHi[a], Math.max(eHi[b], mHi[b])) + 1);
@@ -348,8 +335,6 @@ final class ExactSteiner {
         }
     }
 
-    // внутренние циклы слияния — отдельные маленькие методы: JIT векторизует каждый сам по себе, а в общем теле
-    // merge векторизация зависела от того, какая ветка попалась при компиляции (слияния 30 или 55 с CPU)
     private static void pairs(float[] ea, float[] eb, float[] mb, float[] two, float[] three, int from, int to) {
         for (int v = from; v < to; v++) {
             float x = ea[v];
@@ -397,7 +382,6 @@ final class ExactSteiner {
         return Arrays.stream(order).mapToInt(Integer::intValue).toArray();
     }
 
-    /** Первое и последнее место, где values не ровно INF. */
     private void span(float[] values, int d, int[] lo, int[] hi) {
         int first = 0;
         while (first < n && values[first] >= INF) {
@@ -458,9 +442,6 @@ final class ExactSteiner {
         }
         float[] out = new float[n];
         Arrays.fill(out, INF);
-        // Строки идут по возрастанию t, а t + r·w ≥ t. Место v уже не изменится, если out[v] ≤ t, и обречено на
-        // финальное отсечение по корню, если t + r·w(v, root) > bound (итог ≥ t). Оба свойства с ростом t
-        // сохраняются, поэтому места вне [done, last] больше не трогаются; когда таковы все, остальные строки ничего не дают.
         float[] toRoot = root >= 0 ? transposed[root] : null;
         int done = 0;
         int last = n - 1;
@@ -475,7 +456,6 @@ final class ExactSteiner {
             if (done > last) {
                 break;
             }
-            // Восемь строк за проход по out: минимум тех же сумм, а out читается и пишется в 8 раз реже.
             if (q + 7 < count) {
                 float[] r0 = transposed[live[q]];
                 float[] r1 = transposed[live[q + 1]];

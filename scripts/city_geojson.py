@@ -1,9 +1,3 @@
-"""Входной GeoJSON сервиса по реальной карте города: OSM (Overpass) + достраивание по нормативам.
-
-Запуск из корня:
-    uv run --project tools python scripts/city_geojson.py build moscow [--bbox S,W,N,E]
-    uv run --project tools python scripts/city_geojson.py check moscow
-"""
 import argparse
 import hashlib
 import json
@@ -38,19 +32,11 @@ ENDPOINTS = (
 )
 MARGIN_M = 300.0
 
-# установленная тепловая мощность: ТЭЦ-16 — 1422,2 Гкал/ч (ПАО «Мосэнерго», mosenergo.gazprom.ru),
-# Южная ТЭЦ-22 — 2353,0 Гкал/ч (ПАО «ТГК-1», tgc1.ru). Шаг камер на магистралях: ТЭЦ-16 — 1674 камеры на 357,9 км
-# трассы, ≈ 210 м (Схема теплоснабжения Москвы до 2035, актуализация 2026, книга 1.3); ТЭЦ-22 — 221 камера на
-# 66,5 км магистралей, ≈ 300 м (схема теплоснабжения Санкт-Петербурга, data/cities/sources.md)
 CITIES = {
     "moscow": dict(bbox=(55.760, 37.430, 55.820, 37.600), plant_name="ТЭЦ-16", plant_hint=(55.782, 37.503),
                    plant_gcal_h=1422.2, min_future=501, chamber_step_m=210.0, bridge_m=1.0),
     "spb": dict(bbox=(59.815, 30.380, 59.862, 30.470), plant_name="ТЭЦ-22", plant_hint=(59.825, 30.455),
                 plant_gcal_h=2353.0, min_future=50, chamber_step_m=300.0, bridge_m=12.0),
-    # Нижний Новгород целиком: 8 районов (admin_level 9 в relation 335495) без Кстовского района, который OSM с 2025 г.
-    # включает в городской округ, а схема теплоснабжения города не покрывает. Сеть — граф схемы (scripts/heat_embed_nn.py),
-    # источники — все из Гл. 4 схемы с координатами (вариант а), --one-source — одна Сормовская ТЭЦ (вариант б).
-    # Камера на 221 м трассы — вся сеть АО «Теплоэнерго» (5 475 ТК на 1 212 км, data/cities/sources_nnovgorod.md).
     "nnovgorod": dict(bbox=(56.132, 43.5475, 56.422, 44.1548), epsg=32638, districts="nnovgorod/osm/adm_nnovgorod.json",
                       plant_name="Сормовская ТЭЦ", plant_hint=(56.3529, 43.8911), plant_gcal_h=696.0, min_future=501,
                       chamber_step_m=221.0, bridge_m=1.0, png_m_per_px=8.0),
@@ -62,8 +48,6 @@ def cache_path(query):
 
 
 def overpass(query, attempts=60):
-    """Ответ Overpass из кэша data/cities/cache/<sha256>.json; без кэша — сервер и зеркала по кругу с паузой.
-    None — если за attempts попыток никто не ответил."""
     path = cache_path(query)
     if path.exists():
         return json.loads(path.read_text(encoding="utf-8"))
@@ -89,8 +73,6 @@ def overpass(query, attempts=60):
 
 
 def fetch_tile(template, tile, depth=0):
-    """Элементы плитки; если зеркала не отвечают, плитка делится на четыре. Деление записывается в кэш меткой,
-    и повторный запуск идёт по тем же плиткам из кэша."""
     s, w, n, e = tile
     query = "[out:json][timeout:180];" + template.format(b="{:.6f},{:.6f},{:.6f},{:.6f}".format(*tile))
     marker = cache_path(query).with_suffix(".split")
@@ -115,7 +97,6 @@ def padded(bbox, margin_m=MARGIN_M):
 
 
 def queries(bbox):
-    """Запросы Overpass по группам слоёв, {b} — bbox плитки. Источники тепла ищутся одним запросом с запасом 3 км."""
     return {
         "buildings": """(way["building"]({b});relation["building"]["type"="multipolygon"]({b});
 way["demolished:building"]({b});way["razed:building"]({b});way["was:building"]({b}););out geom;""",
@@ -141,12 +122,9 @@ TILES = 3
 
 PBF = {"moscow": "moscow-latest.osm.pbf", "spb": "saint_petersburg-latest.osm.pbf",
        "nnovgorod": "nnovgorod/nizhny_novgorod_oblast-latest.osm.pbf"}
-# выгрузки OSM: https://download.openstreetmap.fr/extracts/russia/ (central_federal_district/moscow-latest.osm.pbf,
-# northwestern_federal_district/saint_petersburg-latest.osm.pbf), кладутся в data/cities/cache/
 
 
 def group_of(kind, tags):
-    """Группы слоёв как в запросах Overpass (queries): по типу объекта OSM и тегам."""
     groups = []
     mp = kind == "relation" and tags.get("type") == "multipolygon"
     if (kind == "way" or mp) and "building" in tags or kind == "way" and any(
@@ -172,9 +150,6 @@ def group_of(kind, tags):
 
 
 def from_pbf(city, bbox):
-    """Слои из выгрузки OSM (openstreetmap.fr, ODbL) в data/cities/cache/<город>.osm.pbf в том же виде, что ответы
-    Overpass `out geom`; итог кэшируется в data/cities/cache/osm-<город>-<sha256 bbox>.json. Нужен pyosmium:
-    uv run --project tools --with osmium python scripts/city_geojson.py fetch <город> (сборке он уже не нужен)."""
     import osmium
     pbf = CACHE / PBF[city]
     s, w, n, e = padded(bbox)
@@ -248,15 +223,12 @@ def from_pbf(city, bbox):
 
 
 def districts_wgs(city):
-    """Районы города из cfg["districts"] (ответ Overpass или heat_pbf.py): [(название, полигон EPSG:4326)]."""
     sys.path.insert(0, str(ROOT / "scripts"))
     from heat_osm import districts
     return districts(CACHE / CITIES[city]["districts"])
 
 
 def city_filter(city):
-    """Для города с районами — проверка «точка в районах города с запасом ~500 м» (lon, lat) → bool, иначе None:
-    так в кэш не идут соседние города внутри bbox (Бор, Кстово)."""
     if "districts" not in CITIES[city]:
         return None
     zone = unary_union([g for _, g in districts_wgs(city)]).buffer(0.006)
@@ -273,8 +245,6 @@ def pbf_meta(city):
 
 
 def fetch(city, bbox):
-    """Слои OSM района: из выгрузки .osm.pbf, если она лежит в кэше (основной путь, воспроизводимо и без лимитов),
-    иначе из Overpass плитками TILES×TILES (большой запрос под нагрузкой отвечает 504), без повторов."""
     key = hashlib.sha256(json.dumps([city, list(bbox)]).encode()).hexdigest()[:16]
     cached = CACHE / f"osm-{city}-{key}.json"
     if cached.exists():
@@ -308,11 +278,8 @@ nwr["plant:output:hot_water"]({wide});nwr["plant:output:heat"]({wide}););out tag
     return data
 
 
-# ---------------------------------------------------------------- OSM → геометрия в EPSG:32637
-
 TO_UTM = Transformer.from_crs("EPSG:4326", "EPSG:32637", always_xy=True)
 TO_WGS = Transformer.from_crs("EPSG:32637", "EPSG:4326", always_xy=True)
-# замкнутая линия с этими ключами — площадь (вики OSM, «Area»)
 AREA_KEYS = ("building", "landuse", "leisure", "amenity", "military", "area:highway", "boundary", "healthcare",
              "place", "demolished:building", "razed:building", "was:building", "building:part", "water", "power",
              "man_made", "natural")
@@ -329,7 +296,6 @@ def wgs(geom):
 
 
 def polygonal(geom):
-    """Только площадные части геометрии, после make_valid."""
     if geom is None or geom.is_empty:
         return None
     if not geom.is_valid:
@@ -368,7 +334,6 @@ def is_area(tags):
 
 
 def element_geometry(el):
-    """Геометрия элемента Overpass `out geom` в EPSG:32637: точка, линия, полигон или мультиполигон с дырами."""
     kind = el["type"]
     if kind == "node":
         return utm(Point(el["lon"], el["lat"]))
@@ -395,7 +360,6 @@ def element_geometry(el):
 
 
 class Obj:
-    """Объект OSM: id вида w123/r45/n6, теги, геометрия в UTM."""
     __slots__ = ("id", "tags", "geom")
 
     def __init__(self, oid, tags, geom):
@@ -417,7 +381,6 @@ def objects(answer):
 
 
 def region_polygon(bbox, city=None):
-    """Район сборки в UTM: bbox, а у города с районами (cfg["districts"]) — объединение районов."""
     if city and "districts" in CITIES[city]:
         return polygonal(utm(unary_union([g for _, g in districts_wgs(city)])))
     s, w, n, e = bbox
@@ -425,7 +388,6 @@ def region_polygon(bbox, city=None):
 
 
 def use_zone(city):
-    """Зона UTM города: 37N (Москва, СПб) или из cfg["epsg"] (Н. Новгород, 44° в. д. — зона 38N)."""
     global TO_UTM, TO_WGS
     epsg = CITIES[city].get("epsg", 32637)
     TO_UTM = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
@@ -433,7 +395,6 @@ def use_zone(city):
 
 
 def number(value):
-    """Первое число тега OSM: «5», «5;9», «12 m», «3,5» → float или None."""
     if value is None:
         return None
     text = str(value).replace(",", ".")
@@ -450,14 +411,11 @@ def number(value):
 
 
 def lifecycle(tags):
-    """Объект ещё не построен или уже снесён: такие дороги, пути и трубы в ограничения не идут."""
     return any(tags.get(k) for k in ("construction", "proposed", "disused", "abandoned", "razed", "demolished")
                if k in ("disused", "abandoned")) or any(
         v in ("construction", "proposed", "disused", "abandoned", "razed", "demolished", "planned")
         for k, v in tags.items() if k in ("highway", "railway", "building", "power", "man_made", "waterway"))
 
-
-# ---------------------------------------------------------------- здания и тепловая нагрузка
 
 RESIDENTIAL = {"apartments", "residential", "house", "detached", "semidetached_house", "terrace", "dormitory",
                "bungalow", "hotel"}
@@ -466,48 +424,32 @@ PUBLIC = {"school", "kindergarten", "hospital", "clinic", "university", "college
           "chapel", "mosque", "temple", "train_station", "transportation", "fire_station", "police", "museum",
           "theatre", "library", "community_centre", "healthcare", "mall", "bank", "post_office", "gym"}
 INDUSTRIAL = {"industrial", "warehouse", "manufacture", "factory", "hangar", "depot"}
-# без отопления: гаражи, навесы, сараи, киоски, трансформаторные и насосные (building=service), резервуары,
-# теплицы, парковки
 UNHEATED = {"garage", "garages", "shed", "roof", "hut", "carport", "kiosk", "transformer_tower", "storage_tank",
             "greenhouse", "bunker", "toilets", "parking", "container", "tent", "ruins", "barn", "cowshed", "stable",
             "sty", "farm_auxiliary", "silo", "tower", "water_tower", "bridge", "guardhouse", "gatehouse", "no",
             "boathouse", "digester", "grandstand", "pavilion", "shelter", "allotment_house", "cabin",
             "service"}
-# СП 131.13330.2020, табл. 3.1: температура наиболее холодной пятидневки обеспеченностью 0,92
 T_DESIGN = {"moscow": -25.0, "spb": -24.0, "nnovgorod": -30.0}
-# СНиП 2.04.07-86*, прил. 2: укрупнённый показатель максимального теплового потока на отопление жилых зданий,
-# Вт на 1 м² общей площади, при расчётной температуре −20 и −25 °C; ключ — (постройка, этажность)
 Q_O = {
     ("до 1985", "1-2"): (205, 213), ("до 1985", "3-4"): (117, 126), ("до 1985", "5+"): (79, 86),
     ("после 1985", "1-2"): (166, 173), ("после 1985", "3-4"): (91, 97), ("после 1985", "5+"): (73, 81),
 }
-# СНиП 2.04.07-86*, прил. 3: средний тепловой поток на ГВС на одного жителя при норме 105 л/сут (55 °C), Вт
 Q_H_PERSON = 305.0
-# СНиП 2.04.07-86*, п. 2.4: доля вентиляции общественных зданий k2 = 0,4 (до 1985) и 0,6 (после 1985)
 K2 = {"до 1985": 0.4, "после 1985": 0.6}
-# общая площадь квартир и помещений на этаж — 0,8 площади застройки (типовые секции: 75–85 %, принято 0,8)
 AREA_SHARE = 0.8
-# жилищная обеспеченность: 18 м²/чел для существующего фонда (СНиП 2.07.01-89*, п. 2.6), 30 м²/чел для новых домов
-# (СП 42.13330.2016, табл. 2, экономический класс)
 AREA_PER_PERSON = {"до 1985": 18.0, "после 1985": 18.0, "new": 30.0}
-# расчётный расход сетевой воды закрытой системы (СП 124.13330.2012, разд. 8; СНиП 2.04.07-86*, п. 5.2):
-# G = G_o + G_v + k3·G_hm, график 150/70 °C, ГВС по параллельной схеме от точки излома 70/30 °C; k3 = 1,0 — система
-# от ТЭЦ с тепловым потоком больше 100 МВт
 C_WATER = 4.187
 DT_HEAT = 150.0 - 70.0
 DT_HOT_WATER = 70.0 - 30.0
 K3 = 1.0
 W_PER_GCAL_H = 1.163e6
-# внутренняя температура по назначению к расчётной жилой 20 °C (ГОСТ 30494): производство 16 °C, склад 12 °C
 INDOOR = {"industrial": 16.0, "warehouse": 12.0}
 
 
-# building=yes площадью до 80 м² — киоски, сараи, трансформаторные, будки: без отопления
 SMALL_M2 = 80.0
 
 
 def building_class(tags, landuse, area=1e9):
-    """Назначение здания: residential / public / industrial / unheated по building=* и землепользованию квартала."""
     kind = tags.get("building", "yes")
     if tags.get("power") or tags.get("man_made") in ("storage_tank", "water_tower", "chimney", "silo"):
         return "unheated"
@@ -521,7 +463,6 @@ def building_class(tags, landuse, area=1e9):
         return "unheated"
     if area < SMALL_M2:
         return "unheated"
-    # building=yes и прочее: по землепользованию квартала, где стоит центр здания
     if landuse in ("residential",):
         return "residential"
     if landuse in ("industrial", "railway", "garages"):
@@ -534,8 +475,6 @@ def storeys_row(levels):
 
 
 def heat_demand(kind, floor_m2, levels, era, t_design, new=False):
-    """Расчётные нагрузки (Вт) отопления, вентиляции и средняя ГВС одного здания по СНиП 2.04.07-86*, прил. 2–3.
-    floor_m2 — площадь всех этажей по наружному обмеру (площадь застройки × этажность, у сложных зданий — по частям)."""
     if kind == "unheated":
         return 0.0, 0.0, 0.0
     low, high = Q_O[(era, storeys_row(levels))]
@@ -546,15 +485,12 @@ def heat_demand(kind, floor_m2, levels, era, t_design, new=False):
         q_heat *= (INDOOR["industrial"] - t_design) / (20.0 - t_design)
         return q_heat, K2[era] * q_heat, 0.0
     if kind == "public":
-        # вентиляция по k2, ГВС общественного здания — 10 % отопления (допущение: норм на здание неизвестного
-        # назначения нет; порядок как у школ и офисов)
         return q_heat, K2[era] * q_heat, 0.1 * q_heat
     people = area / AREA_PER_PERSON["new" if new else era]
     return q_heat, 0.0, Q_H_PERSON * people
 
 
 def flow_of(demand):
-    """Расход сетевой воды, т/ч, и нагрузка, Гкал/ч, по нагрузкам (Вт) отопления, вентиляции и ГВС."""
     q_o, q_v, q_hm = demand
     g = 3.6 * (q_o + q_v) / (C_WATER * DT_HEAT) + K3 * 3.6 * q_hm / (C_WATER * DT_HOT_WATER)
     return g / 1000.0, (q_o + q_v + q_hm) / W_PER_GCAL_H
@@ -569,21 +505,17 @@ def year_of(tags):
 
 
 def era_of(tags, levels):
-    """Постройка до или после 1985 г.: по start_date, без тега — дома от 17 этажей считаются новыми."""
     year = year_of(tags)
     if year is not None:
         return "после 1985" if year >= 1985 else "до 1985"
     return "после 1985" if levels >= 17 else "до 1985"
 
 
-# ---------------------------------------------------------------- растр стоимости прокладки и дерево сети
-
 INF = float("inf")
 SQRT2 = math.sqrt(2.0)
 
 
 class Grid:
-    """Растр стоимости прокладки 1 м трубы. Ячейки по краю — непроходимые, поэтому соседи без проверки границ."""
 
     def __init__(self, bounds, cell, default):
         x0, y0, x1, y1 = bounds
@@ -608,7 +540,6 @@ class Grid:
         return (slice(j0, j1 + 1), slice(i0, i1 + 1)), gx, gy
 
     def paint(self, geom, value):
-        """Ячейки, центр которых внутри площадной геометрии, получают стоимость value."""
         if geom is None or geom.is_empty:
             return
         win = self.window(geom)
@@ -628,12 +559,8 @@ class Grid:
 
 
 def dijkstra(grid, starts):
-    """Кратчайшие пути по 8 соседям от ячеек starts. Стоимость шага — средняя стоимость двух ячеек на длину шага;
-    диагональ не срезает угол непроходимой ячейки. Равные расстояния разрешаются номером ячейки: результат
-    детерминирован."""
     import heapq
     from array import array
-    # pred — массив array, а не список: на растре района в миллионы ячеек это сотни мегабайт памяти
     cost = grid.cost.ravel().tolist()
     n, nx, half = len(cost), grid.nx, grid.cell / 2.0
     dist = [INF] * n
@@ -673,8 +600,6 @@ def dijkstra(grid, starts):
 
 
 def cell_tree(pred, source, targets):
-    """Дерево кратчайших путей от источника (или от стартовых ячеек, у которых pred = −1) до целей: родитель каждой
-    ячейки на путях и узлы ветвления."""
     parent, children = {}, defaultdict(list)
     for t in targets:
         c = t
@@ -687,7 +612,6 @@ def cell_tree(pred, source, targets):
 
 
 def cell_edges(parent, children, source, nodes):
-    """Рёбра дерева между узлами: (верхний узел, нижний узел, ячейки сверху вниз)."""
     nodes = set(nodes) | {source} | {c for c, ch in children.items() if len(ch) >= 2}
     edges = []
     for n in sorted(nodes):
@@ -703,8 +627,6 @@ def cell_edges(parent, children, source, nodes):
     return nodes, edges
 
 
-# ---------------------------------------------------------------- запись GeoJSON
-
 TYPE_ORDER = ("source", "heat_network", "heat_chamber", "oks_future", "oks_connection_point", "oks_existing",
               "restriction")
 DATASET_ORDER = ("source", "heat_network", "heat_chamber", "oks_connection_point", "restriction")
@@ -715,7 +637,6 @@ def rounded(geom):
 
 
 def final_geometry(geom):
-    """Геометрия в EPSG:4326 с 9 знаками, валидная (OGC) уже после округления; None — если не спасти."""
     area = geom.geom_type in ("Polygon", "MultiPolygon")
     line = geom.geom_type in ("LineString", "MultiLineString")
     g = rounded(geom)
@@ -731,8 +652,6 @@ def final_geometry(geom):
 
 
 def write_features(path, items, order=TYPE_ORDER):
-    """items: (геометрия UTM, свойства). Одна фича на строку (scripts/city_cut.py читает построчно), порядок —
-    по типу объекта, типу ограничения и id; повторный запуск даёт тот же файл байт в байт."""
     rows, dropped = [], 0
     for geom, props in items:
         g = final_geometry(geom)
@@ -753,11 +672,6 @@ def write_features(path, items, order=TYPE_ORDER):
     return len(rows), dropped
 
 
-# ---------------------------------------------------------------- ограничения из OSM
-
-# ширина проезжей части без тегов width/lanes: число полос по категории улицы × ширина полосы
-# (СП 42.13330.2016, разд. 11, табл. 11.2: магистрали 3,5–3,75 м × 4–8 полос, улицы районного значения
-# 3,5 м × 2–4, местные 3,0 м × 2; основные внутриквартальные проезды 2 × 2,75 м, второстепенные 1 × 3,5 м)
 ROAD_CLASS = {
     "motorway": (6, 3.75), "trunk": (6, 3.5), "primary": (4, 3.5), "secondary": (4, 3.5), "tertiary": (2, 3.5),
     "unclassified": (2, 3.0), "residential": (2, 3.0), "living_street": (2, 3.0), "road": (2, 3.0),
@@ -768,18 +682,13 @@ MINOR_SERVICE = {"driveway", "alley", "emergency_access"}
 SKIP_SERVICE = {"parking_aisle", "drive-through"}
 MAJOR = {"motorway", "trunk", "primary", "secondary", "motorway_link", "trunk_link", "primary_link", "secondary_link"}
 LANE_M = 3.5
-# трамвай: ширина одного пути по концам шпал 2,6–2,75 м, принято 3,0 м; второй путь через 3,2 м (межпутье)
 TRAM_TRACK_M, TRAM_SPACING_M = 3.0, 3.2
-# ж/д и открытые участки метро: основная площадка земляного полотна однопутной линии 5,5–7,6 м
-# (СП 119.13330.2017, табл. 5.2), принято 6 м на путь
 RAIL_TRACK_M = 6.0
-# ширина русла без тега width: река 20 м, канал 8 м, ручей 3 м, канава и дренаж 2 м (типичные значения OSM)
 WATERWAY_M = {"river": 20.0, "canal": 8.0, "stream": 3.0, "drain": 2.0, "ditch": 2.0, "tidal_channel": 5.0}
 MIN_PART_M2 = 1.0
 
 
 def road_width(tags):
-    """Ширина проезжей части, м, и откуда она: тег width, тег lanes × 3,5 м или класс улицы."""
     width = number(tags.get("width"))
     if width and 2.0 <= width <= 60.0:
         return width, "width"
@@ -817,8 +726,6 @@ def is_carriageway(tags):
 
 
 def roads(highways, region):
-    """Проезжая часть: полигоны area:highway (real), остальное — ось с шириной по тегам или классу.
-    Мосты и тоннели пропускаются: трасса проходит под мостом и над тоннелем, это не пересечение проезжей части."""
     areas = [o for o in highways if o.tags.get("area:highway") in ROAD_CLASS and o.geom.geom_type.endswith("Polygon")]
     area_union = unary_union([o.geom for o in areas]) if areas else None
     items, axes = [], []
@@ -849,8 +756,6 @@ def roads(highways, region):
 
 
 def tracks(rail, region):
-    """Трамвай (tram_tracks), ж/д (railway), метро на поверхности (metro) — полигоны вокруг осей OSM.
-    Тоннели не ограничение: трасса над тоннелем не пересекает путь. Мосты тоже пропускаются."""
     items = []
     for o in rail:
         t = o.tags
@@ -874,7 +779,6 @@ def tracks(rail, region):
 
 
 def area_layers(areas, region):
-    """Вода, парки, территории соцобъектов, запретные территории — полигоны OSM, обрезанные по району."""
     water_polys, water_lines, items = [], [], []
     for o in areas:
         t = o.tags
@@ -911,10 +815,8 @@ def area_layers(areas, region):
     return items
 
 
-# парки: leisure=park, лес; сады и перелески во дворах — от 2000 м² (меньше — озеленение двора, а не парк)
 PARK_MIN_M2 = 2000.0
 SOCIAL = {"school", "kindergarten", "hospital", "clinic", "childcare"}
-# запретные: военные объекты, кладбища, электростанции и подстанции, места заключения
 PROHIBITED_LANDUSE = {"military", "cemetery"}
 
 
@@ -945,8 +847,6 @@ def substance(tags):
 
 
 def utility_lines(utilities, region):
-    """Коммуникации из OSM как есть (real): газ, кабели, водопровод, канализация. Трубы теплосети и люки —
-    отдельно, из них собирается существующая сеть."""
     items, heat_pipes, manholes = [], [], []
     for o in utilities:
         t = o.tags
@@ -977,8 +877,6 @@ def utility_lines(utilities, region):
     return items, heat_pipes, manholes
 
 
-# ---------------------------------------------------------------- существующие здания
-
 DEFAULT_LEVELS = {"residential": 9, "public": 3, "industrial": 2, "unheated": 1}
 STOREY_M = 3.0
 NEIGHBOUR_M = 200.0
@@ -999,7 +897,6 @@ def tagged_levels(tags):
 
 
 def quarters(axes, region):
-    """Кварталы: полигоны, на которые район режут оси улиц (без внутриквартальных проездов)."""
     lines = [a["axis"] for a in axes if a["kind"] != "service"] + [region.exterior]
     return [p for p in polygonize(unary_union(lines)) if p.area > 100.0]
 
@@ -1011,8 +908,6 @@ def part_levels(tags):
 
 
 def floor_area(b, parts, part_tree):
-    """Площадь этажей: у здания с частями building:part (башни на стилобате) — сумма по частям с их этажностью,
-    непокрытая частями площадь — по наименьшей этажности частей; без частей — площадь застройки × этажность."""
     inside = [parts[i] for i in part_tree.query(b.geom, predicate="intersects")
               if b.geom.buffer(1.0).contains(parts[i][0].representative_point())]
     tagged = [(g, lv) for g, lv in inside if lv]
@@ -1024,8 +919,6 @@ def floor_area(b, parts, part_tree):
 
 
 def existing_buildings(objs, part_objs, areas, axes, region, t_design):
-    """oks_existing: все здания OSM, задевающие район, кроме строящихся (они — перспективные ОКС).
-    Этажность без тега — медиана зданий того же назначения в квартале, иначе в радиусе 200 м, иначе по назначению."""
     landuse = [o for o in areas if o.tags.get("landuse") and o.geom.geom_type.endswith("Polygon")]
     land_tree = STRtree([o.geom for o in landuse])
     result = []
@@ -1073,11 +966,6 @@ def existing_buildings(objs, part_objs, areas, axes, region, t_design):
     return result
 
 
-# ---------------------------------------------------------------- перспективные ОКС
-
-# разрывы при размещении новых домов на участке: до существующих зданий 12 м и между новыми 20 м (противопожарные
-# 6–15 м по СП 4.13130.2013, табл. 1; инсоляция по СанПиН 1.2.3685-21 на практике даёт 20–30 м между длинными
-# сторонами), до проезжей части 5 м (красная линия), до воды 10 м, до парков, соцобъектов и запретных 3 м
 GAP_EXISTING_M, GAP_NEW_M, GAP_ROAD_M, GAP_WATER_M, GAP_OTHER_M = 12.0, 20.0, 5.0, 10.0, 3.0
 GAP_LINE_M = 5.0
 CP_INSET_M = 1.0
@@ -1087,8 +975,6 @@ DEMOLISHED_PAD_M = 8.0
 
 
 def modern_form(buildings):
-    """Типичный новый дом района по реальным данным: медианы этажности и сторон описанного прямоугольника жилых домов
-    с годом постройки от 2005 (или от 12 этажей без года). Без таких домов — секция 16×60 м, 14 этажей."""
     sample = [b for b in buildings if b.kind == "residential" and b.levels_source == "real"
               and ((b.year or 0) >= 2005 or (b.year is None and b.levels >= 12))]
     if len(sample) < 5:
@@ -1107,7 +993,6 @@ def modern_form(buildings):
 
 
 def connection_point(poly, streets):
-    """Точка подключения внутри контура в CP_INSET_M от стены, ближайшей к улице."""
     near = streets.query_nearest(poly, all_matches=False)
     street = streets.geometries[int(near[0])]
     wall = shapely.ops.nearest_points(poly.boundary, street)[0]
@@ -1118,8 +1003,6 @@ def connection_point(poly, streets):
 
 
 def pack(free, depth, length, gap):
-    """Жадная раскладка прямоугольных домов по свободной части участка: вдоль длинной оси участка рядами,
-    сначала секции length×depth, затем точечные дома depth×depth в оставшиеся места."""
     placed = []
     for part in sorted(getattr(free, "geoms", [free]), key=lambda p: (-p.area, p.bounds)):
         if part.area < depth * depth:
@@ -1152,8 +1035,6 @@ class Future:
 
 
 def future_buildings(objs, areas, existing, obstacles, region, streets, form, t_design):
-    """Перспективные ОКС: реальные контуры строящихся зданий (building=construction), затем дома типичной для района
-    формы на реальных свободных участках — стройплощадках, brownfield/greenfield, местах снесённых зданий."""
     levels, depth, length, _ = form
     ex_tree = STRtree([b.geom for b in existing])
     result, taken = [], []
@@ -1208,42 +1089,21 @@ def future_buildings(objs, areas, existing, obstacles, region, streets, form, t_
     return result
 
 
-# ---------------------------------------------------------------- существующая теплосеть
-
 CELL_M = 3.0
-# стоимость прокладки 1 м трубы по типу земли (безразмерная, для выбора трасс): техническая полоса вдоль улицы 1,0 у
-# магистральных улиц и 1,25 у местных и внутриквартальных проездов (на второй стороне улицы — +15 %), проезжая часть
-# 3,0, двор и газон 4,0, соцобъект 5,0, парк 6,0, трамвай 8, ж/д и метро 20 (переход в футляре), мост 6, река 60
-# (дюкер — только поперёк и там, где нет моста), территория станции 2,0; запретные территории непроходимы. Реальные и
-# восстановленные трубы — 0,5: сеть идёт по ним. Сети кладут вдоль улиц и проездов, через двор — только последние
-# метры до здания, поэтому двор вчетверо дороже полосы.
 COST = {"open": 4.0, "social_area": 5.0, "park": 6.0, "major": 1.0, "minor": 1.25, "other_side": 1.15,
         "road": 3.0, "tram_tracks": 8.0, "railway": 20.0, "metro": 20.0, "bridge": 6.0, "water": 60.0, "plant": 2.0,
         "real": 0.5}
-# ЦТП (man_made=heat_exchange_station из OSM): от магистрали к ЦТП — распределительная сеть, от ЦТП к зданиям
-# квартала — внутриквартальная. ЦТП берёт здания в радиусе 500 м, ближние первыми, пока суммарный расход укладывается
-# в пропускную способность Ду 200 (152 т/ч ≈ 12 Гкал/ч, типовой ЦТП 5–15 Гкал/ч); остальные здания — с ИТП,
-# от распределительной сети напрямую
 CTP_RADIUS_M, CTP_DN = 500.0, 200
-# общие траншеи: после первого дерева ячейки под ним дешевеют (REUSE), и дерево строится заново — ветки к соседним
-# зданиям сливаются в одну распределительную линию, а не идут веером (эвристика сетей с экономией на масштабе)
 REUSE_PASSES, REUSE = 2, 0.6
-# техническая полоса для сетей — до 8 м за кромкой проезжей части (тротуар и газон между дорогой и застройкой)
 STRIP_M = 8.0
-# отступ оси существующей трубы от стены здания: 2 м от наружной стенки канала (СП 42.13330.2016, табл. 12.5)
-# плюс половина канала, принято 2,5 м; от перспективных зданий — 5 м (бесканальная прокладка, та же таблица)
 CLEAR_EXISTING_M, CLEAR_FUTURE_M = 2.5, 5.0
-# ветка к зданию кончается снаружи у стены, в 0,5 м от неё
 WALL_GAP_M = 0.5
-# камеры на достроенных магистралях (Ду от 500): шаг по реальным сетям города (CITIES[...]["chamber_step_m"]);
-# участок длиннее MAIN_SPLIT_M делится на равные части не длиннее шага
 MAIN_DN, MAIN_SPLIT_M = 500, 300.0
 SIMPLIFY_M = (2.0, 1.0, 0.0)
 MAX_DOWNSTREAM = 3
 
 
 def side_preference(axes, heated):
-    """Сторона улицы для сети: где больше отапливаемой площади в 40 м от проезжей части (+1 слева, −1 справа)."""
     tree = STRtree([b.geom for b in heated])
     result = {}
     for a in axes:
@@ -1286,13 +1146,11 @@ def cost_grid(region, layers, axes, heated, existing, future, real_lines, source
     for g in layers.get("prohibited_site", []):
         grid.paint(g, INF)
     if fence is not None:
-        # территория станции: выводы магистралей идут от главного корпуса к ограде по эстакадам и каналам
         grid.paint(fence, COST["plant"])
     for b in existing:
         grid.paint(b.geom.buffer(CLEAR_EXISTING_M, quad_segs=2), INF)
     for f in future:
         grid.paint(f.geom.buffer(CLEAR_FUTURE_M, quad_segs=2), INF)
-    # у источника — выход коллектора: 8 м вокруг точки проходимы, даже если рядом корпус станции
     grid.paint(source.buffer(8.0), COST["plant"])
     return grid
 
@@ -1305,8 +1163,6 @@ def dn_for(flow, table):
 
 
 def inlet(grid, dist, building, blockers):
-    """Ячейка подхода к зданию и конец ветки: свободная ячейка у стены с наименьшей стоимостью пути от источника
-    плюс стоимость ветки через двор; ветка — прямой отрезок до ближайшей точки стены, не задевающий другие здания."""
     reach = CLEAR_EXISTING_M + 2.0 * grid.cell
     win = grid.window(building.geom, reach)
     if win is None:
@@ -1338,7 +1194,6 @@ def inlet(grid, dist, building, blockers):
 
 
 def split_line(coords, at):
-    """Делит ломаную на расстоянии at от начала: (голова, хвост), точка деления — в обоих."""
     line = LineString(coords)
     point = line.interpolate(at)
     head = shapely.ops.substring(line, 0, at)
@@ -1347,7 +1202,6 @@ def split_line(coords, at):
 
 
 def simplify(coords, blockers):
-    """Ступеньки растра спрямляются Дугласом — Пекером, если спрямлённая линия не задевает зданий."""
     line = LineString(coords)
     for tol in SIMPLIFY_M:
         g = line.simplify(tol) if tol else line
@@ -1357,7 +1211,6 @@ def simplify(coords, blockers):
 
 
 def window_grid(grid, geom, pad):
-    """Часть растра вокруг geom с запасом pad, выровненная по сетке растра (центры ячеек те же)."""
     sl = grid.window(geom, pad)[0]
     j0, j1, i0, i1 = sl[0].start - 1, sl[0].stop + 1, sl[1].start - 1, sl[1].stop + 1
     sub = Grid.__new__(Grid)
@@ -1370,8 +1223,6 @@ def window_grid(grid, geom, pad):
 
 
 def grow(grid, root, targets_of, passes):
-    """Дерево кратчайших путей от ячейки root до целей targets_of(dist); после каждого прохода, кроме последнего,
-    ячейки под деревом дешевеют (общие траншеи), и дерево строится заново."""
     for attempt in range(passes):
         dist, pred = dijkstra(grid, [root])
         targets = targets_of(np.asarray(dist))
@@ -1385,10 +1236,6 @@ def grow(grid, root, targets_of, passes):
 
 
 def heat_network(trees, source, blockers, source_id):
-    """Сеть из деревьев по растру: trees[0] — от источника, остальные — от ЦТП (корень дерева ЦТП совпадает с узлом
-    ЦТП в дереве источника). Цели дерева: {ячейка: [(вид, нагрузка т/ч, конец ветки или None, метка)]}, вид —
-    building (ветка к стене), exit (транзит за границу района), manhole (люк — камера), ctp (ЦТП — камера),
-    pass (точка на реальной трубе). Возвращает участки и камеры с расходом и upstream_object_id."""
     main = trees[0]
 
     def key(t, c):
@@ -1466,12 +1313,6 @@ def heat_network(trees, source, blockers, source_id):
 
 
 def finish_network(segments, chambers, table, main_step):
-    """Расход участка — сумма нагрузок ниже по сети. Ду: у восстановленного участка — Ду схемы (dn_hint), но не меньше
-    нужного по расходу (пропускная способность из rules.json) и не больше Ду участка выше (ошибки распознавания
-    подписей); у достроенного — наименьший по расходу. Участки идут от источника к концам, поэтому Ду не растёт.
-    Камер с больше чем тремя участками вниз не бывает (CONSTRAINTS §5): лишние участки уходят во вторую камеру в 2,5 м
-    по одной из веток. На достроенных магистралях (Ду от 500) — камеры с шагом main_step. Возвращает участки, камеры
-    и число исправлений Ду схемы: (поднято по расходу, опущено до Ду выше)."""
     counter = {"hn": len(segments), "hc": len(chambers)}
 
     def new_id(kind):
@@ -1498,7 +1339,6 @@ def finish_network(segments, chambers, table, main_step):
         s["dn"] = max(need, min(hint, ceiling))
         raised += hint < need
         lowered += hint > ceiling and hint > need
-    # камера с больше чем тремя участками вниз: вторая камера рядом
     for c in list(chambers):
         outs = below[c["id"]]
         while len(outs) > MAX_DOWNSTREAM:
@@ -1523,7 +1363,6 @@ def finish_network(segments, chambers, table, main_step):
             below[c2["id"]] = [host] + moved
             outs = below[c2["id"]]
             c = c2
-    # камеры по длине магистралей
     for s in list(segments):
         line = LineString(s["coords"])
         if s["dn"] < MAIN_DN or line.length <= MAIN_SPLIT_M or s["source"] != "inferred":
@@ -1554,27 +1393,16 @@ def finish_network(segments, chambers, table, main_step):
     return segments, chambers, (raised, lowered)
 
 
-# ---------------------------------------------------------------- восстановленная сеть (схемы теплоснабжения)
-
-# стыки схемы: концы участков ближе 1 м — один узел (Разведчик: сеть связна при допуске 1 м); камеры схемы — к узлу
-# или трубе в пределах 3,5 м (СКО привязки схемы 2,8–3,0 м); ввод потребителя — к зданию в пределах 15 м
 RESTORED_SNAP_M, CHAMBER_SNAP_M, CONSUMER_SNAP_M = 1.0, 3.5, 15.0
-# разомкнутое кольцо: конец участка в 1,5 м от камеры (дальше допуска стыка 0,5 м, docs/interpretation.md)
 RING_GAP_M = 1.5
-# заход трассы в здание до 5 м — ошибка привязки схемы, больше — транзит через техподполье
 SMALL_INTRUSION_M = 5.0
-# обход здания: растр 1 м, стоимость 1 + отклонение от исходной трассы / 5 м, здания с отступом 1 м непроходимы
 DETOUR_CELL_M, DETOUR_PAD_M, DETOUR_CLEAR_M = 1.0, 40.0, 1.0
 HOLE_M = 150.0
-# тупик схемы с Ду от 300 в 150 м от края листа и без ввода потребителя — обрез трубы рамкой листа: магистраль
-# продолжается за ним и несёт транзит
 SHEET_EDGE_DN, SHEET_EDGE_M = 300, 150.0
-# загрузка участка по отношению к пропускной способности Ду без подписи расхода: медиана по схеме ТЭЦ-16 (МОЭК) 0,25
 DEFAULT_USAGE = 0.25
 
 
 def load_restored(city):
-    """Сеть, восстановленная Разведчиком по схеме теплоснабжения: data/cities/raw/<город>/restored_heat.geojson."""
     path = RAW / city / "restored_heat.geojson"
     if not path.exists():
         return None
@@ -1587,8 +1415,6 @@ def load_restored(city):
 
 
 def graph_from_lines(lines, chambers, region):
-    """Граф сети: участки схемы, обрезанные по району; концы ближе RESTORED_SNAP_M — один узел, конец у середины
-    другого участка — Т-стык (участок режется), камеры схемы — в узлах или с разрезом участка."""
     pieces = []
     for g, p in lines:
         if not g.intersects(region):
@@ -1669,8 +1495,6 @@ def graph_from_lines(lines, chambers, region):
 
 
 def detour(coords, houses, house_tree):
-    """Трасса в обход зданий рядом с исходной: кратчайший путь по растру 1 м, где стоимость растёт с отклонением
-    от исходной линии, а здания с отступом DETOUR_CLEAR_M непроходимы. None — обойти нельзя."""
     line = LineString(coords)
     x0, y0, x1, y1 = line.buffer(DETOUR_PAD_M).bounds
     grid = Grid((x0, y0, x1, y1), DETOUR_CELL_M, 1.0)
@@ -1700,9 +1524,6 @@ def detour(coords, houses, house_tree):
 
 
 def fix_crossings(nodes, edges, houses, stats):
-    """Трассы схемы сквозь здания: узел ветвления внутри здания выносится наружу, тупиковая ветка к зданию кончается
-    у стены снаружи, прочие участки обходят здание ближайшим путём. Помеченные _adjusted участки — восстановленные с
-    поправкой; обойти нельзя — участок остаётся как в схеме, это записывается."""
     house_tree = STRtree(houses)
     degree = defaultdict(int)
     for e in edges:
@@ -1733,13 +1554,11 @@ def fix_crossings(nodes, edges, houses, stats):
         stats["large_m" if big else "small_m"] += inside
         leaf = next((end for end, n in ((0, e["u"]), (-1, e["v"])) if degree[n] == 1), None)
         if leaf is not None and any(h.contains(Point(e["coords"][leaf])) for h in hits):
-            # ветка к зданию: конец у стены снаружи, WALL_GAP_M до стены
             seq = e["coords"] if leaf == -1 else e["coords"][::-1]
             g = LineString(seq)
             entry = min((g.project(Point(xy)) for h in hits
                          for xy in shapely.get_coordinates(g.intersection(h.boundary))), default=None)
             if entry is None:
-                # отрезок целиком внутри здания, оба конца висячие: такой обрывок схемы не нужен
                 e["drop"] = True
                 stats["dropped"] = stats.get("dropped", 0) + 1
                 continue
@@ -1755,7 +1574,6 @@ def fix_crossings(nodes, edges, houses, stats):
                     continue
         route = detour(e["coords"], houses, house_tree)
         if route is None:
-            # обойти нельзя (плотная застройка, узел в проезде под зданием): транзит через здание, как в схеме
             e["through"] = True
             stats["kept"] += 1
             stats["kept_m"] += sum(LineString(e["coords"]).intersection(h).length for h in hits)
@@ -1766,10 +1584,6 @@ def fix_crossings(nodes, edges, houses, stats):
 
 
 def bridge_components(nodes, edges, root, reach, houses, house_tree):
-    """Связность схемы: висячий конец ближе reach к участку другой компоненты стягивается к нему короткой перемычкой;
-    оставшиеся компоненты по очереди подключаются к ближайшей точке уже связанной с источником сети. Перемычки —
-    inferred, прямые или в обход зданий; компонента, которую не подключить, не пересекая зданий, выбрасывается (её
-    здания достроенная сеть подключит как «дыры»). Возвращает (стянуто концов, подключено компонент, выброшено)."""
     def components():
         parent = list(range(len(nodes)))
 
@@ -1783,7 +1597,6 @@ def bridge_components(nodes, edges, root, reach, houses, house_tree):
         return [find(n) for n in range(len(nodes))]
 
     def route(n, i):
-        """Перемычка от узла n к ближайшей точке участка i: (место на участке, ломаная) или None."""
         line = LineString(edges[i]["coords"])
         at = line.project(Point(nodes[n]))
         on = line.interpolate(at)
@@ -1867,7 +1680,6 @@ def bridge_components(nodes, edges, root, reach, houses, house_tree):
 
 
 def contract_short(nodes, edges, chamber_at, exits, limit=0.05):
-    """Участки короче limit (узлы совпали после выноса из зданий и стяжек) стягиваются в один узел."""
     parent = list(range(len(nodes)))
 
     def find(a):
@@ -1892,9 +1704,6 @@ def contract_short(nodes, edges, chamber_at, exits, limit=0.05):
 
 
 def restored_tree(nodes, edges, root, chamber_at, exits, source_id):
-    """Дерево от источника по графу (кратчайшие пути по длине); ребро вне дерева замыкает кольцо — оно размыкается
-    у камеры: участок остаётся ветвью от ближнего к источнику конца и не доходит RING_GAP_M до камеры на дальнем.
-    Возвращает участки и камеры в формате heat_network (до finish_network) и число разомкнутых колец."""
     import heapq
     adj = defaultdict(list)
     for k, e in enumerate(edges):
@@ -1923,7 +1732,6 @@ def restored_tree(nodes, edges, root, chamber_at, exits, source_id):
     for k, e in enumerate(edges):
         if k in in_tree or e["u"] not in dist or e["v"] not in dist:
             continue
-        # кольцо: режем у камеры, при двух камерах или без них — у дальнего от источника конца
         ends = sorted((e["u"], e["v"]), key=lambda n: (n in chamber_at, dist[n], n))
         keep, cut = ends
         coords = e["coords"] if e["u"] == keep else e["coords"][::-1]
@@ -1970,7 +1778,6 @@ def restored_tree(nodes, edges, root, chamber_at, exits, source_id):
 
 
 def accumulate(segments, chambers):
-    """Расход каждого участка: нагрузка на нём плюс всё ниже по сети."""
     chamber_by_id = {c["id"]: c for c in chambers}
     below = defaultdict(list)
     for s in segments:
@@ -1985,11 +1792,6 @@ def accumulate(segments, chambers):
 
 
 def restored_network(restored, region, source, source_id, heated, existing, future, layers, table, stats, bridge_m):
-    """Существующая сеть по схеме теплоснабжения (restored): граф участков схемы в районе, связность, обход зданий,
-    ветки к зданиям в «дырах» дальше 150 м (inferred), дерево от источника с размыканием колец. Нагрузка зданий —
-    на ближайший участок (у зданий с вводом схемы — на участок у ввода); магистрали, уходящие за границу района, несут
-    транзит — расчётный расход схемы (label_flow_tph) на этом участке. Удельная нагрузка калибруется по расчётным
-    расходам схемы: k — медиана «расход схемы / расход по формуле» на участках без транзита."""
     nodes, edges, chamber_at, exits = graph_from_lines(restored["heat_network"], restored.get("heat_chamber", []),
                                                       region)
     houses = [b.geom for b in existing] + [f.geom for f in future]
@@ -2015,7 +1817,6 @@ def restored_network(restored, region, source, source_id, heated, existing, futu
     segments, chambers, rings, lost = restored_tree(nodes, edges, root, chamber_at, exits, source_id)
     stats["rings_opened"] = rings
     stats["edges_unreached"] = len(lost)
-    # нагрузки зданий
     consumers = [g for g, _ in restored.get("consumer", []) if region.contains(g)]
     bld_tree = STRtree([b.geom for b in heated])
     fed_by = {}
@@ -2037,7 +1838,6 @@ def restored_network(restored, region, source, source_id, heated, existing, futu
     stats["buildings_on_network"] = len(attach)
     for seg, b in attach:
         seg["load"] += b.flow
-    # транзит за границу района: расчётный расход схемы или средняя загрузка участков схемы по пропускной способности
     capacity = {r["dn"]: r["capacity_tph"] for r in table}
     ratios = sorted(s["label_flow"] / capacity[s["dn_hint"]] for s in segments
                     if s.get("label_flow") and s.get("dn_hint") in capacity)
@@ -2048,7 +1848,6 @@ def restored_network(restored, region, source, source_id, heated, existing, futu
     up_seg = {c["id"]: c["up"] for c in chambers}
 
     def dn_known(s):
-        """Ду схемы участка, а без подписи у магистрали — Ду ближайшего подписанного участка выше."""
         while s is not None:
             if s.get("dn_hint"):
                 return s["dn_hint"]
@@ -2057,7 +1856,6 @@ def restored_network(restored, region, source, source_id, heated, existing, futu
             s = by_id.get(up_seg.get(s["up"], s["up"]))
         return None
 
-    # край листа схемы: выпуклая оболочка всех участков схемы (лист обрезает трубы по рамке)
     sheet = shapely.MultiPoint([xy for g, _ in restored["heat_network"] for xy in g.coords]).convex_hull.exterior
     consumer_tree = STRtree([g for g, _ in restored.get("consumer", [])] or [Point(0, 0)])
     for s in segments:
@@ -2066,13 +1864,11 @@ def restored_network(restored, region, source, source_id, heated, existing, futu
         end = Point(s["coords"][-1])
         at_edge = leaf and sheet.distance(end) <= SHEET_EDGE_M and not len(
             consumer_tree.query(end, predicate="dwithin", distance=CONSUMER_SNAP_M))
-        # граница района или край листа схемы: магистраль (Ду от 300) обрывается, а труба идёт дальше
         if (s.get("node") in exits or at_edge) and (dn or 0) >= SHEET_EDGE_DN:
             t = s.get("label_flow") or usage * capacity.get(dn, 0.0)
             s["transit"] = t
             transit += t
     stats["exits"], stats["transit_tph"], stats["usage"] = sum(1 for s in segments if "transit" in s), round(transit, 1), round(usage, 3)
-    # калибровка удельной нагрузки по расчётным расходам схемы на участках без транзита ниже
     below = accumulate(segments, chambers)
     impure = {}
     for s in reversed(segments):
@@ -2088,15 +1884,6 @@ def restored_network(restored, region, source, source_id, heated, existing, futu
     return segments, chambers, lost, Point(nodes[root]), k_cal, holes, scheme
 
 
-# ---------------------------------------------------------------- коммуникации по профилю улицы
-
-# поперечный профиль улицы: все четыре сети — на стороне без теплосети (теплосеть отделена от них проезжей частью).
-# Смещение оси от кромки проезжей части: кабель 1,5 м, водопровод 2,3 м, канализация 4,0 м, газопровод 5,3 м.
-# Нормы (СП 42.13330.2016): до бортового камня (табл. 12.5) — водопровод 2,0 м, канализация, газопровод и кабель
-# 1,5 м; между сетями в свету (табл. 12.6) — кабель–водопровод 0,5 м, водопровод–канализация 1,5 м (Ду до 200),
-# канализация–газопровод низкого давления 1,0 м, кабель–газопровод 1,0 м; межосевые расстояния выше норм в свету
-# на полусумму диаметров (≈0,3 м). До фундаментов зданий (табл. 12.5): кабель 0,6 м, водопровод 5 м, канализация
-# 3 м, газопровод низкого давления 2 м — ближе линия обрезается.
 PROFILE = (("power_cable", "cab", 1.5, 0.6), ("water_supply", "ws", 2.3, 5.0),
            ("sewer", "sew", 4.0, 3.0), ("gas_pipeline", "gas", 5.3, 2.0))
 PROFILE_MIN_M = 10.0
@@ -2104,8 +1891,6 @@ REAL_NEAR_M = 10.0
 
 
 def network_sides(axes, segments, fallback):
-    """Сторона улицы с теплосетью: где больше её длины в полосе до 25 м за кромкой (+1 слева, −1 справа);
-    без сети рядом — сторона по застройке (fallback)."""
     lines = [LineString(s["coords"]) for s in segments]
     tree = STRtree(lines)
     result = {}
@@ -2119,7 +1904,6 @@ def network_sides(axes, segments, fallback):
 
 
 def profile_utilities(axes, sides, existing, future, water, real_items, region):
-    """Газ, кабели, водопровод и канализация вдоль улиц, где их нет в OSM, по типовому поперечному профилю."""
     houses = [b.geom for b in existing] + [f.geom for f in future]
     house_tree = STRtree(houses)
     water_tree = STRtree(water) if water else None
@@ -2155,19 +1939,12 @@ def profile_utilities(axes, sides, existing, future, water, real_items, region):
     return items
 
 
-# ---------------------------------------------------------------- источник и транзит
-
-# присоединённая нагрузка источника — 85 % установленной тепловой мощности (резерв на отказ крупнейшего агрегата);
-# 1 Гкал/ч при графике 150/70 °C — 12,5 т/ч сетевой воды
 LOAD_SHARE = 0.85
 TPH_PER_GCAL = 1.0e6 / (1.0 * DT_HEAT) / 1000.0
 EXITS_MAX, EXIT_MIN_ANGLE, EXIT_MIN_M = 3, 60.0, 1000.0
 
 
 def find_source(cfg, plants, areas, existing):
-    """Реальный источник: power=plant с именем из конфигурации (иначе ближайший к подсказке). Точка источника —
-    свободное место на территории станции у главного корпуса (самого большого здания за оградой): оттуда выводы
-    магистралей расходятся в разные стороны, как у настоящей ТЭЦ. Без контура станции — её центр из OSM."""
     hint = utm(Point(cfg["plant_hint"][1], cfg["plant_hint"][0]))
     best = None
     for el in plants["elements"]:
@@ -2195,8 +1972,6 @@ def find_source(cfg, plants, areas, existing):
 
 
 def exit_points(region, axes, source):
-    """Точки, где крупные улицы выходят за границу района, разнесённые по направлению не меньше чем на 60°:
-    по ним магистрали уходят с транзитом в соседние районы."""
     boundary = region.exterior
     cands = []
     for a in axes:
@@ -2217,13 +1992,10 @@ def exit_points(region, axes, source):
     return [p for _, p in chosen]
 
 
-# ---------------------------------------------------------------- находки Разведчика
-
 RAW = ROOT / "data" / "cities" / "raw"
 
 
 def osm_ref(value):
-    """«way/123» → «w123», как id объектов Overpass в этом скрипте."""
     text = str(value)
     for long, short in (("way/", "w"), ("node/", "n"), ("relation/", "r")):
         if text.startswith(long):
@@ -2232,9 +2004,6 @@ def osm_ref(value):
 
 
 def raw_heat(city):
-    """Находки Разведчика в data/cities/raw/<город>/*.geojson: трубы (_class=heat_pipe, у восстановленных по схемам —
-    diameter), люки теплосети (heat_manhole), ЦТП (heat_substation). Берутся только _source real и restored;
-    candidate (трубы без substance) теплосетью не считаются."""
     pipes, hatches, substations = [], [], []
     folder = RAW / city
     for path in sorted(folder.glob("*.geojson")) if folder.exists() else []:
@@ -2263,8 +2032,6 @@ def raw_heat(city):
     return pipes, hatches, substations
 
 
-# ---------------------------------------------------------------- сборка
-
 def nearest_cell(grid, dist, point, radius):
     win = grid.window(point, radius)
     if win is None:
@@ -2279,7 +2046,6 @@ def nearest_cell(grid, dist, point, radius):
 
 
 def trace_share(coords, zones):
-    """Доля длины ломаной в зоне 3 м от реальных или восстановленных трасс: {уровень: доля}, и Ду-подсказка."""
     line = LineString(coords)
     share, hint = {}, 0
     for level, tree, geoms, dns in zones:
@@ -2294,9 +2060,6 @@ def trace_share(coords, zones):
 
 
 def raster_network(grid, source, source_id, heated, ctps, exits, transit, hatches, traces, blockers, table):
-    """Достроенная сеть (inferred) по растру стоимости: дерево от источника к зданиям heated, ЦТП, люкам и реальным
-    трубам; здания у ЦТП — поддеревом от ЦТП."""
-    # ЦТП: здания в радиусе CTP_RADIUS_M, ближние первыми, пока расход ЦТП в пределах CTP_CAP_TPH
     cap = next(r["capacity_tph"] for r in table if r["dn"] == CTP_DN)
     assigned, ctp_load = {}, defaultdict(float)
     heated_tree = STRtree([b.geom for b in heated])
@@ -2364,14 +2127,12 @@ def raster_network(grid, source, source_id, heated, ctps, exits, transit, hatche
         return targets
 
     trees[0] = grow(grid, grid.index(source.x, source.y), targets_of, REUSE_PASSES)
-    # дерево ЦТП без связи с источником не входит в сеть: его здания — среди недостигнутых
     trees = [trees[0]] + [t for t in trees[1:] if t["alias"] in trees[0]["reached"]]
     segments, chambers, unreached = heat_network(trees, source, blockers, source_id)
     return segments, chambers, unreached + no_inlet
 
 
 def merge_networks(segments, chambers, more, more_ch):
-    """Две сети от одного источника в одну: id второй продолжают нумерацию первой."""
     shift = {}
     for s in more:
         shift[s["id"]] = f"hn-{len(segments) + len(shift) + 1}"
@@ -2386,8 +2147,6 @@ def merge_networks(segments, chambers, more, more_ch):
 
 
 def object_items(segments, chambers, existing, future):
-    """Объекты входа: участки и камеры сети, существующие и перспективные ОКС с точками подключения. Участок и камера
-    сети без источника (upstream = None) пишутся без upstream_object_id."""
     items = []
     for s in segments:
         props = {"id": s["id"], "object_type": "heat_network", "diameter": s["dn"], "flow_tph": round(s["flow"], 3),
@@ -2455,10 +2214,8 @@ def build(city, bbox, one_source=False):
     obstacles = {k: v for k, v in layers.items()}
     restored = load_restored(city)
     if restored and restored.get("heat_network"):
-        # новые дома не ставятся на трубы схемы: охранная зона тепловой сети — 3 м от края канала, принято 5 м
         obstacles["heat_network"] = [g for g, _ in restored["heat_network"] if g.intersects(region)]
     future = future_buildings(osm["buildings"], osm["areas"], existing, obstacles, region, streets, form, t_design)
-    # реальные и восстановленные трассы, люки и ЦТП: Overpass и находки Разведчика в raw/, без повторов по id OSM
     raw_pipes, raw_hatches, raw_subs = raw_heat(city)
     traces, hatches, ctps = {}, {}, {}
     for o in heat_pipes:
@@ -2477,7 +2234,6 @@ def build(city, bbox, one_source=False):
     hatches = sorted((h for h in hatches.values() if region.contains(h[0])), key=lambda h: h[2])
     ctps = sorted(ctps.items())
     for b in existing:
-        # здание ЦТП — техническое, своей нагрузки в сети не несёт
         if any(ref == b.id or (g.geom_type == "Point" and b.geom.contains(g)) for ref, g in ctps):
             b.kind, b.flow, b.load = "unheated", 0.0, 0.0
     heated = [b for b in existing if b.kind != "unheated" and region.contains(b.geom.representative_point())]
@@ -2506,7 +2262,6 @@ def build(city, bbox, one_source=False):
         for f in future:
             f.flow, f.load = f.flow * k_cal, f.load * k_cal
         if holes:
-            # здания вне схемы: достроенная сеть от того же источника; люки и трубы OSM — только вне трасс схемы
             near = unary_union([g.buffer(15.0) for g in scheme])
             far_traces = [t for t in traces if t[0].difference(near).length > 0.5 * t[0].length]
             far_hatches = [h for h in hatches if not near.contains(h[0])]
@@ -2548,30 +2303,17 @@ def build(city, bbox, one_source=False):
     return out
 
 
-# ---------------------------------------------------------------- Нижний Новгород целиком
-
-# перспективный ОКС схемы не ставится ближе 3 м к зданию и в полигоны дорог, воды, путей, парков, соцобъектов и
-# запретных территорий, ближе 5 м к трубе схемы (охранная зона тепловой сети — 3 м от края канала, принято 5 м)
 SCHEME_GAP_EXISTING_M, SCHEME_GAP_PIPE_M = 3.0, 5.0
 SCHEME_BLOCK = ("road", "water", "railway", "tram_tracks", "metro", "park", "social_area", "prohibited_site")
-# источник в варианте (б), кроме главного: запретная территория — площадка станции power=plant из OSM, иначе здание
-# котельной с отступом 10 м, иначе квадрат 30 × 30 м вокруг точки схемы
 SITE_PAD_M, SITE_SIDE_M = 10.0, 30.0
-# частный сектор — индивидуальное теплоснабжение (котлы в доме): так в схеме Н. Новгорода территории ИЖС («Индивидуальное
-# теплоснабжение», табл. 2.1 Гл. 2 Прил. 1 Ч. 3). Такие дома не потребители сети и не «дыры»: building=house, detached,
-# semidetached_house, bungalow, cabin и здания до 2 этажей площадью до 250 м² с building=yes/residential
 INDIVIDUAL = {"house", "detached", "semidetached_house", "bungalow", "cabin", "farm", "static_caravan"}
 INDIVIDUAL_M2 = 250.0
 
 
-# жилые и общественные здания дальше 1 км от сети схемы вне Автозаводского и Ленинского районов (там сеть
-# «Теплосетей» достраивается целиком) — посёлки вне зон ЕТО: своё теплоснабжение, к сети не подключаются
 OUTSIDE_ZONE_M = 1000.0
 
 
 def individual(b):
-    """Частный дом: building=house и подобные или небольшое (до 250 м²) жилое здание building=yes/residential не выше
-    2 этажей; этажность без тега (медиана квартала) не в счёт."""
     kind = b.tags.get("building", "yes")
     low = b.levels <= 2 or b.levels_source != "real"
     return b.kind == "residential" and (kind in INDIVIDUAL or (
@@ -2579,9 +2321,6 @@ def individual(b):
 
 
 def scheme_future(city, region, existing, layers, pipes, streets):
-    """Перспективные ОКС по табл. 2.1 схемы (scripts/heat_future_nn.py → raw/<город>/future_scheme.geojson):
-    нагрузка из схемы, flow_tph = нагрузка × 12,5 т/ч на Гкал/ч (150/70). Контур OSM (стройка или новый дом по
-    адресу) — real, достроенный — inferred. Не проходят проверку места — отбрасываются (счёт в build.json)."""
     path = RAW / city / "future_scheme.geojson"
     if not path.exists():
         return [], {}
@@ -2608,7 +2347,7 @@ def scheme_future(city, region, existing, layers, pipes, streets):
         if why:
             dropped[why] += 1
             continue
-        if osm in ex_by_id:  # новый дом уже в OSM как готовое здание: по схеме он перспективный
+        if osm in ex_by_id:
             existing.remove(ex_by_id.pop(osm))
         fu = Future()
         fu.id, fu.geom, fu.tags, fu.source, fu.site = f"oks-s{p['_item']}-{k}", g, {}, p["_source"], f"scheme-{p['_item']}"
@@ -2624,7 +2363,6 @@ def scheme_future(city, region, existing, layers, pipes, streets):
 
 
 def source_site(pt, areas, existing):
-    """Площадка источника для prohibited_site (вариант б): power=plant или котельная OSM, содержащая точку."""
     for o in areas:
         if (o.tags.get("power") == "plant" or "boiler" in o.tags.get("industrial", "")) \
                 and o.geom.geom_type.endswith("Polygon") and o.geom.contains(pt):
@@ -2636,11 +2374,6 @@ def source_site(pt, areas, existing):
 
 
 def build_nn(city, bbox, one_source=False):
-    """Н. Новгород целиком: слои OSM по полигону восьми районов, сеть — граф схемы теплоснабжения, уложенный по улицам
-    (scripts/heat_embed_nn.py embed → raw/nnovgorod/restored_heat.geojson), и достроенная сеть «Теплосетей» и веток
-    к зданиям дальше 150 м (heat_embed_nn.nn_network); перспективные ОКС — табл. 2.1 схемы, затем стройки и свободные
-    участки OSM. Вариант (а): все источники Гл. 4 с координатами в городе — source; (б) one_source — одна
-    Сормовская ТЭЦ, площадки остальных источников — prohibited_site с _heat_source."""
     sys.path.insert(0, str(ROOT / "scripts"))
     import heat_embed_nn as nn
     cfg, t_design = CITIES[city], T_DESIGN[city]
@@ -2709,7 +2442,6 @@ def build_nn(city, bbox, one_source=False):
     crossed = {i for i, f in enumerate(future) if len(net_tree.query(f.geom, predicate="intersects"))}
     future = [f for i, f in enumerate(future) if i not in crossed]
     segments, chambers, dn_fixes = finish_network(segments, chambers, table, cfg["chamber_step_m"])
-    # последний обход зданий: концы участков сдвинуты слиянием узлов (до 0,3 м) и камерами finish_network
     net_stats["detoured_final"], net_stats["through_final_m"] = nn.avoid_buildings(
         [s for s in segments if not s.get("through")], [b.geom for b in existing] + [f.geom for f in future], detour)
     sides = side_preference([a for a in axes if not a["tunnel"]], heated)
@@ -2743,10 +2475,7 @@ def build_nn(city, bbox, one_source=False):
     return out
 
 
-# ---------------------------------------------------------------- проверка полноты и правдоподобия
-
 def share_table(features):
-    """Доли real / restored / inferred по слоям: по числу объектов и по длине (линии) или площади (полигоны)."""
     stat = defaultdict(lambda: defaultdict(lambda: [0, 0.0]))
     for f in features:
         p = f["properties"]
@@ -2760,7 +2489,6 @@ def share_table(features):
 
 
 def check(city):
-    """Проверки п. 4 задания по готовому входу; итог — data/cities/<город>/check.md и код 1 при провале."""
     folder = ROOT / "data" / "cities" / city
     meta = json.loads((folder / "build.json").read_text(encoding="utf-8"))
     rules = json.loads((ROOT / "rules" / "rules.json").read_text(encoding="utf-8"))
@@ -2798,7 +2526,6 @@ def check(city):
     pipes = {f["properties"]["id"]: f for f in by["heat_network"]}
     chambers = {f["properties"]["id"]: f for f in by["heat_chamber"]}
     source_ids = {f["properties"]["id"] for f in by["source"]}
-    # дерево: цепочка upstream до источника, камеры ≤ 1 + 3 участков, ветвления только в камерах
     up = {i: f["properties"].get("upstream_object_id") for i, f in {**pipes, **chambers}.items()}
     broken = sourceless = 0
     for i in up:
@@ -2808,8 +2535,6 @@ def check(city):
             cur = up[cur]
         sourceless += cur is None
         broken += cur is not None and cur not in source_ids
-    # у сети без источника (компоненты схемы без источника с координатами, вариант б) цепочка кончается участком без
-    # upstream_object_id — это не обрыв: сервис предупреждает и считает (docs/interpretation.md)
     verdict("участков сети от 50, цепочка upstream до source", len(pipes) >= 50 and broken == 0,
             f"участков {len(pipes)}, камер {len(chambers)}, оборванных цепочек {broken}"
             + (f", сети без источника (без upstream у корня): {sourceless}" if sourceless else ""))
@@ -2826,7 +2551,6 @@ def check(city):
     forks = [k for k, v in ends.items() if len(v) >= 3 and k not in chamber_at and k not in src_at]
     verdict("камеры во всех ветвлениях, не больше 1 + 3 участков", not crowded and not forks,
             f"ветвлений без камеры {len(forks)}, камер с > 3 участками вниз {len(crowded)}")
-    # Ду не растёт от источника, пропускная способность покрывает расход ниже
     grow = [i for i, f in pipes.items() if f["properties"].get("upstream_object_id") in chambers
             and pipes.get(chambers[f["properties"].get("upstream_object_id")]["properties"].get("upstream_object_id"), f)
             ["properties"]["diameter"] < f["properties"]["diameter"]]
@@ -2841,7 +2565,6 @@ def check(city):
             short.append(feed["properties"]["id"])
     verdict("Ду не растёт к концам, пропускная способность ≥ расхода ниже", not grow and not over and not short,
             f"рост Ду {len(grow)}, перегруз {len(over)}, расход меньше суммы ниже {len(short)}")
-    # сквозь здания
     houses = [f["_utm"] for f in by["oks_existing"] + by["oks_future"]]
     tree = STRtree(houses)
     total = sum(f["_utm"].length for f in pipes.values())
@@ -2857,7 +2580,6 @@ def check(city):
     verdict("0 % длины сети сквозь здания", through <= 0.01,
             f"{through:.1f} м из {total / 1000:.1f} км ({100 * through / max(total, 1):.3f} %) {examples[:5]}; "
             f"транзит схемы через здания, где обхода нет (_through_building): {allowed:.1f} м")
-    # у улиц или на реальных трассах
     osm = objects(fetch(city, tuple(meta["bbox"]))["highways"])
     axes = [o.geom for o in osm if is_carriageway(o.tags) and o.geom.geom_type == "LineString"
             and o.tags.get("tunnel") in (None, "no")]
@@ -2875,7 +2597,6 @@ def check(city):
     detail = "; ".join(f"{k}: {100 * by_level[k] / level_total[k]:.1f} % в 30 м от оси" for k in sorted(level_total))
     verdict("≥ 80 % длины сети в 30 м от оси улицы или на реальной/восстановленной трассе", near >= 0.8 * total,
             f"{100 * near / max(total, 1):.1f} % ({detail})")
-    # нет дыр: жилые и общественные здания района не дальше 150 м от сети
     net_tree = STRtree([f["_utm"] for f in pipes.values()])
     closed = [f["_utm"] for f in by["restriction"] if f["properties"]["restriction_type"] == "prohibited_site"]
     closed_tree = STRtree(closed)
@@ -2894,7 +2615,6 @@ def check(city):
             far.append(f["properties"]["id"])
     verdict("жилые и общественные здания не дальше 150 м от сети", not far,
             f"дальше: {len(far)} {far[:5]}; на запретных территориях (своё теплоснабжение, не проверяются): {skipped}")
-    # перспективные ОКС: расход по формуле, без выбросов
     future = by["oks_future"]
     cps = [f for f in by["oks_connection_point"]]
     fut_ids = {f["properties"]["id"] for f in future}
@@ -2908,7 +2628,7 @@ def check(city):
     worst, flows = 0.0, []
     for f in future:
         p = f["properties"]
-        if p.get("_load_source") == "scheme":  # нагрузка из схемы теплоснабжения, график 150/70
+        if p.get("_load_source") == "scheme":
             g = p["heat_load"] * TPH_PER_GCAL
         else:
             g, load = flow_of(heat_demand(p["_kind"], f["_utm"].area * p["levels"], p["levels"], "после 1985",
@@ -2949,8 +2669,6 @@ def check(city):
     sys.exit(0 if ok else 1)
 
 
-# ---------------------------------------------------------------- картинка района
-
 PNG_M_PER_PX = 2.5
 FILL = {"oks_existing": (150, 150, 150), "oks_future": (245, 158, 11), "road": (70, 70, 80), "water": (96, 165, 250),
         "park": (134, 199, 124), "social_area": (196, 181, 253), "prohibited_site": (252, 165, 165),
@@ -2961,9 +2679,6 @@ NETWORK = {"real": (220, 38, 38), "restored": (234, 88, 12), "inferred": (29, 78
 
 
 def render(city, output=None):
-    """PNG района: здания, дороги, вода, парки, коммуникации, существующая сеть (реальная и восстановленная —
-    красным и оранжевым, достроенная — синим, толщина по Ду), перспективные ОКС и, если есть выход сервиса, новая сеть
-    (пурпурным)."""
     from PIL import Image, ImageDraw
     folder = ROOT / "data" / "cities" / city
     features = json.loads((folder / "input.geojson").read_text(encoding="utf-8"))["features"]
@@ -3023,11 +2738,6 @@ def render(city, output=None):
     return target
 
 
-# ---------------------------------------------------------------- формат датасета организаторов (редакция 18.09)
-
-# фундамент опоры ЛЭП в плане: деревянная или железобетонная опора ВЛ 0,4–10 кВ (power=pole) — квадрат 1×1 м
-# (стойка СВ-110 сечением ≈0,3 м с ригелем и котлованом под пасынок), решётчатая опора ВЛ 35–220 кВ (power=tower) —
-# 6×6 м по осям фундаментов (типовые опоры П110/П220, база 4–7 м), портал подстанции — 3×3 м; тег width, если есть
 SUPPORT_M = {"pole": 1.0, "tower": 6.0, "portal": 3.0}
 
 
@@ -3039,10 +2749,6 @@ def address(tags):
 
 
 def to_dataset(city, minimal):
-    """Второй вход data/cities/<город>/input_1809.geojson в формате датасета организаторов (редакция 18.09): все
-    здания — restriction с restriction_type = oks (адрес в address), расход — у точки подключения, без oks_existing,
-    oks_future и oks_id; опоры ЛЭП — полигоны фундаментов. --minimal оставляет только обязательные атрибуты
-    (и _source)."""
     folder = ROOT / "data" / "cities" / city
     meta = json.loads((folder / "build.json").read_text(encoding="utf-8"))
     data = fetch(city, tuple(meta["bbox"]))

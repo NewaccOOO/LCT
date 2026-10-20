@@ -31,7 +31,6 @@ class JunctionMoverTest {
         TieCandidate tie = new TieInFinder(input, rules).find(List.of(point(300, 60)), DN).stream()
                 .filter(c -> c.getExistingObjectId().equals("hn-2")).findFirst().orElseThrow();
         Coordinate root = tie.getPoint().getCoordinate();
-        // буква Т: ствол от врезки вверх на 120 м, ветки к точкам по горизонтали
         Tree tree = new Tree(tie);
         Tree.Node junction = Tree.Node.junction(new Coordinate(root.x, 120));
         tree.edges.add(new Tree.Edge(tree.root, junction, line(root.x, root.y, root.x, 120)));
@@ -44,7 +43,6 @@ class JunctionMoverTest {
 
         assertEquals(1, moves.size());
         Tree moved = moves.get(0);
-        // развилка уходит к врезке, ветки идут наискось: сеть короче, узлы и рёбра те же
         assertTrue(moved.length() < tree.length() - 10, "длина " + moved.length() + " против " + tree.length());
         assertEquals(3, moved.edges.size());
         Tree.Node shifted = JunctionMover.junctions(moved).get(0);

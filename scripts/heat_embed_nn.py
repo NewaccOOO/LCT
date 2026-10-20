@@ -1,21 +1,3 @@
-"""Укладка графа сети АО «Теплоэнерго» (Н. Новгород) на карту по улицам OSM → restored_heat.geojson.
-
-    uv run --project tools --with osmium python scripts/heat_embed_nn.py osm      # слои OSM города из .osm.pbf
-    uv run --project tools python scripts/heat_embed_nn.py embed                  # укладка, метрики
-    uv run --project tools python scripts/heat_embed_nn.py avtozavod              # Ду и длины «Теплосетей» по районам
-
-Граф — scheme_sections.csv.gz (Схема теплоснабжения до 2030 г., актуализация 2026, Гл. 1 Прил. 2, Ч. 1–4: участки
-«узел – узел – Ду – длина – вид – район»), опорные узлы — scheme_anchors.geojson (потребители и источники, привязанные
-к зданиям OSM по адресу) и heat_sources.geojson. Методика — data/cities/sources_nnovgorod.md, «Методика восстановления»:
-1. граф без параллельных труб (отопление и ГВС одного канала — одно ребро трассы), ключевые узлы — опорные и узлы
-   со степенью ≠ 2, между ними цепочки;
-2. опорные узлы, противоречащие соседям (прямое расстояние > 1,5 × длина по графу + 50 м), отбрасываются;
-3. ключевой узел без адреса ставится в узел графа улиц, где кратчайшие расстояния по улицам до уже уложенных соседей
-   лучше всего согласуются с длинами цепочек (не меньше двух уложенных соседей); затем проход уточнения по всем соседям;
-4. цепочка — кратчайший путь по улицам и проездам OSM между концами, промежуточные узлы — по накопленной длине.
-Узел, который так поставить нельзя (меньше двух уложенных соседей), не выдумывается: его участки уходят в
-restored_unlaid.csv.gz и достраиваются на этапе 2 (inferred).
-"""
 import csv
 import gzip
 import heapq
@@ -31,7 +13,7 @@ import numpy as np
 import shapely
 from pyproj import Transformer
 from shapely import STRtree
-from shapely.geometry import LineString, Point, mapping, shape
+from shapely.geometry import LineString, Point
 from shapely.ops import substring, unary_union
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -39,13 +21,12 @@ RAW = ROOT / "data" / "cities" / "raw" / "nnovgorod"
 CACHE = ROOT / "data" / "cities" / "cache" / "nnovgorod"
 PBF = CACHE / "nizhny_novgorod_oblast-latest.osm.pbf"
 LAYERS = CACHE / "osm" / "embed_osm.json"
-TO_UTM = Transformer.from_crs("EPSG:4326", "EPSG:32638", always_xy=True)  # UTM 38N: 42–48° в. д.
+TO_UTM = Transformer.from_crs("EPSG:4326", "EPSG:32638", always_xy=True)
 TO_WGS = Transformer.from_crs("EPSG:32638", "EPSG:4326", always_xy=True)
 REF = ("Схема теплоснабжения г. Н. Новгорода до 2030 г. (актуализация на 2026 г.), шифр 22401, Обосновывающие "
        "материалы, Гл. 1 Прил. 2 «Тепловые сети», Ч. 1–4 (таблицы участков электронной модели АО «Теплоэнерго»); "
        "укладка по улицам OSM — scripts/heat_embed_nn.py")
 
-# дороги, по которым может идти трасса: всё, кроме строящихся, проектных, платформ и помещений
 NO_ROUTE = {"proposed", "construction", "abandoned", "razed", "platform", "bus_stop", "elevator", "corridor",
             "raceway", "via_ferrata", "services", "rest_area", "emergency_bay", "planned", "disused"}
 SITE = {"construction", "brownfield", "greenfield"}
@@ -55,17 +36,12 @@ KEEP_TAGS = ("highway", "service", "name", "bridge", "tunnel", "area", "layer", 
 
 
 def city_region():
-    """Восемь районов города (admin_level 9 внутри relation 335495) без Кстовского района."""
     sys.path.insert(0, str(Path(__file__).parent))
     from heat_osm import districts
     return districts(CACHE / "osm" / "adm_nnovgorod.json")
 
 
-# ---------------------------------------------------------------- OSM
-
 def osm():
-    """Улицы и проезды (все highway, по которым можно проложить трубу), здания и участки стройки / пустыри
-    в границах восьми районов с запасом 500 м → cache/nnovgorod/osm/embed_osm.json (lon/lat, 7 знаков)."""
     import osmium
     from shapely.prepared import prep
     from heat_osm import rel_geom
@@ -136,22 +112,18 @@ def wgs_point(x, y):
     return [round(lon, 7), round(lat, 7)]
 
 
-# ---------------------------------------------------------------- граф улиц
-
-STEP_M = 25.0          # длинные отрезки улиц делятся: место узла сети выбирается не реже чем через 25 м
-SNAP_M = 200.0         # здание-опора дальше 200 м от любого проезда не используется
-YARD_M = 10.0          # шаг решётки дворов
-YARD_REACH_M = 60.0    # решётка — в 60 м от зданий с потребителями схемы
-YARD_COST = 1.25       # трасса дворами дороже, чем вдоль проезда: магистрали идут по улицам, дворами — короткие
-ENTRY_M = 20.0         # ввод в здание — из узла графа не дальше 20 м от стены
-# проезжая часть (для метрики «в 30 м от оси улицы»), как ROAD_CLASS в scripts/city_geojson.py
+STEP_M = 25.0
+SNAP_M = 200.0
+YARD_M = 10.0
+YARD_REACH_M = 60.0
+YARD_COST = 1.25
+ENTRY_M = 20.0
 CARRIAGEWAY = {"motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential",
                "living_street", "road", "busway", "motorway_link", "trunk_link", "primary_link", "secondary_link",
                "tertiary_link", "service"}
 
 
 class Streets:
-    """Граф улиц, проездов и дорожек OSM в UTM 38N: узлы — точки OSM и точки деления длинных отрезков."""
 
     def __init__(self, highways):
         self.xy, self.adj, index = [], [], {}
@@ -197,9 +169,6 @@ class Streets:
         return out
 
     def add_yards(self, buildings, near):
-        """Решётка дворов с шагом YARD_M в YARD_REACH_M от зданий near: узлы вне зданий, связи с 8 соседями, если
-        отрезок не задевает здание, и с ближайшим узлом улицы в YARD_M. Так трасса может идти дворами наискось,
-        как квартальные сети на деле, а не только по осям проездов."""
         n_street = self.n_street = len(self.xy)
         zone = unary_union([p.buffer(YARD_REACH_M, quad_segs=2) for p in near])
         shapely.prepare(zone)
@@ -239,7 +208,6 @@ class Streets:
         print(f"решётка дворов: узлов {len(cells)}, связей {edges}, со улицами {len(iy)}", file=sys.stderr)
 
     def entries(self, poly):
-        """Узлы графа в ENTRY_M от контура здания: [(узел, расстояние до стены)]."""
         ks = self.nodes.query(poly, predicate="dwithin", distance=ENTRY_M)
         out = [(int(k), float(poly.distance(Point(self.xy[k])))) for k in ks]
         if not out:
@@ -250,7 +218,6 @@ class Streets:
         return out
 
     def ball(self, starts, limit):
-        """Кратчайшие расстояния по улицам от starts [(узел, начальное расстояние)] до limit: {узел: м}."""
         dist, best = {}, {}
         heap = list((d, k) for k, d in starts)
         heapq.heapify(heap)
@@ -268,7 +235,6 @@ class Streets:
         return dist
 
     def path(self, starts, targets, limit):
-        """Кратчайший путь от starts до одного из targets [(узел, добавка)]: список узлов или None."""
         pred, done, best = {}, set(), {}
         goal = dict(targets)
         heap = [(d, k, -1) for k, d in starts]
@@ -299,8 +265,6 @@ class Streets:
         return out[::-1]
 
 
-# ---------------------------------------------------------------- граф сети по таблицам
-
 def pipe_of(kind):
     k = kind.lower()
     return ("inactive" if k.startswith("недейств") else "steam" if k.startswith("паропровод") else
@@ -312,8 +276,6 @@ CTP_SUFFIX = re.compile(r"[\s_.]+(ВВП.*|гвс.*|ГВС.*|от\.?|отоп.*|
 
 
 def ctp_base(n):
-    """«ЦТП-317», «ЦТПО-317», «ЦТПГ-317», «ЦТП-704 ВВП ГВС» → «317»: вход ЦТП со стороны магистрали и выходы
-    квартальных сетей отопления (ЦТПО) и ГВС (ЦТПГ) — одно здание, в графе — один узел."""
     m = CTP.match(n)
     if not m:
         return None
@@ -342,7 +304,7 @@ def heat_graph():
     nbrs = defaultdict(dict)
     for (a, b), rs in pairs.items():
         heat = [float(r["length_m"]) for r in rs if pipe_of(r["kind"]) == "heating"]
-        length = statistics.median(heat or [float(r["length_m"]) for r in rs])  # трубы одного канала
+        length = statistics.median(heat or [float(r["length_m"]) for r in rs])
         nbrs[a][b] = nbrs[b][a] = length
     par = {}
 
@@ -376,7 +338,6 @@ def heat_ball(nbrs, start, limit):
 
 
 def load_anchors(nbrs, canon):
-    """Опорные узлы: {узел: (x, y, роль, адрес)}; Сормовская ТЭЦ — по heat_sources.geojson (узел «Сормовская ТЭЦ»)."""
     anchors = {}
     for f in json.loads((RAW / "scheme_anchors.geojson").read_text())["features"]:
         p = f["properties"]
@@ -395,21 +356,16 @@ def load_anchors(nbrs, canon):
 
 STREET_WORDS = {"ул", "улица", "пр", "пр-т", "проспект", "пер", "переулок", "ш", "шоссе", "наб", "набережная", "б-р",
                 "бульвар", "пл", "площадь", "проезд", "пр-д", "д", "кот", "котельная", "бмк", "бмку", "пос", "п", "мкр",
-                "микрорайон", "с", "к", "кп", "г", "литер", "лит"}  # как в scripts/heat_tables_nn.py
+                "микрорайон", "с", "к", "кп", "г", "литер", "лит"}
 
 
 def street_tokens(text):
-    """Слова названия улицы без типа улицы и чисел: «Победы 40лет» → ['победы', 'лет']."""
     words = re.findall(r"[а-яё]+", text.lower().replace("ё", "е"))
     return [w for w in words if len(w) > 1 and w not in STREET_WORDS]
 
 
 def relaxed_anchors(nbrs, anchors):
-    """Потребители, которых Разведчик не привязал: адрес «ПТ-улица,дом» с числами в названии улицы и дробными
-    номерами («Кораб,26/1» → Корабельная 26/1 или 26), а из нескольких подходящих зданий — ближайшее к привязанным
-    узлам той же компоненты (не дальше 3 км). Ошибки отсеет та же проверка противоречий."""
     sys.path.insert(0, str(Path(__file__).parent))
-    # компонента — по обходу графа, центр — медиана привязанных узлов
     seen, centre = {}, {}
     for start in sorted(nbrs):
         if start in seen:
@@ -461,8 +417,6 @@ CHECK_M = 600.0
 
 
 def contradictions(nbrs, anchors):
-    """Опоры, противоречащие соседям: прямое расстояние > 1,5 × длина по графу + 50 м у большинства пар в 600 м
-    по графу (проверка Разведчика; это ошибки адреса)."""
     score = defaultdict(lambda: [0, 0])
     for a in sorted(anchors):
         for b, length in heat_ball(nbrs, a, CHECK_M).items():
@@ -474,7 +428,6 @@ def contradictions(nbrs, anchors):
 
 
 def chains_of(nbrs, key):
-    """Цепочки узлов степени 2 между ключевыми узлами: [(узлы, длины участков)]."""
     out, seen = [], set()
     for k in sorted(key):
         for nb in sorted(nbrs[k]):
@@ -492,29 +445,23 @@ def chains_of(nbrs, key):
     return out
 
 
-# ---------------------------------------------------------------- укладка
-
-SIGMA0, SIGMA1 = 20.0, 0.25     # допуск согласия «расстояние по улицам ≈ длина цепочки»: 20 м + 25 % длины
-REACH = 1.6                     # дальше 1,6 × длина + 60 м по улицам от уложенного соседа узел не ищется
+SIGMA0, SIGMA1 = 20.0, 0.25
+REACH = 1.6
 
 
 class Placed:
-    """Уложенный узел: старты поиска по графу [(узел, добавка)], точка, контур здания (у опор), невязка, способ."""
     __slots__ = ("starts", "xy", "poly", "fit", "how")
 
     def __init__(self, starts, xy, poly, fit, how):
         self.starts, self.xy, self.poly, self.fit, self.how = starts, xy, poly, fit, how
 
 
-HOP_M = 1500.0      # ограничение по узлам через цепочки: до 1,5 км по графу сети
-HOP_RHO = 0.9       # путь по дереву сети через несколько узлов длиннее пути по улицам: ожидается 0,9 × длина
-HOP_SIGMA1 = 0.4    # и допуск шире: 20 м + 40 % длины
+HOP_M = 1500.0
+HOP_RHO = 0.9
+HOP_SIGMA1 = 0.4
 
 
 def trilaterate(streets, cons):
-    """Узел графа улиц, где расстояния по улицам до уложенных узлов согласуются с ожидаемыми:
-    cons [(Placed, ожидаемое расстояние, допуск)], min Σ ((d − ожидаемое) / допуск)², при равенстве — ближе ко всем.
-    Возвращает (узел, невязка RMS в долях допуска) или None."""
     cons = sorted(cons, key=lambda c: c[1])
     balls = [(streets.ball(p.starts, REACH * e + 60.0), e, sg, REACH * e + 60.0) for p, e, sg in cons]
     best = None
@@ -537,8 +484,6 @@ def direct(kn, placed, n):
 
 
 def multi_hop(kn, placed, n):
-    """Ограничения через цепочки неуложенных узлов: ближайшие уложенные узлы по каждому направлению от n
-    в HOP_M по графу сети → ([(Placed, 0,9 × длина, допуск)], число направлений)."""
     dist, heap, found = {n: 0.0}, [(0.0, n, None)], {}
     while heap:
         d, k, first = heapq.heappop(heap)
@@ -565,7 +510,7 @@ def place(only=""):
     print(f"улицы: узлов {len(streets.xy)}, отрезков {len(streets.seg)}, осей проезжей части {len(streets.axes)}; "
           f"{__import__('time').time() - t0:.0f} с", file=sys.stderr)
     rows, pairs, nbrs, comp, canon = heat_graph()
-    if only:  # отладка: только компоненты из списка «2,3»
+    if only:
         keep = {int(c) for c in only.split(",")}
         nbrs = {n: v for n, v in nbrs.items() if comp[n] in keep}
         rows = [r for r in rows if canon(r["node_from"]) in nbrs]
@@ -584,7 +529,7 @@ def place(only=""):
     placed, far = {}, 0
     for a in names:
         starts = streets.entries(polys[a])
-        if len(nbrs[a]) != 1 and starts:  # узел с несколькими цепочками — одна точка ввода
+        if len(nbrs[a]) != 1 and starts:
             starts = [min(starts, key=lambda kd: (kd[1], kd[0]))]
         if not starts:
             far += 1
@@ -595,13 +540,11 @@ def place(only=""):
 
     key = {n for n in nbrs if len(nbrs[n]) != 2} | set(placed)
     chains = chains_of(nbrs, key)
-    kn = defaultdict(list)  # ключевой узел → [(сосед, длина цепочки)]
+    kn = defaultdict(list)
     for i, (path, lens) in enumerate(chains):
         if path[0] != path[-1]:
             kn[path[0]].append((path[-1], sum(lens)))
             kn[path[-1]].append((path[0], sum(lens)))
-    # постановка ключевых узлов без адреса: сначала те, у кого больше уложенных соседей и короче цепочки;
-    # когда таких нет — узел с ограничениями через цепочки неуложенных узлов не меньше чем с двух направлений
     heap, order = [], []
 
     def push(n):
@@ -629,7 +572,7 @@ def place(only=""):
             if n in placed:
                 continue
             cons = direct(kn, placed, n)
-            if len(cons) == -cnt:  # иначе запись устарела: соседей уже больше, новая запись в куче
+            if len(cons) == -cnt:
                 settle(n, cons, "trilateration")
 
     for n in sorted(kn):
@@ -652,7 +595,6 @@ def place(only=""):
                 strict()
         if not progress:
             break
-    # уточнение: каждый поставленный узел — по всем уложенным соседям (в т. ч. поставленным позже)
     moved = 0
     for n in order:
         cons = direct(kn, placed, n)
@@ -678,7 +620,6 @@ def wall_point(poly, xy):
 
 
 def crosses(streets, line, own):
-    """Линия заходит в здание (кроме зданий own, у которых она начинается или кончается) больше чем на 0,5 м."""
     for i in streets.btree.query(line, predicate="intersects"):
         g = streets.btree.geometries[i]
         if not any(g is o for o in own) and line.intersection(g).length > 0.5:
@@ -690,8 +631,6 @@ PULL_M = 60.0
 
 
 def pull(streets, pts, own):
-    """Спрямление ступенек решётки: из каждой точки — прямо в самую дальнюю точку пути не дальше PULL_M,
-    если отрезок не заходит в здания."""
     out, i = [pts[0]], 0
     while i < len(pts) - 1:
         j = i + 1
@@ -705,8 +644,6 @@ def pull(streets, pts, own):
 
 
 def lay(streets, a, b, total):
-    """Трасса цепочки: от стены здания a по улицам и дворам до стены здания b (у узлов без здания — от узла графа);
-    без пути по графу — прямая, если она не длиннее 1,3 × длина + 30 м. (координаты, способ) или (None, причина)."""
     nodes = streets.path(a.starts, b.starts, max(3.0 * total, total + 400.0))
     if nodes is None:
         if math.dist(a.xy, b.xy) <= 1.3 * total + 30.0:
@@ -737,7 +674,6 @@ def buildings_utm(layers):
 
 
 def axis_share(streets, lines, step=5.0, near=30.0):
-    """Доля длины линий в near м от оси проезжей части (по точкам через step м)."""
     tree = STRtree(streets.axes)
     pts = [ln.interpolate(d) for ln in lines for d in np.arange(step / 2, ln.length, step)]
     if not pts:
@@ -774,7 +710,7 @@ def embed(only=""):
             g = substring(line, float(at[j]), float(at[j + 1]))
             if g.geom_type != "LineString" or g.length < 0.05:
                 p = line.interpolate(float(at[j]))
-                g = LineString([(p.x, p.y), (p.x + 0.05, p.y)])  # участок нулевой длины по таблице
+                g = LineString([(p.x, p.y), (p.x + 0.05, p.y)])
             geom_of[e] = (path[j], g)
             how_of[e], ratio_of[e] = how, ratio
             fit_of[e] = max(placed[a].fit, placed[b].fit)
@@ -785,7 +721,7 @@ def embed(only=""):
     feats, unlaid = [], []
     for e, rs in sorted(pairs.items()):
         for r in rs:
-            a_, b_ = canon(r["node_from"]), canon(r["node_to"])
+            a_ = canon(r["node_from"])
             base = {"diameter": int(float(r["diameter"])), "label_length_m": float(r["length_m"]),
                     "d_label_mm": float(r["d_label_mm"]), "kind": r["kind"], "_pipe": pipe_of(r["kind"]),
                     "district": r["district"], "_from": r["node_from"], "_to": r["node_to"],
@@ -869,15 +805,10 @@ def report(streets, rows, feats, unlaid, geom_of, bad, anchors, placed, only):
 
 
 def teploseti_district(system):
-    """ТСР ООО «Теплосети» → район: ТСР Ленинский (Ржавка, Героя Попова, пр. Ленина, Ленинская магистраль) —
-    Ленинский район, остальные (Заводской, Соцгородской, Юго-Западный, Северный — кварталы Соцгорода и ул. Газовской,
-    ГР ГАЗ, бесхозяйные Автозаводского) — Автозаводский (названия трубопроводов, Гл. 1 Прил. 2 Ч. 5)."""
     return "Ленинский" if "Ленинск" in system else "Автозаводский"
 
 
 def avtozavod():
-    """Сеть ООО «Теплосети» (Автозаводская ТЭЦ, узлов нет): трасса = длина подающих труб (п), по районам —
-    км отопления и ГВС, Ду по длине → raw/nnovgorod/teploseti_stats.json (для достройки на этапе 2 и сверки)."""
     rows = [r for r in csv.DictReader(gzip.open(RAW / "scheme_sections.csv.gz", "rt")) if r["part"] == "5"]
     out = {}
     for r in rows:
@@ -903,20 +834,17 @@ def avtozavod():
     print(json.dumps({k: {p: v[p]["km_route"] for p in v} for k, v in rep.items() if k != "_ref"}, ensure_ascii=False))
 
 
-# ---------------------------------------------------------------- сеть для входа сервиса (этап 2)
-
-HOLE_M = 150.0              # здание дальше 150 м от сети — «дыра», к нему достраивается ветка (PLAN.md)
+HOLE_M = 150.0
 AVTO_ORGS = ("ООО «Автозаводская ТЭЦ»", "ООО «Генерация тепла»")
-AVTO_MIN_GCAL = 50.0        # корни достроенной сети «Теплосетей»: Автозаводская ТЭЦ, «Ленинская», «Северная»
+AVTO_MIN_GCAL = 50.0
 AVTO_DISTRICTS = ("Автозаводский", "Ленинский")
-SOURCE_SNAP_M = 300.0       # источник → узел схемы с тем же адресом не дальше 300 м
-RING_GAP_M = 1.5            # разомкнутое кольцо не доходит 1,5 м до камеры (как в scripts/city_geojson.py)
+SOURCE_SNAP_M = 300.0
+RING_GAP_M = 1.5
 FOREST_LIMIT_M = 4000.0
-COVER_M = 150.0             # здание в 150 м от уже проложенной ветки своей ветки не получает: нагрузка — на ближайший участок
+COVER_M = 150.0
 
 
 def city_sources(region):
-    """Источники из heat_sources.geojson (Гл. 4 схемы) с точкой внутри восьми районов: [(id, Point, свойства)]."""
     out = []
     for i, f in enumerate(json.loads((RAW / "heat_sources.geojson").read_text())["features"], 1):
         (x, y), = utm_xy([f["geometry"]["coordinates"]])
@@ -926,8 +854,6 @@ def city_sources(region):
 
 
 def restored_graph():
-    """Трубы отопления из restored_heat.geojson: узлы по именам схемы (ЦТП/ЦТПО/ЦТПГ — один узел), по одной трубе
-    на пару узлов (параллельные трубы ГВС того же канала — не теплосеть отопления), концы — в точке узла."""
     feats = json.loads((RAW / "restored_heat.geojson").read_text())["features"]
     lines = [f["properties"] | {"_xy": f["geometry"]["coordinates"]} for f in feats
              if f["properties"]["_class"] == "heat_network" and f["properties"]["_pipe"] == "heating"]
@@ -944,7 +870,7 @@ def restored_graph():
         xy = utm_xy(p["_xy"])
         pos.setdefault(a, xy[0])
         pos.setdefault(b, xy[-1])
-        xy[0], xy[-1] = pos[a], pos[b]  # концы разных труб одного узла — в одной точке (сдвиг до ширины ввода)
+        xy[0], xy[-1] = pos[a], pos[b]
         if len(xy) == 2 and math.dist(*xy) < 0.05:
             xy[1] = (xy[1][0] + 0.05, xy[1][1])
         edges.append(dict(u=a, v=b, coords=xy, dn=p["diameter"], source="restored", name=f"{p['_from']} – {p['_to']}",
@@ -957,9 +883,6 @@ def restored_graph():
 
 
 def forest(streets, seeds, targets, limit=FOREST_LIMIT_M):
-    """Кратчайшие пути по улицам и дворам (двор дороже, YARD_COST) от ближайшего семени до каждого здания-цели:
-    seeds {узел улиц: метка}, targets [(id, контур)]. Возвращает рёбра леса [(узел, узел)], концы веток
-    {id здания: (узел ввода, точка у стены)} и метку семени каждого узла."""
     pred, dist, best = {}, {}, {}
     heap = [(0.0, k, -1) for k in sorted(seeds)]
     ns = streets.n_street
@@ -976,7 +899,7 @@ def forest(streets, seeds, targets, limit=FOREST_LIMIT_M):
                 heapq.heappush(heap, (nd, nb, k))
     edges, ends = set(), {}
     covered = set()
-    cells = defaultdict(list)  # клетка COVER_M → точки уже проложенных веток
+    cells = defaultdict(list)
     todo = []
     for bid, poly in targets:
         starts = [(k, off) for k, off in streets.entries(poly) if k in dist]
@@ -989,7 +912,7 @@ def forest(streets, seeds, targets, limit=FOREST_LIMIT_M):
                 for j in range(int(y0 // COVER_M) - 1, int(y1 // COVER_M) + 2) for p in cells.get((i, j), [])]
         if near and shapely.distance(poly, shapely.points(near)).min() <= COVER_M:
             covered.add(bid)
-            continue  # ветка к соседнему зданию уже проходит ближе COVER_M: здание — на ней (нагрузка на ближайший участок)
+            continue
         ends[bid] = (k, wall_point(poly, streets.xy[k]))
         while True:
             x, y = streets.xy[k]
@@ -1002,18 +925,12 @@ def forest(streets, seeds, targets, limit=FOREST_LIMIT_M):
 
 
 def nn_network(heated, obstacles, region, district_of, one_source=False, log=print, detour_fn=None):
-    """Существующая сеть города для входа: восстановленная сеть Теплоэнерго (restored), достроенная сеть «Теплосетей»
-    в Автозаводском и Ленинском районах от Автозаводской ТЭЦ, «Ленинской» и «Северной» и ветки к зданиям дальше 150 м
-    от сети (inferred). heated [(id, контур, расход т/ч)], obstacles — контуры всех зданий, district_of(точка) → район.
-    Вариант (а) — все источники с точкой в городе `source`, корни своих компонент; (б) one_source — только
-    Сормовская ТЭЦ. Возвращает участки и камеры в формате scripts/city_geojson.py (до finish_network), источники,
-    источники вне сети (для prohibited_site в варианте б) и сводку."""
     t0 = __import__("time").time()
     stats = {}
     pos, edges, ch_names, src_nodes = restored_graph()
     stats["restored_km"] = round(sum(LineString(e["coords"]).length for e in edges) / 1000, 1)
     sources = city_sources(region)
-    root_of = {}  # узел графа → id источника
+    root_of = {}
     for sid, pt, props in sources:
         near = [(math.dist(xy, (pt.x, pt.y)), n) for n, xy in src_nodes.items() if n in pos]
         if props["name"] == "Сормовская ТЭЦ":
@@ -1021,7 +938,6 @@ def nn_network(heated, obstacles, region, district_of, one_source=False, log=pri
         d, n = min(near, default=(math.inf, None))
         if n is not None and d <= SOURCE_SNAP_M and n not in root_of:
             root_of[n] = sid
-    # источник без узла схемы по адресу — корень ближайшей компоненты без источника, если её узел не дальше 300 м
     comp, stack_ = {}, []
     adj_ = defaultdict(list)
     for e in edges:
@@ -1064,13 +980,12 @@ def nn_network(heated, obstacles, region, district_of, one_source=False, log=pri
     streets.add_yards(obstacles, [g for _, g in far])
     log(f"сеть: графы готовы, {__import__('time').time() - t0:.0f} с")
     extra, tag = [], {}
-    # «Теплосети»: лес от источников ЕТО Автозаводской ТЭЦ; остальные дыры — от ближайшего узла восстановленной сети
     snap = streets.nodes.query_nearest(shapely.points([(p.x, p.y) for _, p, _ in avto]), all_matches=False)[1]
     seeds = {int(k): ("src", sid, p) for k, (sid, p, _) in zip(snap, avto)}
     e1, ends1, cov1 = forest(streets, seeds, avto_targets, limit=20000.0)
     names = sorted(pos)
     snap = streets.nodes.query_nearest(shapely.points([pos[n] for n in names]), all_matches=False)[1]
-    seeds2 = {k: ("tree", None, None) for e in e1 for k in e}  # вторые ветки примыкают и к лесу «Теплосетей»
+    seeds2 = {k: ("tree", None, None) for e in e1 for k in e}
     for k, n in zip(snap.tolist(), names):
         seeds2.setdefault(int(k), ("node", n, None))
     left = [(b, g) for b, g in avto_targets if b not in ends1 and b not in cov1]
@@ -1115,7 +1030,6 @@ def nn_network(heated, obstacles, region, district_of, one_source=False, log=pri
         root_of = {n: sid for n, sid in root_of.items() if n == "Сормовская ТЭЦ"}
     segments, chambers, stats["rings_opened"], stats["no_source_km"] = tree_segments(
         pos, edges_all, ch_names, root_of)
-    # нагрузки зданий — на ближайший участок в 150 м
     seg_tree = STRtree([LineString(s["coords"]) for s in segments])
     on = 0
     for bid, g, flow in heated:
@@ -1139,8 +1053,6 @@ MERGE_M = 0.3
 
 
 def merge_close(edges, pos, root_of):
-    """Узлы ближе MERGE_M — один узел (вводы разных узлов схемы в одну точку стены, участки нулевой длины):
-    иначе в одной точке сходятся концы трёх участков без камеры. Рёбра внутри одного узла отбрасываются."""
     names = sorted({e[k] for e in edges for k in ("u", "v")}, key=str)
     pts = shapely.points([pos[n] for n in names])
     tree = STRtree(pts)
@@ -1155,7 +1067,6 @@ def merge_close(edges, pos, root_of):
     for i, j in zip(a.tolist(), b.tolist()):
         if i != j:
             ri, rj = root(i), root(j)
-            # корень-источник остаётся представителем группы
             if names[ri] in root_of:
                 par[rj] = ri
             else:
@@ -1169,7 +1080,7 @@ def merge_close(edges, pos, root_of):
         coords = list(e["coords"])
         coords[0], coords[-1] = pos[u], pos[v]
         pair = tuple(sorted((u, v), key=str))
-        if pair in seen:  # две трубы между одними узлами после слияния — одна, с большим Ду
+        if pair in seen:
             k = seen[pair]
             if (e["dn"] or 0) > (out[k]["dn"] or 0):
                 out[k] = dict(e, u=u, v=v, coords=coords)
@@ -1183,8 +1094,6 @@ def merge_close(edges, pos, root_of):
 
 
 def avoid_buildings(edges, houses, detour_fn):
-    """Участок, заходящий в здание дальше 0,01 м (не считая касания стены у ввода), обходит его (detour_fn из
-    scripts/city_geojson.py, растр 1 м); обойти нельзя — остаётся, как есть, и помечается _through_building."""
     tree = STRtree(houses)
     moved, kept = 0, 0.0
     for e in edges:
@@ -1193,7 +1102,7 @@ def avoid_buildings(edges, houses, detour_fn):
         if cut <= 0.005:
             continue
         route = None
-        if line.length > 2.0:  # концы у стены (ввод) отодвигаются на 0,6 м внутрь трассы: касание стены — не заход
+        if line.length > 2.0:
             inner = list(substring(line, 0.6, line.length - 0.6).coords)
             route = detour_fn(inner, houses, tree)
             if route is not None:
@@ -1228,9 +1137,6 @@ def components(edges):
 
 
 def bridges(streets, pos, edges, root_of):
-    """Куски одной компоненты схемы, разорванные неуложенными участками: кусок без источника — перемычкой по улицам
-    от ближайшего своего узла до куска той же компоненты схемы с источником (или до самого длинного куска, если
-    источника у компоненты нет), не длиннее BRIDGE_M (inferred). Разные системы не связываются."""
     comp = components(edges)
     scheme, size = {}, defaultdict(float)
     for e in edges:
@@ -1294,9 +1200,6 @@ def bridges(streets, pos, edges, root_of):
 
 
 def tree_segments(pos, edges, ch_names, root_of):
-    """Дерево от корней-источников по длине (кратчайшие пути), рёбра вне дерева — разомкнутые кольца; компоненты без
-    источника — от конца самого толстого участка, верхний участок без upstream_object_id. Цепочки узлов без ветвления
-    сливаются в один участок; камера — узел схемы ТК или ветвление."""
     adj = defaultdict(list)
     for k, e in enumerate(edges):
         length = LineString(e["coords"]).length
@@ -1344,7 +1247,7 @@ def tree_segments(pos, edges, ch_names, root_of):
     roots = [(r, root_of.get(r)) for r in sorted({top[n] for n in top}, key=key)]
     no_source = 0.0
     for r, sid in roots:
-        if sid is None and len(children[r]) >= 2:  # корень сети без источника с ветвлением — камера без upstream
+        if sid is None and len(children[r]) >= 2:
             chambers.append(dict(id=f"hc-{len(chambers) + 1}", pos=pos[r], up=None,
                                  source="restored" if r in ch_names else "inferred",
                                  osm=r if isinstance(r, str) else None, load=0.0, ctp=False))

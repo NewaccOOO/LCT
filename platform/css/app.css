@@ -1,6 +1,3 @@
-/* Визуальный код платформы: светлая и тёмная тема, см. docs/DESIGN.md, раздел «Визуальный код».
-   Синий — единственный цвет действия, жёлтый — только знак. Кнопки — контур в волосок и малый радиус, главная — заливкой;
-   тени только у плавающего */
 :root {
   --bg: #f4f4f4; --panel: #fff; --float: #fff; --card: #f4f4f4; --card2: #ebebeb; --line: #ebebeb;
   --text: #000; --text2: #4d4d4d; --muted: #878787;
@@ -29,10 +26,9 @@
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html, body { height: 100%; overscroll-behavior: none; }   /* свайп вбок по панели не уводит браузер «назад» */
+html, body { height: 100%; overscroll-behavior: none; }
 body { margin: 0; font: 14px/1.4 var(--font); -webkit-font-smoothing: antialiased; background: var(--bg); color: var(--text); overflow: hidden; display: grid; grid-template-rows: var(--hdr) minmax(0, 1fr) var(--st); grid-template-columns: minmax(0, 1fr); }
 button, select, input { font: inherit; color: var(--text); }
-/* кнопки: контур в волосок, радиус 6, обычный вес; выбранная — синий контур на мягком синем; главная — синяя заливка */
 button { cursor: pointer; background: transparent; color: var(--text); border: 0; box-shadow: var(--hair); border-radius: var(--rb); min-height: 36px; padding: 6px 14px; font-weight: 400; letter-spacing: -.01em; transition: background-color .1s ease-out, box-shadow .1s ease-out, color .1s ease-out; }
 button:hover { background: var(--card); box-shadow: var(--hair-h); }
 button.on, button.on:hover { background: var(--soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
@@ -41,7 +37,6 @@ button.primary:hover { background: var(--accent-h); color: #fff; box-shadow: non
 button.icon { width: 36px; padding: 0; display: inline-grid; place-items: center; font-size: 17px; }
 button:focus-visible, input:focus-visible, select:focus-visible, canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 canvas:focus { outline: none; }
-/* поля — серая заливка без рамки, рамка появляется на фокусе */
 input, select { background: var(--card); border: 2px solid transparent; border-radius: var(--r); min-height: 36px; padding: 5px 10px; }
 input:focus, select:focus { outline: none; border-color: var(--accent); }
 input::placeholder { color: var(--muted); }
@@ -51,7 +46,6 @@ kbd { font: 12px/1 var(--font); border: 0; border-radius: 6px; padding: 3px 7px;
 .caret { color: var(--muted); font-size: 11px; margin-left: 4px; }
 svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
-/* ---------- шапка ---------- */
 header.top { display: flex; align-items: center; gap: 8px; padding: 0 12px; background: var(--panel); box-shadow: 0 1px 0 var(--line); z-index: 20; min-width: 0; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 500; font-size: 17px; white-space: nowrap; margin-right: 4px; }
 .brand svg { width: 28px; height: 28px; stroke: none; }
@@ -60,7 +54,6 @@ header.top { display: flex; align-items: center; gap: 8px; padding: 0 12px; back
 .dataset span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search { position: relative; flex: 1; min-width: 180px; max-width: 560px; display: flex; align-items: center; margin-left: 6px; }
 .search svg { position: absolute; left: 10px; color: var(--muted); width: 18px; height: 18px; pointer-events: none; }
-/* поиск как в Картах: серое поле r16 без тени и рамки */
 .search input { width: 100%; min-height: 40px; padding-left: 38px; padding-right: 34px; font-size: 15px; border-radius: var(--r); }
 .search kbd { position: absolute; right: 10px; }
 .sugg { position: absolute; top: 46px; left: 0; right: 0; background: var(--float); border-radius: var(--r); box-shadow: var(--shadow-pop); max-height: 60vh; overflow: auto; z-index: 40; padding: 8px 0; }
@@ -73,12 +66,10 @@ header .icon { background: none; box-shadow: none; color: var(--text2); border-r
 header .icon:hover { background: var(--card); box-shadow: none; color: var(--text); }
 header .icon[aria-pressed=true] { color: var(--text); }
 header .icon:disabled { opacity: .3; }
-/* варианты — сегменты: выбранный мягко-синий, как выбранное в Картах */
 .variants button { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15; padding: 4px 14px; min-height: 40px; }
 .variants button.on small { color: var(--accent); opacity: .8; }
 .variants small { color: var(--muted); font-size: 11.5px; font-weight: 400; }
 .variants .vs { display: none; }
-/* меню — как «⋯» в Картах: плавающая карточка, пункты 40 px, без рамки */
 .menu { position: absolute; top: 46px; left: 0; min-width: 284px; background: var(--float); border-radius: var(--r); padding: 8px 0; box-shadow: var(--shadow-pop); z-index: 50; display: grid; gap: 0; }
 .menu.right { left: auto; right: 0; }
 .menu .seg { margin: 4px 12px 8px; }
@@ -88,13 +79,10 @@ header .icon:disabled { opacity: .3; }
 .menu .lbl { padding: 6px 16px 4px; color: var(--muted); font-size: 13px; background: none; box-shadow: none; border-radius: 0; white-space: normal; }
 body:not(.server) .srv { display: none !important; }
 
-/* ---------- раскладка ---------- */
 main { display: flex; min-height: 0; position: relative; }
 #left { width: var(--left); flex: none; background: var(--panel); box-shadow: 2px 0 2px rgba(0,0,0,.1); display: flex; flex-direction: column; min-height: 0; z-index: 10; transition: margin-left .2s ease, visibility 0s; }
-/* свёрнутая панель уезжает за край, 3D-окно занимает её место */
 body.leftHidden #left { margin-left: calc(-1 * var(--left)); visibility: hidden; transition: margin-left .2s ease, visibility 0s .2s; }
 .tabs { display: flex; gap: 4px; padding: 4px 12px 0; border-bottom: 1px solid var(--line); }
-/* вкладки: активная — основной цвет текста и линия 2 px акцентом во всю ширину */
 .tabs button { position: relative; flex: 1; background: none; box-shadow: none; border-radius: 0; min-height: 48px; padding: 8px 4px 10px; color: var(--muted); font-weight: 400; white-space: nowrap; }
 .tabs button::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: transparent; }
 .tabs button.on, .tabs button.on:hover { color: var(--text); background: none; box-shadow: none; }
@@ -104,7 +92,6 @@ body.leftHidden #left { margin-left: calc(-1 * var(--left)); visibility: hidden;
 .cnt { font-weight: 400; font-size: 12px; color: var(--muted); }
 .cnt.bad { color: var(--bad-t); }
 .pane { flex: 1; overflow: auto; padding: 4px 16px 16px; min-height: 0; }
-/* заголовок секции как в карточке Карт: 16/20, вес 500, без капса */
 h2 { font-size: 16px; line-height: 20px; color: var(--text); margin: 20px 0 10px; font-weight: 500; }
 h3 { font-size: 14px; margin: 14px 0 6px; font-weight: 500; }
 #stage { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -112,7 +99,6 @@ h3 { font-size: 14px; margin: 14px 0 6px; font-weight: 500; }
 #view > canvas { display: block; width: 100% !important; height: 100% !important; }
 .labels { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
 
-/* ---------- обзор ---------- */
 .kpi { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .kpi > div { background: var(--card); border-radius: var(--r); padding: 10px 12px; }
 .kpi b { display: block; font-size: 20px; line-height: 24px; font-weight: 500; font-variant-numeric: tabular-nums; }
@@ -125,7 +111,6 @@ td:last-child, th:last-child { text-align: right; padding-left: 10px; font-varia
 th { color: var(--muted); font-weight: 500; font-size: 12.5px; }
 tr.click { cursor: pointer; } tr.click:hover td { background: var(--soft); }
 tr.cur td { color: var(--accent); }
-/* списки как выдача Карт: строки через тонкий разделитель, без рамки вокруг */
 .list { border-top: 1px solid var(--line); margin: 0 -16px; }
 .item { padding: 12px 16px; border-bottom: 1px solid var(--line); cursor: pointer; display: block; width: 100%; text-align: left; background: none; box-shadow: none; border-radius: 0; letter-spacing: 0; color: var(--text); font-weight: 400; }
 .item:last-child { border-bottom: 0; }
@@ -136,7 +121,6 @@ tr.cur td { color: var(--accent); }
 .badge { font-size: 12px; font-weight: 500; border-radius: var(--r-s); padding: 2px 8px; white-space: nowrap; flex: none; align-self: flex-start; }
 .b-bad { background: var(--bad-s); color: var(--bad-t); } .b-ok { background: var(--ok-s); color: var(--ok-t); } .b-mut { background: var(--card); color: var(--muted); } .b-warn { background: var(--warn-s); color: var(--warn-t); }
 .filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; }
-/* чипы-фильтры: контур в волосок, выбранный — синий контур */
 .filters button { min-height: 32px; padding: 3px 12px; font-size: 14px; }
 .pane input[type=search] { width: 100%; margin-bottom: 10px; min-height: 40px; }
 .actions { display: grid; gap: 6px; }
@@ -152,7 +136,6 @@ tr.cur td { color: var(--accent); }
 .fld label { display: flex; justify-content: space-between; font-size: 13.5px; margin-bottom: 4px; }
 .fld small { color: var(--muted); font-size: 12px; display: block; margin-top: 3px; }
 .fld input[type=range] { width: 100%; min-height: 22px; padding: 0; accent-color: var(--accent); background: none; border: 0; }
-/* сегмент-контрол: серый трек, выбранный сегмент — белая плашка с тенью, остальные приглушены */
 .seg { display: flex; gap: 2px; padding: 2px; background: var(--card); border-radius: var(--r); }
 .seg button { flex: 1; background: none; box-shadow: none; border-radius: var(--rb); min-height: 32px; padding: 4px 8px; font-size: 13px; color: var(--muted); }
 .seg button:hover { background: none; box-shadow: none; color: var(--text); }
@@ -169,14 +152,10 @@ details.note[open] summary { margin-bottom: 6px; }
 td.best { color: var(--ok-t); font-weight: 500; }
 .verdict { background: var(--card); border-radius: var(--r); padding: 10px 12px; font-size: 13px; margin-bottom: 8px; }
 
-/* ---------- правая панель свойств ---------- */
-/* карточка лежит поверх сцены: 3D-окно не меняет размер, навигация плавно отъезжает */
-/* карточка — плавающая панель над сценой, как карточка организации в Картах */
 #props { position: absolute; top: var(--gap); right: var(--gap); bottom: var(--gap); width: var(--props); background: var(--panel); border-radius: var(--r); overflow: auto; padding: 14px 16px 16px; z-index: 12; box-shadow: var(--shadow-panel); transition: transform .2s ease, visibility 0s; }
 body.propsMin #props { transform: translateX(calc(100% + var(--gap))); visibility: hidden; transition: transform .2s ease, visibility 0s .2s; }
 #navR { transition: right .2s ease; }
 body.propsShown #navR, body.propsShown .attr { right: calc(var(--props) + 2 * var(--gap)); }
-/* подпись источника карты в правом нижнем углу сцены */
 .attr { position: absolute; right: var(--gap); bottom: 4px; z-index: 6; font-size: 11px; color: var(--muted); background: color-mix(in srgb, var(--panel) 80%, transparent); border-radius: var(--r-s); padding: 1px 6px; text-decoration: none; transition: right .2s ease; }
 .attr:hover { color: var(--text); }
 body.propsShown #profile { margin-right: calc(var(--props) + 2 * var(--gap)); }
@@ -192,9 +171,7 @@ body.propsShown #profile { margin-right: calc(var(--props) + 2 * var(--gap)); }
 #props td:first-child { width: 46%; color: var(--muted); padding-right: 8px; }
 #props td:last-child { white-space: normal; word-break: break-word; text-align: right; }
 
-/* ---------- навигация на сцене ---------- */
 #navR { position: absolute; top: var(--gap); right: var(--gap); bottom: var(--gap); display: flex; flex-direction: column; align-items: flex-end; gap: var(--gap); z-index: 6; pointer-events: none; }
-/* невысокое 3D-окно: панель инструментов прокручивается, а не уходит за край */
 #navR .toolbar { min-height: 0; overflow-y: auto; scrollbar-width: none; }
 #navR .cubewrap { flex: none; }
 #navR > * { pointer-events: auto; }
@@ -203,7 +180,6 @@ body.propsShown #profile { margin-right: calc(var(--props) + 2 * var(--gap)); }
 #v2d { gap: 0; line-height: 1.05; font-size: 12px; font-weight: 400; }
 #v2d span { color: var(--muted); opacity: .7; }
 #v2d:not(.is2d) .v3, #v2d.is2d .v2 { color: var(--accent); opacity: 1; }
-/* инструменты — белая плашка с мягкой тенью; на наведение — серая подложка кнопки, активный — синий */
 .toolbar { display: flex; flex-direction: column; gap: 2px; background: var(--float); border-radius: var(--r); padding: 4px; box-shadow: var(--shadow); transition: box-shadow .1s ease-out; }
 .toolbar:hover { box-shadow: var(--shadow-h); }
 .toolbar button { width: 56px; min-height: 48px; padding: 4px 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: none; box-shadow: none; border-radius: var(--rb); color: var(--text2); }
@@ -214,7 +190,6 @@ body.propsShown #profile { margin-right: calc(var(--props) + 2 * var(--gap)); }
 .toolbar hr { border: 0; border-top: 1px solid var(--line); margin: 2px 6px; }
 #scale { position: absolute; left: var(--gap); bottom: 10px; z-index: 5; font-size: 12px; color: var(--text2); display: flex; align-items: flex-end; gap: 6px; pointer-events: none; text-shadow: 0 0 3px var(--panel), 0 0 3px var(--panel); }
 #scale .bar { height: 6px; border: 2px solid var(--text2); border-top: 0; }
-/* всё, что плавает над сценой, — таблетки как в Картах: без рамки, r12, тень */
 .floatcard { position: absolute; z-index: 7; background: var(--float); border-radius: var(--r); box-shadow: var(--shadow); padding: 8px 12px; }
 #legend { left: var(--gap); bottom: 70px; padding: 0; max-width: 280px; font-size: 12px; max-height: calc(100% - 120px); overflow: auto; }
 #legend > button { min-height: 40px; padding: 3px 14px; font-size: 14px; background: none; box-shadow: none; color: var(--text2); }
@@ -222,13 +197,11 @@ body.propsShown #profile { margin-right: calc(var(--props) + 2 * var(--gap)); }
 #legBody { display: grid; grid-template-columns: 22px 1fr; gap: 4px 8px; align-items: center; padding: 0 14px 12px; color: var(--text2); }
 #legBody .h { grid-column: 1 / 3; color: var(--text); font-weight: 500; margin-top: 6px; }
 #legBody .sw { width: 22px; }
-/* под землёй — тёплая таблетка «Под землёй, N м» с кнопкой «Наверх» */
 .camchip { position: absolute; left: var(--gap); top: var(--gap); z-index: 5; min-height: 40px; padding: 4px 4px 4px 14px; border-radius: var(--r); background: var(--float); box-shadow: var(--shadow); color: var(--text); font-size: 14px; display: flex; align-items: center; gap: 10px; }
 .camchip:hover { background: var(--float); color: var(--text); box-shadow: var(--shadow-h); }
 .camchip b { background: #a07850; color: #fff; border-radius: var(--rb); padding: 6px 12px; font-weight: 500; }
 #varSel { display: none; min-height: 36px; padding: 4px 8px; font-weight: 600; }
 .lbl.dim { font-weight: 500; } .lbl.dim.bad { box-shadow: inset 0 0 0 1.5px var(--bad), var(--shadow); color: var(--bad-t); } .lbl.dim.ok { box-shadow: inset 0 0 0 1.5px var(--ok), var(--shadow); color: var(--ok-t); }
-/* слева внизу стопкой: масштабная линейка, вертикальный масштаб, условные обозначения — справа место инструментам */
 .exchip { position: absolute; left: var(--gap); bottom: 30px; z-index: 5; min-height: 32px; padding: 2px 12px; font-size: 13px; border-radius: var(--r-s); background: var(--float); color: var(--text2); box-shadow: var(--shadow); }
 .exchip:hover { background: var(--float); box-shadow: var(--shadow-h); }
 .exchip b { color: var(--accent); font-weight: 500; }
@@ -236,7 +209,6 @@ body.propsShown #profile { margin-right: calc(var(--props) + 2 * var(--gap)); }
 #plEnd button { min-height: 32px; padding: 3px 12px; font-size: 13px; }
 body.propsShown #player, body.propsShown #measure { left: calc(50% - var(--props) / 2); }
 body.flying #legend, body.flying .exchip { display: none; }
-/* в правке легенда и плашка масштаба — правее панели правки, чтобы она их не закрывала */
 body.editing #legend, body.editing .exchip { left: calc(2 * var(--gap) + min(420px, 100% - 2 * var(--gap) - 70px)); }
 #pc { touch-action: none; }
 #errBody { margin: 8px 0; }
@@ -251,7 +223,6 @@ body.editing #legend, body.editing .exchip { left: calc(2 * var(--gap) + min(420
 .row { display: flex; gap: 8px; }
 .row.end { justify-content: flex-end; margin-top: 14px; }
 .coach .row { justify-content: flex-end; }
-/* подсказка у курсора — тёмно-серая в обеих темах */
 #tip { position: fixed; pointer-events: none; z-index: 60; background: var(--tip); color: #fff; border-radius: var(--r-s); padding: 8px 12px; font-size: 13px; max-width: 340px; box-shadow: 0 4px 12px rgba(0,0,0,.2); }
 #tip b { display: block; font-weight: 500; } #tip .m { color: #bdbdbd; }
 .ctx { position: absolute; top: 0; left: 0; min-width: 250px; }
@@ -264,11 +235,8 @@ body.editing #legend, body.editing .exchip { left: calc(2 * var(--gap) + min(420
 #drop { position: absolute; inset: 8px; z-index: 35; border: 2px dashed var(--accent); border-radius: var(--r); background: color-mix(in srgb, var(--soft) 85%, transparent); display: grid; place-items: center; text-align: center; font-size: 20px; font-weight: 600; }
 #drop small { font-size: 14px; font-weight: 400; color: var(--muted); }
 
-/* ---------- ручная правка трассы ---------- */
-/* точки поверх сцены: круг — поворот, квадрат — камера или узел, серые закреплены, «+» — добавить поворот */
 .editlayer { position: absolute; inset: 0; pointer-events: none; z-index: 5; overflow: hidden; }
 .editguide { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4; fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 5 4; }
-/* выноски до объектов: пунктир от трубы, точка на объекте; цвет — смысл: норма, на грани, нарушение, справочно */
 .editguide .cl { stroke-width: 1.5; stroke-dasharray: 4 3; }
 .editguide .cl.ok { stroke: var(--ok); } .editguide .cl.near { stroke: var(--warn); } .editguide .cl.bad { stroke: var(--bad); stroke-width: 2; } .editguide .cl.info { stroke: var(--muted); }
 .editguide .ce { stroke: var(--float); stroke-width: 1.5; stroke-dasharray: none; }
@@ -289,14 +257,12 @@ body.editing #legBody { max-height: 34vh; overflow: auto; }
 .en.info { box-shadow: inset 3px 0 0 var(--muted), var(--shadow); }
 .en.dim { color: var(--text); font-weight: 500; padding: 1px 6px; background: color-mix(in srgb, var(--float) 88%, transparent); box-shadow: inset 0 -2px 0 var(--sel), var(--shadow); }
 .en.ang { color: var(--text); padding: 1px 6px; } .en.ang.bad { color: var(--bad-t); }
-/* плашка у курсора при перетаскивании: самое серьёзное у точки */
 .edittip { position: absolute; left: 0; top: 0; z-index: 9; pointer-events: none; display: block; max-width: 360px; padding: 6px 10px; border-radius: var(--r-s); background: var(--tip); color: #fff; font-size: 13px; line-height: 1.35; box-shadow: var(--shadow-pop); }
 .edittip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); display: inline-block; margin-right: 7px; vertical-align: 1px; }
 .edittip .mut { display: block; font-size: 12px; }
 .edittip.bad .dot { background: var(--bad); } .edittip.warn .dot { background: var(--warn); }
 .edittip .mut { color: #bdbdbd; }
 .eh { position: absolute; left: 0; top: 0; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: var(--float); box-shadow: 0 0 0 2px var(--accent), 0 1px 3px rgba(0,0,0,.35); pointer-events: auto; cursor: grab; touch-action: none; transition: box-shadow .1s ease-out, background-color .1s ease-out; }
-/* видимая точка мелкая, чтобы не закрывать короткие звенья; зона захвата — шире (под мышь 26 px, под палец 44 px) */
 .eh::before { content: ""; position: absolute; inset: -8px; border-radius: 50%; }
 .eh:hover { box-shadow: 0 0 0 3px var(--accent), 0 2px 6px rgba(0,0,0,.35); }
 .eh:active { cursor: grabbing; }
@@ -306,11 +272,8 @@ body.editing #legBody { max-height: 34vh; overflow: auto; }
 .eh.m { width: 14px; height: 14px; margin: -7px 0 0 -7px; background: var(--accent); box-shadow: 0 0 0 1.5px var(--float); opacity: .55; }
 .eh.m::after { content: "+"; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font: 600 11px/1 var(--font); }
 .eh.m:hover { opacity: 1; }
-/* точку взяли — кольцо вокруг сразу: видно, что тянется точка, а не карта */
 .eh.grab { box-shadow: 0 0 0 2px var(--accent), 0 0 0 7px color-mix(in srgb, var(--accent) 22%, transparent); }
-/* палец удержан на точке — отпустите, откроется меню */
 .eh.hold { box-shadow: 0 0 0 2px var(--accent), 0 0 0 9px color-mix(in srgb, var(--accent) 30%, transparent); }
-/* рядом спрятаны точки — «+N», своя кнопка поодаль от точки: касание приближает, точку не выбирает */
 .emore { position: absolute; left: 0; top: 0; z-index: 3; margin: 0; min-height: 0; padding: 0 5px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; box-shadow: 0 0 0 1.5px var(--float); font: 600 10px/16px var(--font); white-space: nowrap; cursor: zoom-in; pointer-events: auto; }
 .emore::before { content: ""; position: absolute; inset: -8px; }
 .emore:hover { background: var(--accent-h); }
@@ -318,12 +281,10 @@ body.pinching .eh { pointer-events: none; }
 .editctx { position: absolute; left: 0; top: 0; z-index: 30; min-width: 200px; }
 .editctx .h { padding: 6px 12px 2px; font-size: 12px; color: var(--muted); }
 body.editing .labels .lbl.depth { display: none; }
-/* в правке: подписи пересечений без проблем и общая легенда уступают место выноскам и панели */
 body.editing .labels .lbl.cx:not(.bad) { display: none; }
 .editbar .eb-else { font-size: 12.5px; color: var(--text2); } .editbar .eb-else .link { background: none; box-shadow: none; min-height: 0; padding: 0; color: var(--accent); font-size: 12.5px; }
 .lg.c { width: 14px; height: 0; border-radius: 0; box-shadow: none; background: none; border-top: 2px dashed; }
 .lg.c.ok { border-color: var(--ok); } .lg.c.near { border-color: var(--warn); } .lg.c.bad { border-color: var(--bad); } .lg.c.info { border-color: var(--muted); }
-/* панель правки — слева вверху сцены, чтобы трасса в центре оставалась видна */
 .editbar { left: var(--gap); top: var(--gap); width: min(420px, calc(100% - 2 * var(--gap) - 70px)); max-height: calc(100% - 2 * var(--gap)); overflow: auto; overscroll-behavior: contain; padding: 8px 10px 10px; display: grid; gap: 6px; z-index: 8; }
 .editbar .eb-h { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .editbar .eb-h b { font-size: 15px; font-weight: 500; white-space: nowrap; }
@@ -366,9 +327,7 @@ body.editing .labels .lbl.cx:not(.bad) { display: none; }
 .editbar .eb-hint .more { margin-top: 6px; color: var(--text2); background: var(--card); border-radius: var(--r-s); padding: 8px 10px; }
 body.editing .coach, body.editing .camchip { display: none !important; }
 body.dragging .editbar *, body.dragging .eh { animation: none !important; }
-/* пока тянут точку, панель не растёт и не накрывает её: список, выбор и справка — после отпускания */
 body.dragging .editbar :is(.eb-p, .eb-selp, .eb-conf, .eb-leg, .eb-hint, .eb-else) { display: none; }
-/* ручка панели на сенсорном экране: коснуться или смахнуть — свернуть до строки кнопок */
 .editbar .eb-grip { order: -1; justify-self: center; width: 64px; min-height: 22px !important; padding: 0; margin: -6px 0 -2px; box-shadow: none; background: none; display: grid; place-items: center; }
 .editbar .eb-grip span { width: 40px; height: 4px; border-radius: 2px; background: var(--card2); }
 .editbar { touch-action: pan-y; }
@@ -376,8 +335,6 @@ body.dragging .editbar :is(.eb-p, .eb-selp, .eb-conf, .eb-leg, .eb-hint, .eb-els
 .editbar.mini > :not(.eb-h):not(.eb-grip) { display: none; }
 body.dragging .eh { cursor: grabbing; }
 
-/* ---------- подписи в 3D ---------- */
-/* подписи на сцене — маленькие таблетки, как подписи организаций на карте; цветная обводка — смысл подписи */
 .lbl { font-size: 12px; padding: 3px 8px; border-radius: var(--r-s); background: var(--float); box-shadow: var(--shadow); color: var(--text); white-space: nowrap; transform-origin: bottom center; }
 .lbl small { color: var(--muted); margin-left: 4px; }
 .lbl.depth { color: var(--text); box-shadow: inset 3px 0 0 var(--sel), var(--shadow); }
@@ -390,7 +347,6 @@ body.dragging .eh { cursor: grabbing; }
 .lbl.segno { font-size: 11px; padding: 1px 6px; color: var(--bad-t); box-shadow: inset 0 0 0 1px var(--bad), var(--shadow); }
 .lbl.segno.entry { color: var(--text); box-shadow: inset 0 0 0 1.5px var(--sel), var(--shadow); }
 
-/* ---------- профиль ---------- */
 #profile { position: relative; height: clamp(200px, 34vh, 320px); flex: none; box-shadow: 0 -1px 0 var(--line), 0 -2px 6px rgba(0,0,0,.08); background: var(--panel); display: flex; flex-direction: column; z-index: 4; }
 #profile .grip { position: absolute; top: -5px; left: 0; right: 0; height: 10px; cursor: ns-resize; z-index: 2; }
 #profile .grip::after { content: ""; position: absolute; left: 50%; top: 3px; width: 44px; height: 4px; margin-left: -22px; border-radius: 2px; background: var(--card2); }
@@ -411,17 +367,13 @@ body.dragging .eh { cursor: grabbing; }
 .phead .icon { background: none; box-shadow: none; color: var(--text2); }
 .phead .icon:hover { background: var(--card); box-shadow: none; color: var(--text); }
 
-/* ---------- строка состояния ---------- */
 #status { display: flex; align-items: center; gap: 16px; padding: 0 12px; background: var(--panel); box-shadow: 0 -1px 0 var(--line); font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
 #stHint b { color: var(--text); font-weight: 500; }
 #stHover { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
 
-/* ---------- уведомления и диалоги ---------- */
 #toasts { position: fixed; left: 50%; transform: translateX(-50%); bottom: 40px; z-index: 80; display: grid; gap: 8px; justify-items: center; pointer-events: none; }
-/* уведомление — тёмная таблетка; цветная метка слева — тип */
 .toast { background: var(--tip); color: #fff; border-radius: var(--r); padding: 10px 16px; box-shadow: var(--shadow-pop); transition: opacity .3s; max-width: 90vw; }
 .toast.ok { box-shadow: inset 4px 0 0 var(--ok), var(--shadow-pop); } .toast.error { box-shadow: inset 4px 0 0 var(--bad), var(--shadow-pop); } .toast.out { opacity: 0; }
-/* диалоги — как попапы Маркета и Go: r24, без рамки, затемнение .6 */
 dialog { background: var(--panel); color: var(--text); border: 0; border-radius: 12px; padding: 0; max-width: min(920px, calc(100vw - 24px)); max-height: calc(100vh - 40px); box-shadow: var(--shadow-pop); }
 dialog::backdrop { background: var(--fade); }
 .dlg { padding: 24px 28px; overflow: auto; }
@@ -479,11 +431,9 @@ table.wrap td:last-child { white-space: normal; }
   #toasts { top: 60px; bottom: auto; }
   #left { position: absolute; left: 0; top: 0; bottom: 0; width: min(88vw, 360px); transform: translateX(-102%); transition: transform .2s; box-shadow: var(--shadow-pop); z-index: 25; }
   body.leftOpen #left { transform: none; }
-  /* нижний лист, как в мобильных Картах: свёрнут — виден заголовок, развёрнут — половина экрана */
   #props { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: 50%; border-radius: 16px 16px 0 0; box-shadow: 0 -4px 20px rgba(0,0,0,.2); z-index: 24; padding-top: 4px; transition: max-height .2s ease; }
   #props.min { max-height: 128px; overflow: hidden; }
   #props .acts { margin-top: 8px; }
-  /* ручка листа — полоса во всю ширину высотой 24 px: тянуть и касаться удобно пальцем */
   #props .grab { display: block; height: 24px; margin: -4px -16px 0; position: relative; touch-action: none; }
   #props .grab::after { content: ""; position: absolute; left: 50%; top: 9px; width: 44px; height: 5px; margin-left: -22px; border-radius: 3px; background: var(--card2); }
   #props .kind, #props .h b { touch-action: none; }
@@ -507,11 +457,9 @@ table.wrap td:last-child { white-space: normal; }
   .coach { left: 8px; right: 8px; width: auto; top: 8px; padding: 10px 12px; }
   .coach .cg { grid-template-columns: auto 1fr; font-size: 12.5px; gap: 4px 10px; margin: 6px 0 8px; }
   .exchip { left: 8px; bottom: 30px; }
-  /* телефон и планшет вертикально: панель правки снизу — под большой палец, верх сцены свободен; карточка не нужна */
   .editbar { left: 8px; right: 8px; width: auto; top: auto; bottom: 8px; max-height: 42vh; overflow: auto; overscroll-behavior: contain; }
   .editbar .eb-p { max-height: 20vh; }
   .en { white-space: normal; max-width: calc(100vw - 110px); }
-  /* кнопки «Отменить», «Вернуть», «Готово» — у нижнего края, на месте, сколько бы ни выросла панель */
   .editbar .eb-h { order: 99; position: sticky; bottom: -10px; background: var(--float); padding: 4px 0 2px; }
   body.editing #props { display: none !important; }
   .variants button { display: none; }
@@ -526,7 +474,6 @@ table.wrap td:last-child { white-space: normal; }
   .helpgrid { grid-template-columns: 1fr; }
 }
 
-/* ---------- плавность: всё, что появляется, проявляется; всё, что сдвигается, едет ---------- */
 @keyframes popIn { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
 @keyframes fadeIn { from { opacity: 0; } }
 @keyframes riseIn { from { opacity: 0; transform: translateY(8px); } }
@@ -544,7 +491,6 @@ dialog[open]::backdrop { animation: fadeIn .2s ease-out; }
 .tabs button::after { transition: background-color .15s ease-out; }
 .seg button, .filters button, .item { transition: background-color .12s ease-out, color .12s ease-out, box-shadow .12s ease-out; }
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .25s; }
-/* переключатели: в сегменте едет белая плашка, у вкладок — линия; без них (до первого замера) — как раньше */
 .seg, .tabs { position: relative; }
 .seg.slide::before { content: ""; position: absolute; top: 2px; bottom: 2px; left: 0; width: var(--sw); transform: translateX(var(--sx)); background: var(--seg-on); border-radius: var(--rb); box-shadow: 0 1px 4px rgba(0,0,0,.15); transition: transform .22s cubic-bezier(.2,.7,.2,1), width .22s cubic-bezier(.2,.7,.2,1); }
 .seg.slide button { position: relative; z-index: 1; }
@@ -552,10 +498,8 @@ dialog[open]::backdrop { animation: fadeIn .2s ease-out; }
 .tabs.slide::before { content: ""; position: absolute; bottom: -1px; left: 0; height: 2px; width: var(--sw); transform: translateX(var(--sx)); background: var(--accent); transition: transform .22s cubic-bezier(.2,.7,.2,1), width .22s cubic-bezier(.2,.7,.2,1); }
 .tabs.slide button.on::after { background: transparent; }
 .seg.still::before, .tabs.still::before { transition: none; }
-/* флажки: заливка и галочка проявляются, а не появляются рывком */
 .tog input { appearance: none; -webkit-appearance: none; flex: none; padding: 0; border: 0; border-radius: 4px; background: var(--panel) no-repeat center / 0 0; box-shadow: inset 0 0 0 1.5px var(--muted); cursor: pointer; transition: background-color .15s ease-out, background-size .15s ease-out, box-shadow .15s ease-out; }
 .tog input:checked { background-color: var(--accent); box-shadow: inset 0 0 0 1.5px var(--accent); background-size: 78% 78%; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
-/* закрытие — так же плавно, как появление: меню, панель правки, меню точки, подсказки гаснут, а не исчезают */
 .menu, .sugg, .editbar, .editctx, .edittip, .coach, #measure, #player, .camchip, .editnotes, .editguide { transition: opacity .15s ease-out, display .15s allow-discrete, overlay .15s allow-discrete; }
 :is(.menu, .sugg, .editbar, .editctx, .edittip, .coach, #measure, #player, .camchip, .editnotes, .editguide)[hidden] { opacity: 0; }
 .en, .edittip:not([hidden]) { animation: fadeIn .14s ease-out; }
@@ -564,7 +508,6 @@ body.dragging .en, body.dragging .edittip { animation: none; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 
-/* ---------- сенсорный экран: цели под палец не меньше 44 px, как в рекомендациях Apple ---------- */
 @media (pointer: coarse) {
   button, input, select { min-height: 44px; }
   button.icon { width: 44px; }
@@ -579,10 +522,8 @@ body.dragging .en, body.dragging .edittip { animation: none; }
   #legend > button, .phead button, .note button, #plEnd button { min-height: 40px; }
   #props .acts button { min-height: 44px; }
   .menu button { min-height: 46px; }
-  /* подсказки про кнопки мыши на планшете не нужны — остаются координаты и высота камеры */
   #stHint, #stHover { display: none; }
   .search kbd { display: none; }
-  /* масштаб — щипком, как в Картах на iPad: кнопки + и − не нужны */
   .menu kbd { display: none; }
   .touch { display: block; }
   p.touch { display: block; }
@@ -591,13 +532,11 @@ body.dragging .en, body.dragging .edittip { animation: none; }
   .eh { width: 16px; height: 16px; margin: -8px 0 0 -8px; } .eh.n { width: 16px; height: 16px; margin: -8px 0 0 -8px; } .eh.m { width: 18px; height: 18px; margin: -9px 0 0 -9px; opacity: .7; }
   .eh.m::after { font-size: 14px; }
   .eh::before { inset: -14px; }
-  .eh.m::before { inset: -8px; }   /* «+» ловит касание теснее точки: случайное касание по трассе — не новый поворот */
-  /* значок «+N» — поодаль от точки, чтобы промах пальца по точке не приближал карту */
+  .eh.m::before { inset: -8px; }
   .emore { font-size: 12px; line-height: 20px; padding: 0 7px; border-radius: 10px; margin: 0; min-height: 0; }
   .emore::before { inset: -6px; }
   .editbar .eb-hint .link { min-height: 32px; padding: 0 8px; }
   .editbar .eb-p { max-height: 22vh; }
-  /* кнопки правки под палец: не ниже 40 px, отмена и возврат — 44 px с промежутком */
   .editbar .eb-a button, .editbar .eb-selp button, .editbar .eb-sum, .editbar .iss { min-height: 40px; }
   .editbar .eb-h .icon { width: 44px; min-height: 44px; } .editbar .eb-h .primary { min-height: 44px; }
   .editbar .eb-h { gap: 8px; }
@@ -605,7 +544,6 @@ body.dragging .en, body.dragging .edittip { animation: none; }
   #legend > button { min-height: 40px; }
   #legend { bottom: 76px; }
 }
-/* планшет горизонтально: панель правки уже, сцене больше места */
 @media (pointer: coarse) and (min-width: 901px) { .editbar { width: min(380px, calc(100% - 2 * var(--gap) - 70px)); } }
 @media (pointer: coarse) and (min-width: 901px) { body.editing #legend, body.editing .exchip { left: calc(2 * var(--gap) + min(380px, 100% - 2 * var(--gap) - 70px)); } }
 @media (max-width: 900px) { body.editing #legend, body.editing .exchip { left: 8px; } }

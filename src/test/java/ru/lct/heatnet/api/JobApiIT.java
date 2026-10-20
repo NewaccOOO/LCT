@@ -289,7 +289,6 @@ class JobApiIT {
         }
     }
 
-    // Отрицательный расход участка сети, дробный диаметр камеры, повтор id и ссылка на несуществующий ОКС.
     private static byte[] brokenSample() throws Exception {
         ObjectNode root = (ObjectNode) MAPPER.readTree(SAMPLE.toFile());
         ArrayNode features = (ArrayNode) root.get("features");

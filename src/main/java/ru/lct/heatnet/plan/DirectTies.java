@@ -39,40 +39,20 @@ import ru.lct.heatnet.rules.Diameter;
 import ru.lct.heatnet.rules.RestrictionRule;
 import ru.lct.heatnet.rules.Rules;
 
-/**
- * Прямые подключения для города: точка подключения соединяется одним прямым участком (или двумя, через точку
- * выхода из своего ОКС) с ближайшей существующей камерой, новой камерой на ближайшей трубе или уже поставленной
- * новой камерой со свободным местом. Без графа: на миллионах точек у существующей сети перебор районов не нужен,
- * а прямой участок к камере в метре от точки и есть дешёвое подключение. Точки, у которых прямого допустимого
- * участка нет, остаются для расчёта районами.
- */
 final class DirectTies {
     private static final Logger log = LoggerFactory.getLogger(DirectTies.class);
     private static final int NEAREST = 3;
-    /** Дальше этого прямое подключение не пробуется (свойство heatnet.city.reach): там трасса с обходами, её строит граф. */
     private static final double REACH_M = Double.parseDouble(System.getProperty("heatnet.city.reach", "300"));
-    /** Сколько точек контура пробуется как начало финального участка: ближайшая, затем ближайшие точки сторон. */
     private static final int PORTAL_TRIES = 8;
-    /** Столько ближних точек подряд получают участки к уже поставленным новым камерам одной параллельной пачкой. */
     private static final int AHEAD = 32;
     private static final double PORTAL_EXTRA_M = 0.3;
     private static final double PORTAL_STEP_M = 0.5;
     private static final double PORTAL_MAX_M = 30;
     private static final double DIST_EPS_M = 0.001;
     private static final double ANGLE_EPS_DEG = 0.01;
-    /**
-     * Допуск, с которым луч выхода задевает чужую зону и сторона считается закрытой: 4,999 м — это 5 м (протокол
-     * 16.09.2026), так же читает check18.py. Иначе сервис счёл бы закрытой сторону, которую проверщик считает открытой.
-     */
     private static final double CLOSED_EPS_M = 0.01;
-    /**
-     * Прямой участок от врезки в зоне отступа своего здания длиннее внутри здания, чем от точки до ближайшей границы,
-     * не больше чем на столько: у check18.py предел 1 м.
-     */
     private static final double NEAR_SIDE_M = 0.9;
-    /** Точка ближе этого к трубе стоит у самой трубы: без допустимого участка от проекции врезка сдвигается вдоль. */
     private static final double NEAR_PIPE_M = 3;
-    /** Сдвиги врезки от проекции вдоль оси: частые рядом, реже дальше. */
     private static final double[] SHIFTS_M = {0.5, 1, 1.5, 2, 3, 4, 6, 8, 11, 15};
     private static final String OKS_EXISTING = "oks_existing";
     private static final String HEAT_NETWORK = "heat_network";
@@ -85,14 +65,10 @@ final class DirectTies {
     private final GeometryFactory factory = new GeometryFactory();
     private final STRtree chambers = new STRtree();
     private final STRtree pipes = new STRtree();
-    /** Рамка существующей сети: труб и камер. */
     private final Envelope network = new Envelope();
-    /** Рамка сети с запасом REACH_M: точка вне её дальше REACH_M от любой врезки, кандидаты у неё не считаются. */
     private final Envelope withinReach;
-    /** Почему прямые участки отбрасывались, для лога: причина → число. */
     private final Map<String, Integer> rejected = new java.util.TreeMap<>();
 
-    /** Одно прямое подключение: врезка, линия от неё до точки, стоимость по грубой оценке. */
     private static final class Option {
         final TieCandidate tie;
         final Coordinate[] line;
@@ -126,28 +102,21 @@ final class DirectTies {
         pipes.build();
     }
 
-    /** Учёт мест одного варианта: занятые места по узлам врезки и поставленные новые камеры. */
     private static final class Ledger {
         final List<Tree> trees = new ArrayList<>();
         final Map<String, Integer> used = new HashMap<>();
-        /** Новые камеры парами «ключ узла → врезка»: ключ через String.format у каждой точки заметно тормозил. */
         final Quadtree created = new Quadtree();
         final Map<String, TieCandidate> createdByKey = new HashMap<>();
-        /** Поставленные деревья по рамкам: новый участок их не касается, см. {@link #touches}. */
         final Quadtree placed = new Quadtree();
     }
 
-    /** Общие для вариантов кандидаты точки: существующие камеры и трубы с допустимыми прямыми участками. */
     private static final class Shared {
         final int dn;
         final boolean far;
         final List<Option> options = new ArrayList<>();
         final Set<String> seen = new HashSet<>();
-        /** Отказы, с которыми кандидаты считались: в общий счёт идут по порядку точек. */
         final Map<String, Integer> rejected = new HashMap<>();
-        /** Участки к новым камерам, посчитанные заранее пачкой точек, см. {@link #ahead}. */
         final Map<TieCandidate, Tried> tried = new IdentityHashMap<>();
-        /** Выход из своего здания, общий для всех врезок точки, см. {@link #portal}. */
         Portal portal;
 
         Shared(int dn, boolean far) {
@@ -156,17 +125,12 @@ final class DirectTies {
         }
     }
 
-    /** Точка вне рамки сети с запасом REACH_M: кандидатов у неё нет, один отказ «далеко». */
     private static final Shared FAR = new Shared(0, true);
 
     static {
         FAR.rejected.put("далеко", 1);
     }
 
-    /**
-     * Выход из своего здания у ближайшей открытой стороны: точка выхода (null — все стороны закрыты) и та ли это
-     * сторона, что ближе всех.
-     */
     private static final class Portal {
         final Coordinate exit;
         final boolean nearest;
@@ -179,7 +143,6 @@ final class DirectTies {
 
     private static final Portal NO_PORTAL = new Portal(null, false);
 
-    /** Прямой участок к новой камере: вариант подключения (null — участок недопустим) и отказы при его расчёте. */
     private static final class Tried {
         final Option option;
         final Map<String, Integer> rejected;
@@ -190,13 +153,6 @@ final class DirectTies {
         }
     }
 
-    /**
-     * Деревья прямых подключений {@code variants} вариантов в порядке точек: вариант k берёт у точки k-й по стоимости
-     * вариант (у кого их меньше — последний). Кандидаты и допустимость прямых участков считаются один раз на точку,
-     * места в камерах — отдельно на вариант: у существующей камеры не больше четырёх участков, у новой камеры на
-     * трубе — по два участка каждой проходящей трубы и новые в остаток до четырёх. Точки без допустимого варианта
-     * попадают в {@code rest}.
-     */
     List<List<Tree>> connect(List<ConnectionPoint> connections, Map<String, FutureOks> oksById, int variants,
             List<ConnectionPoint> rest) {
         List<Ledger> ledgers = new ArrayList<>();
@@ -204,10 +160,6 @@ final class DirectTies {
             ledgers.add(new Ledger());
         }
         long started = System.nanoTime();
-        // общие кандидаты от учёта мест не зависят и считаются параллельно, места и новые камеры — по порядку точек.
-        // На городе 98 % точек вне рамки сети с запасом REACH_M, любой кандидат у них дальше REACH_M; ближние идут
-        // подряд в начале списка, поэтому параллельно считаются только они, иначе почти все достаются одной нити
-        // расходы и рамка — проход по 3 млн объектов, параллельно; диаметр по порядку, чтобы ошибка расхода была прежней
         double[] flows = new double[connections.size()];
         boolean[] reachable = new boolean[connections.size()];
         IntStream.range(0, connections.size()).parallel().forEach(i -> {
@@ -260,10 +212,6 @@ final class DirectTies {
         return result;
     }
 
-    /**
-     * Общие кандидаты точки у сети: ближайшие существующие камеры и врезки в ближайшие трубы; если ни одного нет,
-     * врезки, сдвинутые вдоль ближайших труб ({@link #along}). От учёта мест они не зависят и тоже общие.
-     */
     private void shared(ConnectionPoint connection, Shared shared) {
         int dn = shared.dn;
         Point point = connection.getGeometry();
@@ -289,13 +237,6 @@ final class DirectTies {
         }
     }
 
-    /**
-     * Точка у самой трубы, у которой прямой участок от проекции недопустим: короче метра, упирается в дорогу, соседнюю
-     * трубу или чужое здание. Врезка сдвигается вдоль оси в обе стороны на SHIFTS_M, пока остаётся в своём
-     * здании или его зоне отступа (участок от неё один прямой, CONSTRAINTS.md раздел 19); в каждую сторону берётся
-     * ближайшая, от которой прямой участок допустим. Участок может пересечь чужую трубу специальным проходом, поэтому
-     * дерево ещё и собирается пробно.
-     */
     private void along(Shared shared, NetworkSegment segment, ConnectionPoint connection) {
         int dn = shared.dn;
         LineString axis = segment.getGeometry();
@@ -322,11 +263,6 @@ final class DirectTies {
         }
     }
 
-    /**
-     * Дерево собирается само по себе: зоны спецпроходов, отступы и форма участков как у итоговой сборки. Зоны
-     * пересечения трубы и соседней дороги могут оставить между собой обычный кусок у трубы врезки, а он начинается не
-     * во врезке, и отступ от её трубы для него не снимается.
-     */
     private boolean assembles(Tree tree, Map<String, Integer> reasons) {
         try {
             assembler.assemble("0", 0, List.of(tree), List.of());
@@ -344,17 +280,10 @@ final class DirectTies {
         return tree;
     }
 
-    /** Цена узла врезки: врезка в существующую камеру или новая камера на трубе. */
     private double nodeCost(TieCandidate tie, NetworkSegment segment, int dn) {
         return tie.isChamber() ? rules.tieInCost() : rules.chamberCost(Math.max(dn, segment.getDiameter()));
     }
 
-    /**
-     * Участки от следующих ближних точек ко всем новым камерам рядом, уже поставленным и со свободным местом, одной
-     * параллельной пачкой: у точки таких камер в среднем 18, и параллельный расчёт по одной точке больше ждал нитей,
-     * чем считал. Место в камере только убывает, поэтому лишними окажутся лишь камеры, заполненные внутри пачки;
-     * камеры, поставленные точками пачки, досчитывает {@link #place}.
-     */
     private void ahead(List<ConnectionPoint> connections, Shared[] prepared, List<Integer> points, List<Ledger> ledgers) {
         List<Integer> owners = new ArrayList<>();
         List<TieCandidate> ties = new ArrayList<>();
@@ -376,11 +305,6 @@ final class DirectTies {
         }
     }
 
-    /**
-     * Подключение точки в каждом варианте: общие кандидаты со свободным местом и поставленные раньше новые камеры
-     * рядом. Участки к новым камерам от варианта не зависят и считаются по разу на камеру; отказы учитываются по
-     * вариантам, как при расчёте подряд. false — ни в одном варианте допустимого участка нет.
-     */
     private boolean place(ConnectionPoint connection, Shared shared, List<Ledger> ledgers) {
         List<List<TieCandidate>> free = new ArrayList<>();
         List<TieCandidate> missing = new ArrayList<>();
@@ -414,7 +338,6 @@ final class DirectTies {
                 add(options, result.option);
             }
             options.sort(Comparator.comparingDouble(option -> option.cost));
-            // k-й по стоимости из участков, которые не касаются поставленных раньше (у кого их меньше — последний)
             Option chosen = null;
             int apart = 0;
             for (Option option : options) {
@@ -442,11 +365,6 @@ final class DirectTies {
         return connected;
     }
 
-    /**
-     * Участок option ближе VariantEnumerator.TREES_APART_M к деревьям других врезок варианта или у общей врезки
-     * касается её деревьев вне круга SHARED_ROOT_CLIP_M, как деревья районов (VariantEnumerator#compatible): новые
-     * участки не пересекаются вне общего узла (п. 5), а сборка по врезкам друг с другом их не сверяет.
-     */
     private boolean touches(Ledger ledger, Option option) {
         LineString line = factory.createLineString(option.line);
         Envelope around = new Envelope(line.getEnvelopeInternal());
@@ -469,7 +387,6 @@ final class DirectTies {
         return false;
     }
 
-    /** Новые камеры варианта у точки со свободным местом, кроме её общих кандидатов, в порядке индекса. */
     private static List<TieCandidate> free(Ledger ledger, ConnectionPoint connection, Shared shared) {
         Envelope around = new Envelope(connection.getGeometry().getCoordinate());
         around.expandBy(REACH_M);
@@ -502,18 +419,10 @@ final class DirectTies {
         }
     }
 
-    /**
-     * В узле врезки после уже сделанных подключений есть место ещё для одного участка. Место и у новой камеры на
-     * трубе: точки приходят к ней и как к своему кандидату, и как к поставленной камере.
-     */
     private static boolean roomIn(TieCandidate tie, Map<String, Integer> used) {
         return used.getOrDefault(tie.nodeKey(), 0) < tie.getCapacity();
     }
 
-    /**
-     * Расстояние от точки до ближайшего объекта существующей сети: трубы или камеры. Точка дальше {@code limit} от
-     * рамки сети дальше limit и от самой сети: для неё +∞ без запросов к индексам (на городе таких 3 млн).
-     */
     double networkDistance(Point point, double limit) {
         if (network.isNull() || network.distance(point.getEnvelopeInternal()) > limit) {
             return Double.POSITIVE_INFINITY;
@@ -530,7 +439,6 @@ final class DirectTies {
         return best;
     }
 
-    /** Наборы деревьев одинаковы: те же узлы врезки у тех же точек. */
     boolean same(List<Tree> a, List<Tree> b) {
         if (a.size() != b.size()) {
             return false;
@@ -543,10 +451,6 @@ final class DirectTies {
         return true;
     }
 
-    /**
-     * Вариант подключения к врезке; null — прямой участок недопустим, причина в {@code reasons}. {@code crossPipes} —
-     * участок может пересечь чужую трубу специальным проходом.
-     */
     private Option option(TieCandidate tie, ConnectionPoint connection, Shared shared, double nodeCost,
             boolean crossPipes, Map<String, Integer> reasons) {
         int dn = shared.dn;
@@ -563,11 +467,6 @@ final class DirectTies {
         return new Option(tie, line, nodeCost + length * rules.diameter(actual).getNewRubM());
     }
 
-    /**
-     * Линия от врезки к точке: прямая, если врезка внутри полигона точки или в его зоне отступа (участок и так
-     * финальный), иначе через точку выхода на луче «точка → ближайшая открытая граница» (приложение 18.09, п. 2.2).
-     * null — участок нарушает отступы, идёт вдоль трубы врезки или входит в здание не с ближайшей открытой стороны.
-     */
     private Coordinate[] line(TieCandidate tie, ConnectionPoint connection, Shared shared, boolean crossPipes,
             Map<String, Integer> reasons) {
         int dn = shared.dn;
@@ -591,8 +490,6 @@ final class DirectTies {
             }
             return valid(line, 0, tie, dn, own, crossPipes, reasons) ? line : null;
         }
-        // выход только у ближайшей открытой стороны: дальняя допустима, лишь когда ближние закрыты (п. 2.2), поэтому
-        // недопустимый участок от выхода к врезке не переводит точку на другую сторону, как и у веток дерева
         Coordinate exit = portal(cp, shared, building, clearance).exit;
         if (exit == null) {
             reject(reasons, "нет выхода");
@@ -605,8 +502,6 @@ final class DirectTies {
         Coordinate[] line = {tiePoint, exit, cp};
         double turn = Router.deflectionDeg(tiePoint, exit, cp);
         if (turn < TreeBuilder.MIN_TURN_DEG) {
-            // врезка почти на продолжении луча: излом меньше 3° сборка не пропустит и отбросит весь узел врезки,
-            // поэтому участок один прямой, как у ветки дерева после TreeBuilder#straighten
             Coordinate[] straight = {tiePoint, cp};
             return nearSide(straight, building, shared, clearance, reasons)
                     && valid(straight, 0, tie, dn, own, crossPipes, reasons) ? straight : null;
@@ -614,7 +509,6 @@ final class DirectTies {
         if (turn <= Router.MAX_TURN_DEG) {
             return valid(line, 1, tie, dn, own, crossPipes, reasons) ? line : null;
         }
-        // врезка позади выхода, поворот в нём круче 90°: звено после выхода, как у ветки дерева (TreeBuilder#exitLink)
         for (double length : TreeBuilder.EXIT_LINK ? TreeBuilder.EXIT_LINK_M : new double[0]) {
             Coordinate link = TreeBuilder.exitLink(new Coordinate[] {cp, exit, tiePoint}, length)[2];
             Coordinate[] linked = {tiePoint, link, exit, cp};
@@ -629,12 +523,6 @@ final class DirectTies {
         return null;
     }
 
-    /**
-     * Прямой участок от врезки в зоне отступа своего здания выходит из здания и его зоны отступа по одному разу
-     * ({@link TreeBuilder#leavesOnce}) и, если ближняя сторона открыта, входит в здание у ближайшей к точке границы
-     * (приложение 18.09, п. 2.2). Врезка на трубе внутри своего здания границу не пересекает, её участок — толкование
-     * CONSTRAINTS.md, раздел 19.
-     */
     private boolean nearSide(Coordinate[] line, ExistingOks building, Shared shared, double clearance,
             Map<String, Integer> reasons) {
         Geometry polygon = building.getGeometry();
@@ -657,15 +545,6 @@ final class DirectTies {
         return reject(reasons, "не от ближайшей границы");
     }
 
-    /**
-     * Выход у ближайшей открытой стороны своего здания: ближайшая точка внешнего контура, если луч через неё не
-     * закрыт, иначе ближайшие точки других сторон по очереди, а если закрыты и они — ближайшая допустимая точка
-     * контура ({@link TreeBuilder#entries}). Сторона закрыта, если выхода на луче нет, луч снова
-     * входит в своё здание или его зону отступа или задевает зону чужого здания или запретного объекта
-     * (docs/interpretation.md, так же судит check18.py). От врезки выход не зависит: у точки два десятка врезок, и
-     * поиск выхода с проверкой здания шёл на каждую. Врезки точки считаются в разных нитях, поэтому выход ищется под
-     * замком точки.
-     */
     private Portal portal(Coordinate cp, Shared shared, ExistingOks building, double clearance) {
         synchronized (shared) {
             if (shared.portal == null) {
@@ -687,8 +566,6 @@ final class DirectTies {
                         break;
                     }
                 }
-                // ближние точки сторон закрыты: ближайшая допустимая точка входа среди всех точек внешнего контура, луч
-                // к которой в зоне отступа не подходит к другой стене (толкование п. 2.2 в docs/interpretation.md)
                 List<Coordinate[]> rings = TreeBuilder.rings(building.getGeometry());
                 for (Coordinate entry : shared.portal == NO_PORTAL ? TreeBuilder.entries(building.getGeometry(), cp,
                         Double.POSITIVE_INFINITY) : List.<Coordinate>of()) {
@@ -708,7 +585,6 @@ final class DirectTies {
         }
     }
 
-    /** Отрезок от точки до выхода ближе отступа к чужому зданию или запретному объекту: сторона закрыта. */
     private boolean closed(Coordinate cp, Coordinate exit, int dn, String ownId) {
         LineString ray = factory.createLineString(new Coordinate[] {cp, exit});
         Envelope envelope = ray.getEnvelopeInternal();
@@ -729,7 +605,6 @@ final class DirectTies {
         return false;
     }
 
-    /** Ближайшие к cp точки сторон внешних контуров полигона по возрастанию расстояния. */
     private static List<Coordinate> anchors(Geometry building, Coordinate cp) {
         List<Coordinate> result = new ArrayList<>();
         for (int g = 0; g < building.getNumGeometries(); g++) {
@@ -742,7 +617,6 @@ final class DirectTies {
         return result;
     }
 
-    /** Точка выхода за зоной отступа своего полигона на луче через anchor, вне чужих зон запрета. */
     private Coordinate exit(Coordinate cp, Coordinate anchor, ExistingOks building, double clearance) {
         double dx = anchor.x - cp.x;
         double dy = anchor.y - cp.y;
@@ -779,11 +653,6 @@ final class DirectTies {
         return false;
     }
 
-    /**
-     * Отрезки линии не ближе отступа к полигонам ОКС (кроме своего у финального отрезка {@code finalPiece} и дальше),
-     * запретным ограничениям и существующей сети, не пересекают объекты со специальным проходом и не идут вдоль
-     * труб врезки. С {@code crossPipes} чужую трубу можно пересечь специальным проходом.
-     */
     private boolean valid(Coordinate[] line, int finalPiece, TieCandidate tie, int dn, String ownId, boolean crossPipes,
             Map<String, Integer> reasons) {
         double halfWidth = rules.diameter(dn).getWidthM() / 2;
@@ -805,14 +674,11 @@ final class DirectTies {
                 if (geometry.getDimension() < 2 && rule.getHalfWidthM() != null) {
                     distance += rule.getHalfWidthM();
                 }
-                // дальний объект отсекается расстоянием: оно дешевле пересечения, а город даёт десятки длинных дорог
-                // на рамку отрезка
                 double gap = geometry.distance(piece);
                 if (gap > 0 && gap >= distance - DIST_EPS_M) {
                     continue;
                 }
                 if (!rule.forbid() && geometry.getDimension() > 0 && geometry.intersects(piece)) {
-                    // специальный проход прямым отрезком: у дороги и путей — под углом не меньше заданного
                     if (!crossingAllowed(piece, geometry, rule)) {
                         return reject(reasons, "угол пересечения " + restriction.getType());
                     }
@@ -829,7 +695,6 @@ final class DirectTies {
                 double distance = network.clearanceM(dn) + halfWidth + rules.diameter(segment.getDiameter()).getWidthM() / 2;
                 boolean atTie = tie.getIgnored().contains(segment.getId()) && i == 0;
                 if (atTie) {
-                    // от врезки отрезок уходит от трубы: дальше 0,5 м он её не касается
                     double skip = TieInFinder.TOUCH_M / piece.getLength();
                     if (skip >= 1) {
                         return reject(reasons, "короче 0,5 м");
@@ -850,11 +715,6 @@ final class DirectTies {
         return true;
     }
 
-    /**
-     * Обычная часть отрезка piece через объект держит отступ distance, как у ребра графа (ObstacleSet.closeBeyond):
-     * ближе может быть только часть в полигоне и в margin_m от точек на его границе, у линии — в margin_m и в круге
-     * «норма + CROSS_CIRCLE_M» вокруг точки пересечения.
-     */
     private static boolean holdsBeyond(LineString piece, Geometry geometry, RestrictionRule rule, double distance) {
         Coordinate a = piece.getCoordinateN(0);
         Coordinate b = piece.getCoordinateN(1);
@@ -880,7 +740,6 @@ final class DirectTies {
         return from >= length || !closer(a, b, from / length, 1, geometry, distance);
     }
 
-    /** Часть отрезка a–b от доли from до доли to ближе distance к объекту. */
     private static boolean closer(Coordinate a, Coordinate b, double from, double to, Geometry geometry, double distance) {
         LineSegment segment = new LineSegment(a, b);
         LineString part = new GeometryFactory().createLineString(
@@ -888,10 +747,6 @@ final class DirectTies {
         return geometry.distance(part) < distance - DIST_EPS_M;
     }
 
-    /**
-     * Отрезок пересекает стороны объекта под углом не меньше min_angle_deg и не идёт вдоль них. Отрезок целиком внутри
-     * полигона (точка подключения внутри дороги) — тоже специальный проход: точки входа у него нет, угол не проверяется.
-     */
     private static boolean crossingAllowed(LineString piece, Geometry geometry, RestrictionRule rule) {
         Coordinate a = piece.getCoordinateN(0);
         Coordinate b = piece.getCoordinateN(1);
@@ -920,10 +775,6 @@ final class DirectTies {
         return crossed;
     }
 
-    /**
-     * То же, что pipe.distance(отрезок a–b), без объектов DistanceOp: рамка отрезка у длинных труб города задевает
-     * десятки участков, и это была главная цена проверки.
-     */
     private static double pipeDistance(LineString pipe, Coordinate a, Coordinate b) {
         Coordinate[] coords = pipe.getCoordinates();
         double best = Double.POSITIVE_INFINITY;

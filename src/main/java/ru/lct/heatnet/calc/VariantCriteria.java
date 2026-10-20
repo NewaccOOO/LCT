@@ -43,50 +43,30 @@ import ru.lct.heatnet.rules.Diameter;
 import ru.lct.heatnet.rules.RestrictionRule;
 import ru.lct.heatnet.rules.Rules;
 
-/**
- * Дополнительные критерии варианта сверх формулы S: какие объекты пересечены спецпереходами, сколько поворотов и
- * самый крутой из них, сколько стоит надбавка за спецпереходы, удельная стоимость подключения. Идут в сводку API и
- * в файл рядом с выходом CLI; в выходной GeoJSON не пишутся.
- */
 public final class VariantCriteria {
     private static final Logger log = LoggerFactory.getLogger(VariantCriteria.class);
     private static final double MIN_TURN_DEG = 3;
     private static final String SPECIAL = "special";
     private static final String HEAT_NETWORK = "heat_network";
     private static final String OKS_EXISTING = "oks_existing";
-    // ponytail: замкнутость ищется среди зон в этом радиусе; кольцо шире даст причину no_route вместо enclosed
     private static final double ENCLOSURE_RADIUS_M = 2000;
-    /** Больше стольких причин на вариант не считается: на городе неподключённых десятки тысяч, причина на каждую — секунды. */
     private static final int MAX_REASONS = 1000;
-    /** Зоны ближе этого считаются касающимися, точка ближе этого к контуру — лежащей на нём: запас на округления. */
     private static final double TOUCH_EPS_M = 1e-3;
 
     private final InputData input;
     private final Rules rules;
     private final STRtree crossable = new STRtree();
-    /** Существующая сеть: точка дальше предельной длины наибольшего ДУ от неё недостижима при любом диаметре. */
     private final STRtree network = new STRtree();
     private final double reachM;
-    /** Рамка сети: точка вне рамки с запасом reachM дальше reachM без запроса к индексу. */
     private final Envelope networkArea = new Envelope();
-    /** ОКС с точкой не дальше reachM от сети; остальные с точкой «дальше досягаемости» (на городе их 3 млн на вариант). */
     private Set<String> within;
     private final Map<String, Map<String, Object>> reasons = new HashMap<>();
-    /** Зоны запрета по объекту и отступу для причин неподключения. */
     private final Map<String, Geometry> zoneCache = new ConcurrentHashMap<>();
-    // точка подключения по ОКС: строится при первой причине, линейный поиск на городе был O(n²)
     private Map<String, ConnectionPoint> connectionByOks;
     private Map<String, List<ConnectionPoint>> byPlace;
-    /** Зоны запрета по рамке: здания и запретные ограничения; строится при первой причине. */
     private STRtree forbidIndex;
-    /**
-     * Касания пар зон ({@link #rayZones}) для всех причин: соседние точки без маршрута проходят одни и те же цепочки
-     * зданий, а касание буферов — перебор их сторон.
-     */
-    // ponytail: память растёт с числом проверенных пар (десятки байт на пару), чистить по району, если город упрётся в неё
     private final Map<Touch, Boolean> touches = new ConcurrentHashMap<>();
 
-    /** Пара зон по ссылкам в порядке проверки: зоны берутся из zoneCache, у одного объекта и отступа она одна. */
     private static final class Touch {
         final Geometry a;
         final Geometry b;
@@ -107,7 +87,6 @@ public final class VariantCriteria {
         }
     }
 
-    /** Объект, который новая сеть может пересечь спецпереходом. */
     private static final class Crossable {
         final String type;
         final PreparedGeometry geometry;
@@ -141,7 +120,6 @@ public final class VariantCriteria {
         reachM = rules.diameters().get(rules.diameters().size() - 1).getMaxLengthM();
     }
 
-    /** Критерии варианта в порядке вывода; деньги и длины до копеек и сантиметров. */
     public Map<String, Object> of(Variant variant) {
         VariantSummary summary = variant.getSummary();
         Set<Crossable> crossed = new HashSet<>();
@@ -169,7 +147,6 @@ public final class VariantCriteria {
         }
 
         double[] turns = turns(variant);
-        // проход по 3 млн ОКС города параллельно; расход складывается по порядку входа, как раньше
         Set<String> unconnected = new HashSet<>(summary.getUnconnectedOksIds());
         List<FutureOks> connectedOks = input.getFutureOks().parallelStream()
                 .filter(oks -> !unconnected.contains(oks.getId())).collect(Collectors.toList());
@@ -195,8 +172,6 @@ public final class VariantCriteria {
                 withoutReason++;
             }
         }
-        // геометрии своих зданий и расходы одним проходом по ОКС: поиск по id на каждую причину на городе шёл по
-        // 3 млн записей; расход — у первого ОКС с этим id, геометрия — у последнего, как было
         Set<String> wanted = new HashSet<>(explained);
         wanted.removeAll(reasons.keySet());
         Map<String, Geometry> own = new HashMap<>();
@@ -209,7 +184,6 @@ public final class VariantCriteria {
         }
         List<Map<String, Object>> unconnectedReasons = new ArrayList<>();
         long reasoning = System.nanoTime();
-        // причины независимы: индексы после build только читаются, кэш зон потокобезопасный
         index();
         forbidIndex();
         Map<String, Map<String, Object>> fresh = new ConcurrentHashMap<>();
@@ -223,7 +197,6 @@ public final class VariantCriteria {
                 wanted.size(), (System.nanoTime() - reasoning) / 1_000_000_000L);
         result.put("unconnected_reasons", unconnectedReasons);
         if (beyondReach > 0) {
-            // на городе таких миллионы: причина у них одна, в списке их нет
             result.put("beyond_reach_oks", beyondReach);
         }
         if (withoutReason > 0) {
@@ -243,10 +216,6 @@ public final class VariantCriteria {
         return result;
     }
 
-    /**
-     * Повороты новой сети: вершины внутри участков и стыки участков в технических узлах с отклонением от 3°.
-     * В камерах и точках подключения отвода нет. Второй элемент — самый крутой поворот в градусах.
-     */
     private double[] turns(Variant variant) {
         Set<String> technical = new HashSet<>();
         for (TechnicalNode node : variant.getNodes()) {
@@ -279,14 +248,12 @@ public final class VariantCriteria {
         return new double[] {all, steepest};
     }
 
-    /** Точка подключения дальше предельной длины наибольшего ДУ от сети: ни один путь не уложится в предел. */
     private boolean beyondReach(String oksId) {
         if (within == null) {
             index();
             within = ConcurrentHashMap.newKeySet();
             Envelope area = new Envelope(networkArea);
             area.expandBy(reachM);
-            // расстояния независимы, индекс после build только читается; хранятся ближние, их на городе 64 тыс.
             connectionByOks.values().parallelStream()
                     .filter(c -> area.contains(c.getGeometry().getCoordinate()) && networkDistance(c.getGeometry()) <= reachM)
                     .forEach(c -> within.add(c.getOksId()));
@@ -326,10 +293,6 @@ public final class VariantCriteria {
         }
     }
 
-    /**
-     * Точка в той же координате, что подключённая в этом варианте: участок сети кончается в одном узле, разветвление
-     * только в камере (п. 2.1), и участок к ней лёг бы на участок к подключённой. null — таких нет.
-     */
     private Map<String, Object> coincident(String oksId, Set<String> unconnected) {
         ConnectionPoint connection = connectionByOks.get(oksId);
         if (connection == null) {
@@ -345,17 +308,11 @@ public final class VariantCriteria {
                 + "точкой (до 1 см): отдельный участок к ней лёг бы на участок к " + String.join(", ", twins), twins);
     }
 
-    /** Координата точки с точностью до 1 см. */
     private static String place(ConnectionPoint connection) {
         Coordinate c = connection.getGeometry().getCoordinate();
         return Math.round(c.x * 100) + ":" + Math.round(c.y * 100);
     }
 
-    /**
-     * Почему у ОКС нет маршрута. Причина ищется после расчёта по тем же зонам запрета с отступами, что у поиска
-     * маршрута при диаметре по расходу ОКС: точка внутри зоны или в кольце зон. Иначе зоны точку не замыкают, и
-     * трассу не дали предельная длина, правило поворотов, углы пересечения или соседние деревья.
-     */
     private Map<String, Object> reason(String oksId, Geometry own, double flow) {
         index();
         ConnectionPoint connection = connectionByOks.get(oksId);
@@ -373,7 +330,6 @@ public final class VariantCriteria {
         around.expandBy(ENCLOSURE_RADIUS_M);
         Map<String, Geometry> zones = new LinkedHashMap<>();
         double halfWidth = diameter.getWidthM() / 2;
-        // своё здание точке не мешает: к ней ведёт финальный прямой участок без отступа (приложение 18.09, п. 2.2)
         for (Object item : forbidIndex().query(around)) {
             if (item instanceof ExistingOks) {
                 ExistingOks oks = (ExistingOks) item;
@@ -406,8 +362,6 @@ public final class VariantCriteria {
         }
         List<Geometry> near = zones.isEmpty() ? null : rayZones(point, zones.values(), touches);
         if (near != null) {
-            // часть объединения, чей контур содержит точку, пересекает луч, и её зоны — в группах у луча: объединяются
-            // только они. Две такие части (кольцо в кольце) — полное объединение, как раньше: там берётся первая
             List<Geometry> parts = enclosing(UnaryUnionOp.union(near), point, false);
             if (parts.size() > 1) {
                 parts = enclosing(UnaryUnionOp.union(zones.values()), point, true);
@@ -427,17 +381,10 @@ public final class VariantCriteria {
                 + "мешают предельная длина, правило поворотов, углы пересечения или соседние трассы", List.of());
     }
 
-    /**
-     * Зоны точку заведомо не окружают. Кольцо зон вокруг точки пересекает любой луч из неё, поэтому проверяются только
-     * группы касающихся зон у луча вправо: группа не окружает точку, если её рамка точку не содержит или её объединение —
-     * один полигон, внешний контур которого точку не содержит. Объединение всех зон в радиусе 2 км на городе — 0,2 с
-     * на точку, группы у луча — миллисекунды. При сомнении false, и решает объединение групп у луча, см. {@link #rayZones}.
-     */
     static boolean open(Point point, Collection<Geometry> zones) {
         return rayZones(point, zones, new HashMap<>()) == null;
     }
 
-    /** Части объединения, чей внешний контур содержит точку; first — только первая. */
     private static List<Geometry> enclosing(Geometry union, Point point, boolean first) {
         List<Geometry> result = new ArrayList<>();
         for (int i = 0; i < union.getNumGeometries() && !(first && !result.isEmpty()); i++) {
@@ -449,10 +396,6 @@ public final class VariantCriteria {
         return result;
     }
 
-    /**
-     * null — зоны точку заведомо не окружают, см. {@link #open}; иначе зоны всех групп у луча: кольцо вокруг точки
-     * может быть только из них. touches — память касаний пар зон.
-     */
     private static List<Geometry> rayZones(Point point, Collection<Geometry> zones, Map<Touch, Boolean> touches) {
         List<Geometry> list = new ArrayList<>(zones);
         Envelope[] grown = new Envelope[list.size()];
@@ -498,7 +441,6 @@ public final class VariantCriteria {
             if (doubt) {
                 continue;
             }
-            // несколько полигонов у касающихся зон — касание в точке, его объединение всех зон может решить иначе
             Geometry union = group.size() == 1 ? group.get(0) : UnaryUnionOp.union(group);
             if (!(union instanceof Polygon)) {
                 doubt = true;
@@ -515,7 +457,6 @@ public final class VariantCriteria {
         Envelope envelope = new Envelope(geometry.getEnvelopeInternal());
         envelope.expandBy(distance);
         if (envelope.intersects(around)) {
-            // соседние точки без маршрута делят одни и те же здания вокруг: зона строится один раз на объект и отступ
             zones.put(id, zoneCache.computeIfAbsent(id + "@" + distance, key -> geometry.buffer(distance)));
         }
     }

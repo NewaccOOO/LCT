@@ -12,7 +12,6 @@ import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
 import ru.lct.heatnet.model.ConnectionPoint;
 
-/** Дерево новой сети одной врезки: рёбра-полилинии между врезкой, камерами ветвления и точками подключения. */
 final class Tree {
     enum Kind { TIE, JUNCTION, CONNECTION }
 
@@ -38,17 +37,11 @@ final class Tree {
         }
     }
 
-    /** Ребро направлено от врезки: координаты line идут от from к to. */
     static final class Edge {
         final Node from;
         final Node to;
         final LineString line;
-        /**
-         * Части ребра в зонах спецобъектов по объекту, их считает и хранит сборка (NetworkAssembler): дерево входит
-         * в сотни черновиков, а пересечение с объектом зависит только от ребра и объекта.
-         */
         final Map<SpecialObjects.Special, Object> crossings = new ConcurrentHashMap<>();
-        /** Спецобъекты перечислителя, чья рамка задевает рамку ребра; считает сборка, null — ещё не считались. */
         volatile List<SpecialObjects.Special> nearSpecials;
 
         Edge(Node from, Node to, LineString line) {
@@ -64,19 +57,11 @@ final class Tree {
     final Node root;
     final List<Edge> edges = new ArrayList<>();
     final List<ConnectionPoint> unconnected = new ArrayList<>();
-    /** Рамка и линии готового дерева, считаются один раз: дерево входит в сотни черновиков. */
     private volatile Envelope envelope;
     private volatile Geometry geometry;
-    /** Есть ветка по графу меньшего Ду, чем у дерева (TreeBuilder.Run#portal): отступы проверяются по Ду участков. */
     boolean narrow;
-    /** Есть ветка со звеном после выхода из здания (TreeBuilder#exitLink). */
     boolean linked;
-    /** Точка осталась без сети, потому что маршрут от её выхода уходит круче 90°, а звено после выхода не пробовалось. */
     boolean turnStuck;
-    /**
-     * То же дерево до ортогональной формы (VariantEnumerator#squared) или null: в городе дерево района, которое по осям
-     * задевает соседа, берётся в прежнем виде, а не теряет точки (п. 2.5).
-     */
     Tree unsquared;
 
     Tree(TieCandidate tie) {
@@ -94,7 +79,6 @@ final class Tree {
         return degree;
     }
 
-    /** Рамка всех рёбер готового дерева, общая: не менять; у дерева без рёбер пустая. */
     Envelope envelope() {
         Envelope cached = envelope;
         if (cached == null) {
@@ -107,12 +91,10 @@ final class Tree {
         return cached;
     }
 
-    /** Линии всех рёбер готового дерева одной геометрией. */
     Geometry geometry() {
         Geometry cached = geometry;
         if (cached == null) {
             cached = FACTORY.createMultiLineString(edges.stream().map(edge -> edge.line).toArray(LineString[]::new));
-            // рамку JTS считает лениво; здесь она считается до того, как геометрию увидят другие нити
             cached.getEnvelopeInternal();
             geometry = cached;
         }

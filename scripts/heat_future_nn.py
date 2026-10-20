@@ -1,15 +1,3 @@
-"""Перспективная застройка Н. Новгорода по схеме теплоснабжения → future_scheme.geojson (перспективные ОКС).
-
-    uv run --project tools --with pymupdf python scripts/heat_future_nn.py
-
-Источник — Схема теплоснабжения до 2030 г. (актуализация на 2026 г.), Обосновывающие материалы, Глава 2, Прил. 1,
-Ч. 3, табл. 2.1 «Прогноз ввода строений различного назначения … до 2030 года»: район, источник, объект с адресом,
-срок ввода, площади МКД / ИЖФ / ОДЗ (тыс. м²), расчётная нагрузка (Гкал/ч). Адрес → здание или улица OSM
-(cache/nnovgorod/osm/embed_osm.json, scripts/heat_embed_nn.py osm). Контур: стройка OSM у адреса (building=construction,
-landuse=construction) — `real`; иначе дома типичной формы на свободном месте у адреса — `inferred`. Нагрузка — из
-схемы (`_load_source=scheme`), делится между домами объекта пропорционально площади; flow_tph = нагрузка × 1000 /
-(150 − 70) — график 150/70 (Глава 1). Кстовский район в город (8 районов) не входит — его строки не берутся.
-"""
 import json
 import math
 import re
@@ -34,8 +22,6 @@ def num(s):
 
 
 def parse():
-    """Строки табл. 2.1 (ячейки таблиц PDF): [{district, source, name, year, mkd, izhf, odz, total, load}], площади —
-    тыс. м²; проверка — суммы нагрузок по источникам против строк «<источник> Итог»."""
     import pymupdf
     items, totals, district = [], [], None
     clean = lambda c: re.sub(r"\s+", " ", (c or "").replace("\n", " ")).strip()
@@ -53,7 +39,7 @@ def parse():
                 elif c[0].endswith("Итог") and c[0] != "Общий итог":
                     totals.append((district, c[0][:-4].strip(), load))
                 elif c[1] and items and not c[0].startswith("Наименование"):
-                    items[-1]["name"] += " " + c[1]  # перенос ячейки на следующую страницу
+                    items[-1]["name"] += " " + c[1]
     loads = defaultdict(float)
     for it in items:
         loads[(it["district"], it["source"])] += it["load"]
@@ -61,18 +47,14 @@ def parse():
     return items, bad
 
 
-# ---------------------------------------------------------------- адрес → место
-
 STREET_TYPES = {"улица", "проспект", "переулок", "шоссе", "набережная", "бульвар", "площадь", "проезд", "съезд",
                 "тупик", "спуск", "микрорайон", "аллея", "линия", "парк", "имени", "им"}
 NEAR = re.compile(r"(?:у|напротив|рядом\s+с|за|в\s+районе|от|возле|около)\s+(?:д\.|дом\w*|домов)\s*(?:№+\s*)?(\d+[а-яА-Я]?(?:/\d+)?)")
 AT = re.compile(r"^[\s,.]*(?:д\.|дом\s|№)?\s*(\d+[а-яА-Я]?(?:/\d+)?)(?![\d])")
-TPH_PER_GCAL = 1000.0 / (150.0 - 70.0)   # т/ч на 1 Гкал/ч при графике 150/70
+TPH_PER_GCAL = 1000.0 / (150.0 - 70.0)
 
 
 def stems(name):
-    """Основы слов названия улицы OSM: слово без трёх последних букв (не короче 4): «Светлоярская улица» →
-    ['светлоярс']; числа — как есть («50-летия Победы» → ['50', 'лет', 'побе'])."""
     out = []
     for w in re.findall(r"[а-яё]+|\d+", name.lower().replace("ё", "е")):
         if w.isdigit():
@@ -124,9 +106,7 @@ class Geo:
         self.btree = STRtree([g for _, _, g in self.buildings])
         self.sites = [(sid, t, shapely.make_valid(Polygon(utm_xy(rings[0])))) for sid, t, rings in layers["sites"]
                       if t.get("landuse") == "construction"]
-        self.placed = []   # контуры уже поставленных перспективных ОКС
-        # запреты места те же, что проверяет сборка входа (scripts/city_geojson.py, scheme_future): полигоны дорог,
-        # воды, путей, парков, соцобъектов, запретных территорий и трубы схемы с охранной зоной 5 м
+        self.placed = []
         import city_geojson as cg
         cg.use_zone("nnovgorod")
         bbox = cg.CITIES["nnovgorod"]["bbox"]
@@ -142,7 +122,6 @@ class Geo:
         self.block_tree = STRtree(blocked + pipes)
 
     def find_streets(self, text):
-        """Улицы OSM, названные в тексте: [(позиция конца упоминания, имя улицы)], самые полные совпадения."""
         low = text.lower().replace("ё", "е")
         words = [(m.start(), m.end(), m.group()) for m in re.finditer(r"[а-яё]+|\d+", low)]
         hits = []
@@ -174,8 +153,6 @@ class Geo:
         return None
 
     def locate(self, item, sources):
-        """(точка, связь, адрес): связь — at (сам адрес), near (у дома), streets (в границах улиц / по улице),
-        source (у источника тепла из графы «источник»); None — не найдено."""
         from shapely.geometry import Point
         from shapely.ops import nearest_points
         d = (item["district"] or "").split()[0]
@@ -222,8 +199,6 @@ class Geo:
             poly.buffer(12.0).intersects(p) for p in self.placed)
 
     def put(self, centre, w, l, radius):
-        """Прямоугольник w × l на свободном месте ближе всего к centre (спираль с шагом 12 м до radius), вдоль
-        ближайшей оси улицы; None — места нет."""
         from shapely.affinity import rotate, translate
         from shapely.geometry import box
         i = self.axis_tree.query_nearest(centre, all_matches=False)
@@ -248,9 +223,6 @@ class Geo:
 
 
 def forms(item):
-    """Дома объекта: [(площадь этажей м², этажей, ширина, длина)]. Площадь — из схемы; без площади — по нагрузке
-    (0,1 Гкал/ч на 1 000 м², средняя удельная по табл. 2.1). МКД до 20 тыс. м² в доме, 17/12/9/5 этажей по площади,
-    секция шириной 16 м; ОДЗ — до 15 тыс. м², 3–5 этажей, прямоугольник 1 : 1,5."""
     area = item["total"] * 1000.0 or item["load"] / 0.1 * 1000.0
     mkd = item["mkd"] >= item["odz"] and item["mkd"] > 0
     cap = 20000.0 if mkd else 15000.0
@@ -273,7 +245,6 @@ def forms(item):
 
 
 def source_points(geo):
-    """Источник из графы «источник» → точка: heat_sources.geojson по совпадению названия, иначе адрес в названии."""
     sys.path.insert(0, str(Path(__file__).parent))
     from heat_embed_nn import utm_xy
     from shapely.geometry import Point
@@ -286,7 +257,6 @@ def source_points(geo):
 
 
 def build():
-    from shapely.geometry import mapping
     sys.path.insert(0, str(Path(__file__).parent))
     from heat_embed_nn import TO_WGS
     items, bad = parse()
@@ -321,7 +291,6 @@ def build():
         shapes = forms(it)
         radius = 250.0 if how in ("at", "near") else 600.0
         total_area = sum(a for a, *_ in shapes)
-        # реальные контуры: здание по самому адресу, если оно строится или новое; стройки OSM рядом
         real = []
         if how == "at" and bi is not None:
             t = geo.buildings[bi][1]

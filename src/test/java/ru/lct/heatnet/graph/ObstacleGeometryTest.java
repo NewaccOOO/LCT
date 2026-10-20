@@ -17,14 +17,12 @@ import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.prep.PreparedGeometry;
 import org.locationtech.jts.geom.prep.PreparedGeometryFactory;
 
-/** Быстрые проверки зон дают тот же ответ, что предикаты и расстояния JTS, в том числе на касаниях и общих вершинах. */
 class ObstacleGeometryTest {
     private final GeometryFactory factory = new GeometryFactory();
     private final Random random = new Random(7);
 
     @Test
     void hitsBoxMatchesRectangleLineIntersector() {
-        // та же решётка в координатах города: там знак произведения в double чаще спорный, и отвечает точный путь
         for (double shift : new double[] {0, 6_180_000.3}) {
             for (int i = 0; i < 50_000; i++) {
                 Envelope box = new Envelope(shift + lattice(), shift + lattice(), shift + lattice(), shift + lattice());
@@ -40,7 +38,6 @@ class ObstacleGeometryTest {
     void intersectionNumMatchesLineIntersector() {
         RobustLineIntersector intersector = new RobustLineIntersector();
         for (int i = 0; i < 100_000; i++) {
-            // короткая решётка: много общих концов и коллинеарных отрезков
             Coordinate p1 = new Coordinate(random.nextInt(6), random.nextInt(6));
             Coordinate p2 = new Coordinate(random.nextInt(6), random.nextInt(6));
             Coordinate q1 = new Coordinate(random.nextInt(6), random.nextInt(6));
@@ -58,7 +55,6 @@ class ObstacleGeometryTest {
             PreparedGeometry prepared = PreparedGeometryFactory.prepare(zone);
             Coordinate[] vertices = zone.getCoordinates();
             for (int k = 0; k < 200; k++) {
-                // концы на вершинах зоны и на решётке дают касания, коллинеарные стороны и точки на границе
                 Coordinate a = k % 4 == 0 ? vertices[random.nextInt(vertices.length)] : new Coordinate(lattice(), lattice());
                 Coordinate b = k % 5 == 0 ? vertices[random.nextInt(vertices.length)] : new Coordinate(lattice(), lattice());
                 LineString edge = factory.createLineString(new Coordinate[] {a, b});
@@ -78,7 +74,6 @@ class ObstacleGeometryTest {
                 Coordinate a = new Coordinate(lattice(), lattice());
                 Coordinate b = k % 5 == 0 ? new Coordinate(a) : new Coordinate(lattice(), lattice());
                 LineString edge = factory.createLineString(new Coordinate[] {a, b});
-                // зона берёт отступ с запасом 0,05 м; у самой границы расстояния арифметика разная, такие пары не сверяются
                 double gap = object.distance(edge) - (distance + 0.05);
                 if (Math.abs(gap) > 1e-6) {
                     assertEquals(gap <= 0, fast.hitsBox(a, b) && fast.intersects(a, b, 0, false), object + " " + edge);
@@ -122,7 +117,6 @@ class ObstacleGeometryTest {
     void turnAllowedMatchesDeflection() {
         Coordinate b = new Coordinate(412_345.678, 6_171_234.567);
         for (int i = 0; i < 200_000; i++) {
-            // повороты у порога 89,9° и решётка с прямыми углами и нулевыми отрезками
             double angle = Math.toRadians(i % 2 == 0 ? Router.MAX_TURN_DEG + (random.nextDouble() - 0.5) * 1e-6 : random.nextDouble() * 360);
             double heading = random.nextDouble() * 2 * Math.PI;
             double length = 0.1 + random.nextDouble() * 500;
@@ -145,7 +139,6 @@ class ObstacleGeometryTest {
             Coordinate t = i % 3 == 0 ? new Coordinate(node) : new Coordinate(412_000 + random.nextDouble() * 1000, 6_171_000 + random.nextDouble() * 1000);
             double dist = i % 7 == 0 ? Double.POSITIVE_INFINITY : random.nextDouble() * 2000;
             double exact = dist + node.distance(t);
-            // вес ровно на сумме, на соседних double и случайный
             double weight = i % 4 == 0 ? exact : i % 4 == 1 ? Math.nextUp(exact) : i % 4 == 2 ? Math.nextDown(exact) : random.nextDouble() * 3000;
             assertEquals(exact > weight, Router.beyond(dist, node.x, node.y, t, weight), dist + " " + node + " " + t + " " + weight);
         }
@@ -157,7 +150,6 @@ class ObstacleGeometryTest {
         java.util.PriorityQueue<double[]> expected = new java.util.PriorityQueue<>((a, b) -> Double.compare(a[0], b[0]));
         for (int i = 0; i < 200_000; i++) {
             if (expected.isEmpty() || random.nextInt(3) > 0) {
-                // веса из короткого списка: много равных, порядок при них задаёт устройство кучи
                 double key = random.nextInt(20) * 0.5;
                 heap.add(key, i, i + 1, i + 2);
                 expected.add(new double[] {key, i, i + 1, i + 2});
@@ -176,8 +168,6 @@ class ObstacleGeometryTest {
     @Test
     void hashOrderMatchesHashMap() {
         for (int round = 0; round < 400; round++) {
-            // ключи состояний точного поиска node·(n+1)+pred; в каждом десятом наборе ключи с одним hashCode, корзина
-            // дорастает до дерева
             int n = 20 + random.nextInt(2000);
             java.util.Set<Long> unique = new java.util.LinkedHashSet<>();
             int size = random.nextInt(round % 2 == 0 ? 300 : 60_000);
@@ -206,12 +196,10 @@ class ObstacleGeometryTest {
         }
     }
 
-    /** Координата на решётке шагом 0,5 м: много общих вершин и коллинеарных случаев. */
     private double lattice() {
         return random.nextInt(81) * 0.5;
     }
 
-    /** Объект зоны отступа: точка, ломаная или полигон с дыркой и второй частью. */
     private Geometry object() {
         double x = lattice();
         double y = lattice();
@@ -226,7 +214,6 @@ class ObstacleGeometryTest {
         }
     }
 
-    /** Буфер точки, отрезка или пары прямоугольников: многоугольники с дугами, дырками и несколькими частями. */
     private Geometry zone() {
         double x = lattice();
         double y = lattice();

@@ -27,11 +27,6 @@ import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.plan.VariantEnumerator;
 import ru.lct.heatnet.rules.Rules;
 
-/**
- * Режим CLI (D-16): {@code java -jar heatnet.jar --cli [--depth] [--rules=<файл правил>] <input> <output>}, без веба и
- * базы. {@code --depth} — режим с учётом глубины (§5): глубины участков, Kгл, свои варианты; без него — 2D.
- * Рядом с выходом пишется {@code <output>.criteria.json} с дополнительными критериями вариантов.
- */
 @Component
 @Profile("cli")
 public class CliRunner implements ApplicationRunner {
@@ -70,7 +65,6 @@ public class CliRunner implements ApplicationRunner {
             }
             Result result = pipeline.run(input, depth);
             Path output = Path.of(files.get(1)).toAbsolutePath();
-            // каталог выхода создаётся сам: в свежей копии репозитория data/out ещё нет
             try {
                 Files.createDirectories(output.getParent());
             } catch (IOException e) {
@@ -93,7 +87,6 @@ public class CliRunner implements ApplicationRunner {
         }
     }
 
-    /** Критерии вариантов в {@code <имя выхода без .geojson>.criteria.json} рядом с выходом. */
     private static Path writeCriteria(Result result, InputData input, Path output) {
         String name = output.getFileName().toString().replaceFirst("\\.geojson$", "");
         Path path = output.resolveSibling(name + ".criteria.json");

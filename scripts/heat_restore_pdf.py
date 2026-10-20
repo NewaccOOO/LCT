@@ -1,16 +1,3 @@
-"""Восстановление теплосети из векторной «расчётной схемы тепловых сетей» (PDF схемы теплоснабжения Москвы).
-
-    uv run --project tools --with pymupdf python scripts/heat_restore_pdf.py \
-        <pdf> <osm_streets.json> <out.geojson> <страница>[,<страница>...] <ref>
-
-Страница PDF (нумерация с 1) — лист формата A0: трубы — одна ломаная толщиной 0,96 pt, камеры — жёлтые квадраты,
-подписи участков «L <м> / Dвн <мм> / G <т/ч>» с выноской, подложка — улицы с подписями названий.
-Привязка: подписи улиц листа (центры) сопоставляются с одноимёнными улицами OSM (<osm_streets.json> — ответ
-Overpass `way["highway"]["name"](bbox); out geom;`), аффинное преобразование лист → UTM 37N подбирается
-итерациями «точка → ближайшая точка одноимённой улицы» с отбрасыванием выбросов. Выход — GeoJSON EPSG:4326:
-heat_network (LineString, diameter = Ду из ряда сервиса по Dвн), heat_chamber (Point), source (Point),
-consumer (Point, красные ромбы — вводы потребителей); `_source=restored`, `_ref`, `_georef_rmse_m`.
-"""
 import json
 import re
 import sys
@@ -30,7 +17,6 @@ NUM = re.compile(r"-?\d+(?:[.,]\d+)?")
 
 
 def dn_from_inner(d):
-    """Dвн 207 → Ду 200, 514 → 500, 898 → 900: ближайший из ряда сервиса (Ду 350 в ряду нет → 300/400)."""
     return min(DN, key=lambda x: abs(x - d))
 
 
@@ -51,7 +37,7 @@ def fit_affine(src, dst, w=None):
     if w is not None:
         a, dst = a * w[:, None], dst * w[:, None]
     m, *_ = np.linalg.lstsq(a, dst, rcond=None)
-    return m  # 3×2: [x y 1] @ m
+    return m
 
 
 def apply(m, pts):
@@ -59,11 +45,9 @@ def apply(m, pts):
 
 
 def register(labels, streets):
-    """labels: [(name, (x, y))] на листе → аффинное преобразование в UTM и RMSE по подписям (м)."""
     pairs = [(n, p) for n, p in labels if n in streets]
     names = [n for n, _ in pairs]
     src = np.array([p for _, p in pairs])
-    # начальное приближение: центр подписей улицы ↔ центр одноимённой улицы OSM, робастно по улицам
     uniq = sorted(set(names))
     s0 = np.array([src[[i for i, n in enumerate(names) if n == u]].mean(0) for u in uniq])
     d0 = np.array([[streets[u].centroid.x, streets[u].centroid.y] for u in uniq])
@@ -72,7 +56,6 @@ def register(labels, streets):
         m = fit_affine(s0[keep], d0[keep])
         r = np.linalg.norm(apply(m, s0) - d0, axis=1)
         keep = r <= max(np.median(r[keep]) * 2.5, 50)
-    # уточнение: подпись → ближайшая точка своей улицы
     groups = {u: np.array([i for i, n in enumerate(names) if n == u]) for u in uniq}
 
     def closest(cur):
@@ -113,10 +96,9 @@ def page_objects(page):
         elif col == (0.0, 0.0, 0.0) and abs(w - 0.24) < 0.01 and len(dr["items"]) == 1 and dr["items"][0][0] == "l":
             leaders.append(((dr["items"][0][1].x, dr["items"][0][1].y), (dr["items"][0][2].x, dr["items"][0][2].y)))
         elif fill == (0.0, 0.0, 0.0) and r.width > 30 and r.height > 20:
-            big.append(((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2))  # значок ТЭЦ
-    # подписи участков: «L n» + ниже «D»«вн»«n» + ниже «G n»
+            big.append(((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2))
     ls = [(t, bb) for t, bb in spans if t.startswith("L ") and NUM.search(t)]
-    vn = np.array([bb[:2] for t, bb in spans if t == "вн"] or np.empty((0, 2)))  # «D» «вн» «612»
+    vn = np.array([bb[:2] for t, bb in spans if t == "вн"] or np.empty((0, 2)))
     ds = [(float(t), bb) for t, bb in spans if re.fullmatch(r"\d+", t)]
     dxy = np.array([bb[:2] for _, bb in ds] or np.empty((0, 2)))
     gs = [(t, bb) for t, bb in spans if t.startswith("G ") and NUM.search(t)]
@@ -137,12 +119,11 @@ def page_objects(page):
     titles = [(t, ((bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2)) for t, sz, bb in lines
               if sz > 15 and re.search(r"ТЭЦ|РТС|КТС|ГЭС|ТЭС", t)]
     near = lambda c: min(titles, key=lambda tc: Point(tc[1]).distance(Point(c)))
-    big = [(near(c)[0], c) for c in big if titles and Point(near(c)[1]).distance(Point(c)) < 120]  # без легенды
+    big = [(near(c)[0], c) for c in big if titles and Point(near(c)[1]).distance(Point(c)) < 120]
     return street_labels, segs, chambers, consumers, leaders, boxes, big, names
 
 
 def network(segs, chambers, leaders, boxes):
-    """Цепочки между узлами, разрезанные по камерам; Dвн по выноскам подписей."""
     net = linemerge([LineString([(round(a[0], 1), round(a[1], 1)), (round(b[0], 1), round(b[1], 1))])
                      for a, b in segs if a != b])
     chains = list(net.geoms) if hasattr(net, "geoms") else [net]
@@ -158,14 +139,14 @@ def network(segs, chambers, leaders, boxes):
                      if g.length > 0.05]
         pieces += parts
     ptree = STRtree(pieces)
-    hits = {}  # участок → [(положение вдоль участка, подпись)]
-    ends = np.array([[a, c] for a, c in leaders] or np.empty((0, 2, 2)))  # n×2×2
-    uniq = {(round(b["bbox"][0]), round(b["bbox"][1])): b for b in boxes}  # подписи рисуются дважды
+    hits = {}
+    ends = np.array([[a, c] for a, c in leaders] or np.empty((0, 2, 2)))
+    uniq = {(round(b["bbox"][0]), round(b["bbox"][1])): b for b in boxes}
     for b in uniq.values():
         x0, y0, x1, y1 = b["bbox"]
         inb = lambda q: (q[:, 0] >= x0 - 2) & (q[:, 0] <= x1 + 2) & (q[:, 1] >= y0 - 2) & (q[:, 1] <= y1 + 2)
         best = None
-        for e in (0, 1):  # выноска: один конец у рамки подписи, другой снаружи — на трубе
+        for e in (0, 1):
             for far in ends[inb(ends[:, e]) & ~inb(ends[:, 1 - e]), 1 - e]:
                 i = ptree.nearest(Point(far))
                 d = pieces[i].distance(Point(far))
@@ -173,11 +154,10 @@ def network(segs, chambers, leaders, boxes):
                     best = (d, i, pieces[i].project(Point(far)))
         if best:
             hits.setdefault(best[1], []).append((best[2], b))
-    # несколько подписей на одном участке — узлы без камер: режем посередине между точками выносок
     out, lab = [], {}
     for i, p in enumerate(pieces):
         h = []
-        for sb in sorted(hits.get(i, []), key=lambda x: x[0]):  # дубли одной подписи (обводка текста)
+        for sb in sorted(hits.get(i, []), key=lambda x: x[0]):
             if not h or sb[1]["L"] != h[-1][1]["L"] or sb[1]["D"] != h[-1][1]["D"] or sb[0] - h[-1][0] > 10:
                 h.append(sb)
         cuts = [0.0] + [(a[0] + b[0]) / 2 for a, b in zip(h, h[1:])] + [p.length]
@@ -187,7 +167,6 @@ def network(segs, chambers, leaders, boxes):
                 lab[len(out)] = h[k][1]
             out.append(seg)
     pieces, ptree = out, STRtree(out)
-    # участки без подписи: Dвн соседнего подписанного участка той же цепочки/узла, до 30 проходов
     dv = {i: b["D"] for i, b in lab.items()}
     for _ in range(30):
         new = {}
@@ -239,7 +218,7 @@ def main(pdf, streets_path, out, pages, ref):
         for c in consumers:
             feats.append({"type": "Feature", "geometry": mapping(Point(to_geo(*c))),
                           "properties": dict(base, _class="consumer", _page=pno)})
-        for name, c in dict((round(c[0]), (n, c)) for n, c in big).values():  # значок рисуется дважды
+        for name, c in dict((round(c[0]), (n, c)) for n, c in big).values():
             feats.append({"type": "Feature", "geometry": mapping(Point(to_geo(*c))),
                           "properties": dict(base, _class="source", _page=pno, name=name)})
     json.dump({"type": "FeatureCollection", "features": feats}, open(out, "w"), ensure_ascii=False, separators=(",", ":"))

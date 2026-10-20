@@ -1,14 +1,3 @@
-"""Региональная выгрузка OSM (.osm.pbf) -> ответы «как у Overpass» для города, когда Overpass недоступен.
-
-    uv run --project tools --with osmium python scripts/heat_pbf.py <pbf> <город> <relation городского округа> \
-        <admin_level районов> <out_dir>
-
-Пишет в <out_dir> (формат `out geom` Overpass, дальше их читает scripts/heat_osm.py без изменений):
-q1_<город>.json — все теплосетевые объекты города (отбор по heat_osm.classify), q2_<город>.json — пусто,
-adm_<город>.json — районы (boundary=administrative, admin_level, центр внутри городского округа),
-streets_<город>.json — улицы с названиями (для scripts/heat_restore_pdf.py),
-addr_<город>.json — здания с адресом точками (привязка источников и подписей схем по адресу).
-"""
 import json
 import sys
 from pathlib import Path
@@ -18,9 +7,8 @@ from shapely.geometry import Point, box
 from shapely.prepared import prep
 
 sys.path.insert(0, str(Path(__file__).parent))
-from heat_osm import classify, rel_geom  # noqa: E402
+from heat_osm import classify, rel_geom
 
-# объекты, у которых «ТЭЦ/котельная» в названии — остановки, улицы, магазины, а не источники
 NOT_OBJECT = {"highway", "public_transport", "railway", "shop", "office", "place", "route", "waterway", "natural",
               "leisure", "tourism", "barrier", "entrance", "craft"}
 
@@ -30,7 +18,7 @@ def wanted(t):
     if cls is None:
         return None
     if cls in ("heat_source", "heat_substation") and classify({k: v for k, v in t.items() if k != "name"}) is None:
-        return None if NOT_OBJECT & t.keys() else cls  # найден только по названию
+        return None if NOT_OBJECT & t.keys() else cls
     return cls
 
 
@@ -40,7 +28,7 @@ def pts(w):
 
 def main(pbf, city, city_rel, level, out):
     city_rel, out = int(city_rel), Path(out)
-    rels, need = {}, set()  # relation id -> (tags, [(role, way id)])
+    rels, need = {}, set()
     for r in osmium.FileProcessor(pbf, osmium.osm.RELATION):
         t = dict(r.tags)
         adm = t.get("boundary") == "administrative" and (r.id == city_rel or t.get("admin_level") == level)

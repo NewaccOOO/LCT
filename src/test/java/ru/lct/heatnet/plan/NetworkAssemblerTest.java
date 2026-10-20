@@ -18,14 +18,11 @@ import ru.lct.heatnet.rules.Rules;
 
 class NetworkAssemblerTest {
     private static final Geometry ROAD = PlanFixture.rect(-500, 50, 1000, 70);
-    /** Та же дорога осью: полигон нулевой ширины (приложение 18.09, разд. 1.1 и 4, разъяснение 6). */
     private static final Geometry ROAD_AXIS = PlanFixture.line(-500, 60, 1000, 60);
     private final Rules rules = Rules.load();
 
     @Test
     void roadSpecialRunsThreeMetersAlongTraceBeyondPolygon() {
-        // дорога 20 м под 60°: спецучасток — 20 / sin 60° в полигоне и по 3 м вдоль трассы (ТП разд. 4, табл. 2),
-        // а не полоса 3 м поперёк границы, (20 + 6) / sin 60°
         List<NewSegment> special = specials(assemble(PlanFixture.trunk(), 60, 10));
 
         assertEquals(1, special.size());
@@ -34,15 +31,11 @@ class NetworkAssemblerTest {
 
     @Test
     void roadSpecialEndsThreeMetresBeyondWhenBaseBreaksClearance() {
-        // Ду 400 под 46°: в 3 м вдоль трассы за дорогой до неё 3 · sin 46° = 2,16 м, норма 1,5 + 0,685 = 2,185 м.
-        // Спецучасток за 3 м не продлевается (табл. 2), и обычный участок ближе нормы сборка отвергает
         assertThrows(IllegalStateException.class, () -> assemble(PlanFixture.trunk(), 46, 500));
     }
 
     @Test
     void baseNearLineCrossingIsCloserThanNormOnlyInsideCircle() {
-        // газопровод поперёк трассы Ду 80: норма 2 + 0,235 + 0,2 = 2,435 м больше зоны 2 м. Под 90° обычная трасса
-        // ближе нормы только в круге 2,535 м у пересечения, под 60° — ещё и за ним: 2,535 · sin 60° = 2,2 м
         assertEquals(2, specials(assemble(gasAcross(), 90, 10)).size());
         assertThrows(IllegalStateException.class, () -> assemble(gasAcross(), 60, 10));
     }
@@ -53,7 +46,6 @@ class NetworkAssemblerTest {
 
     @Test
     void roadAxisSpecialRunsThreeMetersEachSideAlongTrace() {
-        // табл. 2: «полигон дороги и по 3 м за границей», у оси полигон нулевой ширины — 3 м вдоль трассы в обе стороны
         List<NewSegment> special = specials(assemble(PlanFixture.trunk(), ROAD_AXIS, 60, 10));
 
         assertEquals(1, special.size());
@@ -62,9 +54,6 @@ class NetworkAssemblerTest {
 
     @Test
     void specialIsSplitWhereSetOfZonesChanges() {
-        // газопровод в 2 м под дорогой: его зона накрывает начало зоны дороги. Kспец 1,60 на общем фрагменте и за
-        // ним тот же, но на границе общего фрагмента начинается новый участок (п. 4, разъяснение 8). Трасса идёт
-        // поперёк: под острым углом обычная часть у газопровода была бы ближе нормы за кругом у пересечения
         PlanFixture fixture = PlanFixture.trunk()
                 .restriction("gas-1", PlanFixture.line(250, 48, 450, 48), "gas_pipeline");
 
@@ -81,9 +70,6 @@ class NetworkAssemblerTest {
 
     @Test
     void zoneEndAndNextZoneStartCentimetresApartShareOneCutBetweenThem() {
-        // газопровод в 5,001 м за кромкой (профиль улицы СПб v1): зона дороги кончается в 73,000, зона газопровода
-        // начинается в 73,001. Разрез между ними, а не в начале расширенной зоны газопровода 72,981: иначе 2 см зоны
-        // дороги уходят в участок газопровода с Kспец 1,25 (check18 B14)
         PlanFixture fixture = PlanFixture.trunk()
                 .restriction("gas-1", PlanFixture.line(250, 75.001, 450, 75.001), "gas_pipeline");
 
@@ -96,9 +82,6 @@ class NetworkAssemblerTest {
 
     @Test
     void overlapOfExactZonesGoesToPartWithGreaterSpecialFactor() {
-        // газопровод в 4,97 м за кромкой: точная зона газопровода начинается в 72,97, зона дороги кончается в 73,00.
-        // Общие 3 см считаются по наибольшему Kспец (приложение 18.09, разд. 4) и уходят участку дороги, а не делятся
-        // пополам (72,985)
         PlanFixture fixture = PlanFixture.trunk()
                 .restriction("gas-1", PlanFixture.line(250, 74.97, 450, 74.97), "gas_pipeline");
 
@@ -109,7 +92,6 @@ class NetworkAssemblerTest {
         assertEquals(73.0, cut, 0.0005);
     }
 
-    /** Один прямой участок от врезки на hn-2 в (300, 0) через дорогу под углом deg к ОКС с расходом flow. */
     private Variant assemble(PlanFixture fixture, double deg, double flow) {
         return assemble(fixture, ROAD, deg, flow);
     }
@@ -129,7 +111,6 @@ class NetworkAssemblerTest {
         return assembler.assemble("1", 1, List.of(tree), List.of());
     }
 
-    /** Специальные участки по порядку от врезки. */
     private static List<NewSegment> specials(Variant variant) {
         return variant.getSegments().stream()
                 .filter(segment -> NetworkAssembler.SPECIAL.equals(segment.getLayingMethod()))

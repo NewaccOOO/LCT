@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""Картинки угловых случаев для docs/algorithm.md из настоящих выходов сервиса.
-
-Запуск из корня после сборки (source scripts/env.sh && mvn -q -B -DskipTests package):
-    uv run --project tools python scripts/algorithm_figures.py [старый.jar]
-Считает каждый вход docs/assets/algorithm/inputs/*.geojson сервисом target/heatnet.jar и старым jar для картинок
-«до» (по умолчанию data/out/goal/v0.8.1.jar), кладёт выходы в data/out/algorithm/, печатает итог строгого check18
-по каждому выходу и пишет SVG в docs/assets/algorithm/. Датасет организаторов здесь не используется.
-"""
 import glob
 import html
 import json
@@ -47,7 +39,6 @@ PW, PH = 560, 440
 
 
 def run(jar, name):
-    """Считает вход jar-ом, возвращает путь выхода или None, если сервис вход не принял."""
     out = f"{RUNS}/{name}.{os.path.basename(jar)}.geojson"
     res = subprocess.run(["bash", "-c", f"source scripts/env.sh >/dev/null && java -jar {jar} --cli {INPUTS}/{name}.geojson {out}"],
                          capture_output=True, text=True)
@@ -55,7 +46,6 @@ def run(jar, name):
 
 
 def check(name, out):
-    """Строгий check18: последняя строка и число нарушений варианта 1 по категориям."""
     res = subprocess.run([sys.executable, "tools/validator/check18.py", f"{INPUTS}/{name}.geojson", out], capture_output=True, text=True)
     counts = {}
     first = res.stdout.split("== вариант 2")[0]
@@ -111,7 +101,6 @@ def polys_of(g):
 
 
 def draw(p, inp, out, world):
-    """Вход и вариант выхода в рамке world: здания, ограничения, существующая и новая сеть."""
     clip = box(*world)
     for pr, g in inp:
         kind = pr.get("restriction_type") or pr.get("object_type")
@@ -173,14 +162,12 @@ def around(g, pad):
 
 
 def deflection(a, b, c):
-    """Поворот в b: угол между продолжением a→b и направлением b→c, градусы."""
     h1 = math.atan2(b[1] - a[1], b[0] - a[0])
     h2 = math.atan2(c[1] - b[1], c[0] - b[0])
     return abs((math.degrees(h2 - h1) + 180) % 360 - 180)
 
 
 def cross_angle(seg, edge):
-    """Острый угол между отрезком трассы и отрезком стороны или оси, градусы."""
     (ax, ay), (bx, by) = seg
     (cx, cy), (dx, dy) = edge
     d = abs(math.degrees(math.atan2(by - ay, bx - ax) - math.atan2(dy - cy, dx - cx))) % 180
@@ -188,7 +175,6 @@ def cross_angle(seg, edge):
 
 
 def edge_at(g, pt):
-    """Отрезок контура или линии g, ближайший к точке."""
     best = None
     for c in lines_of(g.boundary if g.geom_type in ("Polygon", "MultiPolygon") else g):
         for a, b in zip(c, c[1:]):
@@ -389,7 +375,6 @@ def u_building(runs):
 
 
 def chamber_turns(out):
-    """Повороты путей точек в камерах: (камера, первое звено ребра к точке, угол)."""
     segs = segments(out)
     parent = {pr["end_node_id"]: g for pr, g in segs}
     turns = []

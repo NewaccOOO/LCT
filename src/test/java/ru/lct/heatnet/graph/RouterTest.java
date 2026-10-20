@@ -73,8 +73,6 @@ class RouterTest {
 
     @Test
     void plainCountsMarginFromRuleClearance() {
-        // зона шире нормы на 0,05 м, а запас формы трассы 0,15 м отсчитывается от нормы, иначе вершины с запасом
-        // прямой 0,15–0,2 м остаются лишними (п. 5)
         Geometry park = rect(-50, -20, 50, 20);
         ObstacleSet zones = router(List.of(new Restriction("park-1", park, "park")), List.of()).obstacles();
         double y = 20 + rules.restriction("park").clearanceM(DN) + halfWidth;
@@ -85,8 +83,6 @@ class RouterTest {
 
     @Test
     void routePassesBetweenDiagonalCornersCloserThanMitreZones() {
-        // углы двух парков по диагонали в 3,2 м: круглые зоны отступа не смыкаются, а зоны с углами JOIN_MITRE
-        // смыкались и закрывали проход
         Geometry left = rect(-50, -50, 0, 0);
         Geometry right = rect(2.263, 2.263, 50, 50);
         Router router = router(List.of(new Restriction("park-1", left, "park"), new Restriction("park-2", right, "park")),
@@ -103,7 +99,6 @@ class RouterTest {
 
     @Test
     void cutRouteAtParkCornerKeepsOneTurn() {
-        // срезка у угла зоны даёт хорду короче 10 м: её два поворота форма заменяет прежним углом (п. 5)
         Geometry park = rect(-50, -50, 0, 0);
         Router router = router(List.of(new Restriction("park-1", park, "park")), List.of());
 
@@ -122,8 +117,6 @@ class RouterTest {
 
     @Test
     void cutRouteAroundRoundParkHasNoDoubleTurns() {
-        // обход скруглённого парка по вершинам зоны — цепочка мелких поворотов в одну сторону; после доводки формы
-        // два поворота подряд со звеном короче 10 м остаются, только если одним поворотом их не заменить (больше 90°)
         Geometry park = point(0, 0).buffer(30, 8);
         Router router = router(List.of(new Restriction("park-1", park, "park")), List.of());
 
@@ -149,7 +142,6 @@ class RouterTest {
 
     @Test
     void sharpenDropsVertexOnlyWhereNeighboursSeeEachOther() {
-        // (А): вершину, соседей которой соединяет прямая с отступом, форма убирает; вершина у угла парка нужна
         Geometry park = rect(-50, -50, 0, 0);
         Router router = router(List.of(new Restriction("park-1", park, "park")), List.of());
         List<Coordinate> detour = new ArrayList<>(List.of(new Coordinate(-40, 30), new Coordinate(0, 40), new Coordinate(40, 30)));
@@ -189,8 +181,6 @@ class RouterTest {
 
     @Test
     void sharpenBendsReplaceTwoTurnsOnLongLinkWithOneVertex() {
-        // (Г): два поворота по −18,4° над узким парком на звене 20 м; ни одну вершину не убрать, а одна вершина над
-        // парком с запасом короче прежнего пути
         double clearance = rules.restriction("park").clearanceM(DN) + halfWidth;
         Router router = router(List.of(new Restriction("park-1", rect(-3, -20, 3, 10 - clearance - 0.3), "park")), List.of());
         List<Coordinate> path = new ArrayList<>(List.of(new Coordinate(-40, 0), new Coordinate(-10, 10),
@@ -209,8 +199,6 @@ class RouterTest {
 
     @Test
     void looseFindsZigzagVertexThatSharpenKeeps() {
-        // зигзаг +4° и −5° на 1,2 м над углом парка: без одной вершины излом другой меньше 3°, без обеих прямая ближе
-        // отступа к парку — форма его не убирает, а проверщик считает вершину лишней
         Router router = router(List.of(new Restriction("park-1", rect(-5, -50, 0, 0), "park")), List.of());
         double a = rules.restriction("park").clearanceM(DN) + halfWidth + 0.4;
         List<Coordinate> zigzag = new ArrayList<>(List.of(new Coordinate(-40, a + 39.4 * Math.tan(Math.toRadians(4))),
@@ -222,7 +210,6 @@ class RouterTest {
 
     @Test
     void routeAroundThinWallTurnsNoSteeperThanNinetyDegrees() {
-        // тонкая стена между точкой и целью: обход её конца без ограничения дал бы разворот почти на 180°
         Geometry wall = rect(-1, -60, 1, 60);
         Router router = router(List.of(new Restriction("park-1", wall, "park")), List.of());
 
@@ -240,8 +227,6 @@ class RouterTest {
 
     @Test
     void exactRouteFromPortalKeepsTurnAtExitWithinLimit() {
-        // точка выхода из здания в (0, 0), финальный участок пришёл с юга: цель за спиной ближе, но поворот к ней
-        // круче 90°, поэтому точный поиск идёт к дальней цели впереди
         Router router = router(List.of(), List.of());
         Point exit = point(0, 0);
         Point behind = point(-20, -5);
@@ -260,7 +245,6 @@ class RouterTest {
 
     @Test
     void apartByBoxesOnlyWhenDistanceIsBeyondLimit() {
-        // координаты UTM: отсев по рамкам отвергает пару, только если JTS тоже насчитал бы больше порога
         Random random = new Random(1);
         int apart = 0;
         for (int k = 0; k < 100_000; k++) {
@@ -295,8 +279,6 @@ class RouterTest {
 
     @Test
     void routeToTieDoesNotRunAlongTiePipe() {
-        // врезка в камеру (0, 0) на трубе вдоль оси x; точка подключения в (-130, 60): прямая под 155° раскладывается
-        // на запад и северо-запад, но идти по трубе от врезки нельзя — сначала диагональ, потом запад
         NetworkSegment west = new NetworkSegment("hn-1", line(-250, 0, 0, 0), DN, 10, "src");
         NetworkSegment east = new NetworkSegment("hn-2", line(0, 0, 100, 0), DN, 10, "hn-1");
         Router router = router(List.of(), List.of(west, east));
@@ -313,8 +295,6 @@ class RouterTest {
 
     @Test
     void sharpenStraightensEdgeFromTieIntoOneSegment() {
-        // ребро от врезки на трубе вдоль оси x: лишняя вершина убирается и тогда, когда остаётся одна прямая, которая
-        // касается трубы врезки своим концом
         NetworkSegment pipe = new NetworkSegment("hn-1", line(-100, 0, 100, 0), DN, 10, "src");
         Router router = router(List.of(), List.of(pipe));
         List<Coordinate> edge = new ArrayList<>(List.of(new Coordinate(0, 0), new Coordinate(-20, 30), new Coordinate(-40, 51)));
@@ -325,7 +305,6 @@ class RouterTest {
 
     @Test
     void pointRestrictionsAreBypassedWithTheirClearance() {
-        // Точка неизвестного типа и точка railway обходятся с отступом своего правила.
         List<Restriction> restrictions = List.of(new Restriction("pls-1", point(0, 0), "power_line_support"),
                 new Restriction("rw-1", point(40, 1), "railway"), new Restriction("x-1", rect(-45, -3, -41, 3), "depot_xyz"));
         Router router = router(restrictions, List.of());
@@ -343,7 +322,6 @@ class RouterTest {
 
     @Test
     void detourAroundSmallObstacleHasNoFlatVertices() {
-        // обход опоры на прямой длиной 120 м по углам её зоны даёт изломы около 2,5°, а меньше 3° запрещено
         Router router = router(List.of(new Restriction("pls-1", point(0, 0), "power_line_support")), List.of());
 
         Route route = router.route(point(0, -60), point(0, 60), Set.of());
@@ -385,7 +363,6 @@ class RouterTest {
 
     @Test
     void roadAxisCrossingAt30DegreesGoesAtAllowedAngle() {
-        // дорога осью (разд. 1.1, разъяснение 6): угол к звену оси, узлы вдоль оси дают переход от 45°, а не обход
         LineString axis = line(-500, 0, 500, 0);
         Router router = router(List.of(new Restriction("road-1", axis, "road")), List.of());
         Coordinate from = polar(-80, 30);
@@ -423,22 +400,17 @@ class RouterTest {
 
         assertEquals(1, spans.size());
         SpecialSpan span = spans.get(0);
-        // спецчасть — полигон и margin_m вдоль отрезка за границей (ТП разд. 4): ширина / sin 60° + 2 × margin
         double halfSpecial = roadWidth / 2 / Math.sin(Math.toRadians(60)) + rule.getMarginM();
         assertEquals(40 - halfSpecial, span.getFromM(), EPS);
         assertEquals(40 + halfSpecial, span.getToM(), EPS);
         assertEquals("road-1", span.getObjectId());
         assertEquals(rule.getKSpecial(), span.getKSpecial(), EPS);
-        // вес ребра графа — по полосе margin_m поперёк границы, оценка не меньше спецчасти:
-        // (ширина + 2 × margin) / sin 60°
         double halfBand = (roadWidth / 2 + rule.getMarginM()) / Math.sin(Math.toRadians(60));
         assertEquals(80 + (rule.getKSpecial() - 1) * 2 * halfBand, weight, EPS);
     }
 
     @Test
     void evenDropsSmallKinkAtEndOfRoadCrossing() {
-        // спецчасть через дорогу кончается в вершине (0, 13), за ней трасса уходит в сторону на 1,3°: вершину заменяет
-        // одна прямая через дорогу, почти под прямым углом к ней
         Router router = router(List.of(new Restriction("road-1", rect(-500, -10, 500, 10), "road")), List.of());
         List<Coordinate> coords = new ArrayList<>(List.of(new Coordinate(0, -60), new Coordinate(0, 13), new Coordinate(2, 100)));
 
@@ -449,7 +421,6 @@ class RouterTest {
 
     @Test
     void perpendicularTramCrossingStaysStraight() {
-        // Узлы вдоль путей лежат в полосе margin_m: переход между ними со сдвигом вбок не должен быть легче прямого.
         double tramWidth = 8;
         Router router = router(List.of(new Restriction("tram-1", rect(-500, 66, 500, 66 + tramWidth), "tram_tracks")),
                 List.of());
@@ -465,7 +436,6 @@ class RouterTest {
 
     @Test
     void hintKeepsEdgeWeights() {
-        // объект, запретивший прошлое ребро строки, проверяется первым: запрет и вес те же, что без подсказки
         Router router = router(List.of(new Restriction("park-1", rect(-60, -40, -20, 0), "park"),
                 new Restriction("park-2", rect(20, 10, 70, 40), "park"),
                 new Restriction("road-1", rect(-200, 50, 200, 70), "road"),
@@ -488,7 +458,6 @@ class RouterTest {
 
     @Test
     void graphNodeNearLineCrossingCarriesSpecialPartBeforeIt() {
-        // узел в 1 м от оси газопровода: отсчёт margin_m 2 м от пересечения продолжается за узел ещё на 1 м
         Router router = router(List.of(new Restriction("gas-1", line(-100, 0, 100, 0), "gas_pipeline")), List.of());
         RestrictionRule rule = rules.restriction("gas_pipeline");
         Coordinate node = new Coordinate(0, -1);
@@ -533,15 +502,12 @@ class RouterTest {
         assertNotNull(plainRoute);
         assertEquals(1, plainRoute.getSpans().size());
         assertEquals("hn-1", plainRoute.getSpans().get(0).getObjectId());
-        // отрезок, который не начинается на участке врезки, по-прежнему держит отступ от него
         Coordinate[] alongSegment = {new Coordinate(-50, 1), new Coordinate(50, 1)};
         assertTrue(Double.isNaN(router.obstacles().edgeWeight(alongSegment[0], alongSegment[1], Set.of("hn-1"))));
     }
 
     @Test
     void lineCrossingKeepsNormBeyondCircleAroundCrossing() {
-        // газопровод: норма 2 + 0,255 + 0,2 = 2,455 м, в круге 2,555 м у пересечения обычная трасса может быть ближе.
-        // Сеть Ду 100: норма 1,51 м меньше спецчасти 2 м, пересекать её можно круче asin(1,51 / 2) ≈ 49°
         ObstacleSet gas = router(List.of(new Restriction("gas-1", line(-100, 0, 100, 0), "gas_pipeline")), List.of())
                 .obstacles();
         ObstacleSet pipe = router(List.of(), List.of(new NetworkSegment("hn-1", line(-100, 0, 100, 0), DN, 10, "src")))
@@ -555,7 +521,6 @@ class RouterTest {
 
     @Test
     void routeCrossesGasPipelineAtRightAngleThroughNodePair() {
-        // прямая под 20° к газопроводу недопустима: трасса поворачивает к паре узлов и пересекает его под 90°
         Router router = router(List.of(new Restriction("gas-1", line(-100, 0, 100, 0), "gas_pipeline")), List.of());
 
         Route route = router.route(factory.createPoint(polar(-60, 20)), factory.createPoint(polar(60, 20)), Set.of());
@@ -649,8 +614,6 @@ class RouterTest {
 
         double buildS = (built - start) / 1e9;
         double queriesS = (done - built) / 1e9;
-        System.out.printf("graph perf: nodes=%d build=%.2fs queries=%.2fs found=%d%n",
-                router.obstacles().nodes().size(), buildS, queriesS, found);
         assertTrue(buildS + queriesS < 20, "построение и запросы заняли " + (buildS + queriesS) + " с");
         assertEquals(100, found);
     }

@@ -76,7 +76,6 @@ class ExactSteinerTest {
                         .tree(root, 3, 0.05);
                 String at = "набор " + trial + " граница ×" + factor;
                 if (bound >= opt) {
-                    // верная нижняя оценка не отсекает оптимум
                     assertNotNull(pruned, at);
                     assertTrue(pruned.cost <= bound, at);
                 }
@@ -94,8 +93,6 @@ class ExactSteinerTest {
 
     @Test
     void trialBoundKeepsSkeletonOnNonMetricWeights() {
-        // веса маршрутов не метрика: прямой вес бывает дороже пути через места, и прежнее правило r·w(v, root)
-        // не нижняя оценка. С пробной границей ответ должен совпасть с прежним счётом с прежней границей
         Random random = new Random(5);
         int checked = 0;
         for (int trial = 0; trial < 80; trial++) {
