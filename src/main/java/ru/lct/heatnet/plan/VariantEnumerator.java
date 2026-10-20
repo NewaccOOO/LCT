@@ -67,6 +67,7 @@ public final class VariantEnumerator {
     private static final double OTHER_TIE_M = 20;
     private static final double SAME_ROUTE_SHARE = 0.9;
     private static final double SAME_ROUTE_M = 10.0;
+    private static final double BALLAST_RATIO = Double.parseDouble(System.getProperty("heatnet.variants.ratio", "1.3"));
     private static final double DRAFT_ROUTE_M = 1.0;
     private static final boolean SCAN = Boolean.parseBoolean(System.getProperty("heatnet.search.scan", "true"));
     private static final double SCAN_RADIUS_M = 150;
@@ -108,6 +109,8 @@ public final class VariantEnumerator {
     private static final double UNKINK_EPS = 1e-9;
     private static final double RETIE_STEP_M = 0.1;
     private static final double RETIE_MAX_M = 5;
+    private static final double STRAIGHT_TIE_MIN_DEG = 70;
+    private static final int STRAIGHT_TIE_TRIES = 12;
     private static final double TURN_STEP_M = 0.1;
     private static final double TURN_MAX_M = 10;
     private static final double TURN_TOLERANCE_S = 0.002;
@@ -1331,6 +1334,11 @@ public final class VariantEnumerator {
         List<Variant> kept = new ArrayList<>();
         for (int i : distinctIndices(variants, trees)) {
             Variant variant = variants.get(i);
+            if (!kept.isEmpty() && variant.getSummary().getScore() > BALLAST_RATIO * kept.get(0).getSummary().getScore()) {
+                log.info("variants: вариант {} с S {} дороже лучшего ({}) больше чем в {} раза и не выдаётся", variant.getId(),
+                        variant.getSummary().getScore(), kept.get(0).getSummary().getScore(), BALLAST_RATIO);
+                continue;
+            }
             String id = String.valueOf(kept.size() + 1);
             boolean same = variant.getId().equals(id) && variant.getSummary().getRank() == kept.size() + 1;
             kept.add(same ? variant : renumbered(variant, id, kept.size() + 1));
@@ -5085,15 +5093,20 @@ public final class VariantEnumerator {
 
     private Tree retied(Tree tree, Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub, Region region,
             Envelope area, List<Tree> others) {
-        if (tree.tie.isChamber()) {
-            return null;
-        }
         int dn = 0;
         List<Tree.Edge> kinked = new ArrayList<>();
         for (Tree.Edge edge : tree.edges) {
-            Coordinate[] c = edge.line.getCoordinates();
             if (edge.from == tree.root) {
                 dn = Math.max(dn, dnByEdge.get(edge));
+            }
+        }
+        Tree straight = straightTied(tree, dn, dnByEdge, priceRub, region, area, others);
+        if (straight != null || tree.tie.isChamber()) {
+            return straight;
+        }
+        for (Tree.Edge edge : tree.edges) {
+            Coordinate[] c = edge.line.getCoordinates();
+            if (edge.from == tree.root) {
                 if (c.length > 2 && TreeBuilder.deflectionDeg(c[0], c[1], c[2]) >= TreeBuilder.MIN_TURN_DEG
                         && region.obstacles(dnByEdge.get(edge), area)
                                 .plain(c[0], c[2], tree.tie.getIgnored(), Router.CUT_MARGIN_M)) {
@@ -5140,6 +5153,104 @@ public final class VariantEnumerator {
             }
         }
         return null;
+    }
+
+    private Tree straightTied(Tree tree, int dn, Map<Tree.Edge, Integer> dnByEdge, Map<Tree.Edge, Double> priceRub,
+            Region region, Envelope area, List<Tree> others) {
+        List<Object[]> shots = new ArrayList<>();
+        for (Tree.Edge s : tree.edges) {
+            if (s.from != tree.root) {
+                continue;
+            }
+            Coordinate[] c = s.line.getCoordinates();
+            boolean inside = s.to.kind == Tree.Kind.CONNECTION && buildingByConnection.containsKey(s.to.connection.getId());
+            for (int k = c.length - (inside ? 2 : 1); k >= 2; k--) {
+                List<TieCandidate> ties = new ArrayList<>();
+                for (TieCandidate tie : finder.direct(factory.createPoint(c[k]), dn)) {
+                    LineString pipe = tie.isChamber() ? null : finder.pipe(tie);
+                    if (pipe == null) {
+                        continue;
+                    }
+                    ties.add(tie);
+                    Coordinate hit = k + 1 < c.length ? rayHit(pipe, c[k], c[k + 1]) : null;
+                    TieCandidate inline = hit == null ? null : finder.shifted(tie, hit, 0, dn);
+                    if (inline != null && !inline.isChamber() && inline.getExistingObjectId().equals(tie.getExistingObjectId())) {
+                        ties.add(inline);
+                    }
+                }
+                for (TieCandidate tie : ties) {
+                    LineString pipe = finder.pipe(tie);
+                    if (!crosses(pipe, tie.getPoint().getCoordinate(), c[k])) {
+                        continue;
+                    }
+                    TreeBuilder.Slide slide = builder.retie(tree, s, tie.getPoint().getCoordinate(), priceRub, 0, k, true);
+                    if (slide != null) {
+                        shots.add(new Object[] {k, slide, tie});
+                    }
+                }
+            }
+        }
+        shots.sort(Comparator.<Object[]>comparingInt(o -> -(int) o[0]).thenComparingDouble(o -> ((TreeBuilder.Slide) o[1]).gain));
+        double before = Double.NaN;
+        int tried = 0;
+        for (Object[] shot : shots) {
+            if (tried >= STRAIGHT_TIE_TRIES) {
+                break;
+            }
+            TreeBuilder.Slide slide = (TreeBuilder.Slide) shot[1];
+            TieCandidate tie = (TieCandidate) shot[2];
+            if (!builder.retieClear(tree, slide, tie.getIgnored(), edge -> region.obstacles(dnByEdge.get(edge), area))) {
+                continue;
+            }
+            tried++;
+            Tree changed = unkinked(tree, slide, tie, dnByEdge, region, area, false);
+            if (changed == null || !compatible(changed, others) || vertices(changed) >= vertices(tree)) {
+                continue;
+            }
+            before = Double.isNaN(before) ? unitScore(List.of(tree)) : before;
+            if (unitScore(List.of(changed)) <= before + UNKINK_EPS && !worse(tree, List.of(tree), changed, List.of(changed))) {
+                return changed;
+            }
+        }
+        return null;
+    }
+
+    private Coordinate rayHit(LineString pipe, Coordinate from, Coordinate back) {
+        double length = from.distance(back);
+        if (length < 1e-9) {
+            return null;
+        }
+        double reach = pipe.distance(factory.createPoint(from)) + pipe.getLength();
+        Coordinate far = new Coordinate(from.x + (from.x - back.x) / length * reach, from.y + (from.y - back.y) / length * reach);
+        org.locationtech.jts.geom.Geometry hits = pipe.intersection(factory.createLineString(new Coordinate[] {from, far}));
+        Coordinate best = null;
+        for (Coordinate hit : hits.getCoordinates()) {
+            if (best == null || hit.distance(from) < best.distance(from)) {
+                best = hit;
+            }
+        }
+        return best;
+    }
+
+    private static boolean crosses(LineString pipe, Coordinate tie, Coordinate next) {
+        LengthIndexedLine axis = new LengthIndexedLine(pipe);
+        double at = axis.project(tie);
+        Coordinate along = axis.extractPoint(Math.min(at + 1, pipe.getLength()));
+        Coordinate back = axis.extractPoint(Math.max(at - 1, 0));
+        double dx = along.x - back.x;
+        double dy = along.y - back.y;
+        double vx = next.x - tie.x;
+        double vy = next.y - tie.y;
+        double norm = Math.hypot(dx, dy) * Math.hypot(vx, vy);
+        return norm > 1e-9 && Math.abs(dx * vx + dy * vy) / norm <= Math.cos(Math.toRadians(STRAIGHT_TIE_MIN_DEG));
+    }
+
+    private static int vertices(Tree tree) {
+        int count = 0;
+        for (Tree.Edge edge : tree.edges) {
+            count += edge.line.getNumPoints() - 2;
+        }
+        return count;
     }
 
     private Tree unkinked(Tree tree, TreeBuilder.Slide slide, TieCandidate tie, Map<Tree.Edge, Integer> dnByEdge,

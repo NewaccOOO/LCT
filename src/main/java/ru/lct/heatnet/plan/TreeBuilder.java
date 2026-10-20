@@ -2340,6 +2340,11 @@ final class TreeBuilder {
     }
 
     Slide retie(Tree tree, Tree.Edge s, Coordinate point, Map<Tree.Edge, Double> priceRub, double maxGainRub) {
+        return retie(tree, s, point, priceRub, maxGainRub, 2, false);
+    }
+
+    Slide retie(Tree tree, Tree.Edge s, Coordinate point, Map<Tree.Edge, Double> priceRub, double maxGainRub, int sSkip,
+            boolean straight) {
         Map<Tree.Edge, Coordinate[]> lines = new IdentityHashMap<>();
         double gain = 0;
         for (Tree.Edge edge : tree.edges) {
@@ -2347,7 +2352,7 @@ final class TreeBuilder {
                 continue;
             }
             Coordinate[] c = edge.line.getCoordinates();
-            int skip = edge == s ? 2 : 1;
+            int skip = edge == s ? sSkip : 1;
             boolean inside = edge.to.kind == Tree.Kind.CONNECTION && buildingByConnection.containsKey(edge.to.connection.getId());
             if (c.length - skip < (inside ? 2 : 1)) {
                 return null;
@@ -2355,6 +2360,12 @@ final class TreeBuilder {
             Coordinate[] line = new Coordinate[c.length - skip + 1];
             line[0] = point;
             System.arraycopy(c, skip, line, 1, c.length - skip);
+            if (straight && edge == s && line.length > 2 && deflectionDeg(point, line[1], line[2]) < MIN_TURN_DEG) {
+                Coordinate[] shorter = new Coordinate[line.length - 1];
+                shorter[0] = point;
+                System.arraycopy(line, 2, shorter, 1, line.length - 2);
+                line = shorter;
+            }
             if (point.distance(line[1]) < Router.CUT_PIECE_M
                     || line.length > 2 && deflectionDeg(point, line[1], line[2]) > Router.MAX_TURN_DEG) {
                 return null;
