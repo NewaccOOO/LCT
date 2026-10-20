@@ -10,6 +10,7 @@ target/
 .venv/
 __pycache__/
 .pytest_cache/
+.ruff_cache/
 .unlazy/
 .unlazy-hook-state.json
 .claude/
