@@ -27,7 +27,5 @@ spring:
       on-profile: cli
   main:
     web-application-type: none
-  # CLI нужны только свои бины (CliRunner, Pipeline): без автоконфигураций нет БД, JPA, actuator, метрик и Jackson —
-  # их условия и бины были половиной старта CLI
   boot:
     enableautoconfiguration: false

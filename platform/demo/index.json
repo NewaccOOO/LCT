@@ -1,7 +1,7 @@
 [
  {
   "name": "small-1",
-  "title": "Пример small-1 (2 варианта)",
+  "title": "Пример small-1 (3 варианта)",
   "input": "small-1.in.geojson",
   "output": "small-1.out.geojson"
  },

@@ -13,13 +13,11 @@ import ru.lct.heatnet.model.Result;
 import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.rules.Rules;
 
-/** Режим с глубиной (§5 приложения 18.09): профиль у газопровода поперёк трассы. */
 class DepthProfilerTest {
     private final Rules rules = Rules.load();
 
     @Test
     void gasFarFromNodesIsPassedOverWithoutExtraCost() {
-        // газ в 30 м от магистрали, ОКС в 80 м: «над» — h ≤ 2,8 − 0,2 − H, спуски по 6–7 м помещаются
         Variant variant = depth(PlanFixture.trunk().restriction("gas-1", PlanFixture.line(0, 30, 600, 30), "gas_pipeline")
                 .oks("1", 300, 80, 20));
         checkProfile(variant);
@@ -31,14 +29,39 @@ class DepthProfilerTest {
     }
 
     @Test
+    void sewerCrossingKeepsVerticalClearance() {
+        Variant variant = depth(PlanFixture.trunk().restriction("sewer-1", PlanFixture.line(0, 30, 600, 30), "sewer")
+                .oks("1", 300, 80, 20));
+        checkProfile(variant);
+        assertTrue(variant.getSegments().stream().anyMatch(s -> s.getDepthCrossings() != null
+                && s.getDepthCrossings().stream().anyMatch(c -> "sewer".equals(c.getType()))), "пересечение с канализацией не учтено");
+        for (NewSegment s : variant.getSegments()) {
+            if (s.getDepthCrossings() != null && s.getDepthCrossings().stream().anyMatch(c -> "sewer".equals(c.getType()))) {
+                double h = rules.diameter(s.getDiameter()).getHeightM();
+                double top = s.getDepthStart();
+                assertTrue(top + h <= 3.5 - 0.2 + 0.0011 || top >= 3.5 + 0.4 + 0.2 - 0.0011, s.getId() + " просвет до канализации");
+            }
+        }
+    }
+
+    @Test
     void gasNextToTieMovesTieDepth() {
-        // газ в 3 м от врезки: ни «над» (≈6,5 м спуска), ни «под» (4 м) до врезки на 3,0 м не помещаются
         Variant variant = depth(PlanFixture.trunk().restriction("gas-1", PlanFixture.line(0, 5, 600, 5), "gas_pipeline")
                 .oks("1", 300, 80, 20));
         checkProfile(variant);
-        // узел поднимается к «над»: Kгл > 1 нет, стоимость как в 2D
         assertTrue(variant.getSegments().stream().allMatch(s -> s.getDepthStart() <= 3 + 1e-9 && s.getDepthEnd() <= 3 + 1e-9),
                 "участок глубже 3,0 м");
+    }
+
+    @Test
+    void chamberWithinToleranceLetsPipePassOverGas() {
+        Variant variant = depth(PlanFixture.trunk().restriction("gas-1", PlanFixture.line(0, 7.5, 600, 7.5), "gas_pipeline")
+                .oks("1", 300, 80, 20));
+        checkProfile(variant);
+        assertTrue(variant.getChambers().stream().allMatch(c -> Math.abs(c.getDepth() - 3) <= 0.05 + 1e-9),
+                "камера вне допуска 3,0 ± 0,05 м");
+        assertTrue(variant.getSegments().stream().allMatch(s -> s.getDepthStart() <= 3 + 1e-9 && s.getDepthEnd() <= 3 + 1e-9),
+                "участок глубже 3,0 м: над газом не прошли");
     }
 
     private Variant depth(PlanFixture fixture) {
@@ -49,7 +72,6 @@ class DepthProfilerTest {
         return deep.getVariants().get(0);
     }
 
-    /** Глубина у каждого участка, уклон ≤ 0,10, ≥ 0,7 м, одна глубина в узле, без перехода через 3,0 м внутри. */
     private static void checkProfile(Variant variant) {
         Map<String, Double> atNode = new HashMap<>();
         for (NewSegment s : variant.getSegments()) {

@@ -1,4 +1,3 @@
-# Команды из корня репозитория. Переменные переопределяются: make cli IN=вход.geojson OUT=выход.geojson
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
@@ -13,7 +12,7 @@ PY := uv run --project tools
 .PHONY: help up down logs jar cli synth validate run real test test-unit test-java viz ui3d platform platform-test
 
 help: ## список команд
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
+	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
 
 up: ## поднять приложение и PostgreSQL в Docker
 	$(ENV); $$COMPOSE up -d --build

@@ -1,7 +1,3 @@
-// Модель сцены из входа и выхода сервиса — без three.js, чтобы проверялась в node.
-// Геометрия переводится в метры вокруг центра набора (x — восток, y — север). У новой сети по вершинам хранится
-// глубина верха габарита d (depth_start/depth_end, между ними линейно; без них — 3,0 м). Пересечения с коммуникациями
-// и проверки глубины — раздел 14 docs/architecture/CONSTRAINTS.md, та же логика, что в scripts/ui3d/prep.py.
 
 export const NORMAL_DEPTH = 3.0;
 export const MIN_DEPTH = 0.7;
@@ -9,7 +5,6 @@ export const MAX_SLOPE = 0.10;
 const EARTH_M = 6371008.8;
 const CELL = 50;
 
-// Таблица 1 rules/rules.json: Ду, высота и ширина габарита, пропускная способность, предельная длина
 export const DIAMETERS = [[50, 0.125, 0.4, 3.5, 181], [65, 0.14, 0.43, 8.3, 245], [80, 0.16, 0.47, 13.2, 327], [100, 0.18, 0.51, 22.3, 419],
   [125, 0.225, 0.6, 40.2, 554], [150, 0.25, 0.65, 65.1, 696], [200, 0.315, 0.88, 152.3, 1042], [250, 0.4, 1.05, 274.9, 1379],
   [300, 0.45, 1.15, 437.4, 1718], [400, 0.56, 1.37, 943.1, 2477], [500, 0.71, 1.67, 1663.4, 3245], [600, 0.8, 1.85, 2627.7, 4037],
@@ -17,16 +12,13 @@ export const DIAMETERS = [[50, 0.125, 0.4, 3.5, 181], [65, 0.14, 0.43, 8.3, 245]
   [1200, 1.425, 3.1, 15012.8, 9288], [1400, 1.6, 3.45, 22501.9, 11276]]
   .map(([dn, h, w, cap, maxLen]) => ({dn, h, w, cap, maxLen}));
 
-// Таблица 2 и раздел 14: глубина верха, высота габарита, нужный вертикальный зазор с новой сетью.
-// Водопровода и канализации в правилах по глубине нет — показываем условно и зазор не проверяем.
 export const UTILITIES = {
   gas_pipeline: {top: 2.8, h: 0.40, clear: 0.2, name: 'Газопровод', short: 'газ', color: '#facc15'},
   power_cable: {top: 2.7, h: 0.20, clear: 0.5, name: 'Электрокабель', short: 'кабель', color: '#c084fc'},
   heat_network: {top: 3.0, h: null, clear: 0.5, name: 'Существующая теплосеть', short: 'теплосеть', color: '#ef4444'},
   water_supply: {top: 2.5, h: 0.30, clear: null, name: 'Водопровод', short: 'вода', color: '#3b82f6', assumed: true},
-  sewer: {top: 3.5, h: 0.40, clear: null, name: 'Канализация', short: 'канализ.', color: '#a16207', assumed: true},
+  sewer: {top: 3.5, h: 0.40, clear: 0.2, name: 'Канализация', short: 'канализ.', color: '#a16207', assumed: true},
 };
-// Верх новой сети под полигоном не мельче, м (зона — сам полигон, без буфера 3 м)
 export const UNDER = {road: 1.0, tram_tracks: 1.2};
 
 export const SURFACES = {
@@ -43,7 +35,6 @@ export const SURFACES = {
   oks_future: {name: 'Новые здания (подключаем)', color: '#22d3ee'},
 };
 export const BUILDING_KEYS = new Set(['oks_existing', 'oks_future', 'oks']);
-// типы объектов входа (раздел 12 CONSTRAINTS.md и редакция 18.09)
 const KNOWN = new Set([...Object.keys(UTILITIES), ...Object.keys(SURFACES), ...BUILDING_KEYS, 'heat_chamber', 'oks_connection_point', 'source']);
 
 export const NODE_TYPES = {
@@ -56,7 +47,6 @@ export const NODE_TYPES = {
 const KIND = {residential: 'Жилой дом', apartments: 'Жилой дом', school: 'Школа', kindergarten: 'Детский сад', hospital: 'Больница',
   clinic: 'Поликлиника', office: 'Офисное здание', commercial: 'Торговое здание', retail: 'Торговое здание', public: 'Общественное здание'};
 
-// Человеческие имена вместо служебных номеров: «Участок 6», «Камера 19», «Поворот 3»
 export function segName(s) { const m = /_seg_(\d+)$/.exec(s.id); return m ? `Участок ${m[1]}` : `Участок ${s.id}`; }
 export function nodeName(nd, sc) {
   if (!nd) return '—';
@@ -76,7 +66,6 @@ export function dnRow(dn) {
 }
 export const kDepth = h => h > NORMAL_DEPTH ? 1 + 0.1 * (h - NORMAL_DEPTH) : 1;
 
-// ---------- геометрия ----------
 export function segX(a, b, c, d) {
   const rx = b[0] - a[0], ry = b[1] - a[1], sx = d[0] - c[0], sy = d[1] - c[1];
   const den = rx * sy - ry * sx;
@@ -110,7 +99,6 @@ function* allCoords(g) {
   else if (t === 'MultiPolygon') for (const p of c) for (const r of p) yield* r;
 }
 
-// Проекция вокруг центра: x = Δλ·R·cos φ0, y = Δφ·R. Обратная — для координат под курсором.
 export function makeProjection(lon0, lat0) {
   const k = Math.cos(lat0 * Math.PI / 180), D = Math.PI / 180;
   return {
@@ -120,16 +108,10 @@ export function makeProjection(lon0, lat0) {
   };
 }
 
-/**
- * Сцена: {proj, bbox, utilities, surfaces, points, oks, variants, segs, nodes, crossings, hasDepth, stats}.
- * input и output — разобранные FeatureCollection; output может отсутствовать (только исходные данные).
- * onProgress(доля, текст) вызывается между этапами; функция асинхронная, чтобы большой город не морозил вкладку.
- */
 export async function buildScene(input, output, {onProgress = () => {}, yieldEvery = 20000} = {}) {
   const fin = input?.features || [], fout = output?.features || [];
   const wait = typeof setTimeout === 'function' ? () => new Promise(r => setTimeout(r, 0)) : async () => {};
   onProgress(0.02, 'Центр набора');
-  // центр — по точкам входа, иначе по всем координатам
   let sx = 0, sy = 0, n = 0;
   for (const f of fin) if (f.geometry?.type === 'Point') { sx += f.geometry.coordinates[0]; sy += f.geometry.coordinates[1]; n++; }
   if (!n) for (const f of [...fin, ...fout]) if (f.geometry) for (const c of allCoords(f.geometry)) { sx += c[0]; sy += c[1]; n++; }
@@ -137,12 +119,12 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
   const proj = makeProjection(sx / n, sy / n), xy = proj.xy;
 
   const utilities = {}, surfaces = {}, points = {};
-  const grid = new Map();   // клетка → [{type, id, a, b, top, h}]
-  const zones = new Map();  // клетка → [{type, bbox, ring}]
+  const grid = new Map();
+  const zones = new Map();
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   const grow = p => { if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0]; if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; };
   const byInputId = new Map();
-  const skipped = new Map();   // почему объект не попал в сцену → сколько таких
+  const skipped = new Map();
   const skip = why => skipped.set(why, (skipped.get(why) || 0) + 1);
 
   for (let fi = 0; fi < fin.length; fi++) {
@@ -208,7 +190,6 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
   const zonesAt = (x, y) => (zones.get(Math.floor(x / CELL) * 100003 + Math.floor(y / CELL)) || [])
     .filter(z => x >= z.bbox[0] && x <= z.bbox[2] && y >= z.bbox[1] && y <= z.bbox[3] && inRing(x, y, z.ring));
 
-  // Здания к подключению: точка подключения + здание (по oks_id или полигон, в котором лежит точка)
   const oks = (points.oks_connection_point || []).map(cp => {
     let bld = null;
     const oid = sid(cp.p.oks_id);
@@ -220,14 +201,12 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
     const name = bld?.p.address || bld?.p.name || cp.p.address || cp.p.name || null;
     return {id: cp.id, oksId: oid || bld?.id || null, xy: cp.xy, flow, load, name, building: bld, p: cp.p};
   });
-  // понятные имена: адрес, если есть, иначе «Жилой дом №14, 15 эт.» — номер по порядку во входе
   oks.forEach((o, i) => {
     o.no = i + 1;
     const lv = o.building?.p.levels;
     o.label = o.name || `${KIND[o.building?.p._kind] || 'Здание'} №${o.no}${lv ? `, ${lv} эт.` : ''}`;
   });
 
-  // ---------- выход ----------
   onProgress(0.55, 'Новая сеть');
   const summaries = [], outById = new Map();
   for (const f of fout) {
@@ -260,17 +239,23 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
       from: sid(p.start_node_id), to: sid(p.end_node_id), cx: [], issues: [], bad: false});
   }
 
-  // ---------- пересечения и проверки ----------
   onProgress(0.6, 'Пересечения с коммуникациями');
   const crossings = [];
   const tiedOf = s => new Set([s.from, s.to].map(id => outById.get(id)?.p.existing_object_id).filter(x => x != null).map(String));
-  // пересечения участка с коммуникациями и проверки глубины; вызывается и после ручной правки трассы
+  const isChamber = id => outById.get(id)?.p.object_type === 'heat_chamber' || byInputId.get(id)?.type === 'heat_chamber';
+  const off = (p, a, b) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+    const t = l2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
+    return Math.hypot(a[0] + t * dx - p[0], a[1] + t * dy - p[1]);
+  };
+  const atChamber = (s, e, at) => [[s.from, s.pts[0], at], [s.to, s.pts[s.pts.length - 1], s.len - at]]
+    .some(([id, q, d]) => d <= 1 && isChamber(id) && off(q, e.a, e.b) <= 0.1);
   const checkSeg = s => {
     const {pts, lens, len, d0, d1, row} = s, tied = tiedOf(s), seen = new Set(), issues = [], out = [];
     s.cx = [];
-    const slope = Math.abs(d1 - d0) / len;
-    // глубины в выходе округлены до мм: на коротком участке это даёт лишнюю тысячную уклона
-    if (slope > MAX_SLOPE + 0.0011 / len + 1e-9) issues.push(`уклон ${slope.toFixed(3)} больше ${MAX_SLOPE}`);
+    const L = s.p.length > 0 ? s.p.length : len;
+    const slope = Math.abs(d1 - d0) / L;
+    if (slope > MAX_SLOPE + 0.0011 / L + 1e-9) issues.push(`уклон ${slope.toFixed(3)} больше ${MAX_SLOPE}`);
     if (Math.min(d0, d1) < MIN_DEPTH - 1e-9) issues.push(`глубина ${Math.min(d0, d1).toFixed(2)} м мельче ${MIN_DEPTH} м`);
     for (let i = 0; i + 1 < pts.length; i++) {
       const a = pts[i], b = pts[i + 1], cand = new Set();
@@ -283,13 +268,12 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
         if (seen.has(key)) continue;
         seen.add(key);
         const at = lens[i] + hit[0] * (lens[i + 1] - lens[i]);
-        if (e.type === 'heat_network' && Math.min(at, len - at) <= 0.05) continue;  // камера врезки на трубе
+        if (e.type === 'heat_network' && (Math.min(at, len - at) <= 0.05 || atChamber(s, e, at))) continue;
         const hn = d0 + (d1 - d0) * at / len, u = UTILITIES[e.type];
         const over = e.top - (hn + row.h), under = hn - (e.top + e.h);
         const gap = Math.max(over, under);
-        // без нормы зазора (вода, канализация) проверяем хотя бы физику: трубы не должны проходить друг через друга
         const ok = u.clear == null ? (gap < -1e-9 ? false : null) : gap >= u.clear - 1e-9;
-        const cl = u.clear ?? 0;   // без нормы — хотя бы не насквозь
+        const cl = u.clear ?? 0;
         const aboveMax = e.top - cl - row.h;
         const belowMin = e.top + e.h + cl;
         const c = {seg: s, v: s.v, x: hit[1], y: hit[2], s: at, type: e.type, eid: e.id, top: e.top, eh: e.h, hn, H: row.h,
@@ -298,7 +282,6 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
         s.cx.push(c);
         out.push(c);
       }
-      // дороги и трамвай: верх не мельче 1,0/1,2 м — концы и середина отрезка
       for (const [q, sq] of [[a, lens[i]], [b, lens[i + 1]], [[(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], (lens[i] + lens[i + 1]) / 2]]) {
         for (const z of zonesAt(q[0], q[1])) {
           if (!UNDER[z.type]) continue;
@@ -319,14 +302,12 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
     crossings.push(...checkSeg(segs[si]));
   }
 
-  // ---------- узлы: глубина и связи ----------
   onProgress(0.92, 'Узлы и варианты');
   const nodeById = new Map(nodes.map(nd => [nd.v + '|' + nd.id, nd]));
   for (const s of segs) {
     for (const [id, d, end] of [[s.from, s.d0, s.pts[0]], [s.to, s.d1, s.pts[s.pts.length - 1]]]) {
       let nd = nodeById.get(s.v + '|' + id);
       if (!nd) {
-        // конец участка в объекте входа: существующая камера, точка подключения, источник
         const src = byInputId.get(id);
         const type = src?.type === 'heat_chamber' ? 'existing_chamber' : src?.type === 'oks_connection_point' ? 'oks_entry' : 'endpoint';
         nd = {id, v: s.v, type, xy: end, p: src?.item.p || {id}, depth: null, virtual: true};
@@ -364,8 +345,6 @@ export async function buildScene(input, output, {onProgress = () => {}, yieldEve
   };
 }
 
-// ---------- трасса от врезки до здания ----------
-/** Цепочка участков варианта от корня до узла end (по end_node_id вверх по дереву). */
 export function routeTo(variant, end) {
   const byEnd = new Map(variant.segs.map(s => [s.to, s]));
   const path = [];
@@ -378,7 +357,6 @@ export function routeTo(variant, end) {
     bad: path.reduce((a, s) => a + s.cx.filter(c => c.ok === false).length + (s.issues.length ? 1 : 0), 0)};
 }
 
-/** Конец ветки для участка: идём вниз, пока ветка не ветвится, — так щелчок по трубе даёт трассу до здания. */
 export function branchEnd(variant, seg) {
   const byStart = new Map();
   for (const s of variant.segs) { const l = byStart.get(s.from); if (l) l.push(s); else byStart.set(s.from, [s]); }
@@ -391,7 +369,6 @@ export function branchEnd(variant, seg) {
   return s.to;
 }
 
-/** Точка трассы на расстоянии at от начала: [x, y, глубина верха], участок и направление. */
 export function pointAt(route, at) {
   at = Math.max(0, Math.min(route.len, at));
   const s = route.segs.find(q => at <= q.s0 + q.len + 1e-9) || route.segs[route.segs.length - 1];

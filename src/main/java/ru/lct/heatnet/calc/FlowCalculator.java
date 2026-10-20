@@ -12,7 +12,6 @@ public final class FlowCalculator {
     private FlowCalculator() {
     }
 
-    /** Расход ребра: сумма расходов ОКС в узлах ниже по дереву. Порядок ключей как у edges. */
     public static Map<String, Double> flows(List<TreeEdge> edges, String rootNode, Map<String, Double> oksFlowByNode) {
         List<TreeEdge> order = orderFromRoot(edges, rootNode);
         Set<String> nodes = new HashSet<>();
@@ -40,7 +39,6 @@ public final class FlowCalculator {
         return result;
     }
 
-    /** Проверяет, что рёбра образуют дерево с корнем rootNode, и возвращает их так, что родитель идёт раньше детей. */
     static List<TreeEdge> orderFromRoot(List<TreeEdge> edges, String rootNode) {
         Map<String, List<TreeEdge>> childrenByNode = new HashMap<>();
         Set<String> edgeIds = new HashSet<>();

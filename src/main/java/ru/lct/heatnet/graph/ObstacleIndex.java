@@ -17,12 +17,6 @@ import ru.lct.heatnet.rules.Diameter;
 import ru.lct.heatnet.rules.RestrictionRule;
 import ru.lct.heatnet.rules.Rules;
 
-/**
- * Пространственный индекс препятствий входа, строится один раз на расчёт. {@link ObstacleSet} берёт из него объекты
- * у своей области, а не перебирает весь вход: на городе в сотни тысяч зданий это проход по десяткам объектов вместо
- * всех. Конверт каждого объекта в индексе раздут на наибольший возможный отступ, поэтому индекс ничего не теряет,
- * а точная проверка близости остаётся в ObstacleSet. Объекты отдаются в порядке входа, как при переборе.
- */
 public final class ObstacleIndex {
     private static final String OKS_EXISTING = "oks_existing";
     private static final String HEAT_NETWORK = "heat_network";
@@ -52,7 +46,6 @@ public final class ObstacleIndex {
         return near(segments, input.getSegments(), area);
     }
 
-    /** Наибольший отступ ObstacleSet при любом диаметре: отступ правила, ширина трубы, полуширина линейного объекта и ширина соседней трубы. */
     private static double reach(InputData input, Rules rules) {
         Set<String> types = new HashSet<>(List.of(OKS_EXISTING, HEAT_NETWORK));
         input.getRestrictions().forEach(restriction -> types.add(restriction.getType()));
@@ -71,7 +64,6 @@ public final class ObstacleIndex {
                 try {
                     clearance = Math.max(clearance, rule.clearanceM(diameter.getDn()));
                 } catch (IllegalArgumentException e) {
-                    // отступ для этого диаметра не задан: ObstacleSet упадёт сам, если такой диаметр понадобится
                 }
             }
         }
@@ -84,7 +76,6 @@ public final class ObstacleIndex {
             envelope.expandBy(reach);
             tree.insert(envelope, i);
         }
-        // дерево строится сразу: ленивая сборка при первом запросе не потокобезопасна
         tree.build();
     }
 

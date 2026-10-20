@@ -12,7 +12,6 @@ public class NewChamber {
     Point geometry;
     int diameter;
     double cost;
-    /** Режим с глубиной: глубина верха габарита труб в камере, м; null — 2D. */
     Double depth;
 
     public NewChamber(String id, String variantId, Point geometry, int diameter, double cost) {

@@ -1,27 +1,3 @@
-"""Таблицы участков тепловых сетей из Схемы теплоснабжения Н. Новгорода (актуализация на 2026 г.) -> CSV.
-
-    uv run --project tools --with pymupdf python scripts/heat_tables_nn.py <папка с PDF> <out.csv>
-
-Источник — «Обосновывающие материалы…, Глава 1, Приложение 2 «Тепловые сети», Части 1–6» (шифр 22401.ОМ-ПСТ.001.002):
-Части 1–4 — АО «Теплоэнерго» по РТС: «имя начального узла, имя конечного узла, диаметр (Ду), длина, вид участка,
-район» — это граф сети электронной модели (узлы ТК-…, ВД-…, ОТВ-…, УТ-…, ПТ-<улица>,<дом> — потребитель);
-Часть 5 — ООО «Теплосети» (Автозаводская ТЭЦ): трубопровод, участок, назначение, наружный d (м), п/о, длина, год;
-Часть 6 — ООО «Нижновтеплоэнерго», ООО «КСК», ООО «СТН-Энергосети», ПАО «НИТЕЛ»: магистраль, «ТК a - ТК b»,
-наружный d (мм), длина 2-трубная, год, прокладка. Ду сервиса: по ряду 50…1400 (наружный d → Ду как в СПб).
-
-    uv run --project tools --with pymupdf python scripts/heat_tables_nn.py sources <Глава 4.pdf> <addr.json> \
-        <osm_heat_sources.geojson> <out.geojson>
-
-Источники тепла из Главы 4 (балансы мощности, шифр 22401.ОМ-ПСТ.004.000, табл. 2.1–2.6): название с адресом,
-организация, установленная мощность и фактическая нагрузка 2024 г. (Гкал/ч); координаты — по адресу из OSM
-(addr_<город>.json от heat_pbf.py), ТЭЦ — по источникам OSM. Пишет <out.geojson> (найденные) и <out>.csv (все).
-    uv run --project tools --with pymupdf python scripts/heat_tables_nn.py graph <sections.csv.gz> <addr.json> \
-        <heat_sources.csv> <out_dir>
-
-Граф АО «Теплоэнерго» (Части 1–4): компоненты связности, источники в каждой (по адресу из Главы 4), перемычки;
-узлы с адресом («ПТ-Чаад,24а», «ул.Базарная,6», «ЦТП-Минина,1а») → здания OSM того же района. Пишет
-<out_dir>/scheme_anchors.geojson (привязанные узлы — опорные точки восстановления) и scheme_components.csv.
-"""
 import json
 import csv
 import gzip
@@ -116,7 +92,6 @@ STREET_WORDS = {"ул", "улица", "пр", "пр-т", "проспект", "п
 
 
 def balance_rows(lines):
-    """Глава 4, табл. 2.1–2.6: (таблица, название, УТМ 2024, нагрузка 2024) по каждому источнику."""
     table = ""
     for i, t in enumerate(lines):
         if t.startswith("Таблица 2.") and "...." not in t:
@@ -150,8 +125,6 @@ def house(s):
 
 
 def geocoder(addr_path, extra=()):
-    """Адрес «улица, дом» → точка здания OSM; для городских таблиц — только в 8 районах (в округ с 2025 г. входит
-    Кстовский район с одноимёнными улицами)."""
     sys.path.insert(0, str(Path(__file__).parent))
     from heat_osm import districts
     from shapely.geometry import Point
@@ -173,7 +146,6 @@ def geocoder(addr_path, extra=()):
         sw, h = words(m.group(1).split(",")[-1].split("»")[-1]), house(m.group(2))
         if not sw or not h:
             return None
-        # котельная — обычно пристройка «31В» без адреса в OSM: тогда дом «31» той же улицы (≈ 50–200 м)
         for hh, how in ((h, ""), (re.sub(r"к\d+$", "", h), ""), (re.match(r"\d+", h).group(), " (по дому без литеры)")):
             for ow, lon, lat, st, in8 in idx.get(hh, []):
                 if (in8 or anywhere) and all(any(o.startswith(w[:5]) for o in ow) for w in sw[-2:]):
@@ -196,7 +168,7 @@ def sources(ch4, addr, osm_src, out):
         r = {"name": name, "org": org, "capacity_gcal_h": cap, "load_gcal_h": load, "_table": f"Глава 4, табл. {table}"}
         hit = next(((c[0], c[1], f"OSM {i}") for n, c, i in osm if table in TPL and n and TPL[table] == n), None) \
             or find(name, anywhere=table == "2.6")
-        if hit and not hit[2].startswith("OSM"):  # адрес → ближайший источник OSM в 250 м, если есть
+        if hit and not hit[2].startswith("OSM"):
             near = min(osm, key=lambda o: (o[1][0] - hit[0]) ** 2 + ((o[1][1] - hit[1]) * 1.8) ** 2)
             if ((near[1][0] - hit[0]) ** 2 + ((near[1][1] - hit[1]) * 1.8) ** 2) ** 0.5 * 62000 < 250:
                 hit = (near[1][0], near[1][1], f"OSM {near[2]} у адреса {hit[2]}")
@@ -217,7 +189,6 @@ STD = re.compile(r"^(ОТВ|ТК|ВД|УТ|ВДГ|ШО|ПЕР|РД|ЗАГ|ПАВ
 
 
 def node_addr(n):
-    """«ПТ-Кр.Зорь,11а гвс» → (['кр', 'зорь'], '11А'); «ул.Базарная,6» → (['базарная'], '6')."""
     n = re.sub(r"^(ПТ|ЦТП[ОИГ]?|КП|ГЭУ|ПТЭ)\s*-\s*", "", n)
     m = re.match(r"(.*?[А-Яа-яё])\s*[,.]\s*(\d+\s*[а-яА-Я]?)(?![\d])", n)
     if not m:

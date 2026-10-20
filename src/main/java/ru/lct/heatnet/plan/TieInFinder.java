@@ -29,33 +29,17 @@ import ru.lct.heatnet.rules.ChamberRule;
 import ru.lct.heatnet.rules.RestrictionRule;
 import ru.lct.heatnet.rules.Rules;
 
-/**
- * Кандидаты врезки (D-9): для каждой точки три ближайшие камеры и перпендикулярные проекции на три ближайших
- * участка. Проекция не дальше {@code max_dist_m} от камеры, у которой после подключения будет не больше
- * {@code max_segments} участков, становится врезкой в эту камеру.
- */
 final class TieInFinder {
     static final int NEAREST = 3;
-    /** Конец участка совпадает с камерой и объект касается врезки, если расстояние не больше этого (A-9). */
     static final double TOUCH_M = 0.5;
     private static final int PIPE_SEGMENTS = 2;
-    /** Запас к max_dist_m: валидатор считает расстояние по координатам, округлённым до 9 знаков. */
     private static final double DIST_MARGIN_M = 0.1;
     private static final double SAME_POINT_M = 1.0;
-    /** Врезка в трубу не ближе этого к точке, от которой она ищется: метр подотрезка и запас на округление. */
     private static final double MIN_TIE_M = 1.2;
     private static final double END_GAP_EXTRA_M = 1.0;
-    /** Запас к otherTieM у сдвинутой врезки: ось участка может быть не прямой. */
     private static final double ALONG_EXTRA_M = 1.0;
-    /** Первое окно поиска ближайших, м; дальше оно растёт вчетверо, см. {@link #nearest}. */
     private static final double FIRST_REACH_M = 64;
-    /** Запас окна запроса к индексу: объект на самом краю не должен выпасть из-за округления. */
     private static final double WINDOW_EXTRA_M = 1.0;
-    /**
-     * Врезка, вынесенная из полосы margin_m дороги, стоит на столько дальше её границы вдоль трубы: буфер строится
-     * хордами и лежит внутри полосы на миллиметры. Спецучасток через дорогу из камеры сборка начинает в самой камере:
-     * граница полосы ближе MERGE_M.
-     */
     private static final double BAND_EXTRA_M = 0.05;
     private static final int MARGIN_QUADRANT_SEGMENTS = 16;
 
@@ -63,10 +47,6 @@ final class TieInFinder {
     private final Rules rules;
     private final GeometryFactory factory = new GeometryFactory();
     private final Map<String, Integer> linksByChamber = new HashMap<>();
-    /**
-     * Участки и камеры сети по рамке, элемент — номер во входе: город — сотни тысяч участков, и перебор всех на
-     * каждую врезку был главной ценой.
-     */
     private final STRtree segmentIndex = new STRtree();
     private final STRtree chamberIndex = new STRtree();
     private final Envelope segmentExtent = new Envelope();
@@ -74,21 +54,13 @@ final class TieInFinder {
     private final Map<String, NetworkSegment> segmentById = new HashMap<>();
     private final Map<String, Chamber> chamberById = new HashMap<>();
     private final SpecialObjects specials;
-    /** Части оси трубы в полосе margin_m полигонов спецпрохода, по длине от начала оси; считаются раз на трубу. */
     private final Map<String, double[][]> bandsBySegment = new ConcurrentHashMap<>();
-    /** Буфер margin_m полигона спецпрохода; строится при первой трубе рядом. */
     private final Map<SpecialObjects.Special, Geometry> bandBySpecial = new ConcurrentHashMap<>();
     private final double maxMargin;
-    /**
-     * Шаг поиска места врезки вдоль трубы вне зон запрета, см. {@link #free}. Выключатель
-     * heatnet.tie.free=false — врезка у проекции, как в v0.9.0.
-     */
     private static final double FREE_STEP_M = 0.5;
     static final boolean FREE_TIE = Boolean.parseBoolean(System.getProperty("heatnet.tie.free", "true"));
-    /** Здания и запретные ограничения по рамке: элемент — {геометрия, тип правила}; строится при первой врезке. */
     private volatile STRtree forbidIndex;
     private double forbidReach;
-    /** Место врезки вне зон по трубе, Ду и месту у проекции, см. {@link #free}. */
     private final Map<List<Object>, Double> freeByKey = new ConcurrentHashMap<>();
 
     TieInFinder(InputData input, Rules rules) {
@@ -131,7 +103,6 @@ final class TieInFinder {
         }
     }
 
-    /** Участки сети не дальше TOUCH_M от точки, по возрастанию порядка входа. */
     private Set<String> touching(Point point) {
         Envelope envelope = new Envelope(point.getCoordinate());
         envelope.expandBy(TOUCH_M);
@@ -145,10 +116,6 @@ final class TieInFinder {
         return result;
     }
 
-    /**
-     * То же, что line.isWithinDistance(point, distance), без объектов DistanceOp: рамка запроса у длинных труб города
-     * задевает десятки участков, и проверка шла на каждую врезку.
-     */
     private static boolean within(LineString line, Coordinate c, double distance) {
         Coordinate[] coords = line.getCoordinates();
         for (int i = 0; i + 1 < coords.length; i++) {
@@ -159,7 +126,6 @@ final class TieInFinder {
         return false;
     }
 
-    /** Кандидаты для точек в порядке точек и расстояния; dn — расчётный диаметр новой сети у врезки. */
     List<TieCandidate> find(List<Point> points, int dn) {
         Map<String, TieCandidate> byKey = new LinkedHashMap<>();
         for (Point point : points) {
@@ -173,20 +139,46 @@ final class TieInFinder {
             for (NetworkSegment segment : nearest(input.getSegments(), segmentIndex, segmentExtent, point,
                     s -> s.getGeometry().distance(point),
                     s -> s.getGeometry().getEnvelopeInternal().distance(point.getEnvelopeInternal()))) {
-                TieCandidate candidate = pipeCandidate(segment, point, dn);
-                if (candidate != null && byKey.values().stream().noneMatch(c -> same(c, candidate))) {
-                    byKey.put(candidate.nodeKey(), candidate);
+                for (TieCandidate candidate : new TieCandidate[] {pipeCandidate(segment, point, dn), endCandidate(segment, point, dn)}) {
+                    if (candidate != null && byKey.values().stream().noneMatch(c -> same(c, candidate))) {
+                        byKey.put(candidate.nodeKey(), candidate);
+                    }
                 }
             }
         }
         return new ArrayList<>(byKey.values());
     }
 
-    /**
-     * Врезки в участки, которых касается {@code tie}, на расстоянии больше {@code otherTieM} от неё вдоль оси в обе
-     * стороны, для второго варианта по правилу variants (D-11), когда среди ближайших кандидатов отличной врезки
-     * нет. Точка ближе max_dist_m к камере со свободным местом, как и в {@link #find}, становится врезкой в камеру.
-     */
+    List<TieCandidate> direct(Point point, int dn) {
+        List<TieCandidate> result = new ArrayList<>();
+        for (NetworkSegment segment : nearest(input.getSegments(), segmentIndex, segmentExtent, point,
+                s -> s.getGeometry().distance(point), s -> s.getGeometry().getEnvelopeInternal().distance(point.getEnvelopeInternal()))) {
+            for (TieCandidate candidate : new TieCandidate[] {pipeCandidate(segment, point, dn, false), projected(segment, point, dn)}) {
+                if (candidate != null && result.stream().noneMatch(c -> same(c, candidate))) {
+                    result.add(candidate);
+                }
+            }
+        }
+        return result;
+    }
+
+    private TieCandidate projected(NetworkSegment segment, Point point, int dn) {
+        LineString line = segment.getGeometry();
+        LengthIndexedLine indexed = new LengthIndexedLine(line);
+        double length = line.getLength();
+        double gap = endGap(segment, dn);
+        if (length <= 2 * gap) {
+            return null;
+        }
+        double at = indexed.project(point.getCoordinate());
+        double across = point.getCoordinate().distance(indexed.extractPoint(at));
+        if (across < MIN_TIE_M) {
+            double shift = Math.sqrt(MIN_TIE_M * MIN_TIE_M - across * across);
+            at += at < length / 2 ? shift : -shift;
+        }
+        return candidateAt(segment, factory.createPoint(indexed.extractPoint(Math.max(gap, Math.min(length - gap, at)))));
+    }
+
     List<TieCandidate> along(TieCandidate tie, int dn, double otherTieM) {
         List<TieCandidate> result = new ArrayList<>();
         Envelope window = new Envelope(tie.getPoint().getCoordinate());
@@ -211,12 +203,11 @@ final class TieInFinder {
         return result;
     }
 
-    /**
-     * Все врезки не дальше radius от точки: камеры со свободным местом и места на трубах через step м вдоль оси, как
-     * у {@link #pipeCandidate(NetworkSegment, double, int)} (перенос из полосы дороги, камера ближе max_dist_m). Запас
-     * для точки, у которой ближайшие проекции лежат в зонах коммуникаций, идущих вдоль трубы, и трассы из них нет.
-     */
     List<TieCandidate> around(Point point, int dn, double radius, double step) {
+        return around(point, dn, radius, step, false);
+    }
+
+    List<TieCandidate> around(Point point, int dn, double radius, double step, boolean inBand) {
         Map<String, TieCandidate> byKey = new LinkedHashMap<>();
         Envelope window = new Envelope(point.getCoordinate());
         window.expandBy(radius);
@@ -237,6 +228,10 @@ final class TieInFinder {
                 if (candidate != null) {
                     byKey.putIfAbsent(candidate.nodeKey(), candidate);
                 }
+                TieCandidate banded = inBand ? bandCandidate(segment, at, dn) : null;
+                if (banded != null) {
+                    byKey.putIfAbsent(banded.nodeKey(), banded);
+                }
             }
         }
         return new ArrayList<>(byKey.values());
@@ -246,7 +241,6 @@ final class TieInFinder {
         return linksByChamber.getOrDefault(chamberId, 0);
     }
 
-    /** Предел участков у камеры с учётом правила ответвлений. */
     int nodeLimit() {
         ChamberRule rule = rules.chamberRule();
         return Math.min(rule.getMaxSegments(), rule.getMaxBranches() + 1);
@@ -261,12 +255,6 @@ final class TieInFinder {
                 touching(chamber.getGeometry()), capacity);
     }
 
-    /**
-     * Врезки у проекции точки на участки узла врезки tie, как у {@link #find}: на трубу врезки или на трубы камеры
-     * врезки. Проекцию ближе max_dist_m к камере со свободным местом {@link #pipeCandidate} отдаёт камере. Новую
-     * камеру сразу за этим пределом сервис не ставит: по разъяснению 9 от 29.09 правило 10 м запрещает строить новую
-     * камеру рядом с существующей.
-     */
     List<TieCandidate> ownPipes(TieCandidate tie, Point point, int dn) {
         Chamber own = tie.isChamber() ? chamberById.get(tie.getExistingObjectId()) : null;
         NetworkSegment pipe = tie.isChamber() ? null : segmentById.get(tie.getExistingObjectId());
@@ -282,7 +270,6 @@ final class TieInFinder {
         return result;
     }
 
-    /** Врезка на участке врезки tie в трубу в shift м вдоль оси от проекции point; null — участок не подходит. */
     TieCandidate shifted(TieCandidate tie, Coordinate point, double shift, int dn) {
         NetworkSegment segment = segmentById.get(tie.getExistingObjectId());
         if (segment == null) {
@@ -291,7 +278,6 @@ final class TieInFinder {
         return pipeCandidate(segment, new LengthIndexedLine(segment.getGeometry()).project(point) + shift, dn);
     }
 
-    /** Ось участка врезки tie в трубу; null — такого участка нет. */
     LineString pipe(TieCandidate tie) {
         NetworkSegment segment = segmentById.get(tie.getExistingObjectId());
         return segment == null ? null : segment.getGeometry();
@@ -301,12 +287,9 @@ final class TieInFinder {
         return pipeCandidate(segment, point, dn, FREE_TIE);
     }
 
-    /** free = false — без переноса из зон запрета: прямое подключение из своего здания, по которому идёт труба. */
     TieCandidate pipeCandidate(NetworkSegment segment, Point point, int dn, boolean free) {
         LengthIndexedLine indexed = new LengthIndexedLine(segment.getGeometry());
         double at = indexed.project(point.getCoordinate());
-        // точка у самой трубы: отрезок от перпендикуляра короче метра, его не пропускает правило длины подотрезка,
-        // и трасса уходит петлёй по зоне трубы; врезка сдвигается вдоль оси к середине участка
         double across = point.getCoordinate().distance(indexed.extractPoint(at));
         if (across < MIN_TIE_M) {
             double shift = Math.sqrt(MIN_TIE_M * MIN_TIE_M - across * across);
@@ -315,34 +298,56 @@ final class TieInFinder {
         return pipeCandidate(segment, at, dn, free);
     }
 
+    TieCandidate endCandidate(NetworkSegment segment, Point point, int dn) {
+        LineString line = segment.getGeometry();
+        double at = new LengthIndexedLine(line).project(point.getCoordinate());
+        double length = line.getLength();
+        double gap = endGap(segment, dn);
+        Coordinate first = line.getCoordinateN(0);
+        Coordinate last = line.getCoordinateN(line.getNumPoints() - 1);
+        Coordinate end = at < gap ? first : at > length - gap ? last : null;
+        if (length <= 2 * gap || end == null || !deadEnd(segment, end) || point.getCoordinate().distance(end) < MIN_TIE_M
+                || inBand(bands(segment), end == first ? 0 : length)) {
+            return null;
+        }
+        return candidateAt(segment, factory.createPoint(end));
+    }
+
     TieCandidate pipeCandidate(NetworkSegment segment, double at, int dn) {
         return pipeCandidate(segment, at, dn, FREE_TIE);
     }
 
-    /** Врезка в участок в точке {@code at} м от начала оси, прижатой к отступу от концов. */
     TieCandidate pipeCandidate(NetworkSegment segment, double at, int dn, boolean free) {
         LineString line = segment.getGeometry();
         LengthIndexedLine indexed = new LengthIndexedLine(line);
         double length = line.getLength();
-        // у конца участка его сосед по сети ближе отступа, и из точки врезки не выйти ни одним отрезком
-        double gap = rules.restriction(TieCandidate.HEAT_NETWORK).clearanceM(dn) + rules.diameter(dn).getWidthM() / 2
-                + rules.diameter(segment.getDiameter()).getWidthM() / 2 + END_GAP_EXTRA_M;
+        double gap = endGap(segment, dn);
         if (length <= 2 * gap) {
             return null;
         }
         double position = outside(bands(segment), Math.max(gap, Math.min(length - gap, at)), gap, length - gap);
         if (free) {
-            // труба идёт по территории школы или под зданием: у проекции врезка в зоне запрета, трассы к ней нет;
-            // ближайшее по трубе место вне зон и полос спецпроходов. Те же места поиск спрашивает в каждом подмножестве
             double from = position;
             position = freeByKey.computeIfAbsent(List.of(segment.getId(), dn, from), key -> forbidden(indexed.extractPoint(from), dn)
                     ? free(indexed, bands(segment), from, gap, length - gap, dn) : from);
         }
-        Point tie = factory.createPoint(indexed.extractPoint(position));
+        return candidateAt(segment, factory.createPoint(indexed.extractPoint(position)));
+    }
 
+    private TieCandidate bandCandidate(NetworkSegment segment, double at, int dn) {
+        LineString line = segment.getGeometry();
+        double length = line.getLength();
+        double gap = endGap(segment, dn);
+        if (length <= 2 * gap || at < gap || at > length - gap || !inBand(bands(segment), at)) {
+            return null;
+        }
+        Coordinate c = new LengthIndexedLine(line).extractPoint(at);
+        return forbidden(c, dn) ? null : candidateAt(segment, factory.createPoint(c));
+    }
+
+    private TieCandidate candidateAt(NetworkSegment segment, Point tie) {
         ChamberRule rule = rules.chamberRule();
         Chamber best = null;
-        // камеры дальше max_dist_m отбрасываются и при переборе всех; окно с запасом, обход — в порядке входа
         Envelope window = new Envelope(tie.getCoordinate());
         window.expandBy(rule.getMaxDistM() + DIST_MARGIN_M + WINDOW_EXTRA_M);
         for (int i : sorted(chamberIndex.query(window))) {
@@ -351,7 +356,6 @@ final class TieInFinder {
             if (distance > rule.getMaxDistM() + DIST_MARGIN_M || links(chamber.getId()) + 1 > rule.getMaxSegments()) {
                 continue;
             }
-            // приложение 18.09, п. 2.4: камера не дальше 10 м со свободным местом обязательна; из нескольких — ближняя
             if (best == null || distance < best.getGeometry().distance(tie)) {
                 best = chamber;
             }
@@ -359,13 +363,32 @@ final class TieInFinder {
         if (best != null) {
             return chamberCandidate(best);
         }
-        // камера режет каждую проходящую трубу на два примыкания (п. 2.1): на дублях труб места для нового участка нет
         Set<String> touching = touching(tie);
         int capacity = nodeLimit() - PIPE_SEGMENTS * Math.max(1, touching.size());
         if (capacity <= 0) {
             return null;
         }
         return new TieCandidate(segment.getId(), TieCandidate.HEAT_NETWORK, segment.getDiameter(), tie, touching, capacity);
+    }
+
+    private double endGap(NetworkSegment segment, int dn) {
+        return rules.restriction(TieCandidate.HEAT_NETWORK).clearanceM(dn) + rules.diameter(dn).getWidthM() / 2
+                + rules.diameter(segment.getDiameter()).getWidthM() / 2 + END_GAP_EXTRA_M;
+    }
+
+    private boolean deadEnd(NetworkSegment segment, Coordinate end) {
+        Point point = factory.createPoint(end);
+        if (!touching(point).equals(Set.of(segment.getId()))) {
+            return false;
+        }
+        Envelope window = new Envelope(end);
+        window.expandBy(TOUCH_M);
+        for (Object item : chamberIndex.query(window)) {
+            if (input.getChambers().get((Integer) item).getGeometry().getCoordinate().distance(end) <= TOUCH_M) {
+                return false;
+            }
+        }
+        return true;
     }
 
     boolean crowded(TieCandidate candidate) {
@@ -388,11 +411,6 @@ final class TieInFinder {
         return nearest == null ? null : nearest.getId();
     }
 
-    /**
-     * Разъяснение 6: спецпроход — один прямой участок, угол проверяется в точке входа. Камера врезки в полосе margin_m
-     * дороги или трамвайных путей начинала бы спецучастки внутри неё, поэтому врезка переносится вдоль трубы за
-     * ближайшую границу полосы в пределах [low, high]. Места вне полос на трубе нет — точка остаётся.
-     */
     static double outside(double[][] bands, double position, double low, double high) {
         if (!inBand(bands, position)) {
             return position;
@@ -409,7 +427,6 @@ final class TieInFinder {
         return Double.isNaN(best) ? position : best;
     }
 
-    /** Ближайшее к position место на [low, high] вне зон запрета и полос спецпроходов; нет — position. */
     private double free(LengthIndexedLine indexed, double[][] bands, double position, double low, double high, int dn) {
         for (double step = FREE_STEP_M; position - step >= low || position + step <= high; step += FREE_STEP_M) {
             for (double at : new double[] {position - step, position + step}) {
@@ -421,7 +438,6 @@ final class TieInFinder {
         return position;
     }
 
-    /** Точка ближе нормы Ду dn к зданию или запретному ограничению: трасса к ней нарушила бы отступ. */
     boolean forbidden(Coordinate c, int dn) {
         double half = rules.diameter(dn).getWidthM() / 2;
         STRtree index = forbidIndex();
@@ -479,7 +495,6 @@ final class TieInFinder {
         return false;
     }
 
-    /** Части оси участка в буфере margin_m полигонов спецпрохода: [от, до] по длине оси. */
     private double[][] bands(NetworkSegment segment) {
         return bandsBySegment.computeIfAbsent(segment.getId(), id -> {
             LineString line = segment.getGeometry();
@@ -496,8 +511,6 @@ final class TieInFinder {
                         s -> s.geometry.buffer(margin, MARGIN_QUADRANT_SEGMENTS)).intersection(line);
                 for (int i = 0; i < inside.getNumGeometries(); i++) {
                     Coordinate[] c = inside.getGeometryN(i).getCoordinates();
-                    // труба ровно на margin_m от спецпрохода: isWithinDistance да, а буфер-многоугольник её не
-                    // задевает, и пересечение — пустая линия (Москва, 510 ОКС: падение на c[0])
                     if (c.length == 0) {
                         continue;
                     }
@@ -515,7 +528,6 @@ final class TieInFinder {
                 && a.getPoint().distance(b.getPoint()) <= SAME_POINT_M;
     }
 
-    /** Существующие участки камеры: те, что подходят к ней концом или проходят через неё, не дальше 0,5 м. */
     private List<NetworkSegment> links(Chamber chamber) {
         List<NetworkSegment> result = new ArrayList<>();
         Coordinate at = chamber.getGeometry().getCoordinate();
@@ -530,13 +542,6 @@ final class TieInFinder {
         return result;
     }
 
-    /**
-     * NEAREST ближайших к point по distance, при равенстве — в порядке входа. Объекты берутся из index окнами вокруг
-     * точки, окно растёт вчетверо, пока NEAREST-й найденный не окажется ближе края окна: за окном рамки, а значит и
-     * геометрии дальше. Внутри окна расстояние до рамки не больше расстояния до геометрии, поэтому точное считается
-     * только у объектов, чья рамка не дальше NEAREST-го найденного. Прежний перебор с сортировкой всех объектов
-     * города по рамке на каждую точку занимал пятую часть расчёта района.
-     */
     static <T> List<T> nearest(List<T> items, STRtree index, Envelope extent, Point point,
             ToDoubleFunction<T> distance, ToDoubleFunction<T> bound) {
         if (items.isEmpty()) {
@@ -557,7 +562,6 @@ final class TieInFinder {
         }
     }
 
-    /** Прежний отбор среди объектов с номерами ids по возрастанию: расстояние и номер NEAREST ближайших по порядку. */
     private static <T> List<double[]> nearest(List<T> items, int[] ids, ToDoubleFunction<T> distance, ToDoubleFunction<T> bound) {
         Integer[] byBound = new Integer[ids.length];
         double[] bounds = new double[ids.length];
@@ -582,7 +586,6 @@ final class TieInFinder {
         return found;
     }
 
-    /** Номера из запроса к индексу по возрастанию. */
     private static int[] sorted(List<?> items) {
         int[] ids = new int[items.size()];
         for (int k = 0; k < ids.length; k++) {

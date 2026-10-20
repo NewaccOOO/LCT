@@ -55,7 +55,6 @@ class GroupsEquivalenceTest {
         return groups.stream().map(List::size).sorted(Comparator.reverseOrder()).collect(Collectors.toList());
     }
 
-    /** Кластеры в метрах (EPSG:32637), ~800 м между центрами, шум ~200 м. */
     static List<ConnectionPoint> syntheticUtmClustered(int n, long seed) {
         List<ConnectionPoint> result = new ArrayList<>(n);
         if (n == 0) {

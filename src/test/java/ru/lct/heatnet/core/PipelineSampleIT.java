@@ -13,7 +13,6 @@ import ru.lct.heatnet.io.GeoJsonStreamWriter;
 import ru.lct.heatnet.model.InputData;
 import ru.lct.heatnet.model.Result;
 
-/** Сквозной прогон: пайплайн на синтетике из репозитория, выход проверяет независимый проверщик check18. */
 class PipelineSampleIT {
     private static final Path SAMPLE = Path.of("data/samples/small-1.geojson");
     private static final Path OUTPUT = Path.of("target/pipeline-sample-small-1.geojson");

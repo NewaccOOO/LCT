@@ -1,22 +1,9 @@
-"""Датасет организаторов + условные газопроводы и силовые кабели для бенча режима глубины.
-
-В датасете организаторов нет ни газа, ни кабеля (типы ограничений: oks, water, railway), а 2D-трасса не пересекает
-существующую теплосеть: режим глубины на нём ничего не меняет. Здесь добавляются линии gas_pipeline и power_cable
-поперёк 2D-трассы варианта 1 в разных положениях профиля (табл. 2 и §5 приложения 18.09):
-  - далеко от узлов (спуск «над» помещается),
-  - рядом с камерой или точкой подключения (спуск не помещается до узла),
-  - газ и кабель рядом друг с другом (общий профиль без возврата на 3,0 м).
-Линии длинные, как улицы, и обрезаны у зданий (2 м до полигона ОКС, как отступ газа) и у воды.
-Каждая линия помечена "_source": "synthetic" (в городах так же помечены выведенные сети: "inferred").
-
-Использование: uv run --project tools python scripts/depth_dataset.py <чистый датасет> <2D-выход по нему> <выход>
-"""
 import json
 import math
 import sys
 
 from pyproj import Transformer
-from shapely.geometry import LineString, MultiLineString, Point, shape
+from shapely.geometry import LineString, MultiLineString, shape
 from shapely.ops import transform, unary_union
 
 TO_M = Transformer.from_crs("EPSG:4326", "EPSG:32637", always_xy=True).transform
@@ -26,9 +13,6 @@ BUILDING_GAP_M = 2.0
 MIN_PIECE_M = 10
 
 NODE_GAP_M = 2.0
-# (тип, № участка варианта 1 по убыванию длины, доля длины от начала, сдвиг вдоль трассы, м, угол к нормали, °, что
-# проверяет). Спуск «над» газа у Ду 100–200: 3,0 − (2,8 − 0,2 − H) ≈ 0,6–0,7 м, то есть 6–7 м при уклоне 0,1, плюс 2 м
-# спецпрохода; «под»: 3,4 − 3,0 = 0,4 м, 4 м + 2 м. Кабель «под»: 3,4 м, «над»: 1,9–2,0 м
 PLAN = [
     ("gas_pipeline", 0, 0.5, 0, 0, "газ поперёк длинного участка далеко от узлов: «над», Kгл = 1"),
     ("power_cable", 1, 0.5, 0, 0, "кабель поперёк второго по длине участка далеко от узлов: «над»"),
@@ -36,8 +20,6 @@ PLAN = [
     ("power_cable", 2, 0.5, 4, 0, "кабель — пара к газу выше"),
     ("gas_pipeline", 3, 0.0, 8, 0, "газ в 8 м от начального узла: «над» не помещается (≈8,5 м), «под» помещается (6 м)"),
     ("power_cable", 4, 1.0, -7, 0, "кабель в 7 м от конечного узла: «над» не помещается, «под» помещается"),
-    # 60 м и участок 6: на участке 5 в 3,5 м от узла (и при длине 300 м) 2D-сервис теряет ОКС 9, 10, 13 (no_route),
-    # вход сохранён в data/depth/case_2d_noroute.geojson — отдельная задача 2D
     ("gas_pipeline", 6, 0.0, 4.5, 0, "газ в 4,5 м от начального узла: не помещается ни «над», ни «под» — глубина в узле", 30),
     ("power_cable", 0, 0.25, 0, 45, "кабель под углом 45° к нормали: спецпроход по 2 м вдоль трассы, косое пересечение"),
 ]
@@ -51,7 +33,6 @@ def main(clean_path, out2d_path, out_path):
         if p.get("object_type") == "restriction" and p.get("restriction_type") in ("oks", "water", "railway"):
             blocked.append(transform(TO_M, shape(f["geometry"])).buffer(BUILDING_GAP_M))
         elif p.get("object_type") in ("source", "heat_chamber", "oks_connection_point"):
-            # узлы входа: линия не ближе 2 м (отступ газа), иначе врезка или подключение у самой линии
             blocked.append(transform(TO_M, shape(f["geometry"])).buffer(NODE_GAP_M))
     blocked = unary_union(blocked)
 
@@ -81,7 +62,6 @@ def main(clean_path, out2d_path, out_path):
         full = LineString([(c.x - nx * half, c.y - ny * half), (c.x + nx * half, c.y + ny * half)])
         rest = full.difference(blocked)
         pieces = list(rest.geoms) if isinstance(rest, MultiLineString) else [rest]
-        # только кусок через точку пересечения: обрывки между зданиями — шум без пересечений с трассой
         for piece in pieces:
             if piece.is_empty or piece.length < MIN_PIECE_M or piece.distance(c) > 0.01:
                 continue

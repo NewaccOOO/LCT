@@ -20,9 +20,7 @@ public class NewSegment {
     Double depthStart;
     Double depthEnd;
     double cost;
-    /** Режим с глубиной: пересечения участка (над или под, просвет); null — нет или 2D. */
     List<DepthCrossing> depthCrossings;
-    /** Режим с глубиной: профиль с уклоном не поместился, участок требует ручной проработки (ДИТ, п. 4.6). */
     boolean manualReview;
 
     public NewSegment(String id, String variantId, LineString geometry, String startNodeId, String endNodeId,

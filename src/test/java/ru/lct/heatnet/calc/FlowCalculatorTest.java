@@ -12,7 +12,6 @@ class FlowCalculatorTest {
 
     @Test
     void edgeFlowIsSumOfOksBelowInBranchedTree() {
-        // tie -e1-> c1; c1 -e2-> o1; c1 -e3-> c2; c2 -e4-> o2; c2 -e5-> o3
         List<TreeEdge> edges = List.of(
                 new TreeEdge("e1", "tie", "c1", 10),
                 new TreeEdge("e2", "c1", "o1", 20),
@@ -22,9 +21,9 @@ class FlowCalculatorTest {
         Map<String, Double> flows = FlowCalculator.flows(edges, "tie", Map.of("o1", 1.2, "o2", 2.3, "o3", 0.5));
 
         assertEquals(List.of("e1", "e2", "e3", "e4", "e5"), List.copyOf(flows.keySet()));
-        assertEquals(1.2 + 2.3 + 0.5, flows.get("e1"), EPS); // 4.0
+        assertEquals(1.2 + 2.3 + 0.5, flows.get("e1"), EPS);
         assertEquals(1.2, flows.get("e2"), EPS);
-        assertEquals(2.3 + 0.5, flows.get("e3"), EPS); // 2.8
+        assertEquals(2.3 + 0.5, flows.get("e3"), EPS);
         assertEquals(2.3, flows.get("e4"), EPS);
         assertEquals(0.5, flows.get("e5"), EPS);
     }

@@ -9,7 +9,6 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
 
-// Глобальный, а не внутри контроллера: неподходящий Content-Type отсекается до выбора метода контроллера.
 @Profile("!cli")
 @RestControllerAdvice
 public class ApiErrorHandler {

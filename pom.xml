@@ -109,7 +109,6 @@
             <resource>
                 <directory>rules</directory>
             </resource>
-            <!-- платформа инженера (platform/): сервис отдаёт её на / рядом с API -->
             <resource>
                 <directory>platform</directory>
                 <targetPath>static</targetPath>

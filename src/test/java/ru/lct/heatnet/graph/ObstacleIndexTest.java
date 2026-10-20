@@ -21,7 +21,6 @@ class ObstacleIndexTest {
     void returnsNearObjectsInInputOrderAndSkipsFarOnes() {
         Restriction inside = park("inside", 50, 50);
         Restriction far = park("far", 5000, 5000);
-        // в 1 м за краем области: отступ парка и ширина трубы достают до области
         Restriction edge = park("edge", 201, 100);
         Restriction second = park("second", 120, 20);
         ObstacleIndex index = new ObstacleIndex(input(List.of(inside, far, edge, second)), rules);
@@ -32,7 +31,6 @@ class ObstacleIndexTest {
     @Test
     void farObjectsDoNotChangeObstacleSet() {
         List<Restriction> near = List.of(park("a", 30, 30), park("b", 100, 60), park("c", 60, 140), park("d", 199, 199));
-        // между ближними объектами по 250 дальних, порядок ближних прежний
         List<Restriction> withFar = new ArrayList<>();
         for (Restriction restriction : near) {
             for (int i = 0; i < 250; i++) {

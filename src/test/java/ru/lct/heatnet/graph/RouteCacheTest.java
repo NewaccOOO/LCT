@@ -15,7 +15,6 @@ class RouteCacheTest {
         RouteCache cache = new RouteCache(1);
         cache.put(List.of("a"), new double[0], MB / 2);
         cache.put(List.of("b"), new double[0], MB / 3);
-        // «a» запрошена последней, поэтому при переполнении уходит «b»
         assertNotNull(cache.get(List.of("a")));
         cache.put(List.of("c"), new double[0], MB / 3);
 

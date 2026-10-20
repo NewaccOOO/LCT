@@ -215,7 +215,6 @@ public class JobController {
                     required = true,
                     description = "Входной GeoJSON FeatureCollection в EPSG:4326",
                     content = {
-                            // первым, чтобы Swagger UI по умолчанию показывал кнопку выбора файла
                             @Content(mediaType = MediaType.APPLICATION_OCTET_STREAM_VALUE, schema = @Schema(type = "string", format = "binary")),
                             @Content(mediaType = GEO_JSON, schema = @Schema(type = "object"), examples = @ExampleObject(
                                     name = "Одно здание",
@@ -270,11 +269,9 @@ public class JobController {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Тело запроса должно быть JSON-объектом GeoJSON FeatureCollection");
             }
             if (depth) {
-                // флаг режима лежит рядом со входом: схема таблицы задач не меняется
                 Files.createFile(dir.resolve(JobWorker.DEPTH_FLAG));
             }
             job.setCreatedAt(Instant.now());
-            // save() коммитит свою транзакцию до возврата, поэтому воркер получает уже видимую запись.
             jobs.save(job);
         } catch (IOException | RuntimeException e) {
             FileSystemUtils.deleteRecursively(dir);
@@ -411,7 +408,6 @@ public class JobController {
         }
     }
 
-    // Пробелы по RFC 8259: пробел, табуляция, перевод строки, возврат каретки.
     private static int firstSignificantByte(Path file) throws IOException {
         try (InputStream in = new BufferedInputStream(Files.newInputStream(file))) {
             int b = in.read();

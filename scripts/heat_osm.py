@@ -1,12 +1,3 @@
-"""Теплосетевые объекты OSM города: сырой ответ Overpass -> GeoJSON EPSG:4326 + сводка по районам.
-
-    uv run --project tools python scripts/heat_osm.py <город> <overpass_dir>
-
-<overpass_dir> содержит ответы Overpass (запросы в data/cities/sources.md, раздел OSM):
-q1_<город>.json (трубопроводы, люки, тепловые пункты), q2_<город>.json (источники тепла),
-adm_<город>.json (административные районы). Пишет data/cities/raw/<город>/osm_heat.geojson,
-osm_pipeline_untagged.geojson, osm_heat_sources.geojson (источники точками) и печатает сводку по районам в markdown.
-"""
 import json
 import re
 import sys
@@ -40,7 +31,7 @@ def classify(t):
             or "boiler" in t.get("building", "") or "plant:output:hot_water" in t):
         return "heat_source"
     name = t.get("name", "")
-    if "power" in t or "route" in t or NAME_NOT.search(name):  # ЛЭП «ТЭЦ-21 — Бутаково», проходные, насосные
+    if "power" in t or "route" in t or NAME_NOT.search(name):
         return None
     if NAME_SUB.search(name):
         return "heat_substation"
@@ -129,7 +120,6 @@ def main(city, ov):
             {"type": "Feature", "geometry": mapping(g), "properties": props})
     out = Path("data/cities/raw") / city
     out.mkdir(parents=True, exist_ok=True)
-    # все источники тепла точками (центр контура) — для выбора главного источника и сверки со схемой теплоснабжения
     feats["sources"] = [{"type": "Feature", "geometry": mapping(shape(f["geometry"]).representative_point()),
                          "properties": f["properties"]} for f in feats["real"] if f["properties"]["_class"] == "heat_source"]
     for key, fn in (("real", "osm_heat.geojson"), ("untagged", "osm_pipeline_untagged.geojson"),

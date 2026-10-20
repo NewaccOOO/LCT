@@ -97,7 +97,6 @@ class GeoJsonStreamReaderTest {
 
         assertEquals(List.of(), data.getDiagnostics());
         assertEquals(List.of(), partials.get(0).getRestrictions());
-        // полигон oks_future O1 — здание-препятствие (приложение 18.09, п. 2.2), дальние здания в часть не попадают
         assertEquals(List.of("O1"), ids(partials.get(0).getExistingOks(), ExistingOks::getId));
         assertEquals(List.of("E1", "v1_far", "O1"), ids(data.getExistingOks(), ExistingOks::getId));
         assertEquals(List.of("R1", "R2"), ids(data.getRestrictions(), Restriction::getId));
@@ -169,7 +168,6 @@ class GeoJsonStreamReaderTest {
 
     @Test
     void datasetSegmentOffNetworkIsKeptWithWarning() throws IOException {
-        // связи сети с источником приложение не требует (п. 1.1, 2.4, разъяснение 11): участок остаётся местом врезки
         ArrayNode features = datasetFeatures();
         features.add(feature("LineString", new double[][] {{37.70, 55.70}, {37.71, 55.70}},
                 "id", 13, "object_type", "heat_network", "diameter", 300));
@@ -184,7 +182,6 @@ class GeoJsonStreamReaderTest {
 
     @Test
     void severalSourcesEachDirectTheirOwnNetwork() throws IOException {
-        // у каждой системы города свой источник: приложение 18.09 (п. 1.1) число source не ограничивает
         ArrayNode features = datasetFeatures();
         features.add(feature("Point", new double[] {37.70, 55.70}, "id", 2, "object_type", "source", "name", "котельная"));
         features.add(feature("LineString", new double[][] {{37.70, 55.70}, {37.71, 55.70}},
@@ -210,7 +207,6 @@ class GeoJsonStreamReaderTest {
 
     @Test
     void branchEndOnPipeMiddleIsConnected() throws IOException {
-        // ответвление упирается концом в середину участка 12 без разреза, а за ним ещё участок: всё связано
         ArrayNode features = datasetFeatures();
         features.add(feature("LineString", new double[][] {{37.62, 55.755}, {37.63, 55.755}},
                 "id", 13, "object_type", "heat_network", "diameter", 100));
@@ -229,7 +225,6 @@ class GeoJsonStreamReaderTest {
 
     @Test
     void anyJsonNumberIsId() throws IOException {
-        // разд. 1: id «могут быть строковыми или числовыми» — и 11.0, и 11.5; в выход пишется та же запись числа
         ArrayNode features = datasetFeatures();
         ((ObjectNode) features.get(5).get("properties")).put("id", 30.5);
         ((ObjectNode) features.get(2).get("properties")).put("id", 20.0);
@@ -251,7 +246,6 @@ class GeoJsonStreamReaderTest {
 
     @Test
     void pointOnWallBelongsToItsBuilding() throws IOException {
-        // точка на стене после перевода в UTM лежит в долях миллиметра от контура, здание всё равно своё (п. 2.2)
         ArrayNode features = datasetFeatures();
         ((ObjectNode) features.get(5)).set("geometry", geometry("Point", new double[] {37.6301, 55.76}));
         InputData data = GeoJsonStreamReader.read(write(features));
@@ -261,7 +255,6 @@ class GeoJsonStreamReaderTest {
 
     @Test
     void offTableDiameterRoundsUp() throws IOException {
-        // ДУ существующей сети вне таблицы 1 и записанный с дробной частью не роняют расчёт
         ArrayNode features = validFeatures();
         props(features, "N1").put("diameter", 350);
         assertEquals(400, GeoJsonStreamReader.read(write(features)).getSegments().get(0).getDiameter());
@@ -325,7 +318,6 @@ class GeoJsonStreamReaderTest {
 
     @Test
     void geometryAndTypeProblems() throws IOException {
-        // приложение 18.09, п. 1.1: ограничение любого типа может прийти линией
         ArrayNode features = validFeatures();
         ((ObjectNode) features.get(7)).set("geometry", geometry("LineString", new double[][] {{37.6, 55.7}, {37.7, 55.8}}));
         assertTrue(GeoJsonStreamReader.read(write(features)).getDiagnostics().isEmpty());
@@ -348,7 +340,6 @@ class GeoJsonStreamReaderTest {
         ((ObjectNode) features.get(4)).set("geometry", geometry("Polygon", new double[][][] {{{37.6, 55.7}, {37.61, 55.7}, {37.61, 55.71}, {37.6, 55.71}}}));
         assertOnly(features, "O1", "geometry");
 
-        // второй источник — вторая система теплоснабжения, не ошибка
         features = validFeatures();
         features.add(features.get(0).deepCopy());
         ((ObjectNode) features.get(9).get("properties")).put("id", "S3");
@@ -361,7 +352,6 @@ class GeoJsonStreamReaderTest {
         List<String> problems = GeoJsonStreamReader.read(write(features)).getDiagnostics().stream()
                 .map(d -> d.getFeatureId() + " " + d.getField())
                 .collect(Collectors.toList());
-        // без source расчёт идёт; остаётся только ссылка на удалённый источник
         assertEquals(List.of("N1 upstream_object_id"), problems);
     }
 
@@ -374,7 +364,6 @@ class GeoJsonStreamReaderTest {
 
     @Test
     void selfIntersectingPolygonIsReported() throws IOException {
-        // протокол 16.09.2026, п. 9: невалидная геометрия — диагностическая ошибка
         ArrayNode features = validFeatures();
         ((ObjectNode) features.get(4)).set("geometry", geometry("Polygon", new double[][][] {
             {{37.6, 55.7}, {37.61, 55.71}, {37.61, 55.7}, {37.6, 55.71}, {37.6, 55.7}}}));
@@ -504,7 +493,6 @@ class GeoJsonStreamReaderTest {
         assertTrue(fast > 100_000, "быстрый разбор берёт обычные координаты: " + fast);
     }
 
-    // Быстрый разбор берёт только корректный JSON и строит те же узлы, что readTree; остальное отдаёт Jackson.
     @Test
     void fastMatchesReadTreeOrGivesUp() throws IOException {
         String geometry = "\"geometry\":{\"type\":\"Point\",\"coordinates\":[37.6,55.7]}";
@@ -544,8 +532,6 @@ class GeoJsonStreamReaderTest {
         }
     }
 
-    // Чтение строками в пуле (UTF-8, с BOM и без) и чтение деревьями на главном потоке (UTF-16, без байтовых
-    // смещений) дают один и тот же вход и те же диагностики, в том числе там, где быстрый разбор отдаёт фичу Jackson.
     @Test
     void pooledReadMatchesTreeRead() throws IOException {
         ArrayNode features = validFeatures();
@@ -589,7 +575,6 @@ class GeoJsonStreamReaderTest {
         assertSameRead(json, 8);
         assertSameRead("{\"type\":\"FeatureCollection\",\"features\":[1," + json.substring(json.indexOf('[') + 1), 9);
         assertSameRead("{\"features\":[]}", 1);
-        // сломанный JSON в геометрии ограничения: первый проход её не разбирает, ту же ошибку даёт второй
         Path broken = dir.resolve("broken-geometry.geojson");
         Files.writeString(broken, json.replace("[37.66,55.76],[37.67,55.76]", "[37.66,55.76],,[37.67,55.76]"));
         List<Diagnostic> once = GeoJsonStreamReader.read(broken).getDiagnostics();
@@ -604,8 +589,6 @@ class GeoJsonStreamReaderTest {
         assertSameRead(MAPPER.writeValueAsString(collection(features)), 9);
     }
 
-    // Файл больше блока чтения строками: фича на строке с запятой в конце или в начале следующей строки, пустые
-    // строки, CRLF, ключ корня после features; JSON с отступами читается срезами. Всё как чтение деревьями.
     @Test
     void linesAcrossBlocksMatchTreeRead() throws IOException {
         ArrayNode features = withPolygons(6000);
@@ -619,8 +602,6 @@ class GeoJsonStreamReaderTest {
         assertSameRead(head + String.join(",\n", lines.subList(0, 3000)) + "\n" + String.join(",\n", lines.subList(3000, 6009)) + "]}", 1);
     }
 
-    // Нити пула разбирают куски строк и за концом features, пока главный поток не дошёл до «]». Второй массив
-    // features читается после первого, как деревьями, без ложных повторов id от таких кусков.
     @Test
     void secondFeaturesArrayMatchesTreeRead() throws IOException {
         List<String> lines = lines(withPolygons(20000));
@@ -628,7 +609,6 @@ class GeoJsonStreamReaderTest {
                 + "\n],\"features\":[\n" + String.join(",\n", lines.subList(10000, lines.size())) + "\n]}\n", 0);
     }
 
-    // Фичи другого массива корня после features не читаются, и их id не закрывают ссылку из features.
     @Test
     void featuresOfAnotherRootArrayAreNotRead() throws IOException {
         ArrayNode features = withPolygons(10000);
@@ -640,7 +620,6 @@ class GeoJsonStreamReaderTest {
                 + "\n],\"extra\":[\n" + String.join(",\n", Collections.nCopies(20000, chamber)) + "\n]}\n", 1);
     }
 
-    /** validFeatures и за ними count треугольников P0, P1, ...: каждый третий — здание, остальные — парки. */
     private static ArrayNode withPolygons(int count) {
         ArrayNode features = validFeatures();
         for (int i = 0; i < count; i++) {
@@ -734,8 +713,6 @@ class GeoJsonStreamReaderTest {
         throw new IllegalArgumentException(id);
     }
 
-    // Формат датасета организаторов: числовые id, расход на точке подключения, здания ограничением oks,
-    // у сети нет flow_tph и upstream_object_id, у камеры нет diameter.
     private static ArrayNode datasetFeatures() {
         ArrayNode features = MAPPER.createArrayNode();
         features.add(feature("Point", new double[] {37.60, 55.75}, "id", 1, "object_type", "source", "name", "ТЭЦ"));
@@ -760,7 +737,6 @@ class GeoJsonStreamReaderTest {
         return features;
     }
 
-    // Тесты обращаются к фичам по позиции: R1 восьмая, её порядковый номер #8.
     private static ArrayNode validFeatures() {
         ArrayNode features = MAPPER.createArrayNode();
         features.add(feature("Point", new double[] {37.60, 55.75}, "id", "S", "object_type", "source"));

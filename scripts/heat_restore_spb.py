@@ -1,15 +1,3 @@
-"""Восстановление сети ТЭЦ-22 (Купчино) из «Схемы Фрунзенской и Московской магистралей ТЭЦ-22»
-(схема теплоснабжения СПб, актуализация на 2021 г., Книга 3, Прил. А–В, стр. 431).
-
-    uv run --project tools --with pymupdf python scripts/heat_restore_spb.py <pdf> <osm_cache.json> <out.geojson>
-
-<osm_cache.json> — выгрузка OSM Купчино (ключи buildings/areas: ответы Overpass `out geom`).
-Подписей улиц на листе нет, поэтому привязка по зданиям: начальное подобие по опорным точкам (ТЭЦ-22,
-Бухарестская 89, Софийская 54, парк Интернационалистов), затем ICP центров контуров зданий листа ↔ центров
-зданий OSM (сходной площади) с сужением порога 150 → 12 м, аффинное преобразование лист → UTM 36N.
-Стиль листа: трубы — синие 2,83 pt (магистрали поверх — красная осевая 0,85 pt), узлы — тёмные кружки 0,5 pt,
-вводы в здания — пурпурные кружки и жёлтые квадраты; Ду подписаны только у магистралей («D=1400» и т. п.).
-"""
 import json
 import re
 import sys
@@ -39,7 +27,6 @@ def rnd(c):
 
 
 def subpaths(items):
-    """Замкнутые контуры рисунка: разрыв там, где отрезок не продолжает предыдущий."""
     out, cur = [], []
     for it in items:
         if it[0] == "re":
@@ -88,7 +75,7 @@ def osm(cache):
     d = json.load(open(cache))
 
     def poly(e):
-        if e["type"] == "relation":  # мультиполигон: внешние контуры
+        if e["type"] == "relation":
             rings = [LineString([(p["lon"], p["lat"]) for p in m["geometry"]]) for m in e.get("members", [])
                      if m.get("role") == "outer" and len(m.get("geometry", [])) > 1]
             ps = list(shapely.polygonize(rings).geoms) if rings else []
@@ -119,7 +106,6 @@ def osm(cache):
 def register(pbl, obl, anchors):
     src = np.array([a for a, _ in anchors])
     dst = np.array([[b.x, b.y] for _, b in anchors])
-    # начальное подобие (4 параметра): x' = a x - b y + tx, y' = b x + a y + ty (с учётом отражения листа)
     best = None
     for flip in (1, -1):
         s = src * [1, flip]
@@ -181,17 +167,16 @@ def main(pdf, cache, out):
     for ch in chains:
         mag = ch.intersection(red_u).length > 0.6 * ch.length
         pr = dict(base, _class="heat_network", _kind="магистраль" if mag else "распределительная")
-        near = [dc for dc in dl if ch.distance(Point(dc[1])) < 60]  # ≈ 200 м: подпись относится к этой трассе
+        near = [dc for dc in dl if ch.distance(Point(dc[1])) < 60]
         if mag and near:
             d_label = min(near, key=lambda dc: ch.distance(Point(dc[1])))[0]
-            pr.update(diameter=dn_from_inner(d_label), d_label_mm=d_label, _diameter_from="label")  # D=1400 и т. п. — уже Ду
+            pr.update(diameter=dn_from_inner(d_label), d_label_mm=d_label, _diameter_from="label")
         else:
             pr["_diameter_from"] = "none"
         feats.append({"type": "Feature", "geometry": mapping(transform(to_geo, ch)), "properties": pr})
     for cls, pts in (("heat_chamber", nodes), ("consumer", inputs)):
-        for c in dict.fromkeys((round(x, 1), round(y, 1)) for x, y in pts):  # символы рисуются дважды
+        for c in dict.fromkeys((round(x, 1), round(y, 1)) for x, y in pts):
             feats.append({"type": "Feature", "geometry": mapping(Point(to_geo(*c))), "properties": dict(base, _class=cls)})
-    # источник — конец магистрали у значка ТЭЦ-22 (подпись стоит рядом со значком)
     tl = Point(text["ТЭЦ-22"][0])
     ends = [Point(q) for ch in chains if ch.intersection(red_u).length > 0.6 * ch.length for q in (ch.coords[0], ch.coords[-1])]
     c = min(ends, key=tl.distance)

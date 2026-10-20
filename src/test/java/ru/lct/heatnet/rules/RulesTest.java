@@ -110,7 +110,6 @@ class RulesTest {
         assertNull(bridge.getHalfWidthM());
         assertEquals(bridge, rules.restriction("_comment"));
 
-        // приложение 18.09, таблица 2: железная дорога — запрет с отступом 1 м
         RestrictionRule railway = rules.restriction("railway");
         assertTrue(railway.forbid());
         assertEquals(1.0, railway.clearanceM(1400), EPS);

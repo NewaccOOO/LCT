@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Стенд качества: S, статьи стоимости и время расчёта на датасете организаторов и сценах medium (сиды 1–3).
-# Использование: scripts/bench.sh [метка]. Сцены генерируются, если их нет. Печатает таблицу и сумму S.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/env.sh
@@ -26,7 +24,6 @@ for name, path in inputs:
     s = next(f["properties"] for f in data["features"] if f["properties"]["object_type"] == "variant_summary" and f["properties"]["rank"] == 1)
     total += s["score"]
     m = lambda k: s[k] / 1e6
-    # поля сводки по правилам 18.09: врезки в существующие камеры и штраф за неподключённые вместо реконструкции
     print(f"{name:10} {s['score']:7.3f} {m('calculated_cost'):7.1f} {m('construction_cost'):6.1f} {m('chamber_construction_cost'):6.1f} {m('existing_chamber_tie_in_cost'):6.1f} {m('unconnected_penalty'):6.1f} {s['new_network_length']:6.0f} {dt:5.0f}")
 print(f"сумма S: {total:.3f}")
 PY

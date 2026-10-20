@@ -186,11 +186,9 @@ async function main() {
   $('#scene').innerHTML = names.map(n => `<option value="${n}" ${n === want ? 'selected' : ''}>${SCENES[n] || n}</option>`).join('');
   $('#scene').onchange = e => location.search = '?scene=' + e.target.value;
   if (!want) { $('#load').textContent = 'Нет подготовленных наборов: python3 scripts/ui3d/prep.py ВХОД ВЫХОД --name город'; return; }
-  const t0 = performance.now();
   [scene, bin] = await Promise.all([fetch(`data/${want}/scene.json`).then(r => r.json()), fetch(`data/${want}/scene.bin`).then(r => r.arrayBuffer())]);
   build(); initDeck(); initInput(); ui();
   $('#load').remove();
-  console.log('[ui3d] loaded', want, Math.round(performance.now() - t0), 'ms', 'участков', segs.length);
   const h = decodeURIComponent(location.hash.slice(1));
   if (h) find(h);
   let seen = false; try { seen = localStorage.getItem('ui3d.help') === '1'; } catch (e) {}
@@ -230,7 +228,6 @@ function build() {
   }
 }
 
-// z_мира = ex·z + dz: метры глубины растянуты для читаемости
 const zm = (dz = 0, ex = S.zex) => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, ex, 0, 0, 0, dz, 1];
 const vSegs = () => segs.filter(s => String(s.p.variant_id) === S.variant);
 const vPts = () => points.filter(s => String(s.p.variant_id) === S.variant);
@@ -310,11 +307,8 @@ function initDeck() {
 }
 const redraw = () => deckgl.setProps({layers: layers()});
 
-// ---------- тачпад, колёсико, клавиши ----------
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const vp = () => deckgl.getViewports()[0];
-// точка мира под пикселем на плоскости z = Z: луч через две глубины пикселя и пересечение с плоскостью
-// (unproject с targetZ в OrbitView возвращает точку не на плоскости)
 function toWorld(x, y, Z = view.target[2] || 0) {
   const v = vp(); if (!v) return null;
   const p = v.unproject([x, y, 0.5]), q = v.unproject([x, y, 1]), dz = q[2] - p[2];
@@ -323,18 +317,15 @@ function toWorld(x, y, Z = view.target[2] || 0) {
   return [p[0] + (q[0] - p[0]) * k, p[1] + (q[1] - p[1]) * k, Z];
 }
 function jump(patch) { view = {...view, ...patch, transitionDuration: 0}; deckgl.setProps({initialViewState: view}); }
-// сдвиг на dx,dy пикселей экрана: точка экрана (центр + d) становится центром — работает при любом повороте и наклоне
 function panPx(dx, dy) {
   const v = vp(); if (!v) return;
   const a = toWorld(v.width / 2, v.height / 2), b = toWorld(v.width / 2 + dx, v.height / 2 + dy);
   if (!a || !b) return;
   let mx = b[0] - a[0], my = b[1] - a[1];
-  const lim = 4 * Math.hypot(dx, dy) / Math.pow(2, view.zoom), m = Math.hypot(mx, my);  // у горизонта не улетаем
+  const lim = 4 * Math.hypot(dx, dy) / Math.pow(2, view.zoom), m = Math.hypot(mx, my);
   if (m > lim) { mx *= lim / m; my *= lim / m; }
   jump({target: [view.target[0] + mx, view.target[1] + my, view.target[2] || 0]});
 }
-// Масштаб к реальной точке под курсором P (объект с глубиной или земля): t' = P + (t − P)·2^(zoom − zoom').
-// P остаётся под курсором при любой высоте центра камеры. Точку держим на время жеста, чтобы щипок не «плавал».
 let zoomP = null;
 function zoomAt(dz, x, y) {
   const now = performance.now();
@@ -344,8 +335,6 @@ function zoomAt(dz, x, y) {
   jump({zoom: z, target: [P[0] + (t[0] - P[0]) * k, P[1] + (t[1] - P[1]) * k, P[2] + ((t[2] || 0) - P[2]) * k]});
 }
 const turn = (dOrbit, dTilt) => jump({rotationOrbit: view.rotationOrbit + dOrbit, rotationX: clamp(view.rotationX + dTilt, -90, 90)});
-// Вращение вокруг точки P, а не центра экрана. OrbitView: камера = L·Rx(наклон)·Rz(поворот)·масштаб·(w − target).
-// P остаётся на том же месте экрана, если (P − target) поворачивается вместе с камерой: t' = P − M'ᵀ·M·(P − t).
 const rotM = (ph, th) => { const cp = Math.cos(ph), sp = Math.sin(ph), ct = Math.cos(th), st = Math.sin(th);
   return [[ct, -st, 0], [cp * st, cp * ct, -sp], [sp * st, sp * ct, cp]]; };
 const mul = (M, v) => M.map(r => r[0] * v[0] + r[1] * v[1] + r[2] * v[2]);
@@ -356,7 +345,6 @@ function rotateAround(P, dOrbit, dTilt) {
   const u = mul(rotM(ph * D, th * D), [P[0] - t[0], P[1] - t[1], P[2] - (t[2] || 0)]), v = mulT(rotM(ph2 * D, th2 * D), u);
   jump({rotationOrbit: th2, rotationX: ph2, target: [P[0] - v[0], P[1] - v[1], P[2] - v[2]]});
 }
-// Точка вращения: объект под курсором (труба, здание, дорога — с глубиной), иначе земля, иначе центр экрана
 function pivotAt(x, y) {
   try { const i = deckgl.pickObject({x, y, radius: 4, unproject3D: true});
     if (i && i.coordinate && i.coordinate.length >= 2 && i.coordinate.every(Number.isFinite)) return [i.coordinate[0], i.coordinate[1], i.coordinate[2] || 0]; } catch (e) {}
@@ -367,44 +355,38 @@ function pivotAt(x, y) {
 const showPivot = P => { S.pivot = P; redraw(); };
 let altPivot = null, altTimer = 0;
 let gesture = null;
-// Оси камеры в мире: строки M = Rx(наклон)·Rz(поворот); камера смотрит вдоль +y своей системы (lookAt из [0,−f,0])
 function camAxes() {
   const D = Math.PI / 180, M = rotM(view.rotationX * D, view.rotationOrbit * D);
   return {right: M[0], fwd: M[1], up: M[2]};
 }
-// Полёт двигает саму камеру. В OrbitView камера стоит на взгляде позади target на dist = altitude·height / 2^zoom
-// (altitude = 1 / (2·tan(fovy/2))). После сдвига target ставим туда, где взгляд упирается в землю (z = 0),
-// а zoom пересчитываем под новое расстояние — картинка та же, а вращение и масштаб дальше идут вокруг земли.
 const FOVY = 40;
 const camDist = (zoom = view.zoom) => vp().height / (2 * Math.tan(FOVY / 2 * Math.PI / 180)) / Math.pow(2, zoom);
 function camPos() { const {fwd} = camAxes(), t = view.target, d = camDist(); return [0, 1, 2].map(i => (t[i] || 0) - fwd[i] * d); }
 function lookFrom(C) {
   const {fwd} = camAxes(), d0 = camDist(), minD = camDist(view.maxZoom);
   let d = d0;
-  if (fwd[2] < -0.05 && C[2] > 0) d = clamp(C[2] / -fwd[2], minD, 1e6);   // до земли по взгляду
-  else if (fwd[2] < -0.05 && C[2] <= 0) d = clamp(d0, minD, 50 * S.zex);    // под землёй: держим близкое расстояние
+  if (fwd[2] < -0.05 && C[2] > 0) d = clamp(C[2] / -fwd[2], minD, 1e6);
+  else if (fwd[2] < -0.05 && C[2] <= 0) d = clamp(d0, minD, 50 * S.zex);
   jump({target: [0, 1, 2].map(i => C[i] + fwd[i] * d), zoom: clamp(Math.log2(camDist(0) / d), view.minZoom, view.maxZoom)});
 }
 function fly3d(fw, sd, up, dt) {
   const {right, fwd} = camAxes(), C = camPos();
-  const ref = clamp(Math.abs(C[2]), 15, 1e5);          // скорость по высоте камеры: у земли медленно, сверху быстро
+  const ref = clamp(Math.abs(C[2]), 15, 1e5);
   const k = ref * dt;
   lookFrom([0, 1, 2].map(i => C[i] + (fw * fwd[i] + sd * right[i]) * k + (i === 2 ? up * k : 0)));
 }
 
 function initInput() {
   const map = $('#map');
-  // Перетаскивание: режим выбирается на каждом движении, а не при нажатии — Shift/Ctrl можно нажать и отпустить посреди жеста.
-  // левая — сдвиг (точка под курсором едет за мышью); правая, Shift + левая, Ctrl + левая — вращение вокруг точки под курсором
   map.addEventListener('contextmenu', e => e.preventDefault());
-  let g = null;   // {x, y: последняя позиция в координатах карты, on: жест начался, mode, P: опорная точка вращения}
+  let g = null;
   const local = e => { const r = map.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
   const wantMode = (buttons, e) => (buttons & 2) || e.shiftKey || e.ctrlKey ? 'rot' : 'pan';
   const setMode = (m, x, y) => {
     if (g.mode === m) return;
     if (g.mode === 'rot') showPivot(null);
     g.mode = m; g.P = null;
-    if (m === 'rot' && g.on) showPivot(g.P = pivotAt(x, y));   // точка — там, где курсор в момент переключения
+    if (m === 'rot' && g.on) showPivot(g.P = pivotAt(x, y));
   };
   map.addEventListener('pointerdown', e => {
     if (e.target.tagName !== 'CANVAS' || (e.button !== 0 && e.button !== 2)) return;
@@ -424,14 +406,13 @@ function initInput() {
       const a = toWorld(g.x, g.y), b = toWorld(x, y);
       if (a && b && a.every(Number.isFinite) && b.every(Number.isFinite)) {
         let mx = a[0] - b[0], my = a[1] - b[1];
-        const lim = 40 * Math.hypot(x - g.x, y - g.y) / Math.pow(2, view.zoom), m = Math.hypot(mx, my);  // у горизонта не улетаем
+        const lim = 40 * Math.hypot(x - g.x, y - g.y) / Math.pow(2, view.zoom), m = Math.hypot(mx, my);
         if (m > lim) { mx *= lim / m; my *= lim / m; }
         jump({target: [view.target[0] + mx, view.target[1] + my, view.target[2] || 0]});
       }
     }
     g.x = x; g.y = y;
   });
-  // Shift без движения мыши тоже переключает сразу: кольцо появляется под курсором
   const onMod = e => { if (g && g.on && (e.key === 'Shift' || e.key === 'Control')) setMode(wantMode(g.buttons, e), g.x, g.y); };
   addEventListener('keydown', onMod); addEventListener('keyup', onMod);
   const endDrag = () => { if (g && g.mode === 'rot') showPivot(null); g = null; };
@@ -440,10 +421,9 @@ function initInput() {
     e.preventDefault();
     const r = map.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
     const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1, dx = e.deltaX * k, dy = e.deltaY * k;
-    // мышь: строки или шаг 120; тачпад: мелкие дробные дельты
     const mouse = e.deltaMode === 1 || (e.deltaX === 0 && e.wheelDeltaY && Math.abs(e.wheelDeltaY) % 120 === 0);
-    if (e.ctrlKey || e.metaKey) { if (!gesture) zoomAt(-dy * 0.012, x, y); }   // щипок (Chrome шлёт ctrl+wheel) или ⌘+колесо
-    else if (e.altKey) {                                                        // ⌥ + два пальца: вокруг точки под курсором
+    if (e.ctrlKey || e.metaKey) { if (!gesture) zoomAt(-dy * 0.012, x, y); }
+    else if (e.altKey) {
       if (!altPivot) showPivot(altPivot = pivotAt(x, y));
       rotateAround(altPivot, dx * 0.3, -dy * 0.2);
       clearTimeout(altTimer); altTimer = setTimeout(() => { altPivot = null; showPivot(null); }, 350);
@@ -451,7 +431,6 @@ function initInput() {
     else if (mouse && !e.shiftKey) zoomAt(-dy * 0.0025, x, y);
     else panPx(dx, dy);
   }, {passive: false, capture: true});
-  // Safari: щипок и вращение двумя пальцами
   map.addEventListener('gesturestart', e => { e.preventDefault(); gesture = {z: view.zoom, o: view.rotationOrbit}; });
   map.addEventListener('gesturechange', e => { e.preventDefault(); if (gesture) jump({zoom: clamp(gesture.z + Math.log2(e.scale), view.minZoom, view.maxZoom), rotationOrbit: gesture.o - e.rotation}); });
   map.addEventListener('gestureend', e => { e.preventDefault(); gesture = null; });
@@ -467,10 +446,8 @@ function initInput() {
       if (!held.size) { running = false; return; }
       const dt = Math.min(50, now - prev) / 1000, f = fast ? 3 : 1, h = c => held.has(c); prev = now;
       const v = 700 * dt * f;
-      // стрелки — сдвиг по карте
       const dx = (h('ArrowRight') ? v : 0) - (h('ArrowLeft') ? v : 0), dy = (h('ArrowDown') ? v : 0) - (h('ArrowUp') ? v : 0);
       if (dx || dy) panPx(dx, dy);
-      // WASD — полёт как в игре: вперёд туда, куда смотрит камера (с наклоном), A/D вбок, пробел/C вверх-вниз
       const fw = (h('KeyW') ? 1 : 0) - (h('KeyS') ? 1 : 0), sd = (h('KeyD') ? 1 : 0) - (h('KeyA') ? 1 : 0), up = (h('Space') ? 1 : 0) - (h('KeyC') ? 1 : 0);
       if (fw || sd || up) fly3d(fw, sd, up, 2 * dt * f);
       const o = (h('KeyE') ? 1 : 0) - (h('KeyQ') ? 1 : 0), t = (h('KeyR') ? 1 : 0) - (h('KeyF') ? 1 : 0);
@@ -485,7 +462,7 @@ function initInput() {
   addEventListener('blur', () => held.clear());
   $('#ctlH').onclick = () => { const b = $('#ctlB'); b.hidden = !b.hidden; $('#ctlH').textContent = '⌨️ Управление ' + (b.hidden ? '▸' : '▾');
     try { localStorage.setItem('ui3d.ctl', b.hidden ? '0' : '1'); } catch (x) {} };
-  try { if (localStorage.getItem('ui3d.ctl') !== '1') $('#ctlH').click(); } catch (x) { $('#ctlH').click(); }  // по умолчанию свёрнуто
+  try { if (localStorage.getItem('ui3d.ctl') !== '1') $('#ctlH').click(); } catch (x) { $('#ctlH').click(); }
 }
 function setView(patch) {
   view = {...view, ...patch, transitionDuration: 600, transitionInterpolator: new deck.LinearInterpolator(['target', 'zoom', 'rotationX', 'rotationOrbit'])};
@@ -493,7 +470,6 @@ function setView(patch) {
 }
 const fly = (t, zoom = 2, rx) => setView({target: [t[0], t[1], t[2] || 0], zoom, ...(rx != null ? {rotationX: rx} : {})});
 
-// ---------- описание объектов человеческим языком ----------
 function propRows(p) {
   return Object.entries(p).filter(([k, v]) => PN[k] && v != null && typeof v !== 'object').map(([k, v]) => [PN[k],
     k === 'cost' ? rub(v) : k === 'laying_method' ? (v === 'special' ? 'спецпереход (под дорогой или коммуникацией)' : 'обычная') : typeof v === 'number' ? fmt(v, k === 'length' ? 1 : 2) : v]);
@@ -560,7 +536,6 @@ function showCard(d) {
   $('#cardLink').onclick = e => { try { navigator.clipboard.writeText(location.href); e.target.textContent = 'Скопировано ✓'; } catch (x) { e.target.textContent = location.href; } };
 }
 
-// ---------- трасса и профиль ----------
 function routeTo(node, via) {
   const ss = vSegs(), byEnd = {}, byStart = {};
   for (const s of ss) { byEnd[s.p.end_node_id] = s; (byStart[s.p.start_node_id] ||= []).push(s); }
@@ -643,7 +618,6 @@ function profile() {
   cv.style.cursor = 'crosshair';
 }
 
-// ---------- поиск ----------
 function find(q) {
   q = String(q).trim(); if (!q) return;
   if (q in byId) {
@@ -666,7 +640,6 @@ function find(q) {
     <div class="mut" style="color:var(--muted)">По запросу «${esc(q)}» нет объекта. Проверьте номер — он есть в карточке объекта и во вкладке «Здания».</div>`;
 }
 
-// ---------- интерфейс ----------
 function setVariant(v) {
   S.variant = v; closeProfile();
   document.querySelectorAll('#variants button').forEach(b => b.classList.toggle('on', b.dataset.v === v));

@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# Проверка решения по правилам 18.09. Запуск из корня: scripts/check.sh organizers|dense|city
-# organizers — оба датасета организаторов считаются, все точки подключены, tools/validator/check18.py без нарушений;
-# dense — сцены «густо» 50/100/200 считаются и проходят check18;
-# city — файл «город» считается целиком при куче 12 ГБ не дольше часа, срез выхода проходит check18, неподключённых нет.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 source scripts/env.sh

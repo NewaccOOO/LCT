@@ -10,32 +10,14 @@ import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.index.strtree.STRtree;
 
-/**
- * Трасса черновика для правила R-11 (VariantEnumerator#sameRoute): линии всех деревьев, их полоса по буферу JTS
- * и отрезки по рамке. Длина одной трассы в полосе другой сначала оценивается без буфера: снизу — по отрезкам ближе
- * ширины полосы без запаса, сверху — с запасом. Буфер JTS и пересечение с ним считаются, только когда оценки не
- * решают: на «густо-200» они занимали четверть времени основной нити.
- */
 final class RouteBand {
-    /**
-     * Буфер JTS отличается от точной полосы на сантиметры: дуги хордами (0,5 см при 8 сегментах на четверть круга),
-     * упрощение входа на 1 % ширины, округление на сетку при повторе с меньшей точностью. Оценки берут полосу
-     * уже и шире на этот запас.
-     */
     private static final double SLACK_M = 0.05;
-    /**
-     * Наложение линий одной трассы JTS считает один раз, а сумма по отрезкам — дважды. Сборка не пускает касаний
-     * дальше 0,15 м от общих узлов и врезок, поэтому оценка снизу теряет по 0,3 м на ребро и дерево.
-     */
     private static final double OVERLAP_M = 0.3;
-    /** Погрешность длины пересечения JTS на отрезок: узлы наложения и привязка при повторе. */
     private static final double NOISE_M = 1e-4;
 
     final Geometry lines;
     private final double width;
-    /** Рёбра и деревья трассы: на них наложения, см. OVERLAP_M. */
     private final int parts;
-    /** Отрезки подряд: x0, y0, x1, y1. */
     private final double[] sides;
     private STRtree index;
     private Geometry buffered;
@@ -60,10 +42,6 @@ final class RouteBand {
         }
     }
 
-    /**
-     * R-11: больше share длины меньшей трассы лежит в полосе другой, и наоборот. Ответ тот же, что у сравнения
-     * длин пересечений с буферами JTS: оценки решают, только если буфер заведомо дал бы то же.
-     */
     static boolean same(RouteBand a, RouteBand b, double share) {
         double shorter = Math.min(a.lines.getLength(), b.lines.getLength());
         if (shorter == 0) {
@@ -72,12 +50,10 @@ final class RouteBand {
         if (a.lines.getEnvelopeInternal().distance(b.lines.getEnvelopeInternal()) > a.width) {
             return false;
         }
-        // полоса отобранного варианта (a) сравнивается со всеми следующими, поэтому она считается первой
         double limit = share * shorter;
         return b.inside(a, limit) && a.inside(b, limit);
     }
 
-    /** Длина этой трассы в полосе other больше limit. */
     private boolean inside(RouteBand other, double limit) {
         double[] bounds = bounds(other);
         if (bounds[0] > limit) {
@@ -89,7 +65,6 @@ final class RouteBand {
         return lines.intersection(other.buffered()).getLength() > limit;
     }
 
-    /** Полоса JTS, строится один раз. */
     private Geometry buffered() {
         if (buffered == null) {
             buffered = lines.buffer(width);
@@ -97,10 +72,6 @@ final class RouteBand {
         return buffered;
     }
 
-    /**
-     * Оценки снизу и сверху длины этой трассы в буфере other: сумма по отрезкам длин их частей не дальше
-     * width − SLACK_M и width + SLACK_M от отрезков other, снизу — за вычетом наложений и погрешности.
-     */
     double[] bounds(RouteBand other) {
         double reach = width + SLACK_M;
         STRtree near = other.index();
@@ -147,14 +118,12 @@ final class RouteBand {
         return index;
     }
 
-    /** Интервал в пределах [0, length] в список, пустой не добавляется. */
     private static void add(List<double[]> out, double[] span, double length) {
         if (span != null && span[1] >= 0 && span[0] <= length) {
             out.add(new double[] {Math.max(0, span[0]), Math.min(length, span[1])});
         }
     }
 
-    /** Длина объединения интервалов. */
     private static double covered(List<double[]> spans) {
         spans.sort(Comparator.comparingDouble(span -> span[0]));
         double total = 0;
@@ -172,11 +141,6 @@ final class RouteBand {
         return total + (Double.isNaN(from) ? 0 : to - from);
     }
 
-    /**
-     * Параметры u на прямой (x0, y0) + u·(dx, dy), (dx, dy) единичный, где точка не дальше r от отрезка
-     * (tx0, ty0)–(tx1, ty1), или null. Окрестность отрезка выпукла: круги у концов и полоса вдоль него, поэтому
-     * ответ — один интервал, охват их трёх интервалов.
-     */
     static double[] span(double x0, double y0, double dx, double dy, double tx0, double ty0, double tx1, double ty1, double r) {
         double lo = Double.POSITIVE_INFINITY;
         double hi = Double.NEGATIVE_INFINITY;
@@ -199,7 +163,6 @@ final class RouteBand {
             ey /= side;
             double px = x0 - tx0;
             double py = y0 - ty0;
-            // вдоль отрезка: проекция в [0, side]; поперёк: расстояние до его прямой не больше r
             double[] along = slab(px * ex + py * ey, dx * ex + dy * ey, 0, side);
             double[] across = slab(px * ey - py * ex, dx * ey - dy * ex, -r, r);
             if (along != null && across != null) {
@@ -214,7 +177,6 @@ final class RouteBand {
         return lo <= hi ? new double[] {lo, hi} : null;
     }
 
-    /** u, при которых min ≤ value + u·rate ≤ max, или null. */
     private static double[] slab(double value, double rate, double min, double max) {
         if (rate == 0) {
             return value >= min && value <= max ? new double[] {Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY} : null;

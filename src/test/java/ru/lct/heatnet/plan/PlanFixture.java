@@ -16,7 +16,6 @@ import ru.lct.heatnet.model.NetworkSegment;
 import ru.lct.heatnet.model.Restriction;
 import ru.lct.heatnet.model.Source;
 
-/** Ручной вход в метрах EPSG:32637 для тестов планировщика. */
 final class PlanFixture {
     static final GeometryFactory GEOMETRY = new GeometryFactory();
 
@@ -37,7 +36,6 @@ final class PlanFixture {
         return this;
     }
 
-    /** ОКС квадратом 20 м за точкой подключения (x, y) в сторону от сети (вверх по y). */
     PlanFixture oks(String id, double x, double y, double flow) {
         oks.add(new FutureOks(id, rect(x - 10, y, x + 10, y + 20), flow, 1.0));
         connections.add(new ConnectionPoint("cp-" + id, point(x, y), id));
@@ -58,7 +56,6 @@ final class PlanFixture {
         return connections.stream().filter(c -> c.getOksId().equals(oksId)).findFirst().orElseThrow();
     }
 
-    /** Магистраль вдоль оси x от источника: hn-1 до камеры hc-1 в (200, 0), дальше hn-2 и hn-3 до (600, 0). */
     static PlanFixture trunk() {
         return new PlanFixture()
                 .pipe("hn-1", 0, 0, 200, 0, 200, 60, "src")

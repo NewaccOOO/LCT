@@ -1,8 +1,3 @@
-"""Одна строка по выходу сервиса: S, стоимость, длина, неподключённые и число участков с глубиной по вариантам.
-
-Использование: python3 scripts/depth_summary.py <out.geojson>
-Выход читается построчно (город — сотни МБ), json.load всего файла не делается.
-"""
 import json
 import sys
 from collections import Counter

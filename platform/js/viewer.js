@@ -1,6 +1,3 @@
-// 3D-сцена на three.js: земля с сеткой, поверхность (дороги, парки, вода), здания объёмом, подземные коммуникации
-// и новая сеть трубами настоящего диаметра, колодцы камер, булавки зданий к подключению.
-// Вертикаль растягивается множителем ex («Глубина ×N») — только положения, диаметры остаются настоящими.
 import * as THREE from 'three';
 import {LineSegments2} from 'three/addons/lines/LineSegments2.js';
 import {LineSegmentsGeometry} from 'three/addons/lines/LineSegmentsGeometry.js';
@@ -13,13 +10,9 @@ THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 const YAX = new THREE.Vector3(0, 1, 0);
 const col = h => new THREE.Color(h);
 export const PALETTE = {
-  // проблема — малиновая: красный уже занят существующей теплосетью, один цвет — одно значение
   selection: '#ff8a1f', problem: '#ff2fd1', ok: '#22c55e', special: '#fb923c',
   connected: '#22c55e', unconnected: '#f43f5e', future: '#e8dcc0', chamberOld: '#94a3b8', chamberNew: '#38bdf8',
 };
-// Подложка сцены в двух темах. Земля, дороги, парки и вода — спокойные цвета картографической подложки;
-// коммуникации и новая сеть — инженерная семантика, одинаковы в обеих темах. Линии поверх сцены (проекция трассы,
-// другой вариант, футляр, отвесы) — контрастные к земле: на светлой тёмные, на тёмной светлые
 export const SCENE = {
   light: {sky: '#f5f4f2', under: '#e9dfcf', ground: '#eeebe6', grid: '#bdb6aa', underGrid: ['#d9c7a6', '#8a6a44'], building: '#eeebe6', future: '#ffd84d', flat: '#c7c1b7',
     trace: '#0891b2', ghost: '#21201f', casing: '#4d4d4d', drop: '#c2410c', focus: '#21201f', surfK: 1.9,
@@ -28,8 +21,6 @@ export const SCENE = {
     trace: '#67e8f9', ghost: '#f1f5f9', casing: '#f8fafc', drop: '#fef08a', focus: '#ffffff', surfK: 0.9,
     surf: {road: '#4a5468', tram_tracks: '#6b7280', railway: '#78716c', metro: '#be185d', park: '#2f6b4f', social_area: '#9a5b3c', water: '#2a55a8', prohibited_site: '#7f2a2a', power_line_support: '#e879f9'}},
 };
-// Новая сеть — свой бирюзовый цвет, которого нет ни у одной существующей сети (вода синяя, кабель фиолетовый,
-// теплосеть красная). Ду меняет только светлоту: тонкие — светлее, магистрали — насыщеннее; толщина — настоящая
 export function dnColor(dn) {
   const t = Math.min(1, Math.max(0, Math.log2((dn || 50) / 50) / Math.log2(28)));
   return new THREE.Color().setHSL(0.49, 0.95, 0.72 - 0.26 * t);
@@ -37,8 +28,6 @@ export function dnColor(dn) {
 
 const EXISTING_AXIS = [UTILITIES.heat_network.top + DIAMETERS[0].h / 2, UTILITIES.heat_network.top + DIAMETERS[DIAMETERS.length - 1].h / 2];
 
-// ---------- геометрия ----------
-// Трубы: цилиндр на каждый прямой кусок полилинии, экземплярами. Ось цилиндра three — Y.
 function tubeMesh(pieces, {radial = 10, material, overlap = true}) {
   const geo = new THREE.CylinderGeometry(1, 1, 1, radial, 1, true);
   const mesh = new THREE.InstancedMesh(geo, material, Math.max(1, pieces.length));
@@ -50,7 +39,7 @@ function tubeMesh(pieces, {radial = 10, material, overlap = true}) {
     const len = d.length() || 1e-3;
     q.setFromUnitVectors(YAX, d.divideScalar(len));
     p.set((pc.a[0] + pc.b[0]) / 2, (pc.a[1] + pc.b[1]) / 2, (pc.a[2] + pc.b[2]) / 2);
-    s.set(pc.r, len + (overlap ? pc.r * 1.6 : 0), pc.r);   // перекрытие закрывает щели на изломах
+    s.set(pc.r, len + (overlap ? pc.r * 1.6 : 0), pc.r);
     mesh.setMatrixAt(i, m.compose(p, q, s));
     mesh.setColorAt(i, c.set(pc.color));
   });
@@ -80,7 +69,6 @@ function boxMesh(items, material) {
   mesh.frustumCulled = false;
   return mesh;
 }
-// Линии постоянной толщины в пикселях — чтобы сеть была видна на обзоре района, где трубы тоньше пикселя
 function fatLines(segments, {width = 2, color = '#ffffff', opacity = 1, colors = null, dashed = false, depthTest = true}) {
   const geo = new LineSegmentsGeometry();
   geo.setPositions(segments);
@@ -94,7 +82,6 @@ function fatLines(segments, {width = 2, color = '#ffffff', opacity = 1, colors =
   return ln;
 }
 
-// Плоские полигоны (кольца в метрах) → треугольники на высоте z
 function flatGeometry(items, z) {
   const pos = [];
   for (const it of items) {
@@ -110,7 +97,6 @@ function flatGeometry(items, z) {
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   return g;
 }
-// Здания: стены и крыша одним буфером; цвет по вершинам
 function buildingGeometry(items, heightOf, colorOf) {
   const pos = [], nrm = [], clr = [];
   const c = new THREE.Color();
@@ -142,7 +128,6 @@ export const buildingHeight = it => {
   return lv > 0 ? Math.min(lv * 3.2, 250) : it.p.height ? +it.p.height : 9;
 };
 
-// Земля: полупрозрачная плоскость с сеткой 10/100 м, которая гаснет вдали (шейдер с логарифмической глубиной)
 function groundMaterial(color, line) {
   return new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, side: THREE.DoubleSide,
@@ -191,7 +176,7 @@ export class Viewer {
     const sun = new THREE.DirectionalLight(0xffffff, 1.4);
     sun.position.set(0.5, -0.8, 1.2);
     this.scene.add(sun);
-    const low = new THREE.DirectionalLight(0x93c5fd, 0.5);   // подсветка снизу — чтобы трубы снизу не были чёрными
+    const low = new THREE.DirectionalLight(0x93c5fd, 0.5);
     low.position.set(-0.4, 0.6, -1);
     this.scene.add(low);
 
@@ -221,7 +206,6 @@ export class Viewer {
   resize() {
     const w = this.host.clientWidth, h = this.host.clientHeight;
     if (!w || !h) return;
-    // окно сцены меняется (свернули панель, открыли профиль): main держит точки на своих местах экрана
     const r = this.host.getBoundingClientRect(), cur = {x: r.left, y: r.top, w, h};
     if (this._box && (this._box.w !== w || this._box.h !== h || this._box.x !== cur.x || this._box.y !== cur.y)) this.onResize?.(this._box, cur);
     this._box = cur;
@@ -232,11 +216,8 @@ export class Viewer {
     for (const m of this.lineMats) m.resolution.set(w, h);
     this.dirty = true;
   }
-  // Уровень детализации по высоте камеры: над районом существующие сети гаснут, новая становится толще
   lod() {
     const h = Math.abs(this.camera.position.z), k = Math.min(1, Math.max(0, (h - 300) / 2500));
-    // дальность видимости по высоте: у земли и под ней — 2,5–3 км с туманом у горизонта, сверху — без ограничений.
-    // Так тайлы за горизонтом не рисуются, а обрыв сцены прячется в дымке
     const far = Math.min(2e5, Math.max(2500, h * 40 + 1500));
     if (Math.abs(far - this.camera.far) / this.camera.far > 0.05) {
       this.camera.far = far;
@@ -246,7 +227,6 @@ export class Viewer {
     if (this._lodK != null && Math.abs(this._lodK - k) < 0.02) return;
     this._lodK = k;
     for (const l of this.g.utilLines.children) l.material.opacity = 0.55 - 0.35 * k;
-    // выше 600 м трубы существующих сетей тоньше пикселя — рисуем только линии (в разы меньше треугольников)
     this.g.utilities.visible = h < 600;
     this.g.existing.visible = h < 600 && this.opts.layers['n:heat_chamber'] !== false;
     const under = this.camera.position.z < 0;
@@ -257,7 +237,7 @@ export class Viewer {
       if (this.depthGrid) this.depthGrid.visible = under;
     }
     const net = this.g.netLines.getObjectByName('netLine');
-    if (net) net.material.linewidth = 3.4 + 3.6 * k;   // на обзоре района новая сеть толще, как маршрут в Картах
+    if (net) net.material.linewidth = 3.4 + 3.6 * k;
   }
   render() {
     this.lod();
@@ -269,7 +249,6 @@ export class Viewer {
     this.declutter();
     this.onRender?.();
   }
-  // Подписи не должны налезать друг на друга: важные (конец трассы, проблемы) остаются, остальные прячутся
   declutter() {
     const els = [];
     this.g.overlay.traverse(o => { if (o.isCSS2DObject && o.element.style.display !== 'none') els.push(o.element); });
@@ -307,15 +286,12 @@ export class Viewer {
   }
   z(depth) { return -depth * this.ex; }
 
-  // Разбивка по квадратам плана: до 12×12 тайлов на набор, не мельче 250 м
   tiles(items, xyOf) {
     const [x0, y0, x1, y1] = this.model.bbox, T = Math.max(250, Math.max(x1 - x0, y1 - y0) / 12), m = new Map();
     for (const it of items) { const [x, y] = xyOf(it), k = Math.floor(x / T) * 100003 + Math.floor(y / T); let l = m.get(k); if (!l) m.set(k, l = []); l.push(it); }
     return [...m.values()];
   }
 
-  // ---------- тема ----------
-  // Перекрашивает подложку и линии поверх сцены; данные и камера остаются
   setTheme(name) {
     const t = this.th = SCENE[name] || SCENE.light;
     PALETTE.future = t.future;
@@ -331,7 +307,6 @@ export class Viewer {
     this.applyOpts();
   }
 
-  // ---------- исходные данные ----------
   setModel(model) {
     this.model = model;
     this.ghost = null;
@@ -344,7 +319,6 @@ export class Viewer {
     this.ground.position.set((x0 + x1) / 2, (y0 + y1) / 2, 0);
     this.ground.renderOrder = 1;
     this.scene.add(this.ground);
-    // под землёй — сетка на обычной глубине 3 м, чтобы было за что зацепиться глазом
     if (this.depthGrid) { this.scene.remove(this.depthGrid); this.depthGrid.geometry.dispose(); }
     const dg = groundMaterial(...this.th.underGrid);
     dg.uniforms.uOpacity.value = 0.08;
@@ -372,7 +346,6 @@ export class Viewer {
       mesh.renderOrder = 2 + i;
       this.g.surface.add(mesh);
     });
-    // точки входа на поверхности: опоры ЛЭП
     const sup = this.model.points.power_line_support || [];
     if (sup.length) {
       const m = sphereMesh(sup.map(p => ({p: [p.xy[0], p.xy[1], 0.5], r: 1.2, color: SURFACES.power_line_support.color})), this.material('lambert', {}));
@@ -396,7 +369,6 @@ export class Viewer {
       solid.add(mesh);
     }
     this.g.buildings.add(solid);
-    // контуры зданий на земле — для режима «контуром»
     const flat = flatGeometry(items, 0.02);
     const fm = new THREE.Mesh(flat, this.material('basic', {color: this.th.flat, transparent: true, opacity: 0.7, depthWrite: false, side: THREE.DoubleSide}));
     fm.name = 'buildingsFlat';
@@ -404,12 +376,10 @@ export class Viewer {
     this.g.buildings.add(fm);
   }
 
-  // Всё, что зависит от вертикального масштаба: коммуникации, камеры, булавки, новая сеть
   buildUnderground() {
     this.clear(this.g.utilities); this.clear(this.g.utilLines); this.clear(this.g.existing); this.clear(this.g.oks);
     const M = this.model, ex = this.ex;
     this.pickItems = [];
-    // существующие коммуникации: трубы с настоящим габаритом на своей глубине + линии для дальнего плана
     for (const [type, lines] of Object.entries(M.utilities)) {
       const u = UTILITIES[type], pieces = [], seg = [];
       for (const ln of lines) {
@@ -421,7 +391,6 @@ export class Viewer {
           this.pickItems.push({kind: 'utility', type, a, b, r, ref: ln});
         }
       }
-      // трубы по тайлам: вблизи рисуется только то, что попало в кадр (важно для города и слабых видеокарт)
       const mat = this.material('standard', {color: 0xffffff, roughness: 0.55, metalness: 0.15});
       for (const part of this.tiles(pieces, pc => [(pc.a[0] + pc.b[0]) / 2, (pc.a[1] + pc.b[1]) / 2])) {
         const mesh = tubeMesh(part, {radial: 8, material: mat});
@@ -429,16 +398,13 @@ export class Viewer {
         mesh.name = 'util:' + type; mesh.userData.key = 'u:' + type;
         this.g.utilities.add(mesh);
       }
-      // существующие сети — фон: тоньше и тусклее новой, чтобы обзор района не превращался в паутину
       const ln = fatLines(seg, {width: 1.1, color: u.color, opacity: 0.5});
       ln.name = 'utilLine:' + type; ln.userData.key = 'u:' + type;
       this._lodK = null;
       this.g.utilLines.add(this.trackLines(ln));
     }
-    // существующие камеры: колодец от крышки до камеры у трубы
     const ch = M.points.heat_chamber || [];
     if (ch.length) this.addWells(this.g.existing, ch.map(c => ({xy: c.xy, a0: EXISTING_AXIS[0], a1: EXISTING_AXIS[1], color: PALETTE.chamberOld, ref: c, kind: 'chamber'})));
-    // источник: высокая труба ТЭЦ — ориентир, видно издалека
     for (const s of M.points.source || []) {
       const m = new THREE.Mesh(new THREE.CylinderGeometry(4, 7, 90, 20), this.material('lambert', {color: '#f43f5e'}));
       m.rotation.x = Math.PI / 2; m.position.set(s.xy[0], s.xy[1], 45);
@@ -465,14 +431,12 @@ export class Viewer {
       this.pickItems.push({kind: w.kind, a: [w.xy[0], w.xy[1], 0.1], b: [w.xy[0], w.xy[1], zBot], r: 1.4, ref: w.ref});
     }
     const mat = this.material('standard', {color: 0xffffff, roughness: 0.8, metalness: 0});
-    // камеры полупрозрачные: трубы внутри и за ними видны
     const bm = this.material('standard', {color: 0xffffff, roughness: 0.8, metalness: 0, transparent: true, opacity: 0.45, depthWrite: false});
     const b = boxMesh(boxes, bm); b.name = 'wells'; b.renderOrder = 19; group.add(b);
     const s = tubeMesh(shafts, {radial: 10, material: mat, overlap: false}); group.add(s);
     const l = tubeMesh(lids, {radial: 16, material: this.material('standard', {color: 0xffffff, roughness: 0.4, metalness: 0.6}), overlap: false}); group.add(l);
   }
 
-  // Булавки зданий к подключению: как метки на картах; цвет — подключено ли в текущем варианте
   buildOks() {
     this.clear(this.g.oks);
     this.pickItems = this.pickItems.filter(p => p.kind !== 'oks');
@@ -492,16 +456,13 @@ export class Viewer {
     this.g.oks.add(hm);
   }
 
-  // ---------- вариант решения ----------
   setVariant(v) { this.variant = v; this.buildOks(); this.buildNetwork(); }
 
   segColor(s) {
-    // «Проблемы»: участки с проблемой — ярким цветом сети, остальные приглушены (как Clash Detective в Navisworks)
     if (this.opts.colorBy === 'status') return s.bad ? '#5eead4' : '#335c5a';
     if (this.opts.colorBy === 'depth') { const t = Math.min(1, Math.max(0, (Math.max(s.d0, s.d1) - 1) / 4)); return new THREE.Color().setHSL(0.5 - 0.08 * t, 0.9, 0.78 - 0.4 * t).getStyle(); }
     return '#' + dnColor(s.p.diameter).getHexString();
   }
-  // skip — участки, которые сейчас тянут: их рисует dragNet поверх, чтобы не пересобирать всю сеть на каждый кадр
   buildNetwork({skip = null} = {}) {
     this.clear(this.g.network); this.clear(this.g.netLines);
     if (!skip) this.clear(this.g.drag);
@@ -522,8 +483,6 @@ export class Viewer {
       }
       for (const p of P) joints.push({p, r, color});
     }
-    // новая сеть рисуется после полупрозрачной земли (прозрачный проход, renderOrder выше): земля её не глушит,
-    // а здания, которые пишут глубину, закрывают как положено
     const mat = this.material('standard', {color: 0xffffff, roughness: 0.35, metalness: 0.3, emissive: 0x0b2235, transparent: true, opacity: 1});
     const tubes = tubeMesh(pieces, {radial: 14, material: mat, overlap: false});
     tubes.name = 'net'; tubes.renderOrder = 15; this.g.network.add(tubes);
@@ -535,11 +494,9 @@ export class Viewer {
     ln.name = 'netLine';
     this.g.netLines.add(this.trackLines(ln));
     this._lodK = null;
-    // проекция трассы на землю — видно сверху сквозь непрозрачную землю (отвес «где копать»)
     const tr = fatLines(trace, {width: 1.2, color: this.th.trace, opacity: 0.55, dashed: true});
     tr.name = 'trace';
     this.g.netLines.add(this.trackLines(tr));
-    // камеры и врезки новой сети
     const wells = [];
     for (const nd of v.nodes) {
       if (nd.type === 'technical_node' || nd.type === 'oks_entry' || nd.type === 'endpoint') {
@@ -552,7 +509,6 @@ export class Viewer {
       wells.push({xy: nd.xy, a0, a1, color, ref: nd, kind: 'node'});
     }
     if (wells.length) this.addWells(this.g.network, wells);
-    // футляры спецпереходов — прозрачная труба побольше вокруг рабочей
     const casings = [];
     for (const s of v.segs) if (s.special && !skip?.has(s)) {
       const P = s.pts.map((p, i) => [p[0], p[1], -(s.depth[i] + s.row.h / 2) * ex]);
@@ -563,7 +519,6 @@ export class Viewer {
       cm.renderOrder = 18; cm.name = 'casing';
       this.g.network.add(cm);
     }
-    // проблемы — красные метки в точке конфликта: шар, игла до земли и кольцо на земле, видны с любого масштаба
     const bad = v.crossings.filter(c => c.ok === false);
     if (bad.length) {
       const pts = bad.map(c => c.type === 'segment' ? [c.x, c.y, -(c.seg.d0 + c.seg.row.h / 2) * ex] : [c.x, c.y, -(c.hn + c.H / 2) * ex]);
@@ -588,7 +543,6 @@ export class Viewer {
     this.applyOpts();
   }
 
-  // участки, которые тянут при ручной правке: только труба и линия, без пересборки остальной сети
   dragNet(segs) {
     this.clear(this.g.drag);
     const ex = this.ex, pieces = [], seg = [], colors = [];
@@ -606,7 +560,6 @@ export class Viewer {
     this.redraw();
   }
 
-  // «Что если»: обход пересечения — полупрозрачная зелёная труба на рекомендуемой глубине
   setDetour(pts, r) {
     let old = this.g.tools.getObjectByName('detour');
     if (old) { this.g.tools.remove(old); old.traverse(x => { x.geometry?.dispose(); x.material?.dispose?.(); if (x.isCSS2DObject) x.element.remove(); }); }
@@ -619,7 +572,6 @@ export class Viewer {
     this.redraw();
   }
 
-  // Другой вариант поверх текущего — пунктиром (белым на тёмной земле, тёмным на светлой), чтобы сравнить трассы на месте
   setGhost(v) {
     this.clear(this.g.ghost);
     this.ghost = v;
@@ -641,7 +593,6 @@ export class Viewer {
     this.onExChange?.();
   }
 
-  // ---------- выделение трассы ----------
   highlight(route, focusSeg = null) {
     this.clear(this.g.overlay);
     this.route = route; this.focusSeg = focusSeg;
@@ -657,7 +608,6 @@ export class Viewer {
     this.g.overlay.add(shell);
     const ln = fatLines(segs, {width: 4, color: PALETTE.selection, opacity: 0.95});
     this.g.overlay.add(this.trackLines(ln));
-    // отвесы до земли через каждые ~25 м и на изломах; подписи глубины — в начале и там, где глубина меняется
     let next = 0, lastD = null, lastAt = -1e9, labels = 0;
     for (const s of route.segs) {
       for (let i = 0; i < s.pts.length; i++) {
@@ -674,7 +624,6 @@ export class Viewer {
     }
     const dl = fatLines(drops, {width: 1.2, color: this.th.drop, opacity: 0.8, dashed: true});
     this.g.overlay.add(this.trackLines(dl));
-    // пересечения по трассе: кольца и подписи
     for (const s of route.segs) for (const c of s.cx) {
       const f2 = v => v.toFixed(2).replace('.', ',');
       const gap = c.gap < 0 ? `наложение ${f2(-c.gap)} м` : c.ok === false && c.need != null ? `${f2(c.gap)} из ${f2(c.need)} м` : `${f2(c.gap)} м`;
@@ -684,7 +633,6 @@ export class Viewer {
       lb.userData.cx = c;
       this.g.overlay.add(lb);
     }
-    // камеры на трассе — подписи с номерами, как на схеме сети
     for (const s of route.segs) {
       const nd = this.variant?.nodes.find(n => n.id === s.from && n.type !== 'technical_node');
       if (!nd) continue;
@@ -712,7 +660,6 @@ export class Viewer {
     o.center.set(0.5, 1.2);
     return o;
   }
-  // Временные метки: точка на профиле, опорная точка вращения, линейка
   marker(name, pos, {color = PALETTE.selection, r = 1.2, ring = false} = {}) {
     let m = this.g.tools.getObjectByName(name);
     if (!pos) { if (m) { this.g.tools.remove(m); m.traverse(x => { x.geometry?.dispose(); x.material?.dispose(); }); } this.redraw(); return; }
@@ -728,14 +675,12 @@ export class Viewer {
     this.redraw();
     return m;
   }
-  // размер метки — по текущему расстоянию до камеры, пересчёт каждый кадр (иначе метка из ссылки остаётся огромной)
   scaleMarker(m) {
     const {r, ring} = m.userData.marker, dist = this.camera.position.distanceTo(m.position);
     m.scale.setScalar(ring ? dist * 0.03 : Math.min(Math.max(r * 0.35, dist * 0.008), r * 1.2));
     if (ring) m.quaternion.copy(this.camera.quaternion);
   }
 
-  // ---------- отображение ----------
   applyOpts() {
     const o = this.opts, L = o.layers;
     const on = k => L[k] !== false;
@@ -745,7 +690,6 @@ export class Viewer {
     const solid = this.g.buildings.getObjectByName('buildings'), flat = this.g.buildings.getObjectByName('buildingsFlat');
     if (solid) {
       solid.visible = on('buildings') && o.buildings === 'solid';
-      // рентген — здания почти прозрачные; выбрана трасса — здания приглушены, чтобы трасса не пряталась за домом
       const op = o.xray ? 0.18 : o.dim ? 0.5 : 1;
       solid.traverse(x => { x.renderOrder = op < 1 ? 11 : 10; });
       this.bldMat.opacity = op;
@@ -756,12 +700,11 @@ export class Viewer {
     if (flat) flat.visible = on('buildings') && o.buildings !== 'hidden';
     for (const m of [...this.g.utilities.children, ...this.g.utilLines.children]) m.visible = on(m.userData.key);
     this._lodK = null;
-    this.g.oks.visible = on('oks') && !o.plan;   // в плане правки иглы подключения закрывают место ввода
+    this.g.oks.visible = on('oks') && !o.plan;
     this.g.netLines.getObjectByName('trace') && (this.g.netLines.getObjectByName('trace').visible = on('trace'));
     this.redraw();
   }
 
-  // ---------- секущий бокс ----------
   setClipBox(box) {
     this.clipPlanes.length = 0;
     if (box) {
@@ -778,7 +721,6 @@ export class Viewer {
       box3 = new THREE.LineSegments(g, new THREE.LineBasicMaterial({color: 0xff8a1f, transparent: true, opacity: 0.7}));
       box3.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
       box3.name = 'clipBox';
-      // размер рамки подписан, как у Section Box: в плане и по глубине (в настоящих метрах)
       const lb = this.label(`срез ${Math.round(x1 - x0)} × ${Math.round(y1 - y0)} м · глубже ${(Math.max(0, -z0) / this.ex).toFixed(1).replace('.', ',')} м`, 'lbl clip');
       lb.position.set(0, 0, (z1 - z0) / 2);
       box3.add(lb);
@@ -788,7 +730,6 @@ export class Viewer {
     this.redraw();
   }
 
-  // ---------- выбор объектов ----------
   rebuildPickGrid() {
     const C = this.pickCell, grid = new Map();
     this.pickItems.forEach((it, i) => {
@@ -811,14 +752,12 @@ export class Viewer {
     for (const pl of this.clipPlanes) if (pl.distanceToPoint(p) < 0) return false;
     return true;
   }
-  /** Что под пикселем (x, y): {kind, ref, point, t} или null. Допуск — в пикселях, поэтому тонкие линии вдали тоже ловятся. */
   pick(x, y, ray, {px = 7} = {}) {
     const C = this.pickCell, h = this.host.clientHeight;
     const pxWorld = 2 * Math.tan(this.camera.fov * Math.PI / 360) / h;
     const o = ray.origin, d = ray.direction;
     const seen = new Set();
     let best = null;
-    // над районом существующие сети не ловим: щелчок на обзоре должен попадать в новую сеть и здания, а не в случайную трубу
     const far = Math.abs(this.camera.position.z) > 700;
     const test = i => {
       if (seen.has(i)) return;
@@ -831,11 +770,9 @@ export class Viewer {
       if (r.dist > tol) return;
       const pt = new THREE.Vector3(o.x + d.x * r.t, o.y + d.y * r.t, o.z + d.z * r.t);
       if (this.clipPlanes.length && !this.inClip(pt)) return;
-      // новая сеть важнее соседних коммуникаций на том же расстоянии
       const score = r.t * (it.kind === 'seg' ? 0.85 : it.kind === 'node' ? 0.8 : 1) + r.dist / Math.max(tol, 1e-6) * 0.5;
       if (!best || score < best.score) best = {kind: it.kind, ref: it.ref, type: it.type, point: pt, on: new THREE.Vector3(...r.on), t: r.t, score};
     };
-    // идём по клеткам вдоль проекции луча на план
     const tMax = Math.min(60000, this.camera.far);
     const zMin = -40 * this.ex, zMax = 400;
     let t0 = 0, t1 = tMax;
@@ -853,7 +790,6 @@ export class Viewer {
       if (best && t > best.t * 1.3 + 30) break;
     }
     if (best) return best;
-    // здания и поверхность: где луч входит в здание или касается земли
     const M = this.model;
     if (!M) return null;
     if (this.opts.buildings === 'solid' && this.opts.layers.buildings !== false) {
@@ -878,7 +814,6 @@ export class Viewer {
     return null;
   }
 
-  // Насколько точка p заходит внутрь трубы или колодца (0 — снаружи): чтобы камера из ссылки не встала внутри
   insideAt(p) {
     const C = this.pickCell, gx = Math.floor(p.x / C), gy = Math.floor(p.y / C);
     let worst = 0;
@@ -899,7 +834,6 @@ export class Viewer {
   }
 }
 
-// Ближайшие точки луча o + t·d и отрезка ab: {t, dist}
 function closestRaySeg(o, d, a, b) {
   const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
   const wx = o.x - a[0], wy = o.y - a[1], wz = o.z - a[2];
@@ -911,7 +845,6 @@ function closestRaySeg(o, d, a, b) {
   else if (den < 1e-12) { s = 0; t = -Dd / A; }
   else { t = (B * E - Cc * Dd) / den; s = (A * E - B * Dd) / den; }
   s = Math.max(0, Math.min(1, s));
-  // после зажима s пересчитываем t
   const px = a[0] + ux * s, py = a[1] + uy * s, pz = a[2] + uz * s;
   t = ((px - o.x) * d.x + (py - o.y) * d.y + (pz - o.z) * d.z) / A;
   const qx = o.x + d.x * t - px, qy = o.y + d.y * t - py, qz = o.z + d.z * t - pz;

@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""Картинки для README и CHANGELOG: трассировка на синтетической сцене и динамика качества по версиям.
-
-Запуск из корня: uv run --project tools python scripts/readme_assets.py [IN.geojson OUT.geojson]
-Пишет docs/assets/versions.svg (таблица версий из CHANGELOG.md, версии с правил 18.09), docs/assets/city.svg
-(таблица «Город» там же) и, если заданы IN/OUT,
-docs/assets/hero.svg (вариант 1 расчёта на сцене). Для README берётся синтетическая сцена: датасет организаторов
-наружу не показывается.
-"""
 import html
 import json
 import re
@@ -21,7 +13,6 @@ BG, CARD = "#0b1220", "#0f172a"
 FILL = {"oks": "#334155", "park": "#14532d", "social_area": "#4c1d95", "prohibited_site": "#7f1d1d", "water": "#1e3a8a",
         "road": "#1f2937", "tram_tracks": "#3f2d1a", "railway": "#3f2d1a"}
 LINE = {"gas_pipeline": "#eab308", "power_cable": "#a855f7"}
-# первая версия по техническому приложению от 18.09.2026: на графике только она и следующие
 FIRST_1809 = (0, 5, 0)
 MEETING = (0, 10, 0)
 
@@ -54,7 +45,6 @@ def hero(inp_path, out_path):
                     ys.append(y)
     margin = 220
     minx, maxx, miny, maxy = min(xs) - margin, max(xs) + margin, min(ys) - margin, max(ys) + margin
-    # вписать в холст с сохранением пропорций
     s = min((W - 2 * PAD) / (maxx - minx), (H - 2 * PAD - 44) / (maxy - miny))
     cx, cy = (minx + maxx) / 2, (miny + maxy) / 2
 
@@ -150,7 +140,6 @@ def hero(inp_path, out_path):
 def versions():
     text = open("CHANGELOG.md", encoding="utf-8").read()
     rows = re.findall(r"^\| (v[\d.]+) \| [^|]+ \| ([\d,]+) \| ([\d,]+) \| (\d+) \|", text, re.MULTILINE)
-    # только версии по правилам 18.09: прежние S считались по другой модели стоимости и несравнимы
     rows = [r for r in reversed(rows) if tuple(int(x) for x in r[0][1:].split(".")) >= FIRST_1809]
     if not rows:
         sys.exit("в CHANGELOG.md нет таблицы версий")
@@ -158,7 +147,6 @@ def versions():
     left, right, top, bottom = 56, 24, 48, 36
     w, h = max(760, left + right + 72 * len(vals)), 300
     top_s = 5 * (int(max(v[1] for v in vals) * 1.1 / 5) + 1)
-    # один-два столбца не растягиваются на всю ширину: колонка не шире 120 px
     bw = min((w - left - right) / len(vals), 120)
     parts = []
     for i in range(5):
@@ -195,7 +183,6 @@ def versions():
 
 
 def city():
-    """Столбцы времени расчёта файла «город» по версиям из таблицы «Город» в CHANGELOG.md; подпись — подключено и память."""
     text = open("CHANGELOG.md", encoding="utf-8").read()
     rows = re.findall(r"^\| (v[\d.]+) \| ([\d ]+) \| [\d ]+ \| (\d+) \| ([\d,]+) \|", text, re.MULTILINE)
     if not rows:

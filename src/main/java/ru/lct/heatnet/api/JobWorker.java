@@ -35,19 +35,16 @@ import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.plan.VariantEnumerator;
 import ru.lct.heatnet.rules.Rules;
 
-/** Выполняет задачи в пуле потоков; каждая смена статуса сохраняется отдельной короткой транзакцией. */
 @Profile("!cli")
 @Component
 public class JobWorker {
     static final int MAX_STORED_ERRORS = 1000;
-    // Точные десятичные: сводка в API совпадает с числами выходного файла, 12.30 не превращается в 12.3.
     private static final Rules RULES = Rules.load();
     static final ObjectMapper JSON = new ObjectMapper()
             .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
             .setNodeFactory(JsonNodeFactory.withExactBigDecimals(true));
 
     private static final Logger log = LoggerFactory.getLogger(JobWorker.class);
-    /** Пустой файл в каталоге задачи: считать в режиме с учётом глубины (POST /api/v1/jobs?depth=true). */
     static final String DEPTH_FLAG = "depth.flag";
 
     private final JobRepository jobs;
@@ -63,7 +60,6 @@ public class JobWorker {
         executor.initialize();
     }
 
-    // Выполняется до старта веб-сервера, поэтому не заденет задачи, принятые уже после рестарта.
     @PostConstruct
     void failInterrupted() {
         List<JobEntity> stale = jobs.findByStatusIn(List.of(JobEntity.Status.QUEUED, JobEntity.Status.RUNNING));
@@ -118,7 +114,6 @@ public class JobWorker {
             jobs.save(job);
             log.info("jobs: job {} done", id);
         } catch (Exception | OutOfMemoryError | StackOverflowError e) {
-            // Ошибки JVM в расчёте тоже закрывают задачу, иначе она навсегда останется RUNNING.
             log.error("jobs: job {} failed", id, e);
             String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             finishFailed(job, new ApiError("Ошибка обработки задачи: " + reason, List.of()));
@@ -145,8 +140,6 @@ public class JobWorker {
         return byVariant;
     }
 
-    // Сводки берутся из готового файла, чтобы API отдавал ровно те поля и числа, что записаны в результат. Рядом
-    // кладутся дополнительные критерии варианта: в файл результата они не пишутся.
     private static String summaries(Path output, Map<String, Map<String, Object>> criteria) throws IOException {
         ArrayNode summaries = JSON.createArrayNode();
         try (JsonParser parser = JSON.getFactory().createParser(output.toFile())) {

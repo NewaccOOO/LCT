@@ -1,4 +1,3 @@
-"""Checks a synthetic input GeoJSON on its own, without generator code."""
 import argparse
 import json
 import math
@@ -57,7 +56,6 @@ RESTRICTION_GEOMETRY = (
     | {kind: {"Point"} for kind in POINT_TYPES}
 )
 DEFAULT_TYPES = ("park", "social_area", "prohibited_site", "water", "road", "tram_tracks", "gas_pipeline", "power_cable")
-# формат датасета организаторов: у сети только диаметр, здания — ограничения oks, расход ОКС на точке подключения
 SCHEMA = {
     "source": ({"Point"}, {"id", "object_type"}),
     "heat_network": ({"LineString"}, {"id", "object_type", "diameter"}),
@@ -80,7 +78,6 @@ def fail(section: str, errors: list[str]) -> None:
 
 
 def read_features(path: Path) -> Iterator[Any]:
-    """Streams features one by one so a 300 MB file never sits in memory as objects."""
     decoder = json.JSONDecoder()
     with path.open(encoding="utf-8") as file:
         buffer = file.read(CHUNK_CHARS)
@@ -202,7 +199,6 @@ def check_schema(path: Path, keep_restrictions: bool, dns: set[int], types: list
 
 
 def check_network(stored: Stored, capacities: dict[int, float]) -> None:
-    """Направление сети выводится обходом от источника по стыкам концов, как это делают сервис и валидатор."""
     errors = []
     source_props, source_point = stored["source"][0]
     segments = stored["heat_network"]
@@ -266,7 +262,6 @@ def too_close(left: list[tuple[str, BaseGeometry]], right: list[tuple[str, BaseG
 
 
 def existing_flow(capacities: dict[int, float], share: float, dn: int) -> float:
-    """Текущий расход участка, который выводят сервис и валидатор: cap(Ду-1) + share × (cap(Ду) − cap(Ду-1))."""
     previous = max((capacity for other, capacity in capacities.items() if other < dn), default=0.0)
     return previous + share * (capacities[dn] - previous)
 
@@ -317,7 +312,6 @@ def check_medium(stored: Stored, capacities: dict[int, float], share: float) -> 
     if crossed < MEDIUM_MIN_CROSSED:
         errors.append(f"дорога или трамвайные пути на прямой к сети у {crossed} ОКС, нужно не меньше {MEDIUM_MIN_CROSSED}")
 
-    # the gaps below keep a corridor around every obstacle, so each OKS has a detour
     polygons = forbid + crossing + future
     network = [(f"heat_network {props['id']!r}", line) for props, line in segments]
     points = [(f"oks_connection_point {props['id']!r}", point) for props, point in stored["oks_connection_point"]]

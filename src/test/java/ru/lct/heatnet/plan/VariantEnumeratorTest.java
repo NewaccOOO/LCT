@@ -55,7 +55,6 @@ class VariantEnumeratorTest {
 
     @Test
     void twoRunsGiveIdenticalResult() {
-        // поиск ограничен только бюджетом сборок, без стенных часов: два прогона совпадают до копейки
         PlanFixture fixture = PlanFixture.trunk().oks("o-1", 100, 150, 5).oks("o-2", 500, 150, 5).oks("o-3", 300, 120, 8);
 
         Result first = new VariantEnumerator(fixture.input(), rules).run();
@@ -71,9 +70,17 @@ class VariantEnumeratorTest {
     }
 
     @Test
+    void groupOverLargestCapacityIsSplitInsteadOfFailing() {
+        PlanFixture fixture = PlanFixture.trunk().oks("o-1", 100, 150, 9000).oks("o-2", 160, 150, 9000).oks("o-3", 220, 150, 9000);
+
+        List<Variant> variants = new VariantEnumerator(fixture.input(), rules).run().getVariants();
+
+        assertFalse(variants.isEmpty());
+        assertTrue(variants.get(0).getSummary().getUnconnectedOksIds().isEmpty());
+    }
+
+    @Test
     void tieShiftedAlongSamePipeIsNotSecondVariant() {
-        // у ОКС одна ближайшая врезка — перпендикуляр на трубу; врезка дальше по той же трубе даёт ту же трассу со
-        // смещением (разд. 6), и второго варианта нет
         PlanFixture fixture = new PlanFixture().pipe("hn-1", 0, 0, 400, 0, 200, 100, "src").oks("o-1", 200, 60, 30);
 
         List<Variant> variants = new VariantEnumerator(fixture.input(), rules).run().getVariants();
@@ -137,7 +144,7 @@ class VariantEnumeratorTest {
         TieCandidate tie = finder.find(List.of(connection.getGeometry()), 100).get(0);
         Coordinate root = tie.getPoint().getCoordinate();
         Tree tree = new Tree(tie);
-        List<Coordinate> line = new ArrayList<>(List.of(root));
+        List<Coordinate> line = new ArrayList<>(List.of(root, new Coordinate(root.x + Math.signum(at.x - root.x) / 2, root.y + 3)));
         if (dx != 0 || dy != 0) {
             line.add(new Coordinate(at.x + dx, root.y + dy / 2));
             line.add(new Coordinate(at.x + dx, at.y - 10));
@@ -149,7 +156,6 @@ class VariantEnumeratorTest {
 
     @Test
     void chamberAtPipeEndAndPipeGiveTwoDifferentVariants() {
-        // у ОКС одна ближайшая врезка — камера на конце трубы; врезка в саму трубу — другой объект врезки
         PlanFixture fixture = new PlanFixture().pipe("hn-1", 0, 0, 300, 0, 150, 50, "src")
                 .chamber("hc-1", 300, 0, 150, "hn-1").oks("o-1", 305, 80, 10);
 
@@ -162,17 +168,35 @@ class VariantEnumeratorTest {
 
     @Test
     void secondVariantWhenAlternativeTieInsOnlySwapChambers() {
-        // у каждого ОКС своя камера рядом, другая врезка каждого ОКС — камера соседа: все другие врезки разом дают
-        // тот же набор камер, отличный вариант получается сменой врезки у одного ОКС
-        PlanFixture fixture = new PlanFixture().pipe("hn-1", 0, 0, 400, 0, 200, 60, "src")
-                .chamber("hc-1", 400, 0, 200, "hn-1").pipe("hn-2", 400, 0, 1000, 0, 150, 30, "hc-1")
-                .chamber("hc-2", 1000, 0, 150, "hn-2").oks("o-1", 405, 60, 8).oks("o-2", 1000, -90, 6);
-
-        List<Variant> variants = new VariantEnumerator(fixture.input(), rules).run().getVariants();
+        List<Variant> variants;
+        try {
+            System.setProperty(VariantEnumerator.BALLAST_PROPERTY, "100");
+            variants = new VariantEnumerator(swappedChambers().input(), rules).run().getVariants();
+        } finally {
+            System.clearProperty(VariantEnumerator.BALLAST_PROPERTY);
+        }
 
         assertTrue(variants.size() >= 2, "вариантов " + variants.size());
         assertTrue(differ(variants.get(0), variants.get(1)), "варианты 1 и 2 не различаются");
         assertTrue(variants.stream().allMatch(v -> v.getSummary().getUnconnectedOksIds().isEmpty()));
+    }
+
+    @Test
+    void variantsMuchCostlierThanBestAreNotShown() {
+        List<Variant> variants = new VariantEnumerator(swappedChambers().input(), rules).run().getVariants();
+
+        assertFalse(variants.isEmpty());
+        double best = variants.get(0).getSummary().getScore();
+        for (Variant variant : variants) {
+            assertTrue(variant.getSummary().getScore() <= 1.3 * best, "вариант " + variant.getId() + ": S "
+                    + variant.getSummary().getScore() + " при лучшем " + best);
+        }
+    }
+
+    private static PlanFixture swappedChambers() {
+        return new PlanFixture().pipe("hn-1", 0, 0, 400, 0, 200, 60, "src")
+                .chamber("hc-1", 400, 0, 200, "hn-1").pipe("hn-2", 400, 0, 1000, 0, 150, 30, "hc-1")
+                .chamber("hc-2", 1000, 0, 150, "hn-2").oks("o-1", 405, 60, 8).oks("o-2", 1000, -90, 6);
     }
 
     @Test
@@ -193,7 +217,6 @@ class VariantEnumeratorTest {
 
     @Test
     void oksWithoutRouteIsUnconnectedWithPenaltyAndOtherOksKept() {
-        // o-2 внутри кольца водоёма: выхода к сети нет ни при каком диаметре
         Polygon water = GEOMETRY.createPolygon(ring(420, 170, 580, 330), new LinearRing[] {ring(470, 220, 530, 280)});
         PlanFixture fixture = PlanFixture.trunk().oks("o-1", 100, 150, 5).oks("o-2", 500, 240, 7)
                 .restriction("water-1", water, "water");
@@ -214,7 +237,6 @@ class VariantEnumeratorTest {
 
     @Test
     void gapWideEnoughForOwnDiameterIsUsedInsteadOfLongDetour() {
-        // ОКС на 690 т/ч получает Ду 400: проём в стене из зданий пропускает его с отступом 5 м, но не Ду 500 с 7 м
         int dn = 400;
         double offset = rules.restriction("oks_existing").clearanceM(dn) + rules.diameter(dn).getWidthM() / 2;
         double gap = 2 * offset + 2;
@@ -238,7 +260,6 @@ class VariantEnumeratorTest {
 
     @Test
     void outputIdsNeverRepeatInputIds() {
-        // ID входа устроены как выходные ID сервиса
         PlanFixture fixture = new PlanFixture().pipe("v1_seg_1", 0, 0, 500, 0, 150, 40, "src")
                 .chamber("v2_ch_1", 500, 0, 150, "v1_seg_1").oks("v1_tie_1", 250, 90, 10)
                 .restriction("summary_1", PlanFixture.rect(900, 900, 910, 910), "park");
@@ -294,7 +315,6 @@ class VariantEnumeratorTest {
         assertTrue(c[c.length - 2].y < 40, "финальный участок через южную сторону: " + last.getGeometry());
     }
 
-    /** Как у сервиса и check18 (разд. 6): у одного из двух не больше 90 % длины меньшего в полосе 10 м от другого. */
     private static boolean differ(Variant a, Variant b) {
         Geometry lineA = lines(a);
         Geometry lineB = lines(b);

@@ -26,7 +26,6 @@ public class JobEntity {
     private Instant createdAt;
     private Instant startedAt;
     private Instant finishedAt;
-    // JSON хранится строкой: в Hibernate 5.6 нет типа jsonb, приведение делает сама база.
     @Column(columnDefinition = "jsonb")
     @ColumnTransformer(write = "?::jsonb")
     private String error;

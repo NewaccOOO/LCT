@@ -8,7 +8,6 @@ import ru.lct.heatnet.model.NewSegment;
 import ru.lct.heatnet.model.VariantSummary;
 import ru.lct.heatnet.rules.Rules;
 
-/** Стоимость по разделу 6 технического приложения от 18.09.2026: участки, камеры, врезки, штраф, S. */
 public final class CostCalculator {
     private final Rules rules;
 
@@ -28,7 +27,6 @@ public final class CostCalculator {
         return rules.chamberCost(dn);
     }
 
-    /** Врезка нового участка в существующую камеру. */
     public double tieInCost() {
         return rules.tieInCost();
     }
@@ -41,7 +39,6 @@ public final class CostCalculator {
         return round2(sum);
     }
 
-    /** Сводка варианта, rank = 0 до ранжирования; existingTieIns — число новых участков, заканчивающихся в существующих камерах. */
     public VariantSummary summary(String id, String variantId, List<NewSegment> segments, List<NewChamber> chambers,
             int existingTieIns, List<FutureOks> unconnected) {
         double segmentCost = 0;
@@ -64,8 +61,6 @@ public final class CostCalculator {
         double penalty = penalty(unconnected);
         double calculatedCost = round2(constructionCost + penalty);
         newNetworkLength = round2(newNetworkLength);
-        // четыре знака, как в примере п. 7.3 приложения 18.09 (0,6913); поиск сравнивает черновики с округлением до
-        // 0,001, см. VariantEnumerator.searchScore
         double score = Math.round(rules.score(calculatedCost, newNetworkLength) * 10000) / 10000.0;
         return new VariantSummary(id, variantId, 0, constructionCost, chamberConstructionCost, existingTieIns, tieInCost,
                 penalty, calculatedCost, newNetworkLength, score, unconnectedIds);

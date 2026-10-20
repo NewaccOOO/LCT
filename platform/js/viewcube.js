@@ -1,6 +1,3 @@
-// ViewCube как в продуктах Autodesk: грань — вид с этой стороны, ребро и угол — вид под 45°,
-// перетаскивание куба вращает сцену, кольцо компаса с «С» — повернуть на север.
-// Стороны названы по сторонам света: инженер привязывает трассу к местности, а не к «Front/Right».
 import * as THREE from 'three';
 
 const FACES = [
@@ -43,7 +40,6 @@ function letterTexture(ch, color) {
 }
 
 export class ViewCube {
-  /** host — контейнер; hooks: {orient(dir: Vector3, name), orbit(dx, dy), north(), home()} */
   constructor(host, mainCamera, hooks) {
     this.main = mainCamera;
     this.hooks = hooks;
@@ -71,7 +67,6 @@ export class ViewCube {
     }
     const edges = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(2.002, 2.002, 2.002)), new THREE.LineBasicMaterial({color: 0xbdbdbd}));
     this.scene.add(edges);
-    // компас под кубом
     const ring = new THREE.Mesh(new THREE.RingGeometry(1.7, 1.95, 64), new THREE.MeshBasicMaterial({color: 0x9e9e9e, transparent: true, opacity: 0.85, side: THREE.DoubleSide}));
     ring.position.z = -1.1;
     this.scene.add(ring);
@@ -93,11 +88,9 @@ export class ViewCube {
   }
 
   update() {
-    // камера куба повторяет поворот главной камеры
     this.camera.quaternion.copy(this.main.quaternion);
     this.camera.position.set(0, 0, 10.2).applyQuaternion(this.main.quaternion);
     this.camera.updateMatrixWorld();
-    // буквы компаса всегда лицом к камере
     for (const l of this.letters) l.quaternion.copy(this.camera.quaternion);
     this.renderer.render(this.scene, this.camera);
   }

@@ -5,7 +5,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Predicate;
 import org.locationtech.jts.algorithm.Distance;
 import org.locationtech.jts.algorithm.RayCrossingCounter;
 import org.locationtech.jts.geom.Coordinate;
@@ -27,38 +26,21 @@ import ru.lct.heatnet.rules.Diameter;
 import ru.lct.heatnet.rules.RestrictionRule;
 import ru.lct.heatnet.rules.Rules;
 
-/** Объекты со специальным проходом: дороги и пути, газопроводы, кабели и существующая сеть. */
 final class SpecialObjects {
-    /** Запас к отступу, чтобы узел не встал на самой границе зоны сближения. */
     private static final double NEAR_EXTRA_M = 0.1;
-    /** Сторон в куске с общей рамкой, см. Special#chunks. */
     private static final int CHUNK = 8;
 
     static final class Special {
         final Geometry geometry;
         final boolean polygon;
-        /**
-         * Зона как у полигона дороги (табл. 2: «полигон и по 3 м за границей»): у полигона и у линии с минимальным
-         * углом пересечения — дороги или путей, заданных осью, то есть полигоном нулевой ширины. Обычный участок за
-         * такой зоной держит отступ от объекта, см. NetworkAssembler.polygonZone.
-         */
         final boolean band;
         final boolean network;
         final RestrictionRule rule;
-        /** Полуширина самого объекта: половина ширины существующей трубы или half_width_m линии. */
         final double halfWidth;
-        /** Высота габарита существующей трубы по Ду (табл. 1), у ограничений 0: для режима с глубиной. */
         final double height;
-        /** Объект зоны band для быстрой проверки, задевает ли его ребро: наложение JTS считается только тогда. */
         final PreparedGeometry prepared;
-        /** Стороны линейного объекта или колец полигона. */
         final LineSegment[] sides;
-        /**
-         * Рамки кусков по CHUNK сторон подряд: minX, minY, maxX, maxY. У магистрали города сотни сторон, а рамка
-         * куска отбрасывает разом все его стороны вдали от отрезка.
-         */
         private final double[] chunks;
-        /** Буферы объекта по отступу для проверки участка у пересечения, см. NetworkAssembler.nearCrossing. */
         final Map<Double, Geometry> buffers = new java.util.concurrent.ConcurrentHashMap<>();
 
         Special(Geometry geometry, boolean network, RestrictionRule rule, double halfWidth) {
@@ -87,23 +69,14 @@ final class SpecialObjects {
             }
         }
 
-        /** Рамка куска сторон c (номер в chunks, кратный 4). */
         private Envelope chunk(int c) {
             return new Envelope(chunks[c], chunks[c + 2], chunks[c + 1], chunks[c + 3]);
         }
 
-        /**
-         * То же, что geometry.isWithinDistance(point, distance). У линии расстояние считается только до сторон, чья
-         * рамка не дальше distance: у магистрали города сотни сторон, а точки вдоль нового участка идут через 0,5 м.
-         */
         boolean within(Point point, double distance) {
             return within(point, distance, sides);
         }
 
-        /**
-         * within по части сторон: остальные заведомо дальше distance от точки. Точка внутри полигона или на его
-         * границе ближе любого distance, как у DistanceOp: ей ноль.
-         */
         boolean within(Point point, double distance, LineSegment[] near) {
             if (geometry.getEnvelopeInternal().distance(point.getEnvelopeInternal()) > distance) {
                 return false;
@@ -122,7 +95,6 @@ final class SpecialObjects {
             return false;
         }
 
-        /** Точка внутри полигона или на границе, по всем кольцам сразу, как IndexedPointInAreaLocator. */
         boolean inside(Coordinate c) {
             RayCrossingCounter counter = new RayCrossingCounter(c);
             for (LineSegment side : sides) {
@@ -134,11 +106,6 @@ final class SpecialObjects {
             return counter.getLocation() != Location.EXTERIOR;
         }
 
-        /**
-         * Расстояние от линии до объекта меньше limit — то же, что line.distance(geometry) < limit, но пары отрезков
-         * с рамками дальше limit не считаются: у магистрали сотни сторон. Первая точка линии внутри полигона — ноль,
-         * как у DistanceOp.
-         */
         boolean closer(LineString line, double limit) {
             if (line.getEnvelopeInternal().distance(geometry.getEnvelopeInternal()) >= limit) {
                 return false;
@@ -150,7 +117,6 @@ final class SpecialObjects {
             for (int i = 0; i + 1 < coords.length; i++) {
                 Envelope piece = new Envelope(coords[i], coords[i + 1]);
                 for (int c = 0; c < chunks.length; c += 4) {
-                    // рамка стороны внутри рамки куска и не ближе её к отрезку
                     if (piece.distance(chunk(c)) >= limit) {
                         continue;
                     }
@@ -166,16 +132,11 @@ final class SpecialObjects {
             return false;
         }
 
-        /**
-         * Линия задевает линейный объект: какой-то её отрезок пересекает какую-то сторону. Без этого пересечение
-         * линий пусто, и наложение JTS в зоне спецперехода можно не считать.
-         */
         boolean crossedBy(LineString line) {
             Coordinate[] coords = line.getCoordinates();
             for (int i = 0; i + 1 < coords.length; i++) {
                 Envelope piece = new Envelope(coords[i], coords[i + 1]);
                 for (int c = 0; c < chunks.length; c += 4) {
-                    // meet сначала сравнивает рамки: стороны куска, чья рамка не задевает отрезок, не пересекаются с ним
                     if (!piece.intersects(chunk(c))) {
                         continue;
                     }
@@ -217,7 +178,6 @@ final class SpecialObjects {
         }
         for (Restriction restriction : input.getRestrictions()) {
             RestrictionRule rule = rules.restriction(restriction.getType());
-            // точечный объект со специальным проходом обходится как запрет, см. ObstacleSet
             if (!rule.forbid() && restriction.getGeometry().getDimension() > 0) {
                 double halfWidth = restriction.getGeometry().getDimension() < 2 && rule.getHalfWidthM() != null
                         ? rule.getHalfWidthM() : 0;
@@ -234,7 +194,6 @@ final class SpecialObjects {
         index.build();
     }
 
-    /** Точка ближе отступа к какому-либо объекту со специальным проходом для диаметра dn. */
     boolean near(Coordinate c, int dn) {
         Point point = factory.createPoint(c);
         for (Special special : around(point, dn)) {
@@ -245,41 +204,6 @@ final class SpecialObjects {
         return false;
     }
 
-    /**
-     * То же, что near, для многих точек одной линии: объекты и их стороны отбираются один раз по рамке линии с
-     * запасом, до которого near вообще смотрит. Сборка проверяет точки нового участка через 0,5 м, а у магистрали
-     * города сотни сторон.
-     */
-    Predicate<Coordinate> nearAlong(Geometry line, int dn) {
-        Envelope reach = new Envelope(line.getEnvelopeInternal());
-        reach.expandBy(maxClearance(dn) + rules.diameter(dn).getWidthM() / 2 + maxHalfWidth + NEAR_EXTRA_M);
-        List<Special> candidates = around(line, dn);
-        List<LineSegment[]> sides = new ArrayList<>();
-        for (Special special : candidates) {
-            List<LineSegment> near = new ArrayList<>();
-            for (LineSegment side : special.sides) {
-                if (reach.intersects(side.p0, side.p1)) {
-                    near.add(side);
-                }
-            }
-            sides.add(near.toArray(new LineSegment[0]));
-        }
-        return c -> {
-            Point point = factory.createPoint(c);
-            for (int i = 0; i < candidates.size(); i++) {
-                Special special = candidates.get(i);
-                if (special.within(point, clearance(special, dn) + NEAR_EXTRA_M, sides.get(i))) {
-                    return true;
-                }
-            }
-            return false;
-        };
-    }
-
-    /**
-     * Объекты, чья рамка задевает рамку envelope: зона сборки начинается там, где ребро пересекает объект, и идёт
-     * через узлы в соседние рёбра.
-     */
     List<Special> zonesNear(Envelope envelope) {
         List<Special> result = new ArrayList<>();
         for (Object item : index.query(envelope)) {
@@ -288,7 +212,6 @@ final class SpecialObjects {
         return result;
     }
 
-    /** Объекты, до которых от геометрии может не хватить отступа для диаметра dn. */
     List<Special> around(Geometry geometry, int dn) {
         Envelope envelope = new Envelope(geometry.getEnvelopeInternal());
         envelope.expandBy(maxClearance(dn) + rules.diameter(dn).getWidthM() / 2 + maxHalfWidth + NEAR_EXTRA_M);
@@ -299,7 +222,6 @@ final class SpecialObjects {
         return result;
     }
 
-    /** Отступ оси нового участка от оси или границы объекта: clearance + width/2 + полуширина объекта. */
     double clearance(Special special, int dn) {
         return special.rule.clearanceM(dn) + rules.diameter(dn).getWidthM() / 2 + special.halfWidth;
     }

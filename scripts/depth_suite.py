@@ -1,13 +1,3 @@
-"""Набор датасетов для проверки режима глубины: по одному трудному случаю на файл.
-
-Мир у всех один (как в scripts/depth_world.py): существующая теплосеть по оси x (y = 0) от источника, ОКС — квадраты
-15×15 м по другую сторону улицы, точка подключения в 1 м внутри от южной стороны (как в датасете организаторов; на
-самой границе 2D при Ду >= 500 трассу не находит — отдельная задача 2D); между ними объекты с вертикальными требованиями
-табл. 2 (газ, кабель, существующая сеть) и полосы дороги и трамвая. Линии и полосы идут на всю ширину с запасом: обойти
-их 2D-трасса не может. Все объекты "_source": "synthetic". Что проверяет каждый случай — в CASES.
-
-Использование: python3 scripts/depth_suite.py <папка>   (пишет <папка>/<случай>.geojson и <папка>/README.md)
-"""
 import json
 import os
 import sys
@@ -16,11 +6,8 @@ from pyproj import Transformer
 
 TO_WGS = Transformer.from_crs("EPSG:32637", "EPSG:4326", always_xy=True).transform
 X0, Y0 = Transformer.from_crs("EPSG:4326", "EPSG:32637", always_xy=True).transform(37.60, 55.75)
-# расходы под Ду (табл. 1): малый Ду 100–150, Ду 500, Ду 900, Ду 1000, Ду 1200, Ду 1400. Ду 1200–1400 через дорогу или
-# трамвай 2D-расчёт сейчас не проводит (no_route, отдельная задача 2D): такие пересечения проверяются при Ду 900–1000
 SMALL, D500, D900, D1000, D1200, D1400 = 40.0, 1500.0, 6000.0, 8500.0, 12000.0, 18000.0
 
-# случай: (что проверяет, ОКС [(x, y, расход)], объекты [(тип, y | (x0, y0, x1, y1), полуширина полосы или 0)])
 CASES = {
     "01_gas_far": ("газ далеко от узлов: «над» помещается, Kгл = 1, профиль только мельче 3,0 м",
                    [(100, 100, SMALL)], [("gas_pipeline", 50, 0)]),
@@ -91,14 +78,13 @@ def build(oks, objects, width=200):
         ring = [wgs(x - 7.5, y), wgs(x + 7.5, y), wgs(x + 7.5, y + 15), wgs(x - 7.5, y + 15), wgs(x - 7.5, y)]
         add({"object_type": "restriction", "restriction_type": "oks"}, {"type": "MultiPolygon", "coordinates": [[ring]]})
         add({"object_type": "oks_connection_point", "flow_tph": flow}, {"type": "Point", "coordinates": wgs(x, y + 1)})
-    lo, hi = -3000, width + 3000  # объезд полосы по краю дороже любого пересечения
+    lo, hi = -3000, width + 3000
     for kind, where, half in objects:
         x0, y0, x1, y1 = where if isinstance(where, tuple) else (lo, where, hi, where)
         if half:
             ring = [wgs(x0, y0 - half), wgs(x1, y1 - half), wgs(x1, y1 + half), wgs(x0, y0 + half), wgs(x0, y0 - half)]
             add({"object_type": "restriction", "restriction_type": kind}, {"type": "Polygon", "coordinates": [ring]})
         elif kind == "heat_network":
-            # вторая существующая сеть между улицей и ОКС
             add({"object_type": "heat_network", "diameter": 300, "_synthetic": True},
                 {"type": "LineString", "coordinates": [wgs(x0, y0), wgs(x1, y1)]})
         else:

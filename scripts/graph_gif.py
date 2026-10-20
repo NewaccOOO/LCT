@@ -1,16 +1,10 @@
 #!/usr/bin/env python3
-"""GIF для README: как строится граф видимости и маршрут, шаг за шагом в темпе для человека.
-
-Запуск из корня: uv run --project tools python scripts/graph_gif.py
-Сцена и расчёт — graph_scene из docs_assets.py (та же, что на graph-steps.svg). Пишет docs/assets/graph-build.gif.
-"""
 from PIL import Image, ImageDraw, ImageFont
 from shapely.geometry import Polygon
 
 from docs_assets import graph_scene
 
-W, H, SS = 1000, 660, 2  # кадр и коэффициент сглаживания (рисуем крупнее, уменьшаем)
-# сцена крупнее, чем на graph-steps.svg: три ряда зданий, точка подключения в одном углу, труба в другом
+W, H, SS = 1000, 660, 2
 BUILDINGS = [Polygon(p) for p in [
     [(20, 20), (70, 20), (70, 60), (20, 60)],
     [(90, 15), (150, 15), (150, 45), (125, 45), (125, 75), (90, 75)],
@@ -111,7 +105,7 @@ def frames():
         f.dot(*target, 6, None, BLUE)
         return f.done()
 
-    out = []  # (кадр, длительность мс)
+    out = []
     t1 = "1. Препятствия, точка подключения и врезка"
     f = base(t1, "здания и парк — препятствия; трасса идёт от точки подключения к врезке в трубу",
              extra=lambda f: (f.label(*start, "точка подключения", 10, -6), f.label(*target, "врезка", -14, 10, "ra"),

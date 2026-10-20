@@ -1,16 +1,4 @@
 #!/usr/bin/env python3
-"""Сцена для 3D-просмотра: вход и результат трассировки → scene.json + scene.bin.
-
-Запуск из корня:
-    python3 scripts/ui3d/prep.py IN.geojson OUT.geojson [--name moscow]
-    python3 -m http.server -d scripts/ui3d 8090   →   http://localhost:8090/?scene=moscow
-
-Геометрия переводится в метры вокруг центра набора и пишется плоскими Float32 (браузер берёт их как есть,
-без разбора JSON на каждый объект) — так держится город на сотни тысяч объектов.
-Заодно считаются пересечения новой сети с существующими коммуникациями и проверки по глубине (раздел 14
-CONSTRAINTS.md): просвет, минимальная глубина, глубина под дорогой, уклон. Глубина новой сети берётся
-из depth_start/depth_end; в 2D-результате их нет, тогда считается обычная 3,0 м.
-"""
 import argparse
 import json
 import math
@@ -25,8 +13,6 @@ NORMAL_DEPTH = 3.0
 MIN_DEPTH = 0.7
 MAX_SLOPE = 0.10
 
-# Таблица 2 и раздел 14: глубина до верха габарита, высота габарита, вертикальный просвет.
-# water_supply и sewer в правилах по глубине нет — показываем условно, без проверки просвета.
 UTILITIES = {
     "gas_pipeline": {"top": 2.8, "h": 0.40, "clear": 0.2, "label": "газопровод"},
     "power_cable": {"top": 2.7, "h": 0.20, "clear": 0.5, "label": "кабель до 35 кВ"},
@@ -34,7 +20,6 @@ UTILITIES = {
     "water_supply": {"top": 2.5, "h": 0.30, "clear": None, "label": "водопровод (условно)"},
     "sewer": {"top": 3.5, "h": 0.40, "clear": None, "label": "канализация (условно)"},
 }
-# Под полигоном: верх новой сети не мельче, м; зона = полигон + 3 м (здесь — сам полигон, ponytail: без буфера 3 м)
 UNDER = {"road": 1.0, "tram_tracks": 1.2}
 POLYGONS = ["oks_existing", "oks_future", "road", "tram_tracks", "railway", "metro", "park", "social_area",
             "water", "prohibited_site"]
@@ -42,7 +27,6 @@ CELL = 50.0
 
 
 def dn_row(dn):
-    """Строка Таблицы 1 по Ду; Ду вне таблицы — ближайший больший."""
     for d in DN:
         if dn is not None and d["dn"] >= dn:
             return d
@@ -64,7 +48,6 @@ def rings_of(g):
 
 
 class Layer:
-    """Плоский набор путей/полигонов/точек: позиции подряд, начало каждого объекта, id для подсказки."""
 
     def __init__(self, kind, dim=2):
         self.kind, self.dim = kind, dim
@@ -80,7 +63,6 @@ class Layer:
 
 
 def seg_x(a, b, c, d):
-    """Точка пересечения отрезков ab и cd: (t по ab, x, y) или None."""
     rx, ry, sx, sy = b[0] - a[0], b[1] - a[1], d[0] - c[0], d[1] - c[1]
     den = rx * sy - ry * sx
     if abs(den) < 1e-12:
@@ -137,8 +119,8 @@ def main():
     def layer(key, kind, dim=2):
         return layers.setdefault(key, Layer(kind, dim))
 
-    grid = {}  # клетка → [(тип, id, a, b, top, h)] для поиска пересечений
-    zones = {t: [] for t in UNDER}  # полигоны дорог и путей: (bbox, ring)
+    grid = {}
+    zones = {t: [] for t in UNDER}
     for f in fin:
         p, g = f.get("properties") or {}, f.get("geometry")
         if not g:
@@ -173,7 +155,6 @@ def main():
             for c in cells((x0, y0), (x1, y1)):
                 zgrid.setdefault(c, []).append((rt, z))
 
-    # Результат: участки 3D (z = −глубина до оси, в метрах), узлы, сводки
     props, summaries, by_id = [], [], {}
     for f in fout:
         p = f.get("properties") or {}
@@ -208,7 +189,6 @@ def main():
         layer("o:heat_network", "path", 3).add([(q[0], q[1], z) for q, z in zip(pts, zc)], idx)
         segs.append(idx)
 
-        # пересечения: не считаем трубу, в которую сделана врезка на концах участка
         tied = {(by_id.get(p.get(e)) or {}).get("existing_object_id") for e in ("start_node_id", "end_node_id")}
         seen = set()
         slope = abs(d1 - d0) / total
@@ -231,7 +211,7 @@ def main():
                 seen.add((rt, eid, round(hit[1], 1), round(hit[2], 1)))
                 s = lens[i] + hit[0] * (lens[i + 1] - lens[i])
                 if rt == "heat_network" and min(s, total - s) <= 0.05:
-                    continue  # новая камера врезки стоит на трубе: касание в конце участка, а не пересечение
+                    continue
                 hn = d0 + (d1 - d0) * s / total
                 u = UTILITIES[rt]
                 over, under = top - (hn + row["height_m"]), hn - (top + eh)
@@ -244,12 +224,10 @@ def main():
                     "seg": idx, "v": v, "x": round(hit[1], 2), "y": round(hit[2], 2), "s": round(s, 2),
                     "type": rt, "eid": eid, "top": top, "eh": eh, "hn": round(hn, 3), "H": row["height_m"],
                     "side": side, "gap": round(gap, 3), "need": u["clear"], "ok": ok,
-                    # чем можно пройти: «над» не глубже above_max (и не мельче 0,7), «под» не мельче below_min
                     "above": round(above_max, 3) if above_max is not None and above_max >= MIN_DEPTH else None,
                     "below": round(below_min, 3) if below_min is not None else None,
                     "k_below": round(k_depth(below_min), 3) if below_min is not None else None,
                 })
-            # зоны дорог и трамвая: проверяем середину и концы отрезка
             for q, sq in ((a, lens[i]), (b, lens[i + 1]), (((a[0] + b[0]) / 2, (a[1] + b[1]) / 2), (lens[i] + lens[i + 1]) / 2)):
                 for rt, ((x0, y0, x1, y1), ring) in zgrid.get((int(q[0] // CELL), int(q[1] // CELL)), ()):
                     if x0 <= q[0] <= x1 and y0 <= q[1] <= y1 and in_ring(q[0], q[1], ring):
@@ -261,7 +239,6 @@ def main():
             crossings.append({"seg": idx, "v": v, "x": round(pts[0][0], 2), "y": round(pts[0][1], 2), "s": 0,
                               "type": "segment", "eid": p.get("id"), "ok": False, "issues": sorted(set(issues))})
 
-    # бинарник: слои подряд, каждый — позиции Float32 и начала Uint32, выравнивание по 4 байта
     blob, meta = bytearray(), []
     for key, L in layers.items():
         entry = {"key": key, "kind": L.kind, "dim": L.dim, "count": len(L.ids), "ids": L.ids}
@@ -297,7 +274,6 @@ def selfcheck():
     assert not in_ring(2, 2, [(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)])
     assert dn_row(300)["height_m"] == 0.45 and dn_row(350)["dn"] == 400
     assert abs(k_depth(4.21) - 1.121) < 1e-9 and k_depth(2.0) == 1.0
-    # газ: верх 2,8, габарит 0,4; новая Ду 300 на 3,0 → просвет снизу 3,0 − 3,2 < 0 — конфликт
     assert 3.0 - (2.8 + 0.4) < 0.2
 
 

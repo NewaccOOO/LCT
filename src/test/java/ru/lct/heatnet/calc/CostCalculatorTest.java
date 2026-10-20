@@ -16,11 +16,8 @@ class CostCalculatorTest {
 
     @Test
     void segmentCostOrdinaryAndSpecial() {
-        // длина сначала округляется до 0,01: 100,004 -> 100,00; 100 × 78 631 × 1
         assertEquals(7_863_100.0, cost.segmentCost(100.004, 65, 1.0), EPS);
-        // 120,5 × 74 023 × 1,6 = 14 271 634,4
         assertEquals(14_271_634.4, cost.segmentCost(120.5, 50, 1.6), EPS);
-        // 33,333 -> 33,33; 33,33 × 120 275 × 1,05 = 4 008 765,75 × 1,05 = 4 209 204,0375 -> 4 209 204,04
         assertEquals(4_209_204.04, cost.segmentCost(33.333, 200, 1.05), EPS);
     }
 
@@ -39,7 +36,6 @@ class CostCalculatorTest {
 
     @Test
     void penaltySumsOverUnconnectedOks() {
-        // (100 000 000 + 500 000 × 2,5) + (100 000 000 + 500 000 × 4) = 101 250 000 + 102 000 000
         assertEquals(203_250_000, cost.penalty(List.of(oks("o1", 2.5), oks("o2", 4.0))), EPS);
         assertEquals(0, cost.penalty(List.of()), EPS);
     }
@@ -56,16 +52,13 @@ class CostCalculatorTest {
         assertEquals("summary_1", summary.getId());
         assertEquals("1", summary.getVariantId());
         assertEquals(0, summary.getRank());
-        // 14 271 634,4 + 7 863 100 + камера 3 000 000 + две врезки по 5 000 000
         assertEquals(35_134_734.4, summary.getConstructionCost(), EPS);
         assertEquals(3_000_000, summary.getChamberConstructionCost(), EPS);
         assertEquals(2, summary.getExistingChamberTieInCount());
         assertEquals(10_000_000, summary.getExistingChamberTieInCost(), EPS);
-        assertEquals(101_250_000, summary.getUnconnectedPenalty(), EPS); // 100 000 000 + 500 000 × 2,5
+        assertEquals(101_250_000, summary.getUnconnectedPenalty(), EPS);
         assertEquals(136_384_734.4, summary.getCalculatedCost(), EPS);
         assertEquals(220.5, summary.getNewNetworkLength(), EPS);
-        // 0,7 × 136 384 734,4 / 25 000 000 + 0,3 × 220,5 / 100 = 3,8187725632 + 0,6615 = 4,48027… -> 4,4803, четыре
-        // знака, как в примере п. 7.3
         assertEquals(4.4803, summary.getScore(), EPS);
         assertEquals(List.of("o9"), summary.getUnconnectedOksIds());
     }
@@ -74,7 +67,6 @@ class CostCalculatorTest {
     void rankOrdersByScoreThenCost() {
         List<VariantSummary> summaries = List.of(summary(2.0, 10), summary(1.0, 50), summary(1.0, 30));
 
-        // score 1,0 у второго и третьего, дешевле третий
         assertEquals(List.of(2, 1, 0), Scorer.rank(summaries));
     }
 

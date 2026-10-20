@@ -18,20 +18,10 @@ import ru.lct.heatnet.model.ExistingOks;
 import ru.lct.heatnet.model.FutureOks;
 import ru.lct.heatnet.rules.Rules;
 
-/**
- * Перенос камеры ветвления готового дерева в точку рядом. Дерево растёт присоединением ветки в первой точке касания,
- * и камера стоит буквой Т; сдвиг в сторону равнодействующей рёбер камеры (вес ребра — цена метра по Ду его расхода
- * плюс цена длины в S) ведёт развилку к точке Штейнера. Каждое ребро камеры перекладывается из новой точки прямой к
- * самой дальней своей вершине, до которой прямая допустима по зонам графа дерева; одно ребро может идти и через
- * прежнюю точку камеры. Финальный участок к точке подключения внутри здания не меняется (п. 2.2). Точки пробуются по
- * оценке выигрыша, окончательно выбирает сборка по точному score.
- */
 final class JunctionMover {
-    /** Точки вокруг камеры: повороты от направления равнодействующей и расстояния, и точки на рёбрах камеры. */
     private static final double[] TURNS_DEG = {0, 20, -20, 40, -40, 60, -60, 90, -90};
     private static final double[] RADII_M = {1, 2, 3, 5, 7, 10, 13, 16, 20};
     private static final double[] ALONG_M = {1, 2, 3, 5, 7, 10, 15, 20, 30};
-    /** Перенос с оценкой выигрыша меньше этого (около 0,3 м трубы) не пробуется. */
     private static final double MIN_GAIN_RUB = 30_000;
     private static final double APART_M = 0.5;
 
@@ -49,7 +39,6 @@ final class JunctionMover {
         this.oksById = oksById;
     }
 
-    /** Камеры ветвления дерева в порядке рёбер. */
     static List<Tree.Node> junctions(Tree tree) {
         Set<Tree.Node> junctions = new LinkedHashSet<>();
         for (Tree.Edge edge : tree.edges) {
@@ -60,7 +49,6 @@ final class JunctionMover {
         return new ArrayList<>(junctions);
     }
 
-    /** Рёбра дерева у узла node в порядке рёбер дерева. */
     static List<Tree.Edge> incident(Tree tree, Tree.Node node) {
         List<Tree.Edge> incident = new ArrayList<>();
         for (Tree.Edge edge : tree.edges) {
@@ -71,12 +59,10 @@ final class JunctionMover {
         return incident;
     }
 
-    /** До limit деревьев с камерой junction в другой точке, по убыванию оценки выигрыша. */
     List<Tree> moves(Tree tree, Tree.Node junction, ObstacleSet obstacles, Envelope area, int dn, int limit) {
         Map<Tree.Edge, Double> rub = metreRub(tree);
         List<Tree.Edge> incident = incident(tree, junction);
         int count = incident.size();
-        // рёбра камеры от неё, цена метра, длина и конец, у которого финальный участок в здание не трогается
         Coordinate[][] lines = new Coordinate[count][];
         double[] price = new double[count];
         double[] old = new double[count];
@@ -110,8 +96,6 @@ final class JunctionMover {
                 points.add(new Coordinate(at.x + radius * Math.cos(angle), at.y + radius * Math.sin(angle)));
             }
         }
-        // оценка снизу: ребро из точки не короче прямой до своего дальнего конца. Точки идут по ней, и перебор
-        // кончается, когда она не лучше худшей из limit найденных
         double[] bound = new double[points.size()];
         List<Integer> order = new ArrayList<>();
         for (int i = 0; i < points.size(); i++) {
@@ -134,8 +118,6 @@ final class JunctionMover {
                 continue;
             }
             Map<Tree.Edge, Coordinate[]> laid = new IdentityHashMap<>();
-            // оценка по уже переложенным рёбрам и прямым для остальных: ребро длиннее своего запаса не даст точке
-            // обойти худшую из найденных
             double delta = bound[i];
             int through = 0;
             for (int e = 0; e < count; e++) {
@@ -143,7 +125,6 @@ final class JunctionMover {
                 double straight = point.distance(coords[coords.length - 1]);
                 Coordinate[] line = relay(tree, coords, inside[e], incident.get(e).from == tree.root, point, obstacles,
                         straight + (worst - delta) / price[e]);
-                // через прежнюю точку камеры идёт не больше одного ребра, иначе рёбра лягут друг на друга
                 if (line == null || line[1].equals2D(at) && through++ > 0) {
                     break;
                 }
@@ -173,21 +154,13 @@ final class JunctionMover {
         return result;
     }
 
-    /**
-     * Ребро coords (от камеры) из точки point вместо камеры: прямая к самой дальней вершине ребра, до которой она
-     * допустима, остаток ребра прежний. Вершина 0 — прежняя точка камеры: ребро идёт через неё. {@code inside} —
-     * ребро кончается в точке подключения внутри здания, {@code fromRoot} — ребро от врезки. null — ни одна прямая
-     * не годится или ребро выходит не короче budget.
-     */
     private Coordinate[] relay(Tree tree, Coordinate[] coords, boolean inside, boolean fromRoot, Coordinate point,
             ObstacleSet obstacles, double budget) {
         int n = coords.length - 1;
         if (inside && n == 1 && new LineSegment(coords[0], coords[1]).distance(point) < 1e-6
                 && point.distance(coords[1]) >= TreeBuilder.MIN_PIECE_M) {
-            // камера стоит на самом финальном участке, и сдвиг вдоль него участок не меняет
             return point.distance(coords[1]) < budget ? new Coordinate[] {point, coords[1]} : null;
         }
-        // финальный участок от выхода из здания к точке подключения остаётся на месте (п. 2.2)
         int last = inside ? n - 1 : n;
         Set<String> ignored = tree.tie.getIgnored();
         double rest = inside ? coords[n].distance(coords[n - 1]) : 0;
@@ -197,7 +170,6 @@ final class JunctionMover {
             if (k < last) {
                 rest += coords[k].distance(coords[k + 1]);
             }
-            // с меньшим k ребро только длиннее
             if (straight + rest >= budget) {
                 return null;
             }
@@ -214,7 +186,6 @@ final class JunctionMover {
             if (Double.isNaN(weight)) {
                 continue;
             }
-            // от врезки прямая обычная и не идёт вдоль трубы, как у переноса врезки к стволу
             if (fromRoot && k == n && (weight > straight + 1e-9 || obstacles.alongIgnored(to, point, ignored))) {
                 continue;
             }
@@ -226,7 +197,6 @@ final class JunctionMover {
         return null;
     }
 
-    /** Новые отрезки у точки камеры не ближе APART_M к отрезкам других рёбер, кроме примыкающих к их концу. */
     private boolean apart(Tree tree, Map<Tree.Edge, Coordinate[]> laid) {
         for (Map.Entry<Tree.Edge, Coordinate[]> entry : laid.entrySet()) {
             LineSegment fresh = new LineSegment(entry.getValue()[0], entry.getValue()[1]);
@@ -245,7 +215,6 @@ final class JunctionMover {
         return true;
     }
 
-    /** Дерево с камерой в точке point и переложенными рёбрами; ребро от врезки получает узел врезки нового дерева. */
     private Tree rebuilt(Tree tree, Tree.Node junction, Coordinate point, Map<Tree.Edge, Coordinate[]> laid) {
         Tree result = new Tree(tree.tie);
         result.unconnected.addAll(tree.unconnected);
@@ -264,7 +233,6 @@ final class JunctionMover {
         return result;
     }
 
-    /** Цена метра ребра в рублях: труба по Ду расхода ниже по дереву и длина по весам S. */
     private Map<Tree.Edge, Double> metreRub(Tree tree) {
         Map<Tree.Node, List<Tree.Edge>> children = new IdentityHashMap<>();
         for (Tree.Edge edge : tree.edges) {
@@ -296,7 +264,6 @@ final class JunctionMover {
         return flow;
     }
 
-    /** Координаты ребра от камеры junction. */
     static Coordinate[] fromJunction(Tree.Edge edge, Tree.Node junction) {
         Coordinate[] coords = edge.line.getCoordinates();
         return edge.from == junction ? coords : reversed(coords);
