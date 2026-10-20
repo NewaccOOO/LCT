@@ -264,67 +264,96 @@ public final class Router {
 
     public Choice choose(Coordinate source, Collection<Point> targets, Set<String> ignored, double bound) {
         Table table = table(source, ignored);
+        int count = targets.size();
+        Coordinate[] coords = new Coordinate[count];
+        double[] extras = new double[count];
+        double[] lowers = new double[count];
+        Integer[] byLower = new Integer[count];
+        int k = 0;
+        for (Point target : targets) {
+            coords[k] = target.getCoordinate();
+            extras[k] = target.getUserData() instanceof Double ? (Double) target.getUserData() : 0;
+            lowers[k] = coords[k].distance(source) + extras[k];
+            byLower[k] = k;
+            k++;
+        }
+        Arrays.sort(byLower, (x, y) -> lowers[x] != lowers[y] ? Double.compare(lowers[x], lowers[y]) : Integer.compare(x, y));
+        double[] values = new double[count];
+        Arrays.fill(values, Double.NaN);
+        double bestWeight = bound;
+        int best = -1;
+        int bestVia = -1;
+        int last = count;
+        for (int s = 0; s < count; s++) {
+            int j = byLower[s];
+            if (lowers[j] > bestWeight) {
+                last = s;
+                break;
+            }
+            int[] via = {-1};
+            double weight = reach(table, source, coords[j], extras[j], ignored, bestWeight, via);
+            if (Double.isNaN(weight)) {
+                continue;
+            }
+            values[j] = weight + extras[j];
+            if (values[j] < bestWeight || values[j] == bestWeight && best >= 0 && j < best) {
+                bestWeight = values[j];
+                best = j;
+                bestVia = via[0];
+            }
+        }
+        if (best < 0) {
+            return null;
+        }
+        boolean tied = false;
+        for (int s = 0; s < last && !tied; s++) {
+            int j = byLower[s];
+            tied = j > best && (lowers[j] == bestWeight || lowers[j] < bestWeight && values[j] == bestWeight);
+        }
+        return new Choice(coords[best], bestVia, bestWeight, extras[best], tied, table.pred);
+    }
+
+    private double reach(Table table, Coordinate source, Coordinate t, double extra, Set<String> ignored, double bestWeight,
+            int[] viaOut) {
         double[] dist = table.dist;
         int[] pred = table.pred;
         int[] order = table.order;
-        double bestWeight = bound;
-        Coordinate bestTarget = null;
-        int bestVia = -1;
-        double bestExtra = 0;
-        boolean tied = false;
+        double direct = direct(source, t, ignored);
+        double weight = Double.isNaN(direct) ? Double.POSITIVE_INFINITY : direct;
+        double cap = bestWeight - extra;
+        cap += CAP_TOL * (1 + Math.abs(cap));
+        boolean capped = weight > cap;
+        if (capped) {
+            weight = cap;
+        }
+        int via = -1;
+        double[] toNodes = partialWeights(t, ignored);
+        Stub[] stubs = stubs(t, ignored);
+        ObstacleSet.Hint hint = ObstacleSet.hint();
         int ready = 0;
-        for (Point target : targets) {
-            Coordinate t = target.getCoordinate();
-            double extra = target.getUserData() instanceof Double ? (Double) target.getUserData() : 0;
-            double lower = t.distance(source) + extra;
-            if (lower >= bestWeight) {
-                tied |= lower == bestWeight && bestTarget != null;
+        for (int i = 0; i < ready || (ready = table.settle(i + 1)) > i; i++) {
+            int v = order[i];
+            if (dist[v] > weight) {
+                break;
+            }
+            if (beyond(dist[v], nodeXY[2 * v], nodeXY[2 * v + 1], t, weight)) {
                 continue;
             }
-            double direct = direct(source, t, ignored);
-            double weight = Double.isNaN(direct) ? Double.POSITIVE_INFINITY : direct;
-            double cap = bestWeight - extra;
-            cap += CAP_TOL * (1 + Math.abs(cap));
-            boolean capped = weight > cap;
-            if (capped) {
-                weight = cap;
+            if (toNodes[v] == UNKNOWN) {
+                toNodes[v] = toNode(t, v, ignored, stubs, hint);
             }
-            int via = -1;
-            double[] toNodes = partialWeights(t, ignored);
-            Stub[] stubs = stubs(t, ignored);
-            ObstacleSet.Hint hint = ObstacleSet.hint();
-            for (int i = 0; i < ready || (ready = table.settle(i + 1)) > i; i++) {
-                int v = order[i];
-                if (dist[v] > weight) {
-                    break;
-                }
-                if (beyond(dist[v], nodeXY[2 * v], nodeXY[2 * v + 1], t, weight)) {
-                    continue;
-                }
-                if (toNodes[v] == UNKNOWN) {
-                    toNodes[v] = toNode(t, v, ignored, stubs, hint);
-                }
-                double total = dist[v] + toNodes[v];
-                if ((total < weight || total == weight && via >= 0 && v < via)
-                        && turnAllowed(pred[v] < 0 ? source : nodes.get(pred[v]), nodes.get(v), t)) {
-                    weight = total;
-                    via = v;
-                }
-            }
-            if (capped && via < 0) {
-                continue;
-            }
-            if (weight + extra < bestWeight) {
-                bestWeight = weight + extra;
-                bestTarget = t;
-                bestVia = via;
-                bestExtra = extra;
-                tied = false;
-            } else if (weight + extra == bestWeight && bestTarget != null) {
-                tied = true;
+            double total = dist[v] + toNodes[v];
+            if ((total < weight || total == weight && via >= 0 && v < via)
+                    && turnAllowed(pred[v] < 0 ? source : nodes.get(pred[v]), nodes.get(v), t)) {
+                weight = total;
+                via = v;
             }
         }
-        return bestTarget == null ? null : new Choice(bestTarget, bestVia, bestWeight, bestExtra, tied, pred);
+        if (capped && via < 0 || weight == Double.POSITIVE_INFINITY) {
+            return Double.NaN;
+        }
+        viaOut[0] = via;
+        return weight;
     }
 
     private static final int SQUARE_PATHS_MAX = 100_000;

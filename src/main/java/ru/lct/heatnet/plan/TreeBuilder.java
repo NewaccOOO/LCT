@@ -1085,7 +1085,7 @@ final class TreeBuilder {
                 double extra = target.getUserData() instanceof Double ? (Double) target.getUserData() : 0;
                 double weight = obstacles.edgeWeight(cp, t, firstIgnored);
                 if (Double.isNaN(weight) || best != null && weight + extra >= best.weight
-                        || !leavesOnce(building.getGeometry(), cp, t, obstacles.oksClearance())
+                        || !leavesOnce(building, cp, t, obstacles.oksClearance())
                         || !Double.isNaN(farEntry(building.getGeometry(), new Coordinate[] {t, cp}))) {
                     continue;
                 }
@@ -1177,9 +1177,10 @@ final class TreeBuilder {
             if (coords.length < 3 || deflectionDeg(coords[0], coords[1], coords[2]) >= MIN_TURN_DEG) {
                 return coords;
             }
-            Geometry building = buildingByConnection.get(connection.getId()).getGeometry();
+            ExistingOks oks = buildingByConnection.get(connection.getId());
+            Geometry building = oks.getGeometry();
             if (Double.isNaN(zones.edgeWeight(coords[0], coords[2], firstIgnored))
-                    || !leavesOnce(building, coords[0], coords[2], zones.oksClearance())
+                    || !leavesOnce(oks, coords[0], coords[2], zones.oksClearance())
                     || !Double.isNaN(farEntry(building, new Coordinate[] {coords[2], coords[0]}))) {
                 return coords;
             }
