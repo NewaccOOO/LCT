@@ -69,6 +69,7 @@
   "cp-scale-20-1": {
    "shortest_m": 71.4,
    "dn_by_flow": 80,
+   "dn": 80,
    "path_wgs84": [
     [
      37.6126853,
@@ -95,6 +96,7 @@
   "cp-scale-20-2": {
    "shortest_m": 71.4,
    "dn_by_flow": 80,
+   "dn": 80,
    "path_wgs84": [
     [
      37.6133225,
@@ -121,6 +123,7 @@
   "cp-scale-20-3": {
    "shortest_m": 71.4,
    "dn_by_flow": 80,
+   "dn": 80,
    "path_wgs84": [
     [
      37.6139597,
@@ -147,6 +150,7 @@
   "cp-scale-20-4": {
    "shortest_m": 71.4,
    "dn_by_flow": 80,
+   "dn": 80,
    "path_wgs84": [
     [
      37.6145969,

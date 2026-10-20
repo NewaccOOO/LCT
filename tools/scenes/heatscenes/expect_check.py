@@ -27,6 +27,7 @@ STEP_LEAD_M = 10.0
 STEP_GAIN_M = 0.5
 STEP_BEND_DEG = 45.0
 VARIANTS_MAX = 3
+MERGE_GAP_M = 1.0
 VARIANT_SHIFT_M = 5.0
 VARIANT_SAME_SHARE = 0.9
 OK, FAIL, NA = "выполнено", "нарушено", "не проверить"
@@ -221,14 +222,18 @@ def acute_angle(u: tuple[float, float], v: tuple[float, float]) -> float:
 
 def count_crossings(variant: Variant, kind: str) -> int:
     route = variant.route()
+    polys = [g for _, g in variant.inp.of(kind) if g.geom_type in POLY]
     total = 0
+    if polys:
+        inter = route.intersection(shapely.union_all(polys).buffer(MERGE_GAP_M / 2))
+        merged = shapely.line_merge(inter) if inter.geom_type == "MultiLineString" else inter
+        total += len([p for p in getattr(merged, "geoms", [merged]) if not p.is_empty and p.length > 0.05])
+    ties = [p for p in variant.tie_points().values() if p is not None]
     for _, g in variant.inp.of(kind):
         if g.geom_type in POLY:
-            inter = route.intersection(g)
-            merged = shapely.line_merge(inter) if inter.geom_type == "MultiLineString" else inter
-            total += len([p for p in getattr(merged, "geoms", [merged]) if not p.is_empty and p.length > 0.05])
-        else:
-            total += len(shapely.get_coordinates(route.intersection(g)))
+            continue
+        pts = [Point(xy) for xy in shapely.get_coordinates(route.intersection(g))]
+        total += len([pt for pt in pts if all(pt.distance(t) > NODE_TOL_M for t in ties)])
     return total
 
 
@@ -698,35 +703,47 @@ class Checker:
                 p = v.segments[cur][0]
                 for node in (key(p["start_node_id"]), key(p["end_node_id"])):
                     stack += [m for m in by_node[node] if m not in seen]
-            line = shapely.line_merge(shapely.MultiLineString([v.segments[m][1] for m in chain]))
-            if line.geom_type != "LineString":
-                for m in chain:
-                    result[m] = (set(), set())
-                continue
-            intervals: list[tuple[str, float, float]] = []
+            merged = shapely.line_merge(shapely.MultiLineString([v.segments[m][1] for m in chain]))
+            parts = list(getattr(merged, "geoms", [merged]))
+            hits = []
             for rtype, g in objects:
                 rule = restriction_rule(rtype or "")
-                if not rule or rule.get("rule") != "special" or not line.intersects(g):
-                    continue
-                margin = rule.get("margin_m", 0.0)
-                if g.geom_type in POLY:
-                    inside = line.intersection(g)
-                    for part in getattr(inside, "geoms", [inside]):
-                        if part.is_empty or part.length < 0.01:
-                            continue
-                        ts = [line.project(Point(xy)) for xy in shapely.get_coordinates(part)]
-                        intervals.append((rtype, min(ts) - margin, max(ts) + margin))
-                else:
-                    for xy in shapely.get_coordinates(line.intersection(g)):
-                        pt = Point(xy)
-                        if rtype == "heat_network" and any(pt.distance(a) < 1.0 for a in anchors):
-                            continue
-                        t = line.project(pt)
-                        intervals.append((rtype, t - margin, t + margin))
-            for m in chain:
-                t = line.project(v.segments[m][1].interpolate(0.5, normalized=True))
-                kinds = {r for r, a, b in intervals if a - 0.05 <= t <= b + 0.05}
-                result[m] = ({k for k in kinds if k in CORE_SPECIAL}, kinds)
+                if rule and rule.get("rule") == "special" and merged.intersects(g):
+                    hits.append((rtype, g, rule.get("margin_m", 0.0), merged.intersection(g)))
+            for line in parts:
+                intervals: list[tuple[str, float, float, bool]] = []
+                far: list[tuple[str, BaseGeometry, float]] = []
+                for rtype, g, margin, cut in hits:
+                    if not line.intersects(g):
+                        far.append((rtype, cut, margin))
+                        continue
+                    if g.geom_type in POLY:
+                        inside = line.intersection(g)
+                        for part in getattr(inside, "geoms", [inside]):
+                            if part.is_empty or part.length < 0.01:
+                                continue
+                            ts = [line.project(Point(xy)) for xy in shapely.get_coordinates(part)]
+                            intervals.append((rtype, min(ts) - margin, max(ts) + margin, True))
+                    else:
+                        for xy in shapely.get_coordinates(line.intersection(g)):
+                            pt = Point(xy)
+                            t = line.project(pt)
+                            touch = rtype == "heat_network" and min(t, line.length - t) < 0.05
+                            at_tie = rtype == "heat_network" and any(
+                                pt.distance(a) < 1.0 and g.distance(a) <= NODE_TOL_M for a in anchors
+                            )
+                            if at_tie and not touch:
+                                continue
+                            intervals.append((rtype, t - margin, t + margin, not touch))
+                for m in chain:
+                    mid = v.segments[m][1].interpolate(0.5, normalized=True)
+                    if line.distance(mid) > 0.01:
+                        continue
+                    t = line.project(mid)
+                    near = [(r, strict) for r, a, b, strict in intervals if a - 0.05 <= t <= b + 0.05]
+                    near += [(r, True) for r, cut, margin in far if cut.distance(mid) <= margin + 0.05]
+                    kinds = {r for r, _ in near}
+                    result[m] = ({r for r, strict in near if strict and r in CORE_SPECIAL}, kinds)
         self._zones = result
         return result
 
@@ -968,8 +985,10 @@ class Checker:
             bad.append(f"calculated_cost {summ.get('calculated_cost')} при {calc:.0f}")
         if abs((summ.get("new_network_length") or 0.0) - length) > max(0.5, length * 1e-4):
             bad.append(f"new_network_length {summ.get('new_network_length')} при {length:.2f}")
-        score = 0.7 * calc / RULES["score"]["cost_base"] + 0.3 * length / RULES["score"]["length_base_m"]
-        if abs((summ.get("score") or 0.0) - score) > 2e-4:
+        cb, lb = RULES["score"]["cost_base"], RULES["score"]["length_base_m"]
+        score = 0.7 * calc / cb + 0.3 * length / lb
+        stated = 0.7 * (summ.get("calculated_cost") or 0.0) / cb + 0.3 * (summ.get("new_network_length") or 0.0) / lb
+        if min(abs((summ.get("score") or 0.0) - x) for x in (score, stated)) > 2e-4:
             bad.append(f"score {summ.get('score')} при {score:.4f}")
         return (OK, f"S {score:.4f}") if not bad else (FAIL, "; ".join(bad[:5]))
 

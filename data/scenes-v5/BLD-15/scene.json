@@ -47,12 +47,12 @@
    ],
    "dn_by_flow_and_length": true,
    "route_length_max_m": {
-    "cp-ring-r7876203": 88
+    "cp-ring-r7876203": 86
    }
   },
   "should": {
    "max_route_length_m": {
-    "cp-ring-r7876203": 60
+    "cp-ring-r7876203": 59
    },
    "tie_in": {
     "cp-ring-r7876203": {
@@ -74,20 +74,17 @@
  ],
  "reference": {
   "cp-ring-r7876203": {
-   "shortest_m": 38.1,
+   "shortest_m": 37.3,
    "dn_by_flow": 125,
+   "dn": 125,
    "path_wgs84": [
     [
      37.5617051,
      55.7843204
     ],
     [
-     37.5613487,
-     55.7841024
-    ],
-    [
-     37.5612591,
-     55.7840922
+     37.5612368,
+     55.7841138
     ]
    ]
   }

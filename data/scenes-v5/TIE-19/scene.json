@@ -57,7 +57,7 @@
    },
    "dn_by_flow_and_length": true,
    "route_length_max_m": {
-    "cp-tie-19-1": 64
+    "cp-tie-19-1": 62
    }
   },
   "should": {},
@@ -71,16 +71,17 @@
  ],
  "reference": {
   "cp-tie-19-1": {
-   "shortest_m": 22.2,
+   "shortest_m": 21.0,
    "dn_by_flow": 80,
+   "dn": 80,
    "path_wgs84": [
     [
      37.6137284,
      55.7580427
     ],
     [
-     37.613751,
-     55.7578542
+     37.6137351,
+     55.7578541
     ]
    ]
   }

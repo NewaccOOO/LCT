@@ -76,6 +76,7 @@
   "cp-bld-05-1": {
    "shortest_m": 81.0,
    "dn_by_flow": 125,
+   "dn": 125,
    "path_wgs84": [
     [
      30.4169146,

@@ -134,16 +134,58 @@ def house_of(scene: Scene, cp_id: str) -> Item:
 def reference_length(scene: Scene, cp_id: Any, radius: float | None = None) -> float | None:
     key = str(cp_id)
     if key not in scene.reference:
-        length, path = shortest_path(scene, cp_id, radius=radius)
+        flow = scene.flow(scene.get(cp_id))
+        dn = dn_for(flow)
+        length, path = shortest_path(scene, cp_id, dn=dn, radius=radius)
+        for _ in range(3):
+            grown = None if length is None else dn_for(flow, length)
+            if grown is None or dn is None or grown <= dn:
+                break
+            dn = grown
+            length, path = shortest_path(scene, cp_id, dn=dn, radius=radius)
         scene.reference[key] = {
             "shortest_m": None if length is None else round(length, 1),
-            "dn_by_flow": dn_for(scene.flow(scene.get(cp_id))),
+            "dn_by_flow": dn_for(flow),
+            "dn": dn,
         }
-        if path:
-            line = to_wgs(LineString(path).simplify(CELL_M / 2)) if len(path) > 1 else None
-            if line is not None:
-                scene.reference[key]["path_wgs84"] = [[round(x, 7), round(y, 7)] for x, y in line.coords]
+        if len(path) > 1:
+            line = to_wgs(LineString(pinned_simplify(path)))
+            scene.reference[key]["path_wgs84"] = [[round(x, 7), round(y, 7)] for x, y in line.coords]
     return scene.reference[key]["shortest_m"]
+
+
+def pinned_simplify(path: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    pins = {0, len(path) - 1}
+    for i in range(len(path) - 1):
+        if math.dist(path[i], path[i + 1]) > CELL_M * 1.5:
+            pins |= {i, i + 1}
+    cuts = sorted(pins)
+    result = [path[0]]
+    for a, b in zip(cuts, cuts[1:], strict=False):
+        piece = LineString(path[a : b + 1]).simplify(CELL_M / 2) if b > a + 1 else LineString(path[a : b + 1])
+        result += list(piece.coords)[1:]
+    return result
+
+
+def doubtful_connected(scene: Scene, reason: str) -> None:
+    cps = scene.must.pop("connected", [])
+    if not cps:
+        return
+    scene.should["connected"] = cps
+    scene.engineer += " " + reason
+
+
+def drop_overlapping_pipes(scene: Scene) -> None:
+    pipes = sorted(scene.of("heat_network"), key=lambda p: (-p.geom.length, str(p.id)))
+    gone = []
+    for n, p in enumerate(pipes):
+        if any(q.id not in gone and p.geom.intersection(q.geom.buffer(0.05)).length > 5 for q in pipes[:n]):
+            gone.append(p.id)
+    if gone:
+        scene.items = [i for i in scene.items if i.id not in gone]
+        scene.prune_chambers()
+        scene.forget_routes()
+        scene.edits.append(f"убраны трубы, лежащие на другой трубе: {', '.join(map(str, gone))}")
 
 
 def require_connected(scene: Scene, cp_ids: list[Any]) -> None:
@@ -1674,9 +1716,19 @@ def area_family(ctx: Ctx) -> Iterator[tuple[str, Callable[[], Scene]]]:
             half=450.0,
         ),
     )
+    def square() -> Scene:
+        scene = around("AREA-02", "moscow", "park", 1500, 9000, "Сквер", ["ТП-4.park"], eng.format(what="сквер", m=1))()
+        doubtful_connected(
+            scene,
+            "Ближайшая врезка стоит у края окна, кабель огибает её в 1,9 м, трубы у камеры обрезаны окном до "
+            "коротких кусков. Эталон на сетке 2 м путь находит, но допустимость пути по check18 не доказана, "
+            "поэтому подключение — ориентир, а не требование.",
+        )
+        return scene
+
     yield (
         "AREA-02",
-        around("AREA-02", "moscow", "park", 1500, 9000, "Сквер", ["ТП-4.park"], eng.format(what="сквер", m=1)),
+        square,
     )
     yield (
         "AREA-03",

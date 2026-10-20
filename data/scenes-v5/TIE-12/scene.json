@@ -55,12 +55,12 @@
     "radius_m": 10.0
    },
    "route_length_max_m": {
-    "cp-tie-12-1": 61
+    "cp-tie-12-1": 59
    }
   },
   "should": {
    "max_route_length_m": {
-    "cp-tie-12-1": 37
+    "cp-tie-12-1": 35
    },
    "tie_in": {
     "cp-tie-12-1": {
@@ -82,16 +82,17 @@
  ],
  "reference": {
   "cp-tie-12-1": {
-   "shortest_m": 20.3,
+   "shortest_m": 19.0,
    "dn_by_flow": 125,
+   "dn": 125,
    "path_wgs84": [
     [
      37.4324921,
      55.7668067
     ],
     [
-     37.4321892,
-     55.7668069
+     37.4321893,
+     55.7668029
     ]
    ]
   }

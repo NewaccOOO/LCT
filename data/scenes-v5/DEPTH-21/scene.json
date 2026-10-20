@@ -45,7 +45,7 @@
    "depth_crossings_valid": true,
    "dn_by_flow_and_length": true,
    "route_length_max_m": {
-    "cp-depth-21-1": 55
+    "cp-depth-21-1": 54
    }
   },
   "should": {
@@ -63,8 +63,9 @@
  ],
  "reference": {
   "cp-depth-21-1": {
-   "shortest_m": 16.6,
+   "shortest_m": 16.0,
    "dn_by_flow": 80,
+   "dn": 80,
    "path_wgs84": [
     [
      37.6136551,

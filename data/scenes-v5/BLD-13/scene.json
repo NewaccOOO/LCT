@@ -18,7 +18,8 @@
   "file": "data/cities/moscow/input.geojson",
   "city": "Москва, Пресненский район",
   "edits": [
-   "добавлен участок сети hn-yard Ду 100 от трубы hn-14429 во двор под корпусом"
+   "добавлен участок сети hn-yard Ду 100 от трубы hn-14429 во двор под корпусом",
+   "линии под новым домом убраны: gas-w880393886, gas-w880393887-1, cab-w880393886, sew-w880393886, sew-w880393887-1, ws-w880393886"
   ]
  },
  "rules": [
@@ -41,24 +42,19 @@
    "no_short_reversal_m": 5.0,
    "no_step_m": 10.0,
    "variants": true,
-   "final_from_nearest_boundary_m": {
-    "tolerance_m": 1.0,
-    "except": [
-     "cp-bld-13-1"
-    ]
-   },
+   "final_from_nearest_boundary_m": 1.0,
    "no_crash": true,
    "connected": [
     "cp-bld-13-1"
    ],
    "dn_by_flow_and_length": true,
    "route_length_max_m": {
-    "cp-bld-13-1": 104
+    "cp-bld-13-1": 85
    }
   },
   "should": {
    "max_route_length_m": {
-    "cp-bld-13-1": 75
+    "cp-bld-13-1": 57
    },
    "tie_in": {
     "cp-bld-13-1": {
@@ -80,16 +76,21 @@
  ],
  "reference": {
   "cp-bld-13-1": {
-   "shortest_m": 49.3,
+   "shortest_m": 36.1,
    "dn_by_flow": 125,
+   "dn": 125,
    "path_wgs84": [
     [
      37.565948,
      55.7631241
     ],
     [
-     37.5657949,
-     55.7630137
+     37.5657922,
+     55.7630855
+    ],
+    [
+     37.5657909,
+     55.7631215
     ],
     [
      37.5657869,
@@ -100,6 +101,10 @@
      55.7632285
     ],
     [
+     37.5656907,
+     55.7632461
+    ],
+    [
      37.5656425,
      55.7632543
     ]
@@ -108,16 +113,16 @@
  },
  "run_args": [],
  "objects": {
-  "gas_pipeline": 93,
+  "gas_pipeline": 91,
   "heat_chamber": 70,
   "heat_network": 152,
   "oks": 65,
   "oks_connection_point": 1,
   "park": 2,
-  "power_cable": 112,
+  "power_cable": 111,
   "road": 100,
-  "sewer": 90,
+  "sewer": 88,
   "social_area": 4,
-  "water_supply": 86
+  "water_supply": 85
  }
 }

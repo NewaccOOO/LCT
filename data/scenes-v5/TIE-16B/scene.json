@@ -73,6 +73,7 @@
   "cp-tie-16b-1": {
    "shortest_m": 26.4,
    "dn_by_flow": 125,
+   "dn": 125,
    "path_wgs84": [
     [
      37.4569915,

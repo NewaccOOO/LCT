@@ -158,6 +158,11 @@ class Scene:
         cp_id = cp_id or house_id.replace("oks-", "cp-", 1)
         if flow is None:
             flow = organizer_flow(house_id)
+        under = [i for i in self.items if i.kind in ("gas_pipeline", "power_cable", "water_supply", "sewer") and i.geom.intersects(poly)]
+        if under:
+            gone = {id(i) for i in under}
+            self.items = [i for i in self.items if id(i) not in gone]
+            self.edits.append(f"линии под новым домом убраны: {', '.join(str(i.id) for i in under)}")
         point = Point(cp) if cp else entry_point(poly, self)
         self.items.append(Item({"id": house_id, "object_type": "oks_future", "flow_tph": flow, "levels": levels}, poly))
         self.items.append(Item({"id": cp_id, "object_type": "oks_connection_point", "oks_id": house_id}, point))

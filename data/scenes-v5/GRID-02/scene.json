@@ -49,11 +49,11 @@
    ],
    "dn_by_flow_and_length": true,
    "route_length_max_m": {
-    "cp-w857530905": 94
+    "cp-w857530905": 88
    }
   },
   "should": {
-   "total_length_max_m": 67,
+   "total_length_max_m": 62,
    "along_axes_share_min": 0.8,
    "max_turn_deg": 90
   },
@@ -67,20 +67,17 @@
  ],
  "reference": {
   "cp-w857530905": {
-   "shortest_m": 42.6,
+   "shortest_m": 38.1,
    "dn_by_flow": 65,
+   "dn": 65,
    "path_wgs84": [
     [
      30.4632046,
      59.8517618
     ],
     [
-     30.4638279,
-     59.8515937
-    ],
-    [
-     30.4637928,
-     59.85159
+     30.4638138,
+     59.851612
     ]
    ]
   }

@@ -67,7 +67,8 @@
  "reference": {
   "cp-area-13-1": {
    "shortest_m": null,
-   "dn_by_flow": 100
+   "dn_by_flow": 100,
+   "dn": 100
   }
  },
  "run_args": [],

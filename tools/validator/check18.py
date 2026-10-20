@@ -50,6 +50,7 @@ ENTRY_STEP_M = 0.05
 TIE_TOUCH_M = 0.5
 ENTRY_TOL_M = 0.1
 CORNER_M = 1.0
+NEAREST_WALL_TOL_M = 1.0
 APPROACH_M = 0.05
 APPROACH_ENTRY_M = 0.03
 ZONE_WIDER_M = 0.05
@@ -625,6 +626,12 @@ def check_variant(inp, trees, vid, feats, rep):
             pieces = [g for g in getattr(piece.intersection(og), "geoms", [piece.intersection(og)]) if g.length > 0.05]
             if len(pieces) > 1:
                 rep.add("B4 финальный участок выходит из своего здания и входит в него снова", f"{sid} куски {[round(g.length, 1) for g in pieces]}")
+            shells = [og.exterior] if og.geom_type == "Polygon" else [g.exterior for g in og.geoms]
+            to_edge = min(sh.distance(cg) for sh in shells)
+            inside = sum(g.length for g in pieces)
+            if inside > to_edge + NEAREST_WALL_TOL_M:
+                rep.add("i  финальный участок не от ближайшей стены (Р29-15: допустимо, только если от неё пути нет)",
+                        f"{sid} {cp}: внутри здания {inside:.2f} м, до ближайшей стены {to_edge:.2f} м")
     by_cp = defaultdict(list)
     for sid, (cp, piece) in final_piece.items():
         by_cp[cp].append(sid)

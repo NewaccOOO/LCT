@@ -45,12 +45,12 @@
    ],
    "dn_by_flow_and_length": true,
    "route_length_max_m": {
-    "cp-cross-24b-1": 563
+    "cp-cross-24b-1": 562
    }
   },
   "should": {
    "max_route_length_m": {
-    "cp-cross-24b-1": 472
+    "cp-cross-24b-1": 471
    },
    "crossings_max": {
     "road": 0
@@ -66,8 +66,9 @@
  ],
  "reference": {
   "cp-cross-24b-1": {
-   "shortest_m": 355.3,
+   "shortest_m": 354.5,
    "dn_by_flow": 65,
+   "dn": 100,
    "path_wgs84": [
     [
      37.6108617,
@@ -86,12 +87,12 @@
      55.757898
     ],
     [
-     37.6162973,
-     55.7579548
+     37.6163291,
+     55.7579552
     ],
     [
-     37.6163909,
-     55.7580098
+     37.6163916,
+     55.7579918
     ],
     [
      37.6164387,

@@ -80,6 +80,7 @@
   "cp-len-08-1": {
    "shortest_m": 211.7,
    "dn_by_flow": 50,
+   "dn": 65,
    "path_wgs84": [
     [
      37.6153918,
@@ -106,6 +107,7 @@
   "cp-len-08-2": {
    "shortest_m": 211.7,
    "dn_by_flow": 50,
+   "dn": 65,
    "path_wgs84": [
     [
      37.6118553,

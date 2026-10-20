@@ -60,12 +60,12 @@
     }
    },
    "route_length_max_m": {
-    "cp-tie-02-1": 61
+    "cp-tie-02-1": 59
    }
   },
   "should": {
    "max_route_length_m": {
-    "cp-tie-02-1": 37
+    "cp-tie-02-1": 35
    },
    "tie_in": {
     "cp-tie-02-1": {
@@ -87,16 +87,17 @@
  ],
  "reference": {
   "cp-tie-02-1": {
-   "shortest_m": 20.1,
+   "shortest_m": 19.0,
    "dn_by_flow": 125,
+   "dn": 125,
    "path_wgs84": [
     [
      30.4590699,
      59.8148863
     ],
     [
-     30.4590195,
-     59.8150545
+     30.4590264,
+     59.815055
     ]
    ]
   }

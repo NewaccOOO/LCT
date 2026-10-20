@@ -61,8 +61,9 @@
  ],
  "reference": {
   "cp-scale-17a-1": {
-   "shortest_m": 21.6,
+   "shortest_m": 21.0,
    "dn_by_flow": 80,
+   "dn": 80,
    "path_wgs84": [
     [
      37.6131709,
@@ -75,8 +76,9 @@
    ]
   },
   "cp-scale-17a-2": {
-   "shortest_m": 21.6,
+   "shortest_m": 21.0,
    "dn_by_flow": 80,
+   "dn": 80,
    "path_wgs84": [
     [
      37.6141267,

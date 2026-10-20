@@ -19,9 +19,11 @@ LINES = ("gas_pipeline", "power_cable")
 SAMPLE_M = 3.0
 CHORD_MAX_M = 150.0
 RAY_ANGLES_DEG = (-20.0, 0.0, 20.0)
+END_ANGLES = np.arange(0.0, 360.0, 30.0)
 AREA_MIN_DEG = 45.0
-LINE_MIN_DEG = 70.0
+CROSS_CIRCLE_M = 0.1
 STEP_OUT_M = 1.0
+DIRECT_TIE_M = 20.0
 
 
 @dataclass
@@ -37,6 +39,7 @@ class Specials:
     ring_lines: Any = None
     ring_tree: Any = None
     approach: np.ndarray | None = None
+    lines: list[tuple[int, Any, float, bool]] | None = None
 
 
 def width_of(dn: int) -> float:
@@ -105,18 +108,21 @@ def specials(scene: Scene, dn: int) -> Specials:
     if dn in cache:
         return cache[dn]
     bands, segs, mins, owners = [], [], [], []
-    pipes = []
+    pipes, line_items = [], []
     for n, item in enumerate(scene.items):
         if item.geom is None:
             continue
         if item.kind in AREAS and item.geom.geom_type in ("Polygon", "MultiPolygon"):
             bands.append(item.geom.buffer(band_width(item, dn), quad_segs=2))
+            line_items.append((n, item.geom, band_width(item, dn), False))
             s = segments_of(item.geom)
             limit = AREA_MIN_DEG
         elif item.kind in LINES or item.kind == "heat_network":
-            bands.append(item.geom.buffer(band_width(item, dn), quad_segs=2))
+            bw = band_width(item, dn)
+            bands.append(item.geom.buffer(bw, quad_segs=2))
             s = segments_of(item.geom)
-            limit = LINE_MIN_DEG
+            limit = math.degrees(math.asin(bw / (bw + CROSS_CIRCLE_M)))
+            line_items.append((n, item.geom, bw, item.kind == "heat_network"))
             if item.kind == "heat_network":
                 pipes.append((n, item.geom))
         else:
@@ -142,6 +148,7 @@ def specials(scene: Scene, dn: int) -> Specials:
     rings = segments_of(union)
     sp.ring_lines = shapely.linestrings(rings) if len(rings) else np.array([])
     sp.ring_tree = shapely.STRtree(sp.ring_lines)
+    sp.lines = line_items
     sp.chords = band_chords(sp)
     sp.approach = pipe_approach(sp)
     cache[dn] = sp
@@ -191,6 +198,12 @@ def pipe_approach(sp: Specials) -> np.ndarray:
         after = shapely.get_coordinates(shapely.line_interpolate_point(pg, np.clip(dist + 0.3, 0, pg.length)))
         t = after - before
         t /= np.maximum(np.linalg.norm(t, axis=1, keepdims=True), 1e-9)
+        others = [g for m, g in sp.pipes if m != n]
+        free_tie = (dist <= 1.0) | (dist >= pg.length - 1.0)
+        if others:
+            free_tie |= shapely.distance(shapely.points(pts), shapely.union_all(others)) > 0.05
+        else:
+            free_tie[:] = True
         for side in (1, -1):
             nrm = np.column_stack([-t[:, 1], t[:, 0]]) * side
             for ang in RAY_ANGLES_DEG:
@@ -207,8 +220,40 @@ def pipe_approach(sp: Specials) -> np.ndarray:
                     continue
                 q = pts[good] + d[good] * (reach[good][:, None] + 0.05 + STEP_OUT_M)
                 ok = crossing_ok(sp, pts[good], q, np.full(int(good.sum()), n))
+                ok &= free_tie[good]
+                ok[ok] = passes_lines(sp, pts[good][ok], q[ok], n)
                 rows.append(np.column_stack([pts[good][ok], q[ok]]))
+        ends = np.repeat(np.array([pg.coords[0], pg.coords[-1]]), len(END_ANGLES), axis=0)
+        a = np.radians(np.tile(END_ANGLES, 2))
+        d = np.column_stack([np.cos(a), np.sin(a)])
+        reach = first_exit(sp, ends + d * 0.05, d)
+        good = ~np.isnan(reach)
+        if good.any():
+            q = ends[good] + d[good] * (reach[good][:, None] + 0.05 + STEP_OUT_M)
+            ok = crossing_ok(sp, ends[good], q, np.full(int(good.sum()), n))
+            ok[ok] = passes_lines(sp, ends[good][ok], q[ok], n)
+            rows.append(np.column_stack([ends[good][ok], q[ok]]))
     return np.concatenate(rows) if rows else np.zeros((0, 4))
+
+
+def passes_lines(sp: Specials, a: np.ndarray, b: np.ndarray, own: int) -> np.ndarray:
+    ok = np.ones(len(a), bool)
+    if not len(a) or not sp.lines:
+        return ok
+    chords = shapely.linestrings(np.stack([a, b], axis=1))
+    geoms = np.array([g for _, g, _, _ in sp.lines], dtype=object)
+    reach = max(bw for _, _, bw, _ in sp.lines)
+    ci, li = shapely.STRtree(geoms).query(chords, predicate="dwithin", distance=reach)
+    owner = np.array([n for n, _, _, _ in sp.lines])[li]
+    bw = np.array([w for _, _, w, _ in sp.lines])[li]
+    pipe = np.array([p for _, _, _, p in sp.lines])[li]
+    keep = owner != own
+    ci, li, bw, pipe = ci[keep], li[keep], bw[keep], pipe[keep]
+    bad = shapely.distance(chords[ci], geoms[li]) < bw - 0.05
+    bad &= ~shapely.intersects(chords[ci], geoms[li])
+    bad &= ~pipe | (shapely.distance(shapely.points(a[ci]), geoms[li]) > 0.5)
+    ok[ci[bad]] = False
+    return ok
 
 
 def band_chords(sp: Specials) -> np.ndarray:
@@ -237,6 +282,7 @@ def band_chords(sp: Specials) -> np.ndarray:
         good = ~np.isnan(reach)
         q = p[good] + d[good] * (reach[good][:, None] + 0.05)
         ok = crossing_ok(sp, p[good], q)
+        ok[ok] = passes_lines(sp, p[good][ok], q[ok], -1)
         rows.append(np.column_stack([p[good][ok], q[ok], d[good][ok]]))
     return np.concatenate(rows) if rows else np.zeros((0, 6))
 
@@ -257,7 +303,7 @@ def grid_of(scene: Scene, around: Point | None = None, radius: float | None = No
 
 def entry_rays(
     cp: Point, house: Any, zone_m: float, hard: Any, sp: Specials, any_wall: bool
-) -> list[tuple[Point, float]]:
+) -> tuple[list[tuple[Point, float]], list[tuple[Point, float]]]:
     ring = house.exterior
     nearest = ring.interpolate(ring.project(cp))
     base = cp.distance(nearest)
@@ -271,12 +317,15 @@ def entry_rays(
                 nearest = Point(cp.x + nx * 0.01, cp.y + ny * 0.01)
         base = cp.distance(nearest)
     group = samples if any_wall else [nearest] + [p for p in samples if cp.distance(p) <= base + 1.0]
-    rays = []
+    rays, ties = [], []
     for b in group:
         d = cp.distance(b)
         if d < 1e-6:
             continue
         ux, uy = (b.x - cp.x) / d, (b.y - cp.y) / d
+        tie = direct_tie(cp, b, (ux, uy), d, house, zone_m, hard, sp)
+        if tie is not None:
+            ties.append(tie)
         k = zone_m + CELL_M
         end = Point(b.x + ux * k, b.y + uy * k)
         while (house.distance(end) < zone_m + CELL_M or sp.bands.contains(end)) and k < CHORD_MAX_M:
@@ -290,7 +339,29 @@ def entry_rays(
         if not crossing_ok(sp, np.array([[b.x, b.y]]), np.array([[end.x, end.y]]))[0]:
             continue
         rays.append((end, ray.length))
-    return rays
+    return rays, ties
+
+
+def direct_tie(
+    cp: Point, b: Point, u: tuple[float, float], d: float, house: Any, zone_m: float, hard: Any, sp: Specials
+) -> tuple[Point, float] | None:
+    probe = LineString([cp, (b.x + u[0] * (zone_m + DIRECT_TIE_M), b.y + u[1] * (zone_m + DIRECT_TIE_M))])
+    hits = [
+        (cp.distance(Point(xy)), n, Point(xy))
+        for n, g in sp.pipes
+        if probe.intersects(g)
+        for xy in shapely.get_coordinates(probe.intersection(g))
+    ]
+    if not hits:
+        return None
+    dist, n, pt = min(hits, key=lambda h: h[0])
+    seg = LineString([cp, pt])
+    if seg.intersects(hard) or house.intersection(seg).length > d + 0.01:
+        return None
+    a, z = np.array([[b.x, b.y]]), np.array([[pt.x, pt.y]])
+    if not crossing_ok(sp, a, z, np.array([n]))[0] or not passes_lines(sp, a, z, n)[0]:
+        return None
+    return pt, dist
 
 
 def shortest(
@@ -336,11 +407,11 @@ def route(
         house = houses[0].geom
         house = house if house.geom_type == "Polygon" else max(house.geoms, key=lambda g: g.area)
         blocked = shapely.union_all([hard, house.buffer(zone_m, quad_segs=2), sp.bands.intersection(box.buffer(5))])
-        rays = entry_rays(cp.geom, house, zone_m, hard, sp, any_wall)
+        rays, ties = entry_rays(cp.geom, house, zone_m, hard, sp, any_wall)
     else:
         blocked = shapely.union_all([hard, sp.bands.intersection(box.buffer(5))])
-        rays = [(cp.geom, 0.0)] if not sp.bands.contains(cp.geom) else []
-    if not rays or not sp.pipes:
+        rays, ties = ([(cp.geom, 0.0)] if not sp.bands.contains(cp.geom) else []), []
+    if not (rays or ties) or not sp.pipes:
         return None, []
     shapely.prepare(blocked)
     free = ~shapely.contains_xy(blocked, gx, gy)
@@ -363,6 +434,10 @@ def route(
         rows.append(np.array([source]))
         cols.append(np.array([ids[sy, sx]]))
         weights.append(np.array([length + Point(xs[sx], ys[sy]).distance(end) + 1e-6]))
+    for _, length in ties:
+        rows.append(np.array([source]))
+        cols.append(np.array([sink]))
+        weights.append(np.array([length]))
     ch = sp.chords
     if len(ch):
         ax, ay = ch[:, 0] - ch[:, 4] * STEP_OUT_M, ch[:, 1] - ch[:, 5] * STEP_OUT_M
@@ -410,6 +485,9 @@ def route(
     if not np.isfinite(best):
         return None, []
     node = pred[sink]
+    if node == source:
+        pt = min(ties, key=lambda t: t[1])[0]
+        return float(best), [(cp.geom.x, cp.geom.y), (pt.x, pt.y)]
     used = ap_sel[ap_nodes == node]
     k = used[np.argmin(np.hypot(ap[used, 2] - ap[used, 0], ap[used, 3] - ap[used, 1]))]
     path = [(float(ap[k, 0]), float(ap[k, 1]))]

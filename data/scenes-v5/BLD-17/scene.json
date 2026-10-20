@@ -58,6 +58,7 @@
   "cp-bld-17-1": {
    "shortest_m": 64.3,
    "dn_by_flow": 80,
+   "dn": 80,
    "path_wgs84": [
     [
      37.6136551,

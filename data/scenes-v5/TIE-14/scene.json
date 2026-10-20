@@ -70,8 +70,9 @@
  ],
  "reference": {
   "cp-tie-14-1": {
-   "shortest_m": 13.6,
+   "shortest_m": 13.0,
    "dn_by_flow": 80,
+   "dn": 80,
    "path_wgs84": [
     [
      37.6135876,
@@ -84,8 +85,9 @@
    ]
   },
   "cp-tie-14-2": {
-   "shortest_m": 13.6,
+   "shortest_m": 13.0,
    "dn_by_flow": 80,
+   "dn": 80,
    "path_wgs84": [
     [
      37.613715,
@@ -98,8 +100,9 @@
    ]
   },
   "cp-tie-14-3": {
-   "shortest_m": 13.6,
+   "shortest_m": 13.0,
    "dn_by_flow": 80,
+   "dn": 80,
    "path_wgs84": [
     [
      37.6136596,

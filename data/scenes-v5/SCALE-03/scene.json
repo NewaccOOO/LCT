@@ -19,6 +19,7 @@
   "city": "Москва, Тимирязевский район",
   "edits": [
    "гаражи r15003610 снесены, на их месте новый дом",
+   "линии под новым домом убраны: gas-w72983018-2",
    "все id заменены порядковыми числами"
   ]
  },
@@ -43,20 +44,20 @@
    "final_from_nearest_boundary_m": 1.0,
    "no_crash": true,
    "connected": [
-    429
+    428
    ],
    "dn_by_flow_and_length": true,
    "ids_numeric_in_output": true,
    "route_length_max_m": {
-    "429": 142
+    "428": 142
    }
   },
   "should": {
    "max_route_length_m": {
-    "429": 107
+    "428": 107
    },
    "tie_in": {
-    "429": {
+    "428": {
      "kind": "new_chamber",
      "pipes": [
       27
@@ -68,14 +69,15 @@
  },
  "points": [
   {
-   "id": 429,
+   "id": 428,
    "flow_tph": 29.42
   }
  ],
  "reference": {
-  "429": {
+  "428": {
    "shortest_m": 74.2,
    "dn_by_flow": 125,
+   "dn": 125,
    "path_wgs84": [
     [
      37.5610789,
@@ -90,6 +92,14 @@
      55.8053774
     ],
     [
+     37.5619743,
+     55.8054141
+    ],
+    [
+     37.5620667,
+     55.805505
+    ],
+    [
      37.5620999,
      55.8055284
     ]
@@ -98,7 +108,7 @@
  },
  "run_args": [],
  "objects": {
-  "gas_pipeline": 51,
+  "gas_pipeline": 50,
   "heat_chamber": 30,
   "heat_network": 75,
   "oks": 42,

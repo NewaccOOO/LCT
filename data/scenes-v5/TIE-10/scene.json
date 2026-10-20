@@ -80,6 +80,7 @@
   "cp-tie-10-1": {
    "shortest_m": 49.8,
    "dn_by_flow": 125,
+   "dn": 125,
    "path_wgs84": [
     [
      37.5495738,

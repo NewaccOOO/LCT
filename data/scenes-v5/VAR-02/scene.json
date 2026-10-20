@@ -44,7 +44,7 @@
    "variants_ranked": true,
    "dn_by_flow_and_length": true,
    "route_length_max_m": {
-    "cp-var-02-1": 71
+    "cp-var-02-1": 69
    }
   },
   "should": {
@@ -62,20 +62,17 @@
  ],
  "reference": {
   "cp-var-02-1": {
-   "shortest_m": 27.0,
+   "shortest_m": 26.0,
    "dn_by_flow": 80,
+   "dn": 80,
    "path_wgs84": [
     [
      37.6136529,
      55.757925
     ],
     [
-     37.6139072,
-     55.7579459
-    ],
-    [
-     37.6140668,
-     55.7579387
+     37.6140671,
+     55.7579297
     ]
    ]
   }

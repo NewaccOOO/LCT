@@ -13,6 +13,8 @@ from heatscenes.catalog import (
     across,
     courtyards,
     drop_network_except,
+    doubtful_connected,
+    drop_overlapping_pipes,
     expect_basic,
     extend_barrier,
     expect_tree,
@@ -826,6 +828,16 @@ def tie_family(ctx: Ctx) -> Iterator[tuple[str, Callable[[], Scene]]]:
         dup = scene.add("heat_chamber", Point(ch.geom.x, ch.geom.y), f"{ch.id}-dup")
         scene.edits.append(f"добавлен дубль камеры {ch.id} в той же координате: {dup}")
         expect_basic(scene)
+        pipes = scene.of("heat_network")
+        twins = sorted(
+            {str(x.id) for x in pipes for y in pipes if x is not y and x.geom.intersection(y.geom.buffer(0.05)).length > 5}
+        )
+        if twins:
+            scene.engineer += (
+                f" Трубы {', '.join(twins)} местами лежат друг на друге: новая камера на общем участке дала бы "
+                f"больше четырёх примыканий, поэтому кратчайший допустимый путь ({reference_length(scene, cp):.0f} м) "
+                "идёт к другой трубе."
+            )
         scene.must.update({"no_crash": True, "not_tie_in": [ch.id, dup]})
         scene.should["tie_in"] = {cp: {"kind": "new_chamber"}}
         return scene
@@ -1067,6 +1079,7 @@ def bld_family(ctx: Ctx) -> Iterator[tuple[str, Callable[[], Scene]]]:
                 "Здание в переулке заменено новым домом той же формы, труба под осью переулка.",
             )
             scene.drop({i.id for i in scene.of("oks_existing") if i.geom.intersection(target.geom).area > 1.0})
+            drop_overlapping_pipes(scene)
             inner_ring = target.geom.buffer(-1.0)
             if inner_ring.is_empty or inner_ring.geom_type != "Polygon":
                 continue
@@ -1077,6 +1090,13 @@ def bld_family(ctx: Ctx) -> Iterator[tuple[str, Callable[[], Scene]]]:
                 continue
             expect_basic(scene)
             scene.should["max_turns"] = {cp: 0}
+            doubtful_connected(
+                scene,
+                "В данных под переулком лежат несколько труб друг на друге, лишние убраны. Оставшаяся труба у дома "
+                "проходит в 1,6 м от края проезда, ближе отступа 1,8 м, поэтому прямой ввод в неё нарушает отступ "
+                "от дороги. Эталон на сетке 2 м находит обходной путь, но его допустимость по check18 не доказана, "
+                "поэтому подключение — ориентир, а не требование.",
+            )
             return scene
         raise Skip(sid)
 

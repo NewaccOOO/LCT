@@ -47,7 +47,7 @@
     "heat_network": 1.05
    },
    "route_length_max_m": {
-    "cp-cross-22-1": 55
+    "cp-cross-22-1": 54
    }
   },
   "should": {
@@ -77,8 +77,9 @@
  ],
  "reference": {
   "cp-cross-22-1": {
-   "shortest_m": 16.6,
+   "shortest_m": 16.0,
    "dn_by_flow": 80,
+   "dn": 80,
    "path_wgs84": [
     [
      37.6136551,
