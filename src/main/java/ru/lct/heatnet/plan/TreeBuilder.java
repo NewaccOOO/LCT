@@ -63,6 +63,7 @@ final class TreeBuilder {
     private static final double APPROACH_M = 0.04;
     private static final double ENTRY_TOL_M = 0.05;
     private static final double ENTRY_NEAR_M = 0.1;
+    private static final double STRAIGHT_ENTRY_MARGIN_M = 0.02;
     static final double CORNER_M = 1.0;
     private static final double CORNER_RIGHT_DEG = 80;
     private static final double SIMPLIFY_M = 0.05;
@@ -498,6 +499,21 @@ final class TreeBuilder {
             result = coords = line;
         }
         return result;
+    }
+
+    Coordinate[] straightFrom(ExistingOks building, Coordinate from, Coordinate cp, ObstacleSet zones,
+            Set<String> ignored, Coordinate before, List<LineSegment> apart) {
+        Geometry polygon = building.getGeometry();
+        double length = from.distance(cp);
+        double ux = (from.x - cp.x) / length;
+        double uy = (from.y - cp.y) / length;
+        double[] out = crossings(rings(polygon), cp, ux, uy, length);
+        if (out.length == 0 || out[0] > nearestWall(polygon, cp) + ENTRY_NEAR_M - STRAIGHT_ENTRY_MARGIN_M) {
+            return null;
+        }
+        Coordinate entry = new Coordinate(cp.x + ux * out[0], cp.y + uy * out[0]);
+        return relinked(building, new Coordinate[] {from, from, cp}, zones, ignored, before, apart, false,
+                List.of(entry), true, false);
     }
 
     Coordinate[] cornered(ExistingOks building, Coordinate[] coords, ObstacleSet zones, Set<String> ignored,

@@ -107,6 +107,16 @@ public final class VariantEnumerator {
     private static final int NEAREST_BLOCKS = 2;
     private static final double IMPROVE_EPS = 1e-6;
     private static final double UNKINK_EPS = 1e-9;
+    private static final double SHAPE_TOLERANCE = Double.parseDouble(System.getProperty("heatnet.shape.tolerance", "0"));
+    private static final double HOOK_LINK_M = 5;
+    private static final double HOOK_SUM_DEG = 90.01;
+    private static final double ORTHO_TURN_DEG = 89.95;
+    private static final double ORTHO_STEP_M = 0.1;
+    private static final double ORTHO_SLIDE_M = 6;
+    private static final double ORTHO_REACH_M = 4;
+    private static final double ORTHO_CORNER_M = 6;
+    private static final double ORTHO_LEG_M = 12;
+    private static final int ORTHO_TRIES = 8;
     private static final double RETIE_STEP_M = 0.1;
     private static final double RETIE_MAX_M = 5;
     private static final double STRAIGHT_TIE_MIN_DEG = 70;
@@ -1322,7 +1332,7 @@ public final class VariantEnumerator {
         Set<Tree> same = Collections.newSetFromMap(new IdentityHashMap<>());
         same.addAll(unkinked);
         List<Tree> squared = squared(unkinked(unkinked(evened(entered(bent(unkinked))), false, same), true));
-        List<Tree> result = entered(unkinked(unkinked(evened(entered(unkinked(squared))), true), false, Set.of(), true));
+        List<Tree> result = orthogonal(entered(unkinked(unkinked(evened(entered(unkinked(squared))), true), false, Set.of(), true)));
         for (int t = 0; t < result.size(); t++) {
             Tree tree = result.get(t);
             if (tree != squared.get(t) && tree.unsquared == null && squared.get(t).unsquared != null) {
@@ -4489,6 +4499,222 @@ public final class VariantEnumerator {
         }
         log.info("entered{}: tried={} moves={} elapsed={}ms", corner ? " corner" : "", tried, taken,
                 (System.nanoTime() - started) / 1_000_000);
+        return result;
+    }
+
+    private List<Tree> orthogonal(List<Tree> trees) {
+        long started = System.nanoTime();
+        List<Tree> result = new ArrayList<>(trees);
+        double budget = SHAPE_TOLERANCE;
+        int taken = 0;
+        int tried = 0;
+        for (int t = 0; t < result.size(); t++) {
+            for (int e = 0; e < result.get(t).edges.size(); e++) {
+                Tree tree = result.get(t);
+                if (hooks(tree, e) == 0) {
+                    continue;
+                }
+                tried++;
+                List<Tree> unit = unit(result, tree);
+                Map<Tree.Edge, Integer> dnByEdge;
+                try {
+                    dnByEdge = diameters(unit);
+                } catch (IllegalStateException | IllegalArgumentException ex) {
+                    break;
+                }
+                int before = hooks(tree);
+                List<Tree> works = new ArrayList<>(movedTies(tree, e, dnByEdge));
+                works.addAll(cornered(tree, e, dnByEdge));
+                works.sort(Comparator.comparingDouble(Tree::length));
+                double was = unitScore(unit);
+                Tree best = null;
+                double bestScore = Double.POSITIVE_INFINITY;
+                int scored = 0;
+                for (Tree work : works) {
+                    if (scored >= ORTHO_TRIES) {
+                        break;
+                    }
+                    if (hooks(work) >= before || sharpPairs(work, Set.of()) > sharpPairs(tree, Set.of())
+                            || !junctionKept(tree, work, e, unit) || !accepted(result, t, unit, work)) {
+                        continue;
+                    }
+                    scored++;
+                    double score = unitScore(swapped(unit, tree, work));
+                    if (score < bestScore) {
+                        best = work;
+                        bestScore = score;
+                    }
+                }
+                if (best == null || bestScore > was + Math.max(UNKINK_EPS, budget)) {
+                    log.info("orthogonal: ввод точки {} не спрямлён{}", tree.edges.get(e).to.key,
+                            best == null ? "" : String.format(Locale.ROOT, ", S +%.5f", bestScore - was));
+                    continue;
+                }
+                budget -= Math.max(0, bestScore - was);
+                result.set(t, best);
+                taken++;
+            }
+        }
+        log.info("orthogonal: tried={} taken={} elapsed={}ms", tried, taken, (System.nanoTime() - started) / 1_000_000);
+        return result;
+    }
+
+    private boolean junctionKept(Tree tree, Tree work, int e, List<Tree> unit) {
+        Tree.Node node = work.edges.get(e).from;
+        if (node.key.equals(tree.edges.get(e).from.key)) {
+            return true;
+        }
+        List<Integer> incident = new ArrayList<>();
+        for (int k = 0; k < work.edges.size(); k++) {
+            if (work.edges.get(k).from == node || work.edges.get(k).to == node) {
+                incident.add(k);
+            }
+        }
+        try {
+            return junctionFits(work, node.key, incident, diameters(swapped(unit, tree, work)));
+        } catch (IllegalStateException | IllegalArgumentException ex) {
+            return false;
+        }
+    }
+
+    private static int hooks(Tree tree) {
+        int count = 0;
+        for (int e = 0; e < tree.edges.size(); e++) {
+            count += hooks(tree, e);
+        }
+        return count;
+    }
+
+    private static int hooks(Tree tree, int e) {
+        Tree.Edge edge = tree.edges.get(e);
+        if (edge.to.kind != Tree.Kind.CONNECTION) {
+            return 0;
+        }
+        List<Coordinate> path = leafPath(tree, edge);
+        int count = 0;
+        double last = 0;
+        for (int v = 1; v + 1 < path.size(); v++) {
+            double turn = signedTurn(path.get(v - 1), path.get(v), path.get(v + 1));
+            if (last * turn > 0 && Math.abs(last + turn) > HOOK_SUM_DEG && path.get(v - 1).distance(path.get(v)) < HOOK_LINK_M) {
+                count++;
+            }
+            last = turn;
+        }
+        return count;
+    }
+
+    private static List<Coordinate> leafPath(Tree tree, Tree.Edge edge) {
+        List<Coordinate> path = new ArrayList<>(Arrays.asList(edge.line.getCoordinates()));
+        Collections.reverse(path);
+        for (Tree.Edge other : tree.edges) {
+            if (edge.from.kind == Tree.Kind.JUNCTION && other.to == edge.from) {
+                path.add(other.line.getCoordinateN(other.line.getNumPoints() - 2));
+            }
+        }
+        return path;
+    }
+
+    private static double signedTurn(Coordinate a, Coordinate b, Coordinate c) {
+        double ux = b.x - a.x;
+        double uy = b.y - a.y;
+        double wx = c.x - b.x;
+        double wy = c.y - b.y;
+        return Math.hypot(ux, uy) < 1e-6 || Math.hypot(wx, wy) < 1e-6 ? 0
+                : Math.toDegrees(Math.atan2(ux * wy - uy * wx, ux * wx + uy * wy));
+    }
+
+    private List<Tree> movedTies(Tree tree, int e, Map<Tree.Edge, Integer> dnByEdge) {
+        Tree.Edge edge = tree.edges.get(e);
+        ExistingOks building = buildingByConnection.get(edge.to.connection.getId());
+        Tree.Edge parent = null;
+        for (Tree.Edge other : tree.edges) {
+            parent = other.to == edge.from ? other : parent;
+        }
+        EdgeShape shape = building == null || parent == null || edge.from.kind != Tree.Kind.JUNCTION ? null
+                : shape(tree, e, dnByEdge);
+        if (shape == null) {
+            return List.of();
+        }
+        Coordinate[] c = edge.line.getCoordinates();
+        Coordinate cp = c[c.length - 1];
+        Coordinate exit = c[c.length - 2];
+        Coordinate junction = edge.from.point;
+        Coordinate source = parent.line.getCoordinateN(parent.line.getNumPoints() - 2);
+        double span = junction.distance(source);
+        double ray = cp.distance(exit);
+        List<Coordinate> spots = new ArrayList<>();
+        for (double d = -Math.min(ORTHO_SLIDE_M, span - Router.CUT_PIECE_M); d <= ORTHO_REACH_M; d += ORTHO_STEP_M) {
+            spots.add(new LineSegment(source, junction).pointAlong(1 + d / span));
+        }
+        for (double s = ray; s <= ray + ORTHO_REACH_M; s += ORTHO_STEP_M) {
+            spots.add(new LineSegment(cp, exit).pointAlong(s / ray));
+        }
+        List<Tree> result = new ArrayList<>();
+        for (Coordinate spot : spots) {
+            Tree work = spot.distance(junction) < 1e-6 ? tree : moved(tree, edge.from, spot);
+            List<LineSegment> apart = new ArrayList<>();
+            Coordinate before = null;
+            for (Tree.Edge other : work.edges) {
+                Coordinate[] o = other.line.getCoordinates();
+                for (int i = 0; other != work.edges.get(e) && i + 1 < o.length; i++) {
+                    apart.add(new LineSegment(o[i], o[i + 1]));
+                }
+                before = other.to == work.edges.get(e).from ? o[o.length - 2] : before;
+            }
+            Coordinate[] line = before == null ? null : builder.straightFrom(building, spot, cp, shape.zones,
+                    tree.tie.getIgnored(), before, apart);
+            if (line != null) {
+                result.add(replaced(work, Map.of(e, factory.createLineString(line))));
+            }
+        }
+        return result;
+    }
+
+    private List<Tree> cornered(Tree tree, int e, Map<Tree.Edge, Integer> dnByEdge) {
+        Tree.Edge edge = tree.edges.get(e);
+        List<Coordinate> path = leafPath(tree, edge);
+        int n = edge.line.getNumPoints();
+        EdgeShape shape = n < 4 || buildingByConnection.get(edge.to.connection.getId()) == null ? null : shape(tree, e, dnByEdge);
+        double first = path.size() > 3 ? signedTurn(path.get(0), path.get(1), path.get(2)) : 0;
+        double second = path.size() > 3 ? signedTurn(path.get(1), path.get(2), path.get(3)) : 0;
+        if (shape == null || first * second <= 0 || Math.abs(first + second) <= HOOK_SUM_DEG
+                || path.get(1).distance(path.get(2)) >= HOOK_LINK_M) {
+            return List.of();
+        }
+        Coordinate cp = path.get(0);
+        Coordinate exit = path.get(1);
+        Coordinate target = path.get(3);
+        List<Coordinate> head = new ArrayList<>(Arrays.asList(edge.line.getCoordinates()).subList(0, n - 3));
+        double ray = cp.distance(exit);
+        double ux = (exit.x - cp.x) / ray;
+        double uy = (exit.y - cp.y) / ray;
+        double side = Math.toRadians(Math.signum(first) * ORTHO_TURN_DEG);
+        double vx = ux * Math.cos(side) - uy * Math.sin(side);
+        double vy = ux * Math.sin(side) + uy * Math.cos(side);
+        List<Tree> result = new ArrayList<>();
+        for (double s = ray; s <= ray + ORTHO_CORNER_M; s += 2.5 * ORTHO_STEP_M) {
+            Coordinate corner = new Coordinate(cp.x + ux * s, cp.y + uy * s);
+            if (s > ray + 1e-6 && (!shape.zones.covers(exit, corner)
+                    || !shape.zones.plain(exit, corner, tree.tie.getIgnored(), Router.CUT_MARGIN_M)
+                    || !Router.apart(new LineSegment(exit, corner), shape.apart))) {
+                break;
+            }
+            for (double leg = 0; leg <= ORTHO_LEG_M; leg = leg == 0 ? HOOK_LINK_M + ORTHO_STEP_M : leg + 5 * ORTHO_STEP_M) {
+                List<Coordinate> line = new ArrayList<>(head);
+                if (leg > 0) {
+                    line.add(new Coordinate(corner.x + vx * leg, corner.y + vy * leg));
+                }
+                line.add(corner);
+                line.add(cp);
+                boolean fits = true;
+                for (int k = head.size() - 1; fits && k + 2 < line.size(); k++) {
+                    fits = shape.router.pieceFitsAt(shape.zones, line, k, tree.tie.getIgnored(), shape.apart);
+                }
+                if (fits) {
+                    result.add(replaced(tree, Map.of(e, factory.createLineString(line.toArray(new Coordinate[0])))));
+                }
+            }
+        }
         return result;
     }
 
