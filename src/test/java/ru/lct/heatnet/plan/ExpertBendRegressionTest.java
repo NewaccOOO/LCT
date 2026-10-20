@@ -12,12 +12,12 @@ class ExpertBendRegressionTest {
 
     @Test
     void pairWithInvalidExtensionCornerIsReplacedByOneVertex() {
-        assertEquals(13.2275, score("e4-combined", 0), 1e-6);
+        assertEquals(13.2989, score("e4-combined", 0), 1e-6);
     }
 
     @Test
     void pairOnEdgeWithGraphOnlyInWideAreaIsReplacedByOneVertex() {
-        assertEquals(46.2128, score("e4-unreachable", 1), 1e-6);
+        assertEquals(42.9138, score("e4-unreachable", 0), 1e-6);
     }
 
     private double score(String name, int variant) {

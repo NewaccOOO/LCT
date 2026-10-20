@@ -294,10 +294,24 @@ class RouterTest {
     }
 
     @Test
+    void routeToTieLeavesPipeAcrossWhenDirectEdgeRunsAlongIt() {
+        NetworkSegment pipe = new NetworkSegment("hn-1", line(-100, 0, 100, 0), DN, 10, "src");
+        Router router = router(List.of(), List.of(pipe));
+
+        Route route = router.routeToAny(point(-60, 10), List.of(point(0, 0)), Set.of("hn-1"));
+
+        assertNotNull(route);
+        Coordinate[] coords = route.getGeometry().getCoordinates();
+        Coordinate beforeTie = coords[coords.length - 2];
+        assertEquals(0, beforeTie.x, 0.01, "отвод от врезки не поперёк трубы: " + route.getGeometry());
+        assertTrue(beforeTie.y > 1, "отвод от врезки идёт по трубе: " + route.getGeometry());
+    }
+
+    @Test
     void sharpenStraightensEdgeFromTieIntoOneSegment() {
         NetworkSegment pipe = new NetworkSegment("hn-1", line(-100, 0, 100, 0), DN, 10, "src");
         Router router = router(List.of(), List.of(pipe));
-        List<Coordinate> edge = new ArrayList<>(List.of(new Coordinate(0, 0), new Coordinate(-20, 30), new Coordinate(-40, 51)));
+        List<Coordinate> edge = new ArrayList<>(List.of(new Coordinate(0, 0), new Coordinate(-5, 30), new Coordinate(-15, 61)));
 
         assertTrue(router.sharpen(router.obstacles(), edge, Set.of("hn-1"), null, null));
         assertEquals(2, edge.size(), edge.toString());

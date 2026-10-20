@@ -73,6 +73,8 @@ public final class VariantEnumerator {
     private static final double SCAN_STEP_M = 2;
     private static final int SCAN_TRIES = 3;
     private static final double DETOUR_RATIO = 1.1;
+    private static final double POOR_RATIO = 1.5;
+    private static final double POOR_EXTRA_M = 20;
     static final double TREES_APART_M = 0.5;
     private static final double SWAP_GAIN = 1e-6;
     private static final double PAIR_MIN_DEG = 60;
@@ -98,6 +100,8 @@ public final class VariantEnumerator {
     private static final int SEARCH_STALL = Integer.getInteger("heatnet.search.stall", 100);
     private static final int CITY_STALL = Integer.getInteger("heatnet.city.stall", 50);
     private static final int CANDIDATE_LIMIT = 6;
+    private static final int CONTINUE_MAX = 4;
+    private static final int JOIN_TREES = 3;
     private static final double LENGTH_DN_MARGIN = 1.2;
     private static final int NEAREST_BLOCKS = 2;
     private static final double IMPROVE_EPS = 1e-6;
@@ -173,6 +177,7 @@ public final class VariantEnumerator {
     private final ObstacleIndex obstacleIndex;
     private final RouteCache routeCache;
     private final boolean district;
+    private volatile boolean extended;
     private STRtree direct;
     private final SpecialObjects specials;
     private final Map<String, ExistingOks> buildingByConnection;
@@ -480,6 +485,9 @@ public final class VariantEnumerator {
         }
         List<Draft> shaped = new ArrayList<>();
         List<Draft> found = picked();
+        for (int i = 0; i < found.size(); i++) {
+            found.set(i, rescued(found.get(i), i == 0));
+        }
         List<Draft> candidates = EXACT ? exact(found) : List.of();
         List<Draft> picked = shaped(found, shaped);
         if (!candidates.isEmpty()) {
@@ -2461,8 +2469,9 @@ public final class VariantEnumerator {
         return options;
     }
 
-    private static String optionsKey(List<ConnectionPoint> subset, boolean slide) {
-        return subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining("|")) + (slide ? "" : "#fixed");
+    private String optionsKey(List<ConnectionPoint> subset, boolean slide) {
+        return subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining("|")) + (slide ? "" : "#fixed")
+                + (extended ? "#wide" : "");
     }
 
     private void prefetch(List<List<ConnectionPoint>> partition, boolean slide) {
@@ -2504,7 +2513,22 @@ public final class VariantEnumerator {
         int blockDn = district ? region.dn : Math.min(region.dn, step != null ? step.getDn() : byFlow.getDn());
         List<TieCandidate> all = reach(finder.find(points, blockDn), points);
         List<Option> options = options(region, blockDn, region.area, subset, false, all, false, slide);
+        if (subset.size() > 1 && !district) {
+            String label = subset.stream().map(ConnectionPoint::getId).sorted().collect(Collectors.joining(","));
+            for (int tried = blockDn; incomplete(plain(options)) && rejectedDn.getOrDefault(label, 0) > tried; ) {
+                tried = rejectedDn.get(label);
+                options.addAll(options(region, tried, region.area, subset, false, candidates(points, flow, tried), false, slide));
+            }
+        }
         if (subset.size() == 1) {
+            if (extended && poor(plain(options), points.get(0), all)) {
+                Set<String> known = all.stream().map(TieCandidate::nodeKey).collect(Collectors.toSet());
+                List<TieCandidate> direct = finder.direct(points.get(0), blockDn).stream()
+                        .filter(candidate -> !known.contains(candidate.nodeKey())).collect(Collectors.toList());
+                if (!direct.isEmpty()) {
+                    options.addAll(options(region, blockDn, region.area, subset, false, direct, false, slide));
+                }
+            }
             int ownDn = rules.diameterFor(oksById.get(subset.get(0).getOksId()).getFlowTph()).getDn();
             if (ownDn < blockDn) {
                 List<TieCandidate> own = candidates(points, flow, ownDn);
@@ -2525,9 +2549,11 @@ public final class VariantEnumerator {
                 tried = rejectedDn.get(label);
                 options.addAll(options(region, tried, region.wideArea, subset, false, candidates(points, flow, tried), false, slide));
             }
-            if (SCAN && incomplete(plain(options))) {
+            boolean none = incomplete(plain(options));
+            if (SCAN && (none || extended && poor(plain(options), points.get(0), all))) {
                 Envelope wide = district ? region.area : region.wideArea;
-                List<TieCandidate> scanned = scanned(region, blockDn, wide, subset.get(0));
+                double radius = (none || extended) && !district ? Math.max(SCAN_RADIUS_M, rules.diameter(blockDn).getMaxLengthM()) : SCAN_RADIUS_M;
+                List<TieCandidate> scanned = scanned(region, blockDn, wide, subset.get(0), radius);
                 if (!scanned.isEmpty()) {
                     options.addAll(options(region, blockDn, wide, subset, false, scanned, false, slide));
                 }
@@ -2552,11 +2578,11 @@ public final class VariantEnumerator {
         return options;
     }
 
-    private List<TieCandidate> scanned(Region region, int dn, Envelope area, ConnectionPoint connection) {
+    private List<TieCandidate> scanned(Region region, int dn, Envelope area, ConnectionPoint connection, double radius) {
         Router router = region.router(dn, area);
         List<TieCandidate> left = new ArrayList<>();
         Set<String> ignored = new HashSet<>();
-        for (TieCandidate candidate : finder.around(connection.getGeometry(), dn, SCAN_RADIUS_M, SCAN_STEP_M)) {
+        for (TieCandidate candidate : finder.around(connection.getGeometry(), dn, radius, SCAN_STEP_M)) {
             Coordinate at = candidate.getPoint().getCoordinate();
             if (area.contains(at) && (region.corridor() == null || region.corridor().covers(candidate.getPoint()))
                     && !router.obstacles().insideForbid(at)) {
@@ -2569,6 +2595,7 @@ public final class VariantEnumerator {
         }
         Coordinate exit = builder.exit(router, dn, area, left.get(0), connection);
         Coordinate start = exit != null ? exit : connection.getGeometry().getCoordinate();
+        left.sort(Comparator.comparingDouble(candidate -> candidate.getPoint().getCoordinate().distance(start)));
         List<TieCandidate> best = new ArrayList<>();
         while (best.size() < SCAN_TRIES && !left.isEmpty()) {
             Router.Choice choice = router.choose(start,
@@ -2613,6 +2640,112 @@ public final class VariantEnumerator {
 
     private static boolean incomplete(List<Option> options) {
         return options.stream().allMatch(option -> !option.tree.unconnected.isEmpty());
+    }
+
+    private Draft rescued(Draft draft, boolean shorten) {
+        if (district) {
+            return draft;
+        }
+        List<Tree> trees = new ArrayList<>(draft.trees);
+        boolean changed = false;
+        extended = true;
+        try {
+            for (FutureOks oks : draft.unconnected) {
+                ConnectionPoint connection = connectionByOks.get(oks.getId());
+                Tree tree = connection == null ? null : compatibleTree(List.of(connection), trees);
+                if (tree != null) {
+                    trees.add(tree);
+                    changed = true;
+                } else if (connection != null) {
+                    changed |= joined(connection, trees);
+                }
+            }
+            for (int i = 0; shorten && i < trees.size(); i++) {
+                Tree tree = trees.get(i);
+                List<ConnectionPoint> connected = tree.connected();
+                if (connected.size() != 1 || !tree.unconnected.isEmpty() || !poor(tree, connected.get(0))) {
+                    continue;
+                }
+                List<Tree> others = new ArrayList<>(trees);
+                others.remove(i);
+                Tree better = compatibleTree(connected, others);
+                if (better == null || better == tree) {
+                    continue;
+                }
+                List<Tree> trial = new ArrayList<>(trees);
+                trial.set(i, better);
+                if (score(trial) < score(trees) - IMPROVE_EPS) {
+                    trees = trial;
+                    changed = true;
+                }
+            }
+        } finally {
+            extended = false;
+        }
+        if (!changed) {
+            return draft;
+        }
+        List<FutureOks> unconnected = missing(trees);
+        try {
+            return new Draft(trees, unconnected, assembler.assemble(draft.variant.getId(), 0, trees, unconnected));
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            log.info("rescue: черновик не собран: {}", e.getMessage());
+            return draft;
+        }
+    }
+
+    private boolean joined(ConnectionPoint connection, List<Tree> trees) {
+        List<Tree> near = new ArrayList<>(trees);
+        near.sort(Comparator.comparingDouble(tree -> tree.geometry().distance(connection.getGeometry())));
+        extended = false;
+        try {
+            for (Tree tree : near.subList(0, Math.min(JOIN_TREES, near.size()))) {
+                List<ConnectionPoint> union = new ArrayList<>(tree.connected());
+                union.add(connection);
+                List<Tree> others = new ArrayList<>(trees);
+                others.remove(tree);
+                Tree joined = compatibleTree(union, others);
+                if (joined != null) {
+                    trees.set(trees.indexOf(tree), joined);
+                    return true;
+                }
+            }
+            return false;
+        } finally {
+            extended = true;
+        }
+    }
+
+    private Tree compatibleTree(List<ConnectionPoint> subset, List<Tree> trees) {
+        for (Option option : options(subset, true)) {
+            if (option.tree.unconnected.isEmpty() && compatible(option.tree, trees)) {
+                return option.tree;
+            }
+        }
+        return null;
+    }
+
+    private double score(List<Tree> trees) {
+        try {
+            return assembler.assemble("0", 0, trees, missing(trees)).getSummary().getScore();
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            return Double.POSITIVE_INFINITY;
+        }
+    }
+
+    private boolean poor(Tree tree, ConnectionPoint connection) {
+        Point point = connection.getGeometry();
+        double straight = finder.find(List.of(point), rules.diameterFor(oksById.get(connection.getOksId()).getFlowTph()).getDn())
+                .stream().mapToDouble(candidate -> candidate.getPoint().distance(point)).min().orElse(0);
+        return tree.length() > POOR_RATIO * straight + POOR_EXTRA_M;
+    }
+
+    private static boolean poor(List<Option> options, Point point, List<TieCandidate> candidates) {
+        double shortest = options.stream().filter(option -> option.tree.unconnected.isEmpty())
+                .mapToDouble(option -> option.tree.length()).min().orElse(Double.POSITIVE_INFINITY);
+        double straight = candidates.stream().mapToDouble(candidate -> candidate.getPoint().distance(point))
+                .min().orElse(0);
+        return shortest > POOR_RATIO * straight + POOR_EXTRA_M;
     }
 
     private static boolean detour(List<Option> options, Point point, List<TieCandidate> candidates) {
@@ -2702,7 +2835,8 @@ public final class VariantEnumerator {
                 return best;
             }).filter(Objects::nonNull).collect(Collectors.toList()));
             int crowded = (int) cheapest.stream().filter(candidate -> treeless.contains(candidate) && finder.crowded(candidate)).count();
-            cheapest = new ArrayList<>(ranked.subList(next, Math.min(next + crowded, ranked.size())));
+            int more = (extended || subset.size() <= CONTINUE_MAX) && options.isEmpty() && next < 2 * CANDIDATE_LIMIT ? CANDIDATE_LIMIT : crowded;
+            cheapest = new ArrayList<>(ranked.subList(next, Math.min(next + more, ranked.size())));
             next += cheapest.size();
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
@@ -3163,6 +3297,10 @@ public final class VariantEnumerator {
             return holds && raysClear(tree, alone) ? new Option(tree, searchScore(alone), exact(alone)) : null;
         } catch (IllegalStateException | IllegalArgumentException e) {
             log.debug("options: subset={} tie={} отброшено: {}", label, tree.tie.nodeKey(), e.getMessage());
+            Diameter byLength = rules.diameterForLength(tree.length());
+            if (!district && byLength != null && byLength.getDn() > graphDn) {
+                rejectedDn.merge(label, byLength.getDn(), Math::max);
+            }
             return null;
         }
     }

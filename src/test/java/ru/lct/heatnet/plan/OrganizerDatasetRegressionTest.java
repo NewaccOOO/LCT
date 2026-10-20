@@ -18,7 +18,7 @@ import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.rules.Rules;
 
 class OrganizerDatasetRegressionTest {
-    private static final double ORGANIZER_RANK1_SCORE = 12.6962;
+    private static final double ORGANIZER_RANK1_SCORE = 12.6982;
     private static final int TURNS_BEFORE_AXES = 26;
 
     @Test
@@ -30,8 +30,8 @@ class OrganizerDatasetRegressionTest {
         Variant best = result.getVariants().get(0);
         assertEquals(1, best.getSummary().getRank());
         assertEquals(ORGANIZER_RANK1_SCORE, best.getSummary().getScore(), 1e-6);
-        assertEquals(3, result.getVariants().size());
-        assertEquals(12.9102, result.getVariants().get(1).getSummary().getScore(), 1e-6);
+        assertEquals(2, result.getVariants().size());
+        assertEquals(12.9290, result.getVariants().get(1).getSummary().getScore(), 1e-6);
         assertTrue(turns(best) <= TURNS_BEFORE_AXES, "поворотов " + turns(best));
     }
 

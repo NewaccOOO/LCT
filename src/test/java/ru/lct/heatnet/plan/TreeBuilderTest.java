@@ -161,6 +161,26 @@ class TreeBuilderTest {
     }
 
     @Test
+    void pipeInsideOwnClearanceZoneIsReachedByStraightFinalPiece() {
+        Geometry building = PlanFixture.rect(140, 80, 160, 100);
+        PlanFixture fixture = new PlanFixture().pipe("hn-1", 0, 78.5, 300, 78.5, 300, 100, "src");
+        fixture.oks.add(new FutureOks("o-1", building, 10, 1.0));
+        fixture.connections.add(new ConnectionPoint("cp-o-1", point(150, 81), "o-1"));
+        fixture.existing.add(new ExistingOks("b-1", building));
+        InputData input = fixture.input();
+        TieInFinder finder = new TieInFinder(input, rules);
+        TieCandidate tie = finder.direct(point(150, 81), DN).get(0);
+        TreeBuilder builder = builder(input, finder, VariantEnumerator.buildings(input));
+
+        Tree tree = builder.build(new Router(input, rules, AREA, DN), DN, AREA, tie, fixture.connections);
+
+        assertTrue(tree.unconnected.isEmpty(), "не подключена");
+        assertEquals(1, tree.edges.size());
+        assertEquals(2, tree.edges.get(0).line.getNumPoints());
+        assertTrue(tree.length() < 3, "длина " + tree.length());
+    }
+
+    @Test
     void finalPieceDoesNotComeBackIntoOwnClearanceZone() {
         Geometry building = PlanFixture.rect(0, 0, 30, 10).union(PlanFixture.rect(25, 10, 30, 30))
                 .union(PlanFixture.rect(13.58, 25, 30, 30));

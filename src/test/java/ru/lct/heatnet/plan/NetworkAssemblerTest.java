@@ -81,15 +81,11 @@ class NetworkAssemblerTest {
     }
 
     @Test
-    void overlapOfExactZonesGoesToPartWithGreaterSpecialFactor() {
+    void overlapOfZonesTooShortForOwnPieceAndTooLongToShareCutIsRejected() {
         PlanFixture fixture = PlanFixture.trunk()
                 .restriction("gas-1", PlanFixture.line(250, 74.97, 450, 74.97), "gas_pipeline");
 
-        List<NewSegment> special = specials(assemble(fixture, 90, 10));
-        double cut = special.get(special.size() - 1).getGeometry().getCoordinateN(0).y;
-
-        assertEquals(2, special.size());
-        assertEquals(73.0, cut, 0.0005);
+        assertThrows(IllegalStateException.class, () -> assemble(fixture, 90, 10));
     }
 
     private Variant assemble(PlanFixture fixture, double deg, double flow) {
@@ -98,14 +94,16 @@ class NetworkAssemblerTest {
 
     private Variant assemble(PlanFixture fixture, Geometry road, double deg, double flow) {
         double rise = 120;
-        fixture.restriction("road-1", road, "road").oks("1", 300 + rise / Math.tan(Math.toRadians(deg)), rise, flow);
+        double leave = 3;
+        fixture.restriction("road-1", road, "road").oks("1", 300 + (rise - leave) / Math.tan(Math.toRadians(deg)), rise, flow);
         InputData input = fixture.input();
         TieCandidate tie = new TieCandidate("hn-2", TieCandidate.HEAT_NETWORK, 200, PlanFixture.point(300, 0),
                 Set.of("hn-2"), 2);
         Tree tree = new Tree(tie);
         Tree.Node cp = Tree.Node.connection(fixture.connection("1"));
         tree.edges.add(new Tree.Edge(tree.root, cp, PlanFixture.GEOMETRY.createLineString(
-                new Coordinate[] {tree.root.point, cp.point})));
+                deg == 90 ? new Coordinate[] {tree.root.point, cp.point}
+                        : new Coordinate[] {tree.root.point, new Coordinate(300, leave), cp.point})));
         NetworkAssembler assembler = new NetworkAssembler(input, rules, new SpecialObjects(input, rules),
                 Map.of("1", fixture.oks.get(0)));
         return assembler.assemble("1", 1, List.of(tree), List.of());

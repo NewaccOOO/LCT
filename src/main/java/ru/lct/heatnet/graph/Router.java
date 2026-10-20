@@ -50,6 +50,7 @@ public final class Router {
     private static final double CROSS_END_M = 0.01;
     public static final double MICRO_M = 0.001;
     private static final double UNKNOWN = Double.NEGATIVE_INFINITY;
+    private static final double STUB_PLAIN_EPS_M = 1e-9;
     private static final int EXACT_STATES = 100_000;
     private static final double HYPOT_TOL = 1e-15;
     private static final double CAP_TOL = 1e-9;
@@ -279,7 +280,7 @@ public final class Router {
                 tied |= lower == bestWeight && bestTarget != null;
                 continue;
             }
-            double direct = obstacles.edgeWeight(t, source, ignored, false, false);
+            double direct = direct(source, t, ignored);
             double weight = Double.isNaN(direct) ? Double.POSITIVE_INFINITY : direct;
             double cap = bestWeight - extra;
             cap += CAP_TOL * (1 + Math.abs(cap));
@@ -289,6 +290,7 @@ public final class Router {
             }
             int via = -1;
             double[] toNodes = partialWeights(t, ignored);
+            Stub[] stubs = stubs(t, ignored);
             ObstacleSet.Hint hint = ObstacleSet.hint();
             for (int i = 0; i < ready || (ready = table.settle(i + 1)) > i; i++) {
                 int v = order[i];
@@ -299,7 +301,7 @@ public final class Router {
                     continue;
                 }
                 if (toNodes[v] == UNKNOWN) {
-                    toNodes[v] = obstacles.tangent(v, t) ? obstacles.edgeWeight(t, nodes.get(v), ignored, false, true, hint) : Double.NaN;
+                    toNodes[v] = toNode(t, v, ignored, stubs, hint);
                 }
                 double total = dist[v] + toNodes[v];
                 if ((total < weight || total == weight && via >= 0 && v < via)
@@ -363,7 +365,7 @@ public final class Router {
                     result[i][j] = 0;
                     continue;
                 }
-                double direct = obstacles.edgeWeight(t, source, ignored, false, false, hint);
+                double direct = direct(source, t, ignored);
                 double weight = Double.isNaN(direct) ? Double.POSITIVE_INFINITY : direct;
                 double[] w = toNodes[j];
                 for (int v : visible[j]) {
@@ -404,6 +406,7 @@ public final class Router {
     private Route shaped(Point from, List<Coordinate> path, Set<String> ignored, boolean cut, double extra) {
         Shape shape = cache.computeIfAbsent(List.of(this, "route", path, ignored, cut), 96L * path.size(), () -> {
             List<Coordinate> coords = new ArrayList<>(path);
+            unstub(coords, ignored);
             straighten(coords, ignored);
             if (cut) {
                 cutCorners(coords, ignored);
@@ -556,7 +559,7 @@ public final class Router {
             Coordinate t = target.getCoordinate();
             double extra = target.getUserData() instanceof Double ? (Double) target.getUserData() : 0;
             if (turnAllowed(incoming, source, t)) {
-                double direct = obstacles.edgeWeight(t, source, ignored, false, false);
+                double direct = direct(source, t, ignored);
                 if (!Double.isNaN(direct) && direct + extra < bestWeight) {
                     bestWeight = direct + extra;
                     bestTarget = t;
@@ -565,6 +568,8 @@ public final class Router {
                 }
             }
             double[] toNodes = partialWeights(t, ignored);
+            Stub[] stubs = stubs(t, ignored);
+            ObstacleSet.Hint hint = ObstacleSet.hint();
             for (int i = 0; i < search.keys.length; i++) {
                 long key = search.keys[i];
                 double reached = search.weights[i];
@@ -576,8 +581,7 @@ public final class Router {
                     continue;
                 }
                 if (toNodes[v] == UNKNOWN) {
-                    toNodes[v] = obstacles.tangent(v, t) ? obstacles.edgeWeight(t, nodes.get(v), ignored, false, true)
-                            : Double.NaN;
+                    toNodes[v] = toNode(t, v, ignored, stubs, hint);
                 }
                 if (!Double.isNaN(toNodes[v]) && reached + toNodes[v] + extra < bestWeight) {
                     bestWeight = reached + toNodes[v] + extra;
@@ -716,12 +720,115 @@ public final class Router {
     private double[] nodeWeights(Coordinate c, Set<String> ignored) {
         return cache.computeIfAbsent(List.of(this, "weights", c.x, c.y, ignored), 8L * nodes.size(), () -> {
             double[] weights = new double[nodes.size()];
+            Stub[] stubs = stubs(c, ignored);
             ObstacleSet.Hint hint = ObstacleSet.hint();
             for (int v = 0; v < weights.length; v++) {
-                weights[v] = obstacles.tangent(v, c) ? obstacles.edgeWeight(c, nodes.get(v), ignored, false, true, hint) : Double.NaN;
+                weights[v] = toNode(c, v, ignored, stubs, hint);
             }
             return weights;
         });
+    }
+
+    private static final class Stub {
+        final Coordinate at;
+        final double weight;
+
+        Stub(Coordinate at, double weight) {
+            this.at = at;
+            this.weight = weight;
+        }
+    }
+
+    private Stub[] stubs(Coordinate c, Set<String> ignored) {
+        return cache.computeIfAbsent(List.of(this, "stubs", c.x, c.y, ignored), 64L, () -> {
+            List<Stub> result = new ArrayList<>();
+            for (Coordinate d : obstacles.departures(c, ignored)) {
+                double weight = obstacles.edgeWeight(c, d, ignored, false, false);
+                if (weight <= c.distance(d) + STUB_PLAIN_EPS_M) {
+                    result.add(new Stub(d, weight));
+                }
+            }
+            return result.toArray(new Stub[0]);
+        });
+    }
+
+    private double toNode(Coordinate c, int v, Set<String> ignored, Stub[] stubs, ObstacleSet.Hint hint) {
+        Coordinate node = nodes.get(v);
+        double best = obstacles.tangent(v, c) ? obstacles.edgeWeight(c, node, ignored, false, true, hint) : Double.NaN;
+        if (!Double.isNaN(best)) {
+            return best;
+        }
+        for (Stub stub : stubs) {
+            if (obstacles.tangent(v, stub.at) && turnAllowed(c, stub.at, node)) {
+                double weight = stub.weight + obstacles.edgeWeight(stub.at, node, ignored, false, true, hint);
+                if (Double.isNaN(best) || weight < best) {
+                    best = weight;
+                }
+            }
+        }
+        return best;
+    }
+
+    private double direct(Coordinate source, Coordinate t, Set<String> ignored) {
+        double best = obstacles.edgeWeight(t, source, ignored, false, false);
+        if (!Double.isNaN(best)) {
+            return best;
+        }
+        for (Stub stub : stubs(source, ignored)) {
+            if (turnAllowed(source, stub.at, t)) {
+                double weight = stub.weight + obstacles.edgeWeight(stub.at, t, ignored, false, false);
+                if (Double.isNaN(best) || weight < best) {
+                    best = weight;
+                }
+            }
+        }
+        for (Stub stub : stubs(t, ignored)) {
+            if (turnAllowed(source, stub.at, t)) {
+                double weight = obstacles.edgeWeight(source, stub.at, ignored, false, false) + stub.weight;
+                if (Double.isNaN(best) || weight < best) {
+                    best = weight;
+                }
+            }
+        }
+        return best;
+    }
+
+    private void unstub(List<Coordinate> coords, Set<String> ignored) {
+        if (Double.isNaN(obstacles.edgeWeight(coords.get(0), coords.get(1), ignored))) {
+            Coordinate next = coords.size() > 2 ? coords.get(2) : null;
+            Coordinate d = bestStub(coords.get(0), coords.get(1), next, ignored, true);
+            if (d != null) {
+                coords.add(1, d);
+            }
+        }
+        int n = coords.size();
+        if (Double.isNaN(obstacles.edgeWeight(coords.get(n - 2), coords.get(n - 1), ignored))) {
+            Coordinate before = n > 2 ? coords.get(n - 3) : null;
+            Coordinate d = bestStub(coords.get(n - 1), coords.get(n - 2), before, ignored, false);
+            if (d != null) {
+                coords.add(n - 1, d);
+            }
+        }
+    }
+
+    private Coordinate bestStub(Coordinate end, Coordinate other, Coordinate beyond, Set<String> ignored, boolean start) {
+        Coordinate best = null;
+        double bestWeight = Double.POSITIVE_INFINITY;
+        boolean bestTurns = false;
+        for (Stub stub : stubs(end, ignored)) {
+            if (!(start ? turnAllowed(end, stub.at, other) : turnAllowed(other, stub.at, end))) {
+                continue;
+            }
+            double weight = stub.weight + obstacles.edgeWeight(stub.at, other, ignored);
+            boolean turns = beyond == null
+                    || (start ? turnAllowed(stub.at, other, beyond) : turnAllowed(beyond, other, stub.at));
+            if (!Double.isNaN(weight) && (turns && !bestTurns || turns == bestTurns && weight < bestWeight)) {
+                best = stub.at;
+                bestWeight = weight;
+                bestTurns = turns;
+            }
+        }
+        return best;
     }
 
     private void straighten(List<Coordinate> coords, Set<String> ignored) {

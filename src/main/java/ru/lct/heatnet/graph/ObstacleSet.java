@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.locationtech.jts.algorithm.Angle;
 import org.locationtech.jts.algorithm.CGAlgorithmsDD;
 import org.locationtech.jts.algorithm.Distance;
 import org.locationtech.jts.algorithm.LineIntersector;
@@ -46,6 +47,9 @@ public final class ObstacleSet {
     private static final double ALONG_TOL_M = 0.01;
     private static final double SPAN_JOIN_M = 1e-6;
     private static final double TIE_IN_TOUCH_M = 0.5;
+    private static final double DEPARTURE_RAY_M = 0.01;
+    private static final double DEPARTURE_GAP_RAD = Math.toRadians(120);
+    private static final double DEPARTURE_SAME_RAD = Math.toRadians(1);
     private static final double ANGLE_MARGIN_DEG = 0.01;
     private static final double CROSSING_STEP_M = 20;
     private static final int MARGIN_QUADRANT_SEGMENTS = 16;
@@ -1005,6 +1009,10 @@ public final class ObstacleSet {
             }
             Special special = specialOrder[k];
             if (ignored.contains(special.id) && touches(special, a, b)) {
+                if (tieClose(special, a, b, NORM_EXTRA_M - SIMPLIFY_M)) {
+                    hint.special = k;
+                    return Double.NaN;
+                }
                 continue;
             }
             List<LineSegment> sides = special.polygon ? null : special.sidesNear(a, b);
@@ -1080,8 +1088,11 @@ public final class ObstacleSet {
     }
 
     private boolean blocks(Special special, Coordinate a, Coordinate b, Set<String> ignored, boolean outside) {
-        if (!special.zone.hitsBox(a, b) || ignored.contains(special.id) && touches(special, a, b)) {
+        if (!special.zone.hitsBox(a, b)) {
             return false;
+        }
+        if (ignored.contains(special.id) && touches(special, a, b)) {
+            return tieClose(special, a, b, NORM_EXTRA_M - SIMPLIFY_M);
         }
         List<LineSegment> sides = special.polygon ? null : special.sidesNear(a, b);
         if (special.polygon ? !special.crossedBy(a, b) : !crosses(sides, a, b)) {
@@ -1163,6 +1174,9 @@ public final class ObstacleSet {
         for (Object item : specials.query(envelope)) {
             Special special = (Special) item;
             if (ignored.contains(special.id) && touches(special, a, b)) {
+                if (tieClose(special, a, b, extra)) {
+                    return false;
+                }
                 continue;
             }
             List<LineSegment> sides = special.sidesNear(a, b);
@@ -1180,8 +1194,10 @@ public final class ObstacleSet {
             return !ignored.contains(zone.id) && zone.intersects(a, b, extra, false);
         }
         Special special = (Special) item;
-        return !(ignored.contains(special.id) && touches(special, a, b))
-                && (special.crossedBy(a, b) || special.zone.intersects(a, b, extra, false));
+        if (ignored.contains(special.id) && touches(special, a, b)) {
+            return tieClose(special, a, b, extra);
+        }
+        return special.crossedBy(a, b) || special.zone.intersects(a, b, extra, false);
     }
 
     private double polygonBeyond(Special special, Coordinate end) {
@@ -1238,6 +1254,71 @@ public final class ObstacleSet {
             }
         }
         return false;
+    }
+
+    public List<Coordinate> departures(Coordinate c, Set<String> ignored) {
+        if (ignored.isEmpty()) {
+            return List.of();
+        }
+        Envelope envelope = new Envelope(c);
+        envelope.expandBy(TIE_IN_TOUCH_M);
+        List<LineSegment> sides = new ArrayList<>();
+        double reach = 0;
+        for (Object item : specials.query(envelope)) {
+            Special special = (Special) item;
+            if (special.polygon || !ignored.contains(special.id)) {
+                continue;
+            }
+            for (LineSegment side : special.sides) {
+                if (side.distance(c) <= TIE_IN_TOUCH_M) {
+                    sides.add(side);
+                    reach = Math.max(reach, special.zone.distance + CROSS_CIRCLE_M + NODE_OFFSET_M);
+                }
+            }
+        }
+        List<Coordinate> result = new ArrayList<>();
+        for (Coordinate d : departures(c, sides, reach)) {
+            if (!insideAnyZone(d) && !insideAny(margins, d)) {
+                result.add(d);
+            }
+        }
+        return result;
+    }
+
+    public static List<Coordinate> departures(Coordinate c, List<LineSegment> sides, double reach) {
+        List<Double> rays = new ArrayList<>();
+        List<Double> angles = new ArrayList<>();
+        double off = 0;
+        for (LineSegment side : sides) {
+            Coordinate foot = side.closestPoint(c);
+            off = Math.max(off, foot.distance(c));
+            double heading = side.angle();
+            angles.add(heading + Math.PI / 2);
+            angles.add(heading - Math.PI / 2);
+            for (Coordinate end : new Coordinate[] {side.p0, side.p1}) {
+                if (end.distance(foot) > DEPARTURE_RAY_M) {
+                    rays.add(Math.atan2(end.y - foot.y, end.x - foot.x));
+                }
+            }
+        }
+        java.util.Collections.sort(rays);
+        for (int k = 0; k < rays.size(); k++) {
+            double from = rays.get(k);
+            double gap = (k + 1 < rays.size() ? rays.get(k + 1) : rays.get(0) + 2 * Math.PI) - from;
+            if (gap >= DEPARTURE_GAP_RAD) {
+                angles.add(from + gap / 2);
+            }
+        }
+        List<Coordinate> result = new ArrayList<>();
+        List<Double> kept = new ArrayList<>();
+        double length = reach + off;
+        for (double angle : angles) {
+            if (kept.stream().noneMatch(other -> Math.abs(Angle.diff(other, angle)) < DEPARTURE_SAME_RAD)) {
+                kept.add(angle);
+                result.add(new Coordinate(c.x + Math.cos(angle) * length, c.y + Math.sin(angle) * length));
+            }
+        }
+        return result;
     }
 
     public boolean alongIgnored(Coordinate a, Coordinate b, Set<String> ignored) {
@@ -1400,6 +1481,22 @@ public final class ObstacleSet {
 
     private boolean touches(Special special, Coordinate a, Coordinate b) {
         return special.near(a, a, TIE_IN_TOUCH_M) || special.near(b, b, TIE_IN_TOUCH_M);
+    }
+
+    private static boolean tieClose(Special special, Coordinate a, Coordinate b, double extra) {
+        double length = a.distance(b);
+        if (special.polygon || length == 0) {
+            return false;
+        }
+        double free = (special.zone.distance + extra + CROSS_CIRCLE_M) / length;
+        double from = special.near(a, a, TIE_IN_TOUCH_M) ? free : 0;
+        double to = special.near(b, b, TIE_IN_TOUCH_M) ? 1 - free : 1;
+        if (from >= to) {
+            return false;
+        }
+        Coordinate p = new Coordinate(a.x + (b.x - a.x) * from, a.y + (b.y - a.y) * from);
+        Coordinate q = new Coordinate(a.x + (b.x - a.x) * to, a.y + (b.y - a.y) * to);
+        return special.zone.intersects(p, q, extra, true);
     }
 
     private boolean insideAnyZone(Coordinate c) {

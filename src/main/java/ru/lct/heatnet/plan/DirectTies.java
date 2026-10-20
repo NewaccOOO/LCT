@@ -53,6 +53,7 @@ final class DirectTies {
     private static final double CLOSED_EPS_M = 0.01;
     private static final double NEAR_SIDE_M = 0.9;
     private static final double NEAR_PIPE_M = 3;
+    private static final double DEPARTURE_EXTRA_M = 0.1;
     private static final double[] SHIFTS_M = {0.5, 1, 1.5, 2, 3, 4, 6, 8, 11, 15};
     private static final String OKS_EXISTING = "oks_existing";
     private static final String HEAT_NETWORK = "heat_network";
@@ -224,11 +225,12 @@ final class DirectTies {
         List<Object> nearPipes = pipes.isEmpty() ? List.of() : nearest(pipes, point);
         for (Object item : nearPipes) {
             NetworkSegment segment = (NetworkSegment) item;
-            TieCandidate tie = finder.pipeCandidate(segment, point, dn, false);
-            if (tie == null || !shared.seen.add(tie.nodeKey())) {
-                continue;
+            for (TieCandidate tie : new TieCandidate[] {finder.pipeCandidate(segment, point, dn, false),
+                    finder.endCandidate(segment, point, dn)}) {
+                if (tie != null && shared.seen.add(tie.nodeKey())) {
+                    add(shared.options, option(tie, connection, shared, nodeCost(tie, segment, dn), false, shared.rejected));
+                }
             }
-            add(shared.options, option(tie, connection, shared, nodeCost(tie, segment, dn), false, shared.rejected));
         }
         if (shared.options.isEmpty()) {
             for (Object item : nearPipes) {
@@ -488,7 +490,7 @@ final class DirectTies {
             if (building != null && !nearSide(line, building, shared, clearance, reasons)) {
                 return null;
             }
-            return valid(line, 0, tie, dn, own, crossPipes, reasons) ? line : null;
+            return departed(line, 0, tie, dn, own, crossPipes, reasons);
         }
         Coordinate exit = portal(cp, shared, building, clearance).exit;
         if (exit == null) {
@@ -504,19 +506,21 @@ final class DirectTies {
         if (turn < TreeBuilder.MIN_TURN_DEG) {
             Coordinate[] straight = {tiePoint, cp};
             return nearSide(straight, building, shared, clearance, reasons)
-                    && valid(straight, 0, tie, dn, own, crossPipes, reasons) ? straight : null;
+                    ? departed(straight, 0, tie, dn, own, crossPipes, reasons) : null;
         }
         if (turn <= Router.MAX_TURN_DEG) {
-            return valid(line, 1, tie, dn, own, crossPipes, reasons) ? line : null;
+            return departed(line, 1, tie, dn, own, crossPipes, reasons);
         }
         for (double length : TreeBuilder.EXIT_LINK ? TreeBuilder.EXIT_LINK_M : new double[0]) {
             Coordinate link = TreeBuilder.exitLink(new Coordinate[] {cp, exit, tiePoint}, length)[2];
             Coordinate[] linked = {tiePoint, link, exit, cp};
             double linkTurn = Router.deflectionDeg(tiePoint, link, exit);
             if (link.distance(tiePoint) >= TreeBuilder.MIN_PIECE_M
-                    && linkTurn >= TreeBuilder.MIN_TURN_DEG && linkTurn <= Router.MAX_TURN_DEG
-                    && valid(linked, 2, tie, dn, own, crossPipes, reasons)) {
-                return linked;
+                    && linkTurn >= TreeBuilder.MIN_TURN_DEG && linkTurn <= Router.MAX_TURN_DEG) {
+                Coordinate[] departed = departed(linked, 2, tie, dn, own, crossPipes, reasons);
+                if (departed != null) {
+                    return departed;
+                }
             }
         }
         reject(reasons, "поворот у выхода");
@@ -653,6 +657,81 @@ final class DirectTies {
         return false;
     }
 
+    private Coordinate[] departed(Coordinate[] line, int finalPiece, TieCandidate tie, int dn, String ownId,
+            boolean crossPipes, Map<String, Integer> reasons) {
+        if (valid(line, finalPiece, tie, dn, ownId, crossPipes, reasons)) {
+            return line;
+        }
+        if (finalPiece == 0 && ownId != null || leaves(tie, line[0], line[1], dn)) {
+            return null;
+        }
+        Coordinate[] best = null;
+        double bestLength = Double.POSITIVE_INFINITY;
+        for (Coordinate d : departures(tie, dn)) {
+            Coordinate[] candidate = new Coordinate[line.length + 1];
+            candidate[0] = line[0];
+            candidate[1] = d;
+            System.arraycopy(line, 1, candidate, 2, line.length - 1);
+            double turn = Router.deflectionDeg(line[0], d, line[1]);
+            double length = line[0].distance(d) + d.distance(line[1]);
+            if (length >= bestLength || d.distance(line[1]) < TreeBuilder.MIN_PIECE_M
+                    || turn < TreeBuilder.MIN_TURN_DEG || turn > Router.MAX_TURN_DEG
+                    || line.length > 2 && Router.deflectionDeg(d, line[1], line[2]) > Router.MAX_TURN_DEG
+                    || !valid(candidate, finalPiece == 0 ? 0 : finalPiece + 1, tie, dn, ownId, crossPipes, new HashMap<>())) {
+                continue;
+            }
+            best = candidate;
+            bestLength = length;
+        }
+        return best;
+    }
+
+    private List<Coordinate> departures(TieCandidate tie, int dn) {
+        Coordinate c = tie.getPoint().getCoordinate();
+        Envelope envelope = new Envelope(c);
+        envelope.expandBy(TieInFinder.TOUCH_M);
+        double halfWidth = rules.diameter(dn).getWidthM() / 2;
+        RestrictionRule network = rules.restriction(HEAT_NETWORK);
+        List<LineSegment> sides = new ArrayList<>();
+        double reach = 0;
+        for (NetworkSegment segment : index.segments(envelope)) {
+            if (!tie.getIgnored().contains(segment.getId())) {
+                continue;
+            }
+            Coordinate[] coords = segment.getGeometry().getCoordinates();
+            for (int i = 0; i + 1 < coords.length; i++) {
+                LineSegment side = new LineSegment(coords[i], coords[i + 1]);
+                if (side.distance(c) <= TieInFinder.TOUCH_M) {
+                    sides.add(side);
+                    reach = Math.max(reach, network.clearanceM(dn) + halfWidth
+                            + rules.diameter(segment.getDiameter()).getWidthM() / 2 + ObstacleSet.CROSS_CIRCLE_M + DEPARTURE_EXTRA_M);
+                }
+            }
+        }
+        return ObstacleSet.departures(c, sides, reach);
+    }
+
+    private boolean leaves(TieCandidate tie, Coordinate tiePoint, Coordinate next, int dn) {
+        LineString piece = factory.createLineString(new Coordinate[] {tiePoint, next});
+        double halfWidth = rules.diameter(dn).getWidthM() / 2;
+        RestrictionRule network = rules.restriction(HEAT_NETWORK);
+        for (NetworkSegment segment : index.segments(piece.getEnvelopeInternal())) {
+            if (!tie.getIgnored().contains(segment.getId())) {
+                continue;
+            }
+            double distance = network.clearanceM(dn) + halfWidth + rules.diameter(segment.getDiameter()).getWidthM() / 2;
+            if (!leavesPipe(segment.getGeometry(), tiePoint, next, distance)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean leavesPipe(LineString pipe, Coordinate tiePoint, Coordinate next, double distance) {
+        double skip = (distance + ObstacleSet.CROSS_CIRCLE_M) / tiePoint.distance(next);
+        return skip >= 1 || pipeDistance(pipe, new LineSegment(tiePoint, next).pointAlong(skip), next) >= distance - DIST_EPS_M;
+    }
+
     private boolean valid(Coordinate[] line, int finalPiece, TieCandidate tie, int dn, String ownId, boolean crossPipes,
             Map<String, Integer> reasons) {
         double halfWidth = rules.diameter(dn).getWidthM() / 2;
@@ -695,13 +774,10 @@ final class DirectTies {
                 double distance = network.clearanceM(dn) + halfWidth + rules.diameter(segment.getDiameter()).getWidthM() / 2;
                 boolean atTie = tie.getIgnored().contains(segment.getId()) && i == 0;
                 if (atTie) {
-                    double skip = TieInFinder.TOUCH_M / piece.getLength();
-                    if (skip >= 1) {
+                    if (piece.getLength() <= TieInFinder.TOUCH_M) {
                         return reject(reasons, "короче 0,5 м");
                     }
-                    LineString away = factory.createLineString(new Coordinate[] {
-                            new LineSegment(line[0], line[1]).pointAlong(skip), line[1]});
-                    if (segment.getGeometry().intersects(away)) {
+                    if (!leavesPipe(segment.getGeometry(), line[0], line[1], distance)) {
                         return reject(reasons, "вдоль трубы врезки");
                     }
                 } else if (pipeDistance(segment.getGeometry(), line[i], line[i + 1]) < distance - DIST_EPS_M

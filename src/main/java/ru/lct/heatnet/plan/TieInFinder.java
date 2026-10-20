@@ -139,13 +139,44 @@ final class TieInFinder {
             for (NetworkSegment segment : nearest(input.getSegments(), segmentIndex, segmentExtent, point,
                     s -> s.getGeometry().distance(point),
                     s -> s.getGeometry().getEnvelopeInternal().distance(point.getEnvelopeInternal()))) {
-                TieCandidate candidate = pipeCandidate(segment, point, dn);
-                if (candidate != null && byKey.values().stream().noneMatch(c -> same(c, candidate))) {
-                    byKey.put(candidate.nodeKey(), candidate);
+                for (TieCandidate candidate : new TieCandidate[] {pipeCandidate(segment, point, dn), endCandidate(segment, point, dn)}) {
+                    if (candidate != null && byKey.values().stream().noneMatch(c -> same(c, candidate))) {
+                        byKey.put(candidate.nodeKey(), candidate);
+                    }
                 }
             }
         }
         return new ArrayList<>(byKey.values());
+    }
+
+    List<TieCandidate> direct(Point point, int dn) {
+        List<TieCandidate> result = new ArrayList<>();
+        for (NetworkSegment segment : nearest(input.getSegments(), segmentIndex, segmentExtent, point,
+                s -> s.getGeometry().distance(point), s -> s.getGeometry().getEnvelopeInternal().distance(point.getEnvelopeInternal()))) {
+            for (TieCandidate candidate : new TieCandidate[] {pipeCandidate(segment, point, dn, false), projected(segment, point, dn)}) {
+                if (candidate != null && result.stream().noneMatch(c -> same(c, candidate))) {
+                    result.add(candidate);
+                }
+            }
+        }
+        return result;
+    }
+
+    private TieCandidate projected(NetworkSegment segment, Point point, int dn) {
+        LineString line = segment.getGeometry();
+        LengthIndexedLine indexed = new LengthIndexedLine(line);
+        double length = line.getLength();
+        double gap = endGap(segment, dn);
+        if (length <= 2 * gap) {
+            return null;
+        }
+        double at = indexed.project(point.getCoordinate());
+        double across = point.getCoordinate().distance(indexed.extractPoint(at));
+        if (across < MIN_TIE_M) {
+            double shift = Math.sqrt(MIN_TIE_M * MIN_TIE_M - across * across);
+            at += at < length / 2 ? shift : -shift;
+        }
+        return candidateAt(segment, factory.createPoint(indexed.extractPoint(Math.max(gap, Math.min(length - gap, at)))));
     }
 
     List<TieCandidate> along(TieCandidate tie, int dn, double otherTieM) {
@@ -259,6 +290,21 @@ final class TieInFinder {
         return pipeCandidate(segment, at, dn, free);
     }
 
+    TieCandidate endCandidate(NetworkSegment segment, Point point, int dn) {
+        LineString line = segment.getGeometry();
+        double at = new LengthIndexedLine(line).project(point.getCoordinate());
+        double length = line.getLength();
+        double gap = endGap(segment, dn);
+        Coordinate first = line.getCoordinateN(0);
+        Coordinate last = line.getCoordinateN(line.getNumPoints() - 1);
+        Coordinate end = at < gap ? first : at > length - gap ? last : null;
+        if (length <= 2 * gap || end == null || !deadEnd(segment, end) || point.getCoordinate().distance(end) < MIN_TIE_M
+                || inBand(bands(segment), end == first ? 0 : length)) {
+            return null;
+        }
+        return candidateAt(segment, factory.createPoint(end));
+    }
+
     TieCandidate pipeCandidate(NetworkSegment segment, double at, int dn) {
         return pipeCandidate(segment, at, dn, FREE_TIE);
     }
@@ -267,8 +313,7 @@ final class TieInFinder {
         LineString line = segment.getGeometry();
         LengthIndexedLine indexed = new LengthIndexedLine(line);
         double length = line.getLength();
-        double gap = rules.restriction(TieCandidate.HEAT_NETWORK).clearanceM(dn) + rules.diameter(dn).getWidthM() / 2
-                + rules.diameter(segment.getDiameter()).getWidthM() / 2 + END_GAP_EXTRA_M;
+        double gap = endGap(segment, dn);
         if (length <= 2 * gap) {
             return null;
         }
@@ -278,8 +323,10 @@ final class TieInFinder {
             position = freeByKey.computeIfAbsent(List.of(segment.getId(), dn, from), key -> forbidden(indexed.extractPoint(from), dn)
                     ? free(indexed, bands(segment), from, gap, length - gap, dn) : from);
         }
-        Point tie = factory.createPoint(indexed.extractPoint(position));
+        return candidateAt(segment, factory.createPoint(indexed.extractPoint(position)));
+    }
 
+    private TieCandidate candidateAt(NetworkSegment segment, Point tie) {
         ChamberRule rule = rules.chamberRule();
         Chamber best = null;
         Envelope window = new Envelope(tie.getCoordinate());
@@ -303,6 +350,26 @@ final class TieInFinder {
             return null;
         }
         return new TieCandidate(segment.getId(), TieCandidate.HEAT_NETWORK, segment.getDiameter(), tie, touching, capacity);
+    }
+
+    private double endGap(NetworkSegment segment, int dn) {
+        return rules.restriction(TieCandidate.HEAT_NETWORK).clearanceM(dn) + rules.diameter(dn).getWidthM() / 2
+                + rules.diameter(segment.getDiameter()).getWidthM() / 2 + END_GAP_EXTRA_M;
+    }
+
+    private boolean deadEnd(NetworkSegment segment, Coordinate end) {
+        Point point = factory.createPoint(end);
+        if (!touching(point).equals(Set.of(segment.getId()))) {
+            return false;
+        }
+        Envelope window = new Envelope(end);
+        window.expandBy(TOUCH_M);
+        for (Object item : chamberIndex.query(window)) {
+            if (input.getChambers().get((Integer) item).getGeometry().getCoordinate().distance(end) <= TOUCH_M) {
+                return false;
+            }
+        }
+        return true;
     }
 
     boolean crowded(TieCandidate candidate) {

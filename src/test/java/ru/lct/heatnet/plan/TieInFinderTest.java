@@ -129,6 +129,8 @@ class TieInFinderTest {
         TieCandidate end = candidates.stream()
                 .filter(c -> c.getExistingObjectId().equals("hn-3") && c.getPoint().getX() > 590).findFirst().orElseThrow();
         assertTrue(end.getPoint().getX() < 600 - 1, "точка врезки у конца участка: " + end.getPoint());
+        assertTrue(candidates.stream().anyMatch(c -> c.getPoint().distance(point(600, 0)) < 1e-6),
+                "нет врезки в свободный конец hn-3: " + candidates);
     }
 
     @Test

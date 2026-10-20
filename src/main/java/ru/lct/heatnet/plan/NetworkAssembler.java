@@ -58,7 +58,10 @@ final class NetworkAssembler {
     private static final double NODE_APART_M = 0.06;
     private static final double TOUCH_APART_M = 0.002;
     private static final double SHARED_CLIP_M = 0.14;
-    private static final double MIN_SPECIAL_M = 0.12;
+    private static final double SLIVER_MAX_M = 0.2;
+    private static final double CHECK_SLACK_M = ZONE_GROW_M;
+    private static final double CHECK_REACH_M = 0.17;
+    private static final double MIN_SPECIAL_M = 0.105;
     private static final double MIN_SPLIT_DEG = 30.5;
     private static final double TIE_BAND_M = TieInFinder.TOUCH_M + 1e-6;
     private static final double GAP_EPS_M = 1e-6;
@@ -408,19 +411,28 @@ final class NetworkAssembler {
         }
 
         void checkClearance() {
+            List<Coordinate> ties = new ArrayList<>();
+            for (NewSegment segment : segments) {
+                if (tieNodeIds.contains(segment.getStartNodeId())) {
+                    ties.add(segment.getGeometry().getCoordinateN(0));
+                }
+            }
             for (NewSegment segment : segments) {
                 if (SPECIAL.equals(segment.getLayingMethod())) {
                     continue;
                 }
-                boolean fromTie = tieNodeIds.contains(segment.getStartNodeId());
-                Coordinate start = segment.getGeometry().getCoordinateN(0);
                 for (SpecialObjects.Special special : specials.around(segment.getGeometry(), segment.getDiameter())) {
-                    if (fromTie && special.network && withinDistance(special.geometry, start, TieInFinder.TOUCH_M)) {
-                        continue;
+                    List<Coordinate> points = new ArrayList<>(crossingsByLine.getOrDefault(special, List.of()));
+                    if (special.network) {
+                        for (Coordinate tie : ties) {
+                            if (withinDistance(special.geometry, tie, TieInFinder.TOUCH_M)) {
+                                points.add(tie);
+                            }
+                        }
                     }
                     double need = specials.clearance(special, segment.getDiameter());
                     if (special.closer(segment.getGeometry(), need - DIST_EPS_M)
-                            && !nearCrossing(segment.getGeometry(), special, need)) {
+                            && !nearCrossing(segment.getGeometry(), special, need, points)) {
                         throw new IllegalStateException("Участок " + segment.getId() + " ближе отступа к объекту "
                                 + "со специальным проходом вне специального участка");
                     }
@@ -428,9 +440,8 @@ final class NetworkAssembler {
             }
         }
 
-        boolean nearCrossing(LineString line, SpecialObjects.Special special, double need) {
-            List<Coordinate> points = crossingsByLine.get(special);
-            if (points == null) {
+        boolean nearCrossing(LineString line, SpecialObjects.Special special, double need, List<Coordinate> points) {
+            if (points.isEmpty()) {
                 return false;
             }
             Geometry close = line.intersection(special.buffers.computeIfAbsent(need - DIST_EPS_M, special.geometry::buffer));
@@ -750,6 +761,16 @@ final class NetworkAssembler {
                     from = to;
                 }
                 collapseSlivers(merged, sets);
+                for (int j = 0; j < merged.size(); j++) {
+                    double[] interval = merged.get(j);
+                    boolean joined = j > 0 && merged.get(j - 1)[1] == interval[0]
+                            || j + 1 < merged.size() && merged.get(j + 1)[0] == interval[1];
+                    double length = interval[1] - interval[0];
+                    if (joined && length > 2 * ZONE_GROW_M && length <= MIN_SPECIAL_M) {
+                        throw new IllegalStateException("Набор объектов спецперехода ребра " + i + " меняется на "
+                                + String.format(java.util.Locale.ROOT, "%.3f", length) + " м: проверка не видит границы");
+                    }
+                }
                 double length = edges.get(i).length;
                 for (double[] interval : merged) {
                     if (interval[0] <= MERGE_M) {
@@ -769,24 +790,33 @@ final class NetworkAssembler {
                 double[] a = merged.get(j - 1);
                 double[] s = merged.get(j);
                 double[] b = merged.get(j + 1);
-                if (s[1] - s[0] >= MERGE_M || a[1] != s[0] || s[1] != b[0]) {
+                if (s[1] - s[0] > SLIVER_MAX_M || a[1] != s[0] || s[1] != b[0]) {
                     continue;
                 }
                 Set<SpecialObjects.Special> left = sets.get(j - 1);
                 Set<SpecialObjects.Special> mid = sets.get(j);
                 Set<SpecialObjects.Special> right = sets.get(j + 1);
-                double lastEnd = !right.containsAll(mid) ? s[1] : !mid.containsAll(left) ? s[0] : Double.NaN;
-                double firstStart = !left.containsAll(mid) ? s[0] : !mid.containsAll(right) ? s[1] : Double.NaN;
-                double at;
-                if (Double.isNaN(lastEnd) || Double.isNaN(firstStart)) {
-                    at = Double.isNaN(lastEnd) ? firstStart : lastEnd;
-                } else if (lastEnd <= firstStart) {
-                    at = a[2] <= b[2] ? firstStart : lastEnd;
-                } else {
-                    double end = lastEnd - ZONE_GROW_M;
-                    double start = firstStart + ZONE_GROW_M;
-                    at = end <= start ? (lastEnd + firstStart) / 2 : a[2] >= b[2] ? end : start;
+                double low = a[0] + MERGE_M;
+                double high = b[1] - MERGE_M;
+                Set<SpecialObjects.Special> all = new HashSet<>(left);
+                all.addAll(mid);
+                all.addAll(right);
+                for (SpecialObjects.Special special : all) {
+                    boolean inLeft = left.contains(special);
+                    boolean inRight = right.contains(special);
+                    if (inLeft == inRight) {
+                        low = inLeft ? low : Double.POSITIVE_INFINITY;
+                        continue;
+                    }
+                    boolean inMid = mid.contains(special);
+                    double edge = inLeft == inMid ? s[1] : s[0];
+                    low = Math.max(low, inLeft ? edge - CHECK_SLACK_M : edge - CHECK_REACH_M);
+                    high = Math.min(high, inLeft ? edge + CHECK_REACH_M : edge + CHECK_SLACK_M);
                 }
+                if (low > high) {
+                    continue;
+                }
+                double at = Math.max(low, Math.min(high, (s[0] + s[1]) / 2));
                 a[1] = at;
                 b[0] = at;
                 merged.remove(j);

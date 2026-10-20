@@ -942,9 +942,41 @@ final class TreeBuilder {
                 return null;
             }
             Exit portal = portal(connection);
-            if (portal == NO_EXIT) {
+            Attach attach = portal == NO_EXIT ? null : portalAttach(connection, targets, fromPortalDirection, portal);
+            return attach != null ? attach : direct(connection, targets);
+        }
+
+        Attach direct(ConnectionPoint connection, List<Point> targets) {
+            ExistingOks building = buildingByConnection.get(connection.getId());
+            if (building == null) {
                 return null;
             }
+            Coordinate cp = connection.getGeometry().getCoordinate();
+            Set<String> firstIgnored = firstIgnored(connection);
+            List<Piece> pieces = null;
+            Attach best = null;
+            for (Point target : targets) {
+                Coordinate t = target.getCoordinate();
+                if (cp.distance(t) < MIN_PIECE_M || !area.contains(t)) {
+                    continue;
+                }
+                double extra = target.getUserData() instanceof Double ? (Double) target.getUserData() : 0;
+                double weight = obstacles.edgeWeight(cp, t, firstIgnored);
+                if (Double.isNaN(weight) || best != null && weight + extra >= best.weight
+                        || !leavesOnce(building.getGeometry(), cp, t, obstacles.oksClearance())
+                        || !Double.isNaN(farEntry(building.getGeometry(), new Coordinate[] {t, cp}))) {
+                    continue;
+                }
+                pieces = pieces == null ? pieces() : pieces;
+                Attach attach = attach(connection, new Coordinate[] {cp, t}, weight + extra, firstIgnored, pieces, router);
+                if (attach != null) {
+                    best = attach;
+                }
+            }
+            return best;
+        }
+
+        Attach portalAttach(ConnectionPoint connection, List<Point> targets, boolean fromPortalDirection, Exit portal) {
             Attach attach = attach(connection, targets, fromPortalDirection, portal);
             if (attach != null || !anySide || portal == null) {
                 return attach;

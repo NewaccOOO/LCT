@@ -134,7 +134,7 @@ class VariantEnumeratorTest {
         TieCandidate tie = finder.find(List.of(connection.getGeometry()), 100).get(0);
         Coordinate root = tie.getPoint().getCoordinate();
         Tree tree = new Tree(tie);
-        List<Coordinate> line = new ArrayList<>(List.of(root));
+        List<Coordinate> line = new ArrayList<>(List.of(root, new Coordinate(root.x + Math.signum(at.x - root.x) / 2, root.y + 3)));
         if (dx != 0 || dy != 0) {
             line.add(new Coordinate(at.x + dx, root.y + dy / 2));
             line.add(new Coordinate(at.x + dx, at.y - 10));
