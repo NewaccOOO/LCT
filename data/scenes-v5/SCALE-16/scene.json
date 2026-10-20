@@ -1,0 +1,152 @@
+{
+ "id": "SCALE-16",
+ "family": "SCALE",
+ "title": "Дома по разные стороны улицы, Купчино",
+ "description": "Новые дома напротив друг друга через улицу, сеть только с одной стороны. Санкт-Петербург, Купчино, окно 440×440 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   30.396366,
+   59.848878,
+   30.405146,
+   59.853295
+  ],
+  "size_m": [
+   440,
+   440
+  ],
+  "file": "data/cities/spb/input.geojson",
+  "city": "Санкт-Петербург, Александровский округ",
+  "edits": [
+   "сеть на одной стороне улицы убрана: убрано участков сети 4"
+  ]
+ },
+ "rules": [
+  "ТП-4.road",
+  "ТП-4.угол",
+  "ТП-4.спецпроход",
+  "ТП-2.1.дерево",
+  "Р6"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-scale-16-1",
+    "cp-scale-16-2"
+   ],
+   "dn_by_flow_and_length": true,
+   "crossing_angle_min_deg": {
+    "road": 45
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-scale-16-1": 26,
+    "cp-scale-16-2": 95
+   },
+   "tie_in": {
+    "cp-scale-16-1": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-2625"
+     ]
+    },
+    "cp-scale-16-2": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-2626"
+     ]
+    }
+   },
+   "crossings_max": {
+    "road": 2
+   }
+  },
+  "engineer": "Сеть есть только на одной стороне улицы. Дом на этой стороне подключается напрямую, дом напротив — одним переходом улицы под углом, близким к прямому. Инженер не тянет общий ввод через улицу дважды."
+ },
+ "points": [
+  {
+   "id": "cp-scale-16-1",
+   "flow_tph": 20.63
+  },
+  {
+   "id": "cp-scale-16-2",
+   "flow_tph": 19.73
+  }
+ ],
+ "reference": {
+  "cp-scale-16-1": {
+   "shortest_m": 12.3,
+   "dn_by_flow": 100,
+   "path_wgs84": [
+    [
+     30.4011885,
+     59.8514072
+    ],
+    [
+     30.4011884,
+     59.8514944
+    ],
+    [
+     30.4012083,
+     59.8515032
+    ]
+   ]
+  },
+  "cp-scale-16-2": {
+   "shortest_m": 64.9,
+   "dn_by_flow": 100,
+   "path_wgs84": [
+    [
+     30.3997854,
+     59.8511325
+    ],
+    [
+     30.4008069,
+     59.8512241
+    ],
+    [
+     30.4007942,
+     59.8512156
+    ],
+    [
+     30.4008249,
+     59.8512357
+    ],
+    [
+     30.400884,
+     59.8512415
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 74,
+  "heat_chamber": 11,
+  "heat_network": 26,
+  "oks": 27,
+  "oks_connection_point": 2,
+  "park": 2,
+  "power_cable": 73,
+  "road": 73,
+  "sewer": 74,
+  "social_area": 1,
+  "tram_tracks": 6,
+  "water": 1,
+  "water_supply": 75
+ }
+}

@@ -1,0 +1,96 @@
+{
+ "id": "TIE-19",
+ "family": "TIE",
+ "title": "Свободная камера под проезжей частью",
+ "description": "Синтетика: улица 20 м, труба под её осью, камера в полигоне дороги, дом у края. синтетическое поле 300×160 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.61124,
+   55.757108,
+   37.61607,
+   55.758599
+  ],
+  "size_m": [
+   300,
+   160
+  ]
+ },
+ "rules": [
+  "Р29-13",
+  "ТП-2.4.камера10",
+  "ТП-4.road",
+  "ТП-4.спецпроход",
+  "Р6"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-tie-19-1"
+   ],
+   "tie_in": {
+    "cp-tie-19-1": {
+     "kind": "existing_chamber",
+     "chambers": [
+      "hc-road"
+     ]
+    }
+   },
+   "chamber_special_exit_m": {
+    "hc-road": 3.0
+   },
+   "crossing_angle_min_deg": {
+    "road": 45
+   },
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-tie-19-1": 64
+   }
+  },
+  "should": {},
+  "engineer": "Свободная камера стоит на трубе под проезжей частью в 5 м от проекции ввода. По правилу 10 м используется она (разъяснение 29.09, п. 9). По п. 13 участок от камеры до выхода из дороги — один прямой спецпроход, он продолжается на 3 м за границей со стороны выхода, со стороны камеры дополнительные 3 м не нужны."
+ },
+ "points": [
+  {
+   "id": "cp-tie-19-1",
+   "flow_tph": 10.0
+  }
+ ],
+ "reference": {
+  "cp-tie-19-1": {
+   "shortest_m": 22.2,
+   "dn_by_flow": 80,
+   "path_wgs84": [
+    [
+     37.6137284,
+     55.7580427
+    ],
+    [
+     37.613751,
+     55.7578542
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "heat_chamber": 1,
+  "heat_network": 1,
+  "oks": 1,
+  "oks_connection_point": 1,
+  "road": 1
+ }
+}

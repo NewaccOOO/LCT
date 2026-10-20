@@ -65,6 +65,18 @@ SCORE_TOL = 0.00005 + 1e-9
 CROSS_CIRCLE_M = 0.1
 SHAPE = "--no-shape" not in sys.argv
 DEPTH = "--depth" in sys.argv
+CORE_TYPES = "--core-types" in sys.argv
+EXTRA_TOKENS: set[str] = set()
+
+
+class _ExtraPattern:
+    def search(self, text):
+        return any(re.search(rf"(?<![\w-]){re.escape(t)}(?![\w-])", text) for t in EXTRA_TOKENS if len(t) >= 4)
+
+
+EXTRA_RE = _ExtraPattern()
+TABLE2_TYPES = {"park", "social_area", "prohibited_site", "water", "railway", "road", "tram_tracks", "gas_pipeline",
+                "power_cable", "heat_network"}
 DEPTH_RULES = RULES.get("depth")
 DEPTH_TOL = 0.0015
 
@@ -209,6 +221,8 @@ class Report:
         self.sample = defaultdict(list)
 
     def add(self, key, text):
+        if CORE_TYPES and EXTRA_TOKENS and EXTRA_RE.search(f"{key} {text}"):
+            key = "i  дополнительный тип ограничения (--core-types): " + key
         self.count[key] += 1
         if len(self.sample[key]) < 3:
             self.sample[key].append(text)
@@ -241,6 +255,8 @@ def load_input(path):
             pipes.append((str(p["id"]), line, dn))
         elif t == "restriction":
             rt = p.get("restriction_type")
+            if rt != "oks" and rt not in TABLE2_TYPES:
+                EXTRA_TOKENS.update({str(rt), str(p["id"])})
             g = utm(f["geometry"])
             if rt == "oks":
                 oks.append((str(p["id"]), g))
@@ -500,6 +516,8 @@ def check_variant(inp, trees, vid, feats, rep):
         if on_pipe:
             near = [(inp["chambers"][e].distance(g), e) for e in trees["chambers_near"](g, 10.0)]
             for d, e in sorted(near):
+                if trees["chamber_links"](e) == 0:
+                    continue
                 links = trees["chamber_links"](e) + len(adj[e]) + len(adj[cid])
                 if links <= 4:
                     rep.add("D9 новая камера в 10 м от существующей, которую можно было использовать", f"{cid} → {e} {d:.1f} м")
@@ -525,6 +543,8 @@ def check_variant(inp, trees, vid, feats, rep):
             new_tie_chamber_cost += chamber_cost(dn)
             g = geo[tid]
             for d, e in sorted((inp["chambers"][e].distance(g), e) for e in trees["chambers_near"](g, 10.0)):
+                if trees["chamber_links"](e) == 0:
+                    continue
                 if trees["chamber_links"](e) + len(adj[tid]) <= 4:
                     rep.add("D9 врезка в трубу в 10 м от существующей камеры, которую нужно было использовать", f"{tid} → {e} {d:.1f} м")
                     break
@@ -611,6 +631,9 @@ def check_variant(inp, trees, vid, feats, rep):
     for cp, sids in by_cp.items():
         cg = inp["cps"][cp][0]
         ray = shapely.line_merge(shapely.MultiLineString([final_piece[sid][1] for sid in sids]))
+        if ray.geom_type != "LineString":
+            rep.add("D3 финальный участок ветвится не в камере", f"{cp}: {','.join(sids)}")
+            continue
         dn = max(seg_by_id[sid]["properties"]["diameter"] for sid in sids)
         need = oks_clearance(dn) + DN[dn]["width_m"] / 2
         for og in (og for _, og in trees["oks_near"](cg, 0.0) if og.buffer(0.01).contains(cg)):
@@ -1003,9 +1026,9 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
                     merged = LineString([far, v])
                     short_links.append((s, node, t, merged.length - merged.intersection(band).length))
 
-    free = defaultdict(set)
+    free = defaultdict(dict)
 
-    def along(node, prev, came, keys):
+    def along(node, prev, came, keys, tie):
         for s in adj[node]:
             if s is came:
                 continue
@@ -1013,15 +1036,16 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
             start = nodes_of[id(s)][0] == node
             end, nb = (c[0], c[1]) if start else (c[-1], c[-2])
             i = 0 if start else len(c) - 2
-            if prev is not None and turn_deg(prev, end, nb) >= 1.0 or keys <= free[(id(s), i)]:
+            if prev is not None and turn_deg(prev, end, nb) >= 1.0 or keys <= free[(id(s), i)].keys():
                 continue
-            free[(id(s), i)] |= keys
+            free[(id(s), i)].update({k: tie for k in keys})
             other = nodes_of[id(s)][1] if start else nodes_of[id(s)][0]
             if len(c) == 2 and kinds.get(other) == "technical_node":
-                along(other, end, s, keys)
+                along(other, end, s, keys, tie)
 
     for node, pt in ties.items():
-        along(node, None, None, {(rt, rid) for rid, rt, _, _ in trees["spec_near"](pt, 0.5) if rt == "heat_network"})
+        along(node, None, None, {(rt, rid) for rid, rt, _, _ in trees["spec_near"](pt, 0.5) if rt == "heat_network"},
+              (pt.x, pt.y))
 
     cross = defaultdict(list)
     for t in special:
@@ -1040,7 +1064,14 @@ def check_specials(trees, segs, geo, adj, kinds, ties, rep):
             if key in own:
                 continue
             need = _TYPES[rt]["clearance_m"] + w2 + extra
-            pieces = [LineString(c[i:i + 2]) for i in range(len(c) - 1) if key not in free[(id(s), i)]]
+            pieces = []
+            for i in range(len(c) - 1):
+                pc = LineString(c[i:i + 2])
+                tie = free[(id(s), i)].get(key)
+                if tie is not None:
+                    pc = pc.difference(Point(tie).buffer(need + CROSS_CIRCLE_M, quad_segs=64))
+                if not pc.is_empty:
+                    pieces.append(pc)
             d = min((pc.distance(rg) for pc in pieces), default=math.inf)
             if d >= need - EPS:
                 continue
@@ -1187,8 +1218,9 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
                 if (rt, rid) not in exempt and link.distance(rg) < norm + CUT_MARGIN_M:
                     return f"отступ до {rt} {rid} {link.distance(rg):.2f} м < {norm:.2f} + {CUT_MARGIN_M} м"
                 tie = new[i] if i == 0 and (rt, rid) in tie_keys.get(start, set()) else new[i + 1]
-                if (rt, rid) in exempt and link.difference(Point(tie).buffer(TIE_TOUCH_M)).intersects(rg):
-                    return f"звено от врезки снова пересекает её сеть {rt} {rid}"
+                rest = link.difference(Point(tie).buffer(norm + CUT_MARGIN_M + CROSS_CIRCLE_M))
+                if (rt, rid) in exempt and not rest.is_empty and rest.distance(rg) < norm + CUT_MARGIN_M:
+                    return f"звено от врезки ближе нормы к её сети {rt} {rid} вне круга «норма + {CROSS_CIRCLE_M} м»"
             why = crowded(k, new[i:i + 2], moved) if apart else None
             if why:
                 return why
@@ -1268,6 +1300,10 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
                 for e in (0, 1):
                     if e not in free:
                         ok &= shapely.distance(links[e], g) >= norm
+                    else:
+                        rest = shapely.difference(links[e], Point((a, b)[e]).buffer(norm + CROSS_CIRCLE_M))
+                        d = shapely.distance(rest, g)
+                        ok &= np.isnan(d) | (d >= norm)
             pts = shapely.points(xs)
             for q in others:
                 for e, node in ((0, a), (1, b)):
@@ -1726,6 +1762,13 @@ def check_shape(trees, segs, geo, adj, kinds, final_piece, ties, parent, path_pa
                 return f"отступ до {rt} {rid} {link.distance(rg):.2f} м"
         for rid, rt, rg, extra in trees["spec_near"](link, trees["spec_reach"] + w2 + CUT_MARGIN_M):
             if (rt, rid) in exempt:
+                norm = _TYPES[rt]["clearance_m"] + w2 + extra + CUT_MARGIN_M
+                rest = link
+                for end in (a, b):
+                    if Point(end).distance(rg) <= TIE_TOUCH_M:
+                        rest = rest.difference(Point(end).buffer(norm + CROSS_CIRCLE_M))
+                if not rest.is_empty and rest.distance(rg) < norm:
+                    return f"звено от врезки ближе нормы к её сети {rt} {rid}"
                 continue
             if link.intersects(rg):
                 angles = [acute_deg(a, b, p_, q_) for p_, q_ in sides(rg) if LineString([p_, q_]).intersects(link)]

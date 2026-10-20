@@ -53,3 +53,14 @@ def test_corner_entry_only_at_nearest_point_of_adjacent_side():
     assert check18.corner_entry(LineString([(26, 0.5), (19, 0.5)]), cg, own, shells, 0.5)
     assert not check18.corner_entry(LineString([(26, 3), (19, 0.5)]), cg, own, shells, 0.5)
     assert not check18.corner_entry(LineString([(23, -6), (19, 0.5)]), cg, own, shells, 0.5)
+
+
+def test_core_types_moves_additional_type_violations_to_info(monkeypatch):
+    monkeypatch.setattr(check18, "CORE_TYPES", True)
+    monkeypatch.setattr(check18, "EXTRA_TOKENS", {"sewer", "sew-w100"})
+    rep = check18.Report()
+    rep.add("B10 отступ до линии нарушен", "v1_seg_1 sewer sew-w100 0.5 м")
+    rep.add("B10 отступ до линии нарушен", "v1_seg_2 gas_pipeline gas-w7 0.5 м")
+    keys = list(rep.count)
+    assert any(k.startswith("i  дополнительный тип") for k in keys)
+    assert rep.count["B10 отступ до линии нарушен"] == 1

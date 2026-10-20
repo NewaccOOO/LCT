@@ -1,0 +1,90 @@
+{
+ "id": "VAR-03",
+ "family": "VAR",
+ "title": "Разумный вариант один",
+ "description": "Дом в 5 м от единственной трубы. синтетическое поле 400×200 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.610438,
+   55.756919,
+   37.616873,
+   55.758787
+  ],
+  "size_m": [
+   400,
+   200
+  ]
+ },
+ "rules": [
+  "ТП-6.варианты",
+  "Р29-8"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-var-03-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-var-03-1": 48
+   }
+  },
+  "should": {
+   "variants_tie_in_spread_min_m": 10,
+   "max_route_length_m": {
+    "cp-var-03-1": 15
+   }
+  },
+  "engineer": "Дом в 5 м от единственной трубы, других мест врезки в 200 м нет. Второй и третий варианты не нужны; если они есть, их место врезки должно отличаться больше чем на 10 м, иначе это смещение той же трассы."
+ },
+ "points": [
+  {
+   "id": "cp-var-03-1",
+   "flow_tph": 10.0
+  }
+ ],
+ "reference": {
+  "cp-var-03-1": {
+   "shortest_m": 11.6,
+   "dn_by_flow": 80,
+   "path_wgs84": [
+    [
+     37.6136551,
+     55.7578621
+    ],
+    [
+     37.6136578,
+     55.7577882
+    ],
+    [
+     37.613658,
+     55.7577813
+    ],
+    [
+     37.6136571,
+     55.7578082
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "heat_network": 1,
+  "oks": 1,
+  "oks_connection_point": 1
+ }
+}

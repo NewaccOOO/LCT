@@ -1,0 +1,146 @@
+{
+ "id": "CROSS-27A",
+ "family": "CROSS",
+ "title": "Ж/д на всю ширину данных",
+ "description": "Новый дом у железной дороги, сеть за путями. Москва, Хорошёво-Мнёвники, окно 520×520 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.512036,
+   55.811769,
+   37.520509,
+   55.81654
+  ],
+  "size_m": [
+   520,
+   520
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Сокол",
+  "edits": [
+   "сеть на стороне нового дома убрана, остаётся за объектом rail-w515847426: убрано участков сети 26",
+   "railway: 15 продолжений прямыми полосами на 7 км за охват, чтобы обход превышал предельную длину Ду 1400"
+  ]
+ },
+ "rules": [
+  "ТП-4.railway",
+  "Р29-3",
+  "ТП-2.5",
+  "ТП-2.1.граница",
+  "ТП-6.штраф"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "unconnected": {
+    "cp-cross-27a-1": [
+     "no_route",
+     "enclosed"
+    ]
+   },
+   "no_cross": [
+    "rail-w1103536041",
+    "rail-w1103536042",
+    "rail-w1103536043",
+    "rail-w1103536047",
+    "rail-w1103536051",
+    "rail-w1104692742",
+    "rail-w1104692743",
+    "rail-w1104692744",
+    "rail-w1104692745",
+    "rail-w1104692746",
+    "rail-w1104692747",
+    "rail-w1104692748",
+    "rail-w1104692749",
+    "rail-w1104692750",
+    "rail-w1104692751",
+    "rail-w1104692752",
+    "rail-w1532036041",
+    "rail-w1532036042",
+    "rail-w189993683",
+    "rail-w189993688",
+    "rail-w215624247",
+    "rail-w28030144",
+    "rail-w29277057",
+    "rail-w29277058",
+    "rail-w396893544",
+    "rail-w396893548",
+    "rail-w508180022",
+    "rail-w515697423",
+    "rail-w515697424",
+    "rail-w515697426",
+    "rail-w515697427",
+    "rail-w515697428",
+    "rail-w515697429",
+    "rail-w515697432",
+    "rail-w515697433",
+    "rail-w515847425",
+    "rail-w515847426",
+    "rail-w515847477",
+    "rail-w515847478",
+    "rail-w515847484",
+    "rail-w515847485",
+    "rail-w515847486",
+    "rail-w515847487",
+    "rail-w54851185",
+    "rail-w96209148",
+    "railway-ext-cross-27a-1",
+    "railway-ext-cross-27a-2",
+    "railway-ext-cross-27a-3",
+    "railway-ext-cross-27a-4",
+    "railway-ext-cross-27a-5",
+    "railway-ext-cross-27a-6",
+    "railway-ext-cross-27a-7",
+    "railway-ext-cross-27a-8",
+    "railway-ext-cross-27a-9",
+    "railway-ext-cross-27a-10",
+    "railway-ext-cross-27a-11",
+    "railway-ext-cross-27a-12",
+    "railway-ext-cross-27a-13",
+    "railway-ext-cross-27a-14",
+    "railway-ext-cross-27a-15"
+   ]
+  },
+  "should": {},
+  "engineer": "Сеть только за железной дорогой, проездов под путями в окне нет, полотно продлено прямыми полосами на 7 км за окно. Пересекать ж/д нельзя (разъяснение 29.09, п. 3), а обход длиннее 14 км и больше предельной длины Ду 1400 (11 276 м). Дом без сети со штрафом."
+ },
+ "points": [
+  {
+   "id": "cp-cross-27a-1",
+   "flow_tph": 33.14
+  }
+ ],
+ "reference": {
+  "cp-cross-27a-1": {
+   "shortest_m": null,
+   "dn_by_flow": 125
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 73,
+  "heat_chamber": 17,
+  "heat_network": 38,
+  "metro": 77,
+  "oks": 66,
+  "oks_connection_point": 1,
+  "power_cable": 80,
+  "railway": 60,
+  "road": 78,
+  "sewer": 72,
+  "social_area": 1,
+  "water_supply": 72
+ }
+}

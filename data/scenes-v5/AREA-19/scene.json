@@ -1,0 +1,137 @@
+{
+ "id": "AREA-19",
+ "family": "AREA",
+ "title": "Пруд целиком в пределах данных",
+ "description": "Новый дом у пруда, сеть за прудом. Москва, Хорошёво-Мнёвники, окно 600×600 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.447428,
+   55.770937,
+   37.457203,
+   55.776447
+  ],
+  "size_m": [
+   600,
+   600
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Крылатское",
+  "edits": [
+   "сеть на стороне нового дома убрана, остаётся за объектом water-w50848440: убрано участков сети 107"
+  ]
+ },
+ "rules": [
+  "ТП-4.water",
+  "ТП-2.5"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "no_cross": [
+    "water-w50848440"
+   ],
+   "dn_by_flow_and_length": true,
+   "connected": [
+    "cp-area-19-1"
+   ],
+   "route_length_max_m": {
+    "cp-area-19-1": 198
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-area-19-1": 156
+   }
+  },
+  "engineer": "Пруд лежит целиком в окне, сеть за ним. Инженер обходит пруд с отступом 1 м по короткой стороне."
+ },
+ "points": [
+  {
+   "id": "cp-area-19-1",
+   "flow_tph": 26.09
+  }
+ ],
+ "reference": {
+  "cp-area-19-1": {
+   "shortest_m": 111.7,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.4516162,
+     55.7737216
+    ],
+    [
+     37.4516844,
+     55.7738292
+    ],
+    [
+     37.4516396,
+     55.7738631
+    ],
+    [
+     37.4516353,
+     55.7739708
+    ],
+    [
+     37.4516027,
+     55.7739884
+    ],
+    [
+     37.4515977,
+     55.7741141
+    ],
+    [
+     37.4515644,
+     55.7741497
+    ],
+    [
+     37.4516586,
+     55.7741868
+    ],
+    [
+     37.4518491,
+     55.7742072
+    ],
+    [
+     37.4521607,
+     55.7743908
+    ],
+    [
+     37.4522585,
+     55.7743381
+    ],
+    [
+     37.4522377,
+     55.7743233
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 48,
+  "heat_chamber": 13,
+  "heat_network": 32,
+  "oks": 123,
+  "oks_connection_point": 1,
+  "park": 3,
+  "power_cable": 42,
+  "road": 27,
+  "sewer": 46,
+  "water": 3,
+  "water_supply": 40
+ }
+}

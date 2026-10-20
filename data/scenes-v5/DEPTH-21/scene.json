@@ -1,0 +1,88 @@
+{
+ "id": "DEPTH-21",
+ "family": "DEPTH",
+ "title": "Пересечение существующей сети без врезки в глубине",
+ "description": "Синтетика: магистраль Ду 1000 и малая труба за ней. синтетическое поле 400×200 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.610444,
+   55.756739,
+   37.61688,
+   55.758608
+  ],
+  "size_m": [
+   400,
+   200
+  ]
+ },
+ "rules": [
+  "ТП-5",
+  "Р16",
+  "ТП-4.heat_network",
+  "Р10",
+  "Р29-14"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-depth-21-1"
+   ],
+   "depth_profile_valid": true,
+   "depth_crossings_valid": true,
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-depth-21-1": 55
+   }
+  },
+  "should": {
+   "crossings_min": {
+    "heat_network": 1
+   }
+  },
+  "engineer": "Геометрия CROSS-22: магистраль Ду 1000 в 15 м от дома, за ней труба Ду 80. Расчёт с ключом --depth. Если трасса переходит магистраль, то выше или ниже неё с просветом 0,5 м (верх магистрали на 3,0 м, высота габарита 1,2 м): верх новой пары не глубже 2,5 м минус её высота или не мельче 4,7 м. На смене глубины — технические узлы, уклон не круче 0,10."
+ },
+ "points": [
+  {
+   "id": "cp-depth-21-1",
+   "flow_tph": 10.0
+  }
+ ],
+ "reference": {
+  "cp-depth-21-1": {
+   "shortest_m": 16.6,
+   "dn_by_flow": 80,
+   "path_wgs84": [
+    [
+     37.6136551,
+     55.7578621
+    ],
+    [
+     37.6136602,
+     55.7577184
+    ]
+   ]
+  }
+ },
+ "run_args": [
+  "--depth"
+ ],
+ "objects": {
+  "heat_network": 2,
+  "oks": 1,
+  "oks_connection_point": 1
+ }
+}

@@ -1,0 +1,111 @@
+{
+ "id": "TIE-17",
+ "family": "TIE",
+ "title": "Камера на магистрали в 25 м",
+ "description": "Новый дом у магистрали, свободная камера в 25 м от проекции. Москва, Хорошёво-Мнёвники, окно 320×320 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.504785,
+   55.790158,
+   37.509996,
+   55.793094
+  ],
+  "size_m": [
+   320,
+   320
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Хорошёвский район",
+  "edits": [
+   "сеть у нового дома, кроме участков камеры, убрана: убрано участков сети 8"
+  ]
+ },
+ "rules": [
+  "ТП-2.4.новая",
+  "ТП-3.2",
+  "Р29-9",
+  "ТП-6.S"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-tie-17-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-tie-17-1": 62
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-tie-17-1": 38
+   },
+   "tie_in": {
+    "cp-tie-17-1": {
+     "kind": "existing_chamber",
+     "chambers": [
+      "hc-294"
+     ]
+    }
+   }
+  },
+  "engineer": "Дом в 20 м от магистрали Ду 600 и больше, свободная камера в 25 м от проекции. Новая камера на магистрали стоит 8 млн (по наибольшему Ду), врезка в существующую 5 млн, путь к ней длиннее примерно на 10–15 м. Выигрыш врезки в камеру около 0,02–0,03 по S; компромисс неочевиден."
+ },
+ "points": [
+  {
+   "id": "cp-tie-17-1",
+   "flow_tph": 33.14
+  }
+ ],
+ "reference": {
+  "cp-tie-17-1": {
+   "shortest_m": 21.3,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5075,
+     55.7914479
+    ],
+    [
+     37.5074586,
+     55.7915192
+    ],
+    [
+     37.5073935,
+     55.7915544
+    ],
+    [
+     37.5073824,
+     55.7916246
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 32,
+  "heat_chamber": 18,
+  "heat_network": 29,
+  "oks": 10,
+  "oks_connection_point": 1,
+  "park": 5,
+  "power_cable": 33,
+  "road": 32,
+  "sewer": 31,
+  "water_supply": 32
+ }
+}

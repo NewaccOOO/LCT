@@ -1,0 +1,104 @@
+{
+ "id": "GRID-02",
+ "family": "GRID",
+ "title": "Сетка улиц под углом к меридиану, Купчино",
+ "description": "Новые дома в квартале с характерной сеткой улиц. Санкт-Петербург, Купчино, окно 500×500 м.",
+ "source": {
+  "kind": "osm",
+  "bbox_wgs84": [
+   30.458408,
+   59.849238,
+   30.468379,
+   59.854254
+  ],
+  "size_m": [
+   500,
+   500
+  ],
+  "file": "data/cities/spb/input.geojson",
+  "city": "Санкт-Петербург, Обуховский округ"
+ },
+ "rules": [
+  "ТП-2.1.повороты",
+  "Р5",
+  "ТП-2.1.пересечения",
+  "ТП-6.варианты"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": {
+    "tolerance_m": 1.0,
+    "except": [
+     "cp-w857530905"
+    ]
+   },
+   "no_crash": true,
+   "connected": [
+    "cp-w857530905"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-w857530905": 94
+   }
+  },
+  "should": {
+   "total_length_max_m": 67,
+   "along_axes_share_min": 0.8,
+   "max_turn_deg": 90
+  },
+  "engineer": "Инженер кладёт трассы вдоль осей застройки и улиц, переходы — под прямым углом, поворот один на 90°, а не два по 45°; ступенек и мелких изломов нет."
+ },
+ "points": [
+  {
+   "id": "cp-w857530905",
+   "flow_tph": 4.08
+  }
+ ],
+ "reference": {
+  "cp-w857530905": {
+   "shortest_m": 42.6,
+   "dn_by_flow": 65,
+   "path_wgs84": [
+    [
+     30.4632046,
+     59.8517618
+    ],
+    [
+     30.4638295,
+     59.8515965
+    ],
+    [
+     30.4637928,
+     59.85159
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 69,
+  "heat_chamber": 56,
+  "heat_network": 115,
+  "oks": 117,
+  "oks_connection_point": 1,
+  "power_cable": 65,
+  "power_line_support": 4,
+  "railway": 9,
+  "road": 73,
+  "sewer": 70,
+  "social_area": 2,
+  "water": 2,
+  "water_supply": 65
+ }
+}

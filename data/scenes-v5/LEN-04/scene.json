@@ -1,0 +1,90 @@
+{
+ "id": "LEN-04",
+ "family": "LEN",
+ "title": "Дом в 5 км",
+ "description": "Труба Ду 500 и один дом в 5000 м от неё, между ними пусто. синтетическое поле 5300×400 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.611202,
+   55.75603,
+   37.695756,
+   55.760548
+  ],
+  "size_m": [
+   5300,
+   400
+  ]
+ },
+ "rules": [
+  "ТП-2.3.ду",
+  "ТП-2.3.длина",
+  "Р1",
+  "ТП-6.стоимость",
+  "Р15"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-len-04-1"
+   ],
+   "final_dn_range": {
+    "cp-len-04-1": [
+     800,
+     800
+    ]
+   },
+   "route_length_max_m": {
+    "cp-len-04-1": 7532
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-len-04-1": 5120
+   }
+  },
+  "engineer": "Пять километров прямого поля. Инженер ведёт одну прямую, Ду — минимальный, укладывающий 5 км в предельную длину (Ду 700, предел 4 775 м, не проходит; нужен Ду 800)."
+ },
+ "points": [
+  {
+   "id": "cp-len-04-1",
+   "flow_tph": 30.0
+  }
+ ],
+ "reference": {
+  "cp-len-04-1": {
+   "shortest_m": 5000.7,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.6933224,
+     55.7587261
+    ],
+    [
+     37.6136555,
+     55.7578532
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "heat_chamber": 1,
+  "heat_network": 1,
+  "oks": 1,
+  "oks_connection_point": 1
+ }
+}

@@ -1,0 +1,85 @@
+{
+ "id": "BLD-12",
+ "family": "BLD",
+ "title": "Новый дом вплотную к соседнему",
+ "description": "Новый дом в 3 м от существующего здания. Москва, Хорошёво-Мнёвники, окно 360×360 м.",
+ "source": {
+  "kind": "osm",
+  "bbox_wgs84": [
+   37.572273,
+   55.803511,
+   37.578132,
+   55.806811
+  ],
+  "size_m": [
+   360,
+   360
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Савёловский район"
+ },
+ "rules": [
+  "ТП-2.2",
+  "Р3",
+  "ТП-4.oks",
+  "ТП-2.5"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "dn_by_flow_and_length": true,
+   "final_segment_clear_of": [
+    "w28029764"
+   ]
+  },
+  "should": {
+   "unconnected": {
+    "cp-bld-12-1": [
+     "no_route",
+     "enclosed",
+     "inside_forbidden_zone"
+    ]
+   }
+  },
+  "engineer": "Новый дом пристроен к существующему с зазором 3 м, меньше нормы 5 м. Финальный участок не должен идти через зону отступа соседа. Инженер выводит ввод через другую стену нового дома; если со всех сторон выход упирается в зону соседа, точка остаётся без сети с причиной. Эталон пути не находит: ввод стоит в 3 м от соседа, и даже финальный участок внутри своего здания лежит в зоне отступа соседнего здания. Это трактовка команды (отступ к чужому зданию действует на всём финальном участке), поэтому неподключение — в should."
+ },
+ "points": [
+  {
+   "id": "cp-bld-12-1",
+   "flow_tph": 18.76
+  }
+ ],
+ "reference": {
+  "cp-bld-12-1": {
+   "shortest_m": null,
+   "dn_by_flow": 100
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 96,
+  "heat_chamber": 46,
+  "heat_network": 108,
+  "oks": 65,
+  "oks_connection_point": 1,
+  "park": 2,
+  "power_cable": 102,
+  "railway": 4,
+  "road": 112,
+  "sewer": 98,
+  "social_area": 2,
+  "water_supply": 94
+ }
+}

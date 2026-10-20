@@ -1,0 +1,118 @@
+{
+ "id": "CROSS-17",
+ "family": "CROSS",
+ "title": "Газопровод, канализация и водопровод",
+ "description": "Новый дом, между ним и трубой подземная линия. Москва, Хорошёво-Мнёвники, окно 354×354 м.",
+ "source": {
+  "kind": "osm",
+  "bbox_wgs84": [
+   37.593774,
+   55.803255,
+   37.59953,
+   55.806498
+  ],
+  "size_m": [
+   354,
+   354
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Марьина Роща"
+ },
+ "rules": [
+  "ТП-4.gas_pipeline",
+  "ТП-4.доп_типы",
+  "ТП-4.наложение",
+  "Р8"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-r11753581-2"
+   ],
+   "dn_by_flow_and_length": true,
+   "special_kspec": {
+    "gas_pipeline": 1.25
+   },
+   "route_length_max_m": {
+    "cp-r11753581-2": 196
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-r11753581-2": 154
+   },
+   "tie_in": {
+    "cp-r11753581-2": {
+     "kind": "existing_chamber",
+     "chambers": [
+      "hc-3500"
+     ]
+    }
+   },
+   "special_kspec": {
+    "sewer": 1.1,
+    "water_supply": 1.1
+   },
+   "crossings_max": {
+    "gas_pipeline": 1,
+    "sewer": 1,
+    "water_supply": 1
+   }
+  },
+  "engineer": "Между домом и трубой три линии подряд (газ, канализация, водопровод). Инженер пересекает линию один раз прямым участком (спецпроход по 2 м в обе стороны от точки пересечения, без поворотов внутри), а рядом с линией держит отступ от внешних границ габаритов. Вдоль линии ближе нормы не идёт. В режиме глубины: в режиме глубины выше или ниже газопровода (верх на 2,8 м, габарит 0,4 м), просвет не меньше 0,2 м."
+ },
+ "points": [
+  {
+   "id": "cp-r11753581-2",
+   "flow_tph": 4.08
+  }
+ ],
+ "reference": {
+  "cp-r11753581-2": {
+   "shortest_m": 110.1,
+   "dn_by_flow": 65,
+   "path_wgs84": [
+    [
+     37.5960988,
+     55.8054095
+    ],
+    [
+     37.5960376,
+     55.8053328
+    ],
+    [
+     37.5960757,
+     55.8044237
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 43,
+  "heat_chamber": 21,
+  "heat_network": 55,
+  "oks": 36,
+  "oks_connection_point": 1,
+  "park": 3,
+  "power_cable": 38,
+  "railway": 14,
+  "road": 48,
+  "sewer": 41,
+  "social_area": 1,
+  "water_supply": 42
+ }
+}

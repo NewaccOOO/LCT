@@ -1,0 +1,105 @@
+{
+ "id": "CROSS-23",
+ "family": "CROSS",
+ "title": "Газопровод под углом 25° к пути",
+ "description": "Дом, в 40 м труба Ду 100, между ними газопровод под углом 25° к прямой. синтетическое поле 400×200 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.610444,
+   55.756739,
+   37.61688,
+   55.758608
+  ],
+  "size_m": [
+   400,
+   200
+  ]
+ },
+ "rules": [
+  "ТП-4.gas_pipeline",
+  "ТП-4.угол",
+  "ТП-4.отступ",
+  "Р29-14",
+  "Р7"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-cross-23-1"
+   ],
+   "crossings_min": {
+    "gas_pipeline": 1
+   },
+   "special_kspec": {
+    "gas_pipeline": 1.25
+   },
+   "clearance_m": {
+    "gas-oblique": 2.0
+   },
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-cross-23-1": 95
+   }
+  },
+  "should": {
+   "crossing_angle_min_deg": {
+    "gas_pipeline": 60
+   },
+   "max_route_length_m": {
+    "cp-cross-23-1": 66
+   }
+  },
+  "engineer": "Газопровод пересекает путь от дома к трубе под углом 25°. Угол для газа в таблице 2 не задан, но на границе зоны ±2 м до оси газа остаётся 2·sin 25° ≈ 0,85 м, а нужно не меньше 2,4 м. Инженер переходит газ почти под прямым углом, а дальше держит отступ. Даже при 90° граница зоны в 2 м ближе нормы отступа; это вопрос к организаторам. Принято: отступ проверяется вне круга 3 м вокруг точки пересечения."
+ },
+ "points": [
+  {
+   "id": "cp-cross-23-1",
+   "flow_tph": 10.0
+  }
+ ],
+ "reference": {
+  "cp-cross-23-1": {
+   "shortest_m": 42.7,
+   "dn_by_flow": 80,
+   "path_wgs84": [
+    [
+     37.6136551,
+     55.7578621
+    ],
+    [
+     37.6136586,
+     55.7577633
+    ],
+    [
+     37.6137561,
+     55.7577105
+    ],
+    [
+     37.6137638,
+     55.7574949
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 1,
+  "heat_network": 1,
+  "oks": 1,
+  "oks_connection_point": 1
+ }
+}

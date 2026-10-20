@@ -1,0 +1,74 @@
+{
+ "id": "CROSS-24A",
+ "family": "CROSS",
+ "title": "Улица во всю ширину между парком и школой",
+ "description": "Улица шириной 20 м между парком и территорией школы, все три тянутся на 7 км в обе стороны. Дом и труба стоят в карманах, вырезанных в парке у длинной стороны дороги, в 350 м друг от друга. синтетическое поле 400×200 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.610438,
+   55.756919,
+   37.616873,
+   55.758787
+  ],
+  "size_m": [
+   400,
+   200
+  ]
+ },
+ "rules": [
+  "ТП-4.road",
+  "ТП-4.спецпроход",
+  "Р6",
+  "ТП-4.park",
+  "ТП-4.social_area",
+  "ТП-2.5",
+  "ТП-2.3.длина"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "unconnected": {
+    "cp-cross-24a-1": [
+     "no_route",
+     "enclosed"
+    ]
+   }
+  },
+  "should": {
+   "special_entry_angle_min_deg": 45,
+   "special_length_max_m": {
+    "road-lane": 34.3
+   }
+  },
+  "engineer": "Проезжая часть занимает улицу от забора до забора, торцов у неё в пределах 7 км нет. Спецпроход — один прямой участок, который входит в полигон дороги под углом не меньше 45° к границе и выходит с другой стороны; из кармана в карман прямой участок идёт почти вдоль длинной стороны дороги, и угол входа меньше 45°. Обход парка и школы длиннее 14 км, это больше предельной длины Ду 1400 (11 276 м). Допустимой трассы нет, дом без сети."
+ },
+ "points": [
+  {
+   "id": "cp-cross-24a-1",
+   "flow_tph": 8.0
+  }
+ ],
+ "reference": {},
+ "run_args": [],
+ "objects": {
+  "heat_network": 1,
+  "oks": 1,
+  "oks_connection_point": 1,
+  "park": 1,
+  "road": 1,
+  "social_area": 1
+ }
+}

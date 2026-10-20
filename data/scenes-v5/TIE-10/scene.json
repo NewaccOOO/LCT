@@ -1,0 +1,120 @@
+{
+ "id": "TIE-10",
+ "family": "TIE",
+ "title": "Место врезки под проезжей частью",
+ "description": "Магистраль под улицей, новый дом у края улицы. Москва, Хорошёво-Мнёвники, окно 360×360 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.546364,
+   55.790732,
+   37.552224,
+   55.794033
+  ],
+  "size_m": [
+   360,
+   360
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Беговой",
+  "edits": [
+   "вводы у нового дома убраны: убрано участков сети 5"
+  ]
+ },
+ "rules": [
+  "ТП-2.4.новая",
+  "Р11",
+  "ТП-4.road",
+  "ТП-4.спецпроход",
+  "Р6",
+  "Р29-13"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-tie-10-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "crossing_angle_min_deg": {
+    "road": 45
+   },
+   "route_length_max_m": {
+    "cp-tie-10-1": 105
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-tie-10-1": 75
+   },
+   "tie_in": {
+    "cp-tie-10-1": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-2500"
+     ]
+    }
+   }
+  },
+  "engineer": "Труба идёт под проезжей частью, ближайшая к дому точка — посреди дороги. По разъяснению 29.09 (п. 13) новая камера внутри полигона дороги допустима; тогда участок от камеры до выхода из дороги — один прямой спецпроход, он продолжается на 3 м за границей со стороны выхода, а со стороны камеры дополнительные 3 м не нужны. Инженер может и сдвинуть врезку вдоль трубы за край дороги, если так дешевле."
+ },
+ "points": [
+  {
+   "id": "cp-tie-10-1",
+   "flow_tph": 26.09
+  }
+ ],
+ "reference": {
+  "cp-tie-10-1": {
+   "shortest_m": 49.8,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5495738,
+     55.7926015
+    ],
+    [
+     37.5492172,
+     55.7923222
+    ],
+    [
+     37.5492327,
+     55.7923281
+    ],
+    [
+     37.5492008,
+     55.7923277
+    ],
+    [
+     37.5492659,
+     55.7923943
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 80,
+  "heat_chamber": 12,
+  "heat_network": 31,
+  "oks": 23,
+  "oks_connection_point": 1,
+  "park": 4,
+  "power_cable": 77,
+  "road": 87,
+  "sewer": 80,
+  "water_supply": 79
+ }
+}

@@ -1,0 +1,117 @@
+{
+ "id": "TIE-02",
+ "family": "TIE",
+ "title": "Камера рядом, Купчино",
+ "description": "Новый дом в 18 м от трубы, проекция точки на трубу в 3 м от камеры с свободным местом. Санкт-Петербург, Купчино, окно 320×320 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   30.455839,
+   59.81345,
+   30.462214,
+   59.81666
+  ],
+  "size_m": [
+   320,
+   320
+  ],
+  "file": "data/cities/spb/input.geojson",
+  "city": "Санкт-Петербург, Петро-Славянка",
+  "edits": [
+   "сеть у нового дома, кроме участков камеры, убрана: убрано участков сети 0"
+  ]
+ },
+ "rules": [
+  "ТП-2.4.камера10",
+  "Р11",
+  "ПР-8",
+  "ТП-3.2",
+  "ТП-2.2",
+  "Р3"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-tie-02-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "no_new_chamber_within_m": {
+    "chambers": [
+     "hc-1712"
+    ],
+    "radius_m": 10.0
+   },
+   "tie_in": {
+    "cp-tie-02-1": {
+     "kind": "existing_chamber"
+    }
+   },
+   "route_length_max_m": {
+    "cp-tie-02-1": 61
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-tie-02-1": 37
+   },
+   "tie_in": {
+    "cp-tie-02-1": {
+     "kind": "existing_chamber",
+     "chambers": [
+      "hc-1712"
+     ]
+    }
+   },
+   "existing_chamber_tie_in_count": 1
+  },
+  "engineer": "Инженер присоединит дом к существующей камере: место врезки на трубе в нескольких метрах от неё, а правило 10 м прямо требует использовать камеру. Новую камеру рядом не строит. Ввод от ближней к трубе стены дома, трасса одна прямая или с одним поворотом."
+ },
+ "points": [
+  {
+   "id": "cp-tie-02-1",
+   "flow_tph": 40.0
+  }
+ ],
+ "reference": {
+  "cp-tie-02-1": {
+   "shortest_m": 20.1,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     30.4590699,
+     59.8148863
+    ],
+    [
+     30.4590195,
+     59.8150545
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 5,
+  "heat_chamber": 1,
+  "heat_network": 3,
+  "oks": 2,
+  "oks_connection_point": 1,
+  "power_cable": 6,
+  "railway": 1,
+  "road": 6,
+  "sewer": 6,
+  "water_supply": 6
+ }
+}

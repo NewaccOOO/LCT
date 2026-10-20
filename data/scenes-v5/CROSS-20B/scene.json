@@ -1,0 +1,137 @@
+{
+ "id": "CROSS-20B",
+ "family": "CROSS",
+ "title": "Вдоль газопровода в 2.60 м от прямой",
+ "description": "Газопровод параллельно прямой от дома к трубе в 2.60 м от неё; нужно 2.455 м для Ду 100.  Москва, Хорошёво-Мнёвники, окно 394×394 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.561849,
+   55.774158,
+   37.568256,
+   55.777769
+  ],
+  "size_m": [
+   394,
+   394
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Беговой",
+  "edits": [
+   "добавлен газопровод gas-cross-20b вдоль прямой от дома к трубе в 2.60 м от неё"
+  ]
+ },
+ "rules": [
+  "ТП-4.gas_pipeline",
+  "ТП-4.отступ",
+  "ТП-3.1",
+  "Р7"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-r1788141-64"
+   ],
+   "dn_by_flow_and_length": true,
+   "clearance_m": {
+    "gas-cross-20b": 2.0
+   },
+   "route_length_max_m": {
+    "cp-r1788141-64": 231
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-r1788141-64": 133
+   },
+   "tie_in": {
+    "cp-r1788141-64": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-11867"
+     ]
+    }
+   },
+   "crossings_max": {
+    "gas_pipeline": 0
+   }
+  },
+  "engineer": "Отступ считается от внешней границы габарита газа (0,4 м) до внешней границы пары Ду 100: 2 + 0,2 + 0.255 = 2.455 м между осями. Прямая в 2.60 м допустима: лишний запас не нужен."
+ },
+ "points": [
+  {
+   "id": "cp-r1788141-64",
+   "flow_tph": 18.76
+  }
+ ],
+ "reference": {
+  "cp-r1788141-64": {
+   "shortest_m": 133.7,
+   "dn_by_flow": 100,
+   "path_wgs84": [
+    [
+     37.5656017,
+     55.7765672
+    ],
+    [
+     37.5654809,
+     55.776615
+    ],
+    [
+     37.5654924,
+     55.7766076
+    ],
+    [
+     37.5654917,
+     55.7766255
+    ],
+    [
+     37.565491,
+     55.7766435
+    ],
+    [
+     37.5655223,
+     55.7766618
+    ],
+    [
+     37.5655442,
+     55.7769317
+    ],
+    [
+     37.5658252,
+     55.7770967
+    ],
+    [
+     37.5661761,
+     55.7775983
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 6,
+  "heat_chamber": 14,
+  "heat_network": 33,
+  "oks": 16,
+  "oks_connection_point": 1,
+  "power_cable": 5,
+  "railway": 38,
+  "road": 6,
+  "sewer": 5,
+  "water_supply": 5
+ }
+}

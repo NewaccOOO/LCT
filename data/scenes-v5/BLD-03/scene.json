@@ -1,0 +1,121 @@
+{
+ "id": "BLD-03",
+ "family": "BLD",
+ "title": "Двор со въездом",
+ "description": "Новый дом во дворе, образованном существующими зданиями. Москва, Хорошёво-Мнёвники, окно 360×360 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.564339,
+   55.776645,
+   37.570195,
+   55.779946
+  ],
+  "size_m": [
+   360,
+   360
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Беговой",
+  "edits": [
+   "сеть внутри двора убрана: убрано участков сети 0"
+  ]
+ },
+ "rules": [
+  "ТП-2.2",
+  "ТП-4.oks",
+  "ТП-2.5",
+  "ТП-4.отступ",
+  "Р15"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-bld-03-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-bld-03-1": 121
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-bld-03-1": 89
+   },
+   "tie_in": {
+    "cp-bld-03-1": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-11867"
+     ]
+    }
+   }
+  },
+  "engineer": "Во двор ведёт проезд. Если щель между корпусами шире нормы, инженер ведёт трассу по ней с отступом от углов зданий. Если щель занята проездом и места для обычного участка нет, по принятой трактовке допустим продольный спецпроход по полигону проезда при входе и выходе через его границу под углом не меньше 45° (обычно через торец)."
+ },
+ "points": [
+  {
+   "id": "cp-bld-03-1",
+   "flow_tph": 24.87
+  }
+ ],
+ "reference": {
+  "cp-bld-03-1": {
+   "shortest_m": 60.3,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5672144,
+     55.778191
+    ],
+    [
+     37.5671667,
+     55.7781112
+    ],
+    [
+     37.5671796,
+     55.7780787
+    ],
+    [
+     37.5671484,
+     55.7780604
+    ],
+    [
+     37.5671609,
+     55.777719
+    ],
+    [
+     37.5671208,
+     55.77767
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 19,
+  "heat_chamber": 8,
+  "heat_network": 21,
+  "oks": 8,
+  "oks_connection_point": 1,
+  "park": 2,
+  "power_cable": 26,
+  "road": 27,
+  "sewer": 19,
+  "social_area": 1,
+  "water_supply": 19
+ }
+}

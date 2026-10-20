@@ -1,0 +1,83 @@
+{
+ "id": "BLD-17",
+ "family": "BLD",
+ "title": "Ввод у середины длинной стены",
+ "description": "Синтетика: длинное здание, труба за его торцом. синтетическое поле 300×200 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.611548,
+   55.757066,
+   37.616391,
+   55.758917
+  ],
+  "size_m": [
+   300,
+   200
+  ]
+ },
+ "rules": [
+  "ТП-2.2",
+  "Р3",
+  "Р29-15",
+  "Р29-16"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-bld-17-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-bld-17-1": 127
+   }
+  },
+  "should": {},
+  "engineer": "Здание 80 × 30 м, ввод в 1 м от середины длинной стены, а торец, ближайший к трубе, в 40 м от ввода. Финальный участок через полздания до торца сократил бы внешнюю трассу, но разъяснение 29.09 (п. 15) это запрещает: сначала ближайшая допустимая точка внешнего контура. Инженер выходит через длинную стену и обходит здание снаружи с отступом."
+ },
+ "points": [
+  {
+   "id": "cp-bld-17-1",
+   "flow_tph": 10.0
+  }
+ ],
+ "reference": {
+  "cp-bld-17-1": {
+   "shortest_m": 64.3,
+   "dn_by_flow": 80,
+   "path_wgs84": [
+    [
+     37.6136551,
+     55.7578621
+    ],
+    [
+     37.6138571,
+     55.7577895
+    ],
+    [
+     37.6146138,
+     55.7577921
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "heat_network": 1,
+  "oks": 1,
+  "oks_connection_point": 1
+ }
+}

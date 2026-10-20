@@ -1,0 +1,161 @@
+{
+ "id": "FLOW-05",
+ "family": "FLOW",
+ "title": "Три соседа вместе больше Ду 1400",
+ "description": "Три соседних дома с расходом по 9 000 т/ч. Москва, Хорошёво-Мнёвники, окно 418×418 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.500984,
+   55.791464,
+   37.507788,
+   55.795298
+  ],
+  "size_m": [
+   418,
+   418
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Сокол",
+  "edits": [
+   "расход каждого дома задан 9 000 т/ч"
+  ]
+ },
+ "rules": [
+  "ТП-2.3.ду",
+  "ТП-2.3.расход",
+  "ТП-2.1.дерево",
+  "ТП-2.4.новая"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-r11035807-1",
+    "cp-r11035807-2",
+    "cp-r11035807-3"
+   ],
+   "dn_by_flow_and_length": true,
+   "segment_flow_within_capacity": true
+  },
+  "should": {
+   "total_length_max_m": 133,
+   "trees_min": 2
+  },
+  "engineer": "Каждый из трёх домов по 9 000 т/ч проходит в Ду 1000, но вместе 27 000 т/ч больше пропускной способности Ду 1400. Общий участок на всех троих невозможен. Инженер делает минимум две отдельные врезки или дерево, где на каждом участке расход не больше пропускной способности."
+ },
+ "points": [
+  {
+   "id": "cp-r11035807-1",
+   "flow_tph": 9000.0
+  },
+  {
+   "id": "cp-r11035807-2",
+   "flow_tph": 9000.0
+  },
+  {
+   "id": "cp-r11035807-3",
+   "flow_tph": 9000.0
+  }
+ ],
+ "reference": {
+  "cp-r11035807-1": {
+   "shortest_m": 46.2,
+   "dn_by_flow": 1000,
+   "path_wgs84": [
+    [
+     37.5040835,
+     55.7926569
+    ],
+    [
+     37.5042154,
+     55.79254
+    ],
+    [
+     37.5046278,
+     55.7925494
+    ],
+    [
+     37.5047076,
+     55.7925645
+    ]
+   ]
+  },
+  "cp-r11035807-2": {
+   "shortest_m": 35.7,
+   "dn_by_flow": 1000,
+   "path_wgs84": [
+    [
+     37.5039372,
+     55.7942027
+    ],
+    [
+     37.5037277,
+     55.7941825
+    ],
+    [
+     37.5037361,
+     55.7941741
+    ],
+    [
+     37.5037354,
+     55.794192
+    ],
+    [
+     37.5037334,
+     55.7942459
+    ],
+    [
+     37.5039019,
+     55.794325
+    ]
+   ]
+  },
+  "cp-r11035807-3": {
+   "shortest_m": 20.3,
+   "dn_by_flow": 1000,
+   "path_wgs84": [
+    [
+     37.5048864,
+     55.7935286
+    ],
+    [
+     37.5051115,
+     55.7935503
+    ],
+    [
+     37.5050135,
+     55.793523
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 53,
+  "heat_chamber": 16,
+  "heat_network": 29,
+  "oks": 37,
+  "oks_connection_point": 3,
+  "park": 1,
+  "power_cable": 55,
+  "prohibited_site": 2,
+  "railway": 11,
+  "road": 54,
+  "sewer": 51,
+  "social_area": 2,
+  "water_supply": 53
+ }
+}

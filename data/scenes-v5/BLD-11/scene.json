@@ -1,0 +1,176 @@
+{
+ "id": "BLD-11",
+ "family": "BLD",
+ "title": "Три ввода в одном доме",
+ "description": "Новый дом с тремя точками подключения. Москва, Хорошёво-Мнёвники, окно 327×327 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.506372,
+   55.767215,
+   37.511699,
+   55.770218
+  ],
+  "size_m": [
+   327,
+   327
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Хорошёво-Мнёвники",
+  "edits": [
+   "точка подключения дома заменена тремя вводами с расходом по трети"
+  ]
+ },
+ "rules": [
+  "ТП-2.2.несколько",
+  "Р4",
+  "ТП-2.3.расход",
+  "ТП-2.1.камеры"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-bld-11-1",
+    "cp-bld-11-2",
+    "cp-bld-11-3"
+   ],
+   "dn_by_flow_and_length": true
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-bld-11-1": 73,
+    "cp-bld-11-2": 48,
+    "cp-bld-11-3": 89
+   },
+   "tie_in": {
+    "cp-bld-11-1": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-11006"
+     ]
+    },
+    "cp-bld-11-2": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-11006"
+     ]
+    },
+    "cp-bld-11-3": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-11006"
+     ]
+    }
+   },
+   "same_tree": [
+    [
+     "cp-bld-11-1",
+     "cp-bld-11-2",
+     "cp-bld-11-3"
+    ]
+   ]
+  },
+  "engineer": "В одном доме три ввода, у каждого свой расход. Каждая точка — отдельная цель. Инженер подключит их одним деревом вдоль фасада с камерами ветвления, а не тремя независимыми врезками."
+ },
+ "points": [
+  {
+   "id": "cp-bld-11-1",
+   "flow_tph": 6.877
+  },
+  {
+   "id": "cp-bld-11-2",
+   "flow_tph": 6.877
+  },
+  {
+   "id": "cp-bld-11-3",
+   "flow_tph": 6.877
+  }
+ ],
+ "reference": {
+  "cp-bld-11-1": {
+   "shortest_m": 47.7,
+   "dn_by_flow": 65,
+   "path_wgs84": [
+    [
+     37.5092401,
+     55.7688844
+    ],
+    [
+     37.5091571,
+     55.7687476
+    ],
+    [
+     37.5091805,
+     55.7684687
+    ]
+   ]
+  },
+  "cp-bld-11-2": {
+   "shortest_m": 29.2,
+   "dn_by_flow": 65,
+   "path_wgs84": [
+    [
+     37.5089182,
+     55.7687379
+    ],
+    [
+     37.508902,
+     55.7686519
+    ],
+    [
+     37.5089261,
+     55.7684793
+    ]
+   ]
+  },
+  "cp-bld-11-3": {
+   "shortest_m": 60.1,
+   "dn_by_flow": 65,
+   "path_wgs84": [
+    [
+     37.5088851,
+     55.7689056
+    ],
+    [
+     37.5086839,
+     55.7689146
+    ],
+    [
+     37.508653,
+     55.7688769
+    ],
+    [
+     37.5086718,
+     55.7684898
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 25,
+  "heat_chamber": 39,
+  "heat_network": 84,
+  "oks": 31,
+  "oks_connection_point": 3,
+  "park": 1,
+  "power_cable": 26,
+  "road": 29,
+  "sewer": 23,
+  "water": 1,
+  "water_supply": 23
+ }
+}

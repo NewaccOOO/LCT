@@ -1,0 +1,129 @@
+{
+ "id": "TIE-06",
+ "family": "TIE",
+ "title": "Камера дальше 10 м, Купчино",
+ "description": "Новый дом у трубы, ближайшая камера в 60 м от проекции точки. Санкт-Петербург, Купчино, окно 320×320 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   30.404942,
+   59.816042,
+   30.411321,
+   59.819254
+  ],
+  "size_m": [
+   320,
+   320
+  ],
+  "file": "data/cities/spb/input.geojson",
+  "city": "Санкт-Петербург, Шушары",
+  "edits": [
+   "сеть у нового дома, кроме участков камеры, убрана: убрано участков сети 0"
+  ]
+ },
+ "rules": [
+  "ТП-2.4.новая",
+  "Р11",
+  "ПР-8",
+  "ТП-3.2",
+  "Р13"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-tie-06-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "no_new_chamber_within_m": {
+    "chambers": [
+     "hc-1723",
+     "hc-1724",
+     "hc-1725",
+     "hc-1726",
+     "hc-1727",
+     "hc-1728",
+     "hc-1729",
+     "hc-1730",
+     "hc-1731",
+     "hc-1732",
+     "hc-1733",
+     "hc-1734",
+     "hc-1735",
+     "hc-1736",
+     "hc-1737",
+     "hc-1739"
+    ],
+    "radius_m": 10.0
+   },
+   "route_length_max_m": {
+    "cp-tie-06-1": 60
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-tie-06-1": 36
+   },
+   "tie_in": {
+    "cp-tie-06-1": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-3379"
+     ]
+    }
+   }
+  },
+  "engineer": "Ближайшая камера далеко. Инженер ставит новую камеру на трубе напротив дома и ведёт короткую прямую трассу, к дальней камере не тянет."
+ },
+ "points": [
+  {
+   "id": "cp-tie-06-1",
+   "flow_tph": 18.76
+  }
+ ],
+ "reference": {
+  "cp-tie-06-1": {
+   "shortest_m": 19.9,
+   "dn_by_flow": 100,
+   "path_wgs84": [
+    [
+     30.4078019,
+     59.8176114
+    ],
+    [
+     30.4079555,
+     59.8176363
+    ],
+    [
+     30.4081346,
+     59.8176415
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 7,
+  "heat_chamber": 16,
+  "heat_network": 34,
+  "oks": 10,
+  "oks_connection_point": 1,
+  "power_cable": 7,
+  "road": 12,
+  "sewer": 7,
+  "water": 3,
+  "water_supply": 7
+ }
+}

@@ -1,0 +1,154 @@
+{
+ "id": "REAL-02",
+ "family": "REAL",
+ "title": "Датасет организаторов, редакция 18.09",
+ "description": "Файл data/real/dataset-corrected.geojson целиком: 17 точек 4–76 т/ч, магистрали Ду 300–500, здания MultiPolygon, source, целые id, CRS84. Эталон S посчитан ровно на этой редакции.",
+ "source": {
+  "kind": "organizers",
+  "bbox_wgs84": [
+   37.626268,
+   55.690915,
+   37.658166,
+   55.705547
+  ],
+  "size_m": [
+   2037,
+   1667
+  ]
+ },
+ "rules": [
+  "ТП-1",
+  "ТП-1.id",
+  "ТП-1.1",
+  "ТП-1.2",
+  "ТП-7",
+  "ТП-6.S",
+  "Р17"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17
+   ],
+   "ids_numeric_in_output": true,
+   "dn_by_flow_and_length": true
+  },
+  "should": {
+   "score_regression_max": 12.9501
+  },
+  "engineer": "Инженер подключает все 17 точек: допустимые маршруты есть. Порог S — регрессионный, а не следствие правил: лучшее известное решение плюс 2 %. Лучшее известное решение — версия сервиса v0.12.0 на скорректированной редакции: S 12.6962."
+ },
+ "points": [
+  {
+   "id": 1,
+   "flow_tph": 24.87
+  },
+  {
+   "id": 2,
+   "flow_tph": 18.76
+  },
+  {
+   "id": 3,
+   "flow_tph": 29.42
+  },
+  {
+   "id": 4,
+   "flow_tph": 47.7
+  },
+  {
+   "id": 5,
+   "flow_tph": 26.09
+  },
+  {
+   "id": 6,
+   "flow_tph": 15.99
+  },
+  {
+   "id": 7,
+   "flow_tph": 27.82
+  },
+  {
+   "id": 8,
+   "flow_tph": 18.03
+  },
+  {
+   "id": 9,
+   "flow_tph": 34.53
+  },
+  {
+   "id": 10,
+   "flow_tph": 33.14
+  },
+  {
+   "id": 11,
+   "flow_tph": 4.08
+  },
+  {
+   "id": 12,
+   "flow_tph": 40.0
+  },
+  {
+   "id": 13,
+   "flow_tph": 19.77
+  },
+  {
+   "id": 14,
+   "flow_tph": 19.73
+  },
+  {
+   "id": 15,
+   "flow_tph": 31.89
+  },
+  {
+   "id": 16,
+   "flow_tph": 76.27
+  },
+  {
+   "id": 17,
+   "flow_tph": 20.63
+  }
+ ],
+ "reference": {
+  "best_known_score": 12.6962,
+  "source": "v0.12.0, data/samples/small-1.geojson"
+ },
+ "run_args": [],
+ "objects": {
+  "heat_chamber": 9,
+  "heat_network": 29,
+  "oks": 85,
+  "oks_connection_point": 17,
+  "railway": 1,
+  "source": 1,
+  "water": 2
+ }
+}

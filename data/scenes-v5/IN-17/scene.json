@@ -1,0 +1,113 @@
+{
+ "id": "IN-17",
+ "family": "INPUT",
+ "title": "Вход как у организаторов",
+ "description": "Окно 300 м, новый дом у сети и павильон в парке. Москва, Хорошёво-Мнёвники, окно 300×300 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.531009,
+   55.786733,
+   37.535893,
+   55.789484
+  ],
+  "size_m": [
+   300,
+   300
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Хорошёвский район",
+  "edits": [
+   "id заменены целыми, здания записаны MultiPolygon, добавлен source, павильон в парке"
+  ]
+ },
+ "rules": [
+  "ТП-1",
+  "ТП-1.id",
+  "ТП-1.1",
+  "ТП-1.2",
+  "ТП-7",
+  "ТП-2.5",
+  "ТП-4.park"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "ids_numeric_in_output": true,
+   "unconnected": {
+    "74": [
+     "inside_forbidden_zone",
+     "enclosed",
+     "no_route"
+    ]
+   },
+   "source_not_used": [
+    75
+   ],
+   "connected": [
+    72
+   ],
+   "route_length_max_m": {
+    "72": 70
+   }
+  },
+  "should": {},
+  "engineer": "Вход в форме датасета организаторов: целые id, все здания MultiPolygon, есть source в 50 м от трубы. Одна точка в здании внутри парка не подключается. Инженер ждёт, что сервис не падает, ссылки остаются числами, id неподключённой точки в unconnected_oks_ids — число, source не место врезки и не препятствие."
+ },
+ "points": [
+  {
+   "id": 72,
+   "flow_tph": 40.0
+  },
+  {
+   "id": 74,
+   "flow_tph": 18.76
+  }
+ ],
+ "reference": {
+  "72": {
+   "shortest_m": 26.2,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5337424,
+     55.7880141
+    ],
+    [
+     37.5335843,
+     55.7879484
+    ],
+    [
+     37.5334248,
+     55.7878534
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 10,
+  "heat_chamber": 2,
+  "heat_network": 9,
+  "oks": 13,
+  "oks_connection_point": 2,
+  "park": 1,
+  "power_cable": 9,
+  "road": 11,
+  "sewer": 9,
+  "source": 1,
+  "water_supply": 8
+ }
+}

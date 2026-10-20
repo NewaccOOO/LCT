@@ -1,0 +1,118 @@
+{
+ "id": "TIE-03",
+ "family": "TIE",
+ "title": "Камера в 9 м от проекции",
+ "description": "Новый дом в 18 м от трубы, проекция точки на трубу в 9 м от камеры с свободным местом. Москва, Хорошёво-Мнёвники, окно 320×320 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.435965,
+   55.775847,
+   37.44118,
+   55.778786
+  ],
+  "size_m": [
+   320,
+   320
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Хорошёво-Мнёвники",
+  "edits": [
+   "сеть у нового дома, кроме участков камеры, убрана: убрано участков сети 0"
+  ]
+ },
+ "rules": [
+  "ТП-2.4.камера10",
+  "Р11",
+  "ПР-8",
+  "ТП-3.2",
+  "ТП-2.2",
+  "Р3"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-tie-03-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "no_new_chamber_within_m": {
+    "chambers": [
+     "hc-5048"
+    ],
+    "radius_m": 10.0
+   },
+   "tie_in": {
+    "cp-tie-03-1": {
+     "kind": "existing_chamber"
+    }
+   },
+   "route_length_max_m": {
+    "cp-tie-03-1": 60
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-tie-03-1": 36
+   },
+   "tie_in": {
+    "cp-tie-03-1": {
+     "kind": "existing_chamber",
+     "chambers": [
+      "hc-5048"
+     ]
+    }
+   },
+   "existing_chamber_tie_in_count": 1
+  },
+  "engineer": "Инженер присоединит дом к существующей камере: место врезки на трубе в нескольких метрах от неё, а правило 10 м прямо требует использовать камеру. Новую камеру рядом не строит. Ввод от ближней к трубе стены дома, трасса одна прямая или с одним поворотом."
+ },
+ "points": [
+  {
+   "id": "cp-tie-03-1",
+   "flow_tph": 26.09
+  }
+ ],
+ "reference": {
+  "cp-tie-03-1": {
+   "shortest_m": 19.4,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.4387751,
+     55.7771891
+    ],
+    [
+     37.4385666,
+     55.777313
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 19,
+  "heat_chamber": 17,
+  "heat_network": 39,
+  "oks": 15,
+  "oks_connection_point": 1,
+  "park": 4,
+  "power_cable": 18,
+  "road": 24,
+  "sewer": 18,
+  "water": 2,
+  "water_supply": 18
+ }
+}

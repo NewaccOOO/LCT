@@ -1,0 +1,130 @@
+{
+ "id": "TIE-05",
+ "family": "TIE",
+ "title": "Камера дальше 10 м",
+ "description": "Новый дом у трубы, ближайшая камера в 45 м от проекции точки. Москва, Хорошёво-Мнёвники, окно 320×320 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.581455,
+   55.786704,
+   37.586661,
+   55.789637
+  ],
+  "size_m": [
+   320,
+   320
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Беговой",
+  "edits": [
+   "сеть у нового дома, кроме участков камеры, убрана: убрано участков сети 2"
+  ]
+ },
+ "rules": [
+  "ТП-2.4.новая",
+  "Р11",
+  "ПР-8",
+  "ТП-3.2",
+  "Р13"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-tie-05-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "no_new_chamber_within_m": {
+    "chambers": [
+     "hc-1541",
+     "hc-1565",
+     "hc-1591",
+     "hc-1620",
+     "hc-1621",
+     "hc-1649",
+     "hc-1650",
+     "hc-1666",
+     "hc-1667",
+     "hc-1686",
+     "hc-1769"
+    ],
+    "radius_m": 10.0
+   },
+   "route_length_max_m": {
+    "cp-tie-05-1": 61
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-tie-05-1": 37
+   },
+   "tie_in": {
+    "cp-tie-05-1": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-3118"
+     ]
+    }
+   }
+  },
+  "engineer": "Ближайшая камера далеко. Инженер ставит новую камеру на трубе напротив дома и ведёт короткую прямую трассу, к дальней камере не тянет."
+ },
+ "points": [
+  {
+   "id": "cp-tie-05-1",
+   "flow_tph": 27.82
+  }
+ ],
+ "reference": {
+  "cp-tie-05-1": {
+   "shortest_m": 20.1,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5842152,
+     55.7883166
+    ],
+    [
+     37.5841384,
+     55.7882451
+    ],
+    [
+     37.584152,
+     55.7882256
+    ],
+    [
+     37.5840992,
+     55.7881566
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 42,
+  "heat_chamber": 11,
+  "heat_network": 21,
+  "oks": 37,
+  "oks_connection_point": 1,
+  "park": 1,
+  "power_cable": 42,
+  "prohibited_site": 1,
+  "railway": 4,
+  "road": 37,
+  "sewer": 38,
+  "water_supply": 38
+ }
+}

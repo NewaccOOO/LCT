@@ -1,0 +1,73 @@
+{
+ "id": "FLOW-03",
+ "family": "FLOW",
+ "title": "Расход больше пропускной способности Ду 1400",
+ "description": "Новый дом с расходом 25000 т/ч. Москва, Хорошёво-Мнёвники, окно 337×337 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.528173,
+   55.787608,
+   37.533653,
+   55.790696
+  ],
+  "size_m": [
+   337,
+   337
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Хорошёвский район",
+  "edits": [
+   "расход дома задан 25000 т/ч вместо расчётного"
+  ]
+ },
+ "rules": [
+  "ТП-2.3.ду",
+  "ТП-2.5",
+  "ТП-6.штраф"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "unconnected": {
+    "cp-w1458258900-1": [
+     "flow_exceeds_capacity"
+    ]
+   }
+  },
+  "should": {},
+  "engineer": "Расход 25 000 т/ч больше пропускной способности самой толстой трубы (22 501,9 т/ч). Подключить нельзя ни одним диаметром. Точка без сети со штрафом и причиной «расход больше пропускной способности»."
+ },
+ "points": [
+  {
+   "id": "cp-w1458258900-1",
+   "flow_tph": 25000.0
+  }
+ ],
+ "reference": {},
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 19,
+  "heat_chamber": 5,
+  "heat_network": 11,
+  "oks": 7,
+  "oks_connection_point": 1,
+  "park": 1,
+  "power_cable": 18,
+  "road": 19,
+  "sewer": 18,
+  "water_supply": 17
+ }
+}

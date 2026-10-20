@@ -1,0 +1,72 @@
+{
+ "id": "DEPTH-01",
+ "family": "DEPTH",
+ "title": "газ далеко от узлов",
+ "description": "Случай режима глубины из data/samples/depth/01_gas_far.geojson (синтетика): газ далеко от узлов: «над» помещается, Kгл = 1, профиль только мельче 3,0 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.552205,
+   55.749895,
+   37.65095,
+   55.751052
+  ],
+  "size_m": [
+   6200,
+   254
+  ]
+ },
+ "rules": [
+  "ТП-5",
+  "Р16",
+  "Р29-7",
+  "ТП-4.gas_pipeline",
+  "ТП-4.power_cable",
+  "ТП-4.road",
+  "ТП-4.tram_tracks"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    4
+   ],
+   "depth_profile_valid": true,
+   "depth_crossings_valid": true,
+   "dn_by_flow_and_length": true
+  },
+  "should": {
+   "kgl_one": true
+  },
+  "engineer": "Расчёт с ключом --depth. Профиль: обычная глубина верха 3,0 м, не мельче 0,7 м, уклон не круче 0,10, узел на переходе через 3,0 м, Kгл = 1 + 0,1 (h − 3) глубже 3 м. Пересечения: под дорогой верх не мельче 1,0 м, под трамваем 1,2 м; газ выше или ниже с просветом 0,2 м (верх газа 2,8 м, габарит 0,4 м), кабель с просветом 0,5 м (верх 2,7 м, габарит 0,2 м), существующая сеть с просветом 0,5 м (верх 3,0 м). Особенность случая: газ далеко от узлов: «над» помещается, Kгл = 1, профиль только мельче 3,0 м."
+ },
+ "points": [
+  {
+   "id": 4,
+   "flow_tph": 40.0
+  }
+ ],
+ "reference": {},
+ "run_args": [
+  "--depth"
+ ],
+ "objects": {
+  "gas_pipeline": 1,
+  "heat_network": 1,
+  "oks": 1,
+  "oks_connection_point": 1,
+  "source": 1
+ }
+}

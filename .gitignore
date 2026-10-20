@@ -20,3 +20,4 @@ data/cities/nnovgorod/input*.geojson
 data/cities/raw/**/*.csv.gz
 bin/
 scripts/ui3d/data/
+.dev/

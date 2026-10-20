@@ -1,0 +1,122 @@
+{
+ "id": "FLOW-04",
+ "family": "FLOW",
+ "title": "Крошечный расход",
+ "description": "Новый дом с расходом 0.05 т/ч. Москва, Хорошёво-Мнёвники, окно 337×337 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.562504,
+   55.805141,
+   37.567989,
+   55.80823
+  ],
+  "size_m": [
+   337,
+   337
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Тимирязевский район",
+  "edits": [
+   "расход дома задан 0.05 т/ч вместо расчётного"
+  ]
+ },
+ "rules": [
+  "ТП-2.3.ду"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-r12046382-2"
+   ],
+   "dn_by_flow_and_length": true,
+   "final_dn_range": {
+    "cp-r12046382-2": [
+     50,
+     50
+    ]
+   },
+   "route_length_max_m": {
+    "cp-r12046382-2": 136
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-r12046382-2": 102
+   },
+   "tie_in": {
+    "cp-r12046382-2": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-5603"
+     ]
+    }
+   }
+  },
+  "engineer": "Расход 0,05 т/ч: Ду 50 с запасом. Инженер ставит Ду 50, если путь короче 181 м."
+ },
+ "points": [
+  {
+   "id": "cp-r12046382-2",
+   "flow_tph": 0.05
+  }
+ ],
+ "reference": {
+  "cp-r12046382-2": {
+   "shortest_m": 70.4,
+   "dn_by_flow": 50,
+   "path_wgs84": [
+    [
+     37.5655208,
+     55.8064075
+    ],
+    [
+     37.5656989,
+     55.8063452
+    ],
+    [
+     37.5662731,
+     55.8063519
+    ],
+    [
+     37.5664605,
+     55.8064619
+    ],
+    [
+     37.5664745,
+     55.8064925
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 45,
+  "heat_chamber": 25,
+  "heat_network": 68,
+  "oks": 28,
+  "oks_connection_point": 1,
+  "park": 2,
+  "power_cable": 44,
+  "power_line_support": 4,
+  "prohibited_site": 1,
+  "railway": 2,
+  "road": 51,
+  "sewer": 43,
+  "social_area": 1,
+  "water_supply": 41
+ }
+}

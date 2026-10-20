@@ -1,0 +1,121 @@
+{
+ "id": "BLD-14",
+ "family": "BLD",
+ "title": "Переулок старого центра: труба под осью",
+ "description": "Здание в переулке заменено новым домом той же формы, труба под осью переулка. Москва, Хорошёво-Мнёвники, окно 300×300 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.574175,
+   55.769532,
+   37.579054,
+   55.772282
+  ],
+  "size_m": [
+   300,
+   300
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Пресненский район",
+  "edits": [
+   "здание w36999680 заменено новым домом той же формы"
+  ]
+ },
+ "rules": [
+  "ТП-2.2",
+  "Р3",
+  "Р29-13",
+  "ТП-4.oks",
+  "ТП-4.road",
+  "ТП-2.4.новая"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-lane-w36999680"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-lane-w36999680": 85
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-lane-w36999680": 58
+   },
+   "tie_in": {
+    "cp-lane-w36999680": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-13305"
+     ]
+    }
+   },
+   "max_turns": {
+    "cp-lane-w36999680": 0
+   }
+  },
+  "engineer": "Переулок 12–16 м между фасадами, труба под проезжей частью. Инженер ведёт один прямой финальный участок поперёк переулка до новой камеры в проекции, без поворотов: любой продольный кусок нарушает отступ 5 м до противоположного фасада. Камера в полигоне дороги допустима (разъяснение 29.09, п. 13)."
+ },
+ "points": [
+  {
+   "id": "cp-lane-w36999680",
+   "flow_tph": 29.42
+  }
+ ],
+ "reference": {
+  "cp-lane-w36999680": {
+   "shortest_m": 36.2,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5763575,
+     55.7710048
+    ],
+    [
+     37.57604,
+     55.7710399
+    ],
+    [
+     37.5760337,
+     55.7710976
+    ],
+    [
+     37.5760649,
+     55.771116
+    ],
+    [
+     37.5761663,
+     55.7711238
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 53,
+  "heat_chamber": 41,
+  "heat_network": 85,
+  "oks": 33,
+  "oks_connection_point": 1,
+  "park": 1,
+  "power_cable": 62,
+  "road": 72,
+  "sewer": 54,
+  "social_area": 2,
+  "water_supply": 42
+ }
+}

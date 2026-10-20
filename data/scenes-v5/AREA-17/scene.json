@@ -1,0 +1,117 @@
+{
+ "id": "AREA-17",
+ "family": "AREA",
+ "title": "Запретная территория, Купчино",
+ "description": "Новый дом, между ним и сетью запретная территория, купчино. Санкт-Петербург, Купчино, окно 700×700 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   30.431349,
+   59.837937,
+   30.445308,
+   59.844961
+  ],
+  "size_m": [
+   700,
+   700
+  ],
+  "file": "data/cities/spb/input.geojson",
+  "city": "Санкт-Петербург, Александровский округ",
+  "edits": [
+   "сеть на стороне нового дома убрана, остаётся за объектом proh-r11747990: убрано участков сети 54"
+  ]
+ },
+ "rules": [
+  "ТП-4.prohibited_site"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "no_cross": [
+    "proh-r11747990"
+   ],
+   "connected": [
+    "cp-area-17-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-area-17-1": 621
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-area-17-1": 522
+   }
+  },
+  "engineer": "Между домом и сетью запретная территория, пересекать её нельзя (таблица 2, отступ 1 м). Инженер обходит её по проездам вокруг или врезается в другую трубу со своей стороны, не срезая угол через территорию. Расход 19.73 т/ч, до ближайшей трубы по прямой 141 м, кратчайший допустимый путь 394 м."
+ },
+ "points": [
+  {
+   "id": "cp-area-17-1",
+   "flow_tph": 19.73
+  }
+ ],
+ "reference": {
+  "cp-area-17-1": {
+   "shortest_m": 393.8,
+   "dn_by_flow": 100,
+   "path_wgs84": [
+    [
+     30.4380703,
+     59.8425465
+    ],
+    [
+     30.4379331,
+     59.8426743
+    ],
+    [
+     30.4380027,
+     59.8427098
+    ],
+    [
+     30.4417081,
+     59.8429525
+    ],
+    [
+     30.4420272,
+     59.8428289
+    ],
+    [
+     30.444321,
+     59.8429791
+    ],
+    [
+     30.4444562,
+     59.8429425
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 124,
+  "heat_chamber": 35,
+  "heat_network": 66,
+  "oks": 171,
+  "oks_connection_point": 1,
+  "power_cable": 112,
+  "power_line_support": 5,
+  "prohibited_site": 1,
+  "railway": 4,
+  "road": 111,
+  "sewer": 122,
+  "water_supply": 120
+ }
+}

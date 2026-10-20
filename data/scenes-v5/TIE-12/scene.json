@@ -1,0 +1,113 @@
+{
+ "id": "TIE-12",
+ "family": "TIE",
+ "title": "Две камеры на равном расстоянии",
+ "description": "Новый дом напротив середины между двумя камерами в 12 м друг от друга. Москва, Хорошёво-Мнёвники, окно 320×320 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.429582,
+   55.765333,
+   37.434796,
+   55.768272
+  ],
+  "size_m": [
+   320,
+   320
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Крылатское",
+  "edits": [
+   "сеть у нового дома, кроме участков камеры, убрана: убрано участков сети 6",
+   "на трубе hn-10044 добавлена камера hc-tie-12-twin симметрично существующей hc-5095"
+  ]
+ },
+ "rules": [
+  "ТП-2.4.выбор",
+  "Р11",
+  "ПР-8",
+  "ТП-2.4.камера10"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-tie-12-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "no_new_chamber_within_m": {
+    "chambers": [
+     "hc-5095",
+     "hc-tie-12-twin"
+    ],
+    "radius_m": 10.0
+   },
+   "route_length_max_m": {
+    "cp-tie-12-1": 61
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-tie-12-1": 37
+   },
+   "tie_in": {
+    "cp-tie-12-1": {
+     "kind": "existing_chamber",
+     "chambers": [
+      "hc-5095",
+      "hc-tie-12-twin"
+     ]
+    }
+   }
+  },
+  "engineer": "Две свободные камеры в 6 м от места врезки по разные стороны. Правила разрешают выбрать любую. Инженер возьмёт одну, новую камеру между ними строить не будет."
+ },
+ "points": [
+  {
+   "id": "cp-tie-12-1",
+   "flow_tph": 29.42
+  }
+ ],
+ "reference": {
+  "cp-tie-12-1": {
+   "shortest_m": 20.3,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.4324921,
+     55.7668067
+    ],
+    [
+     37.4321892,
+     55.7668069
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 12,
+  "heat_chamber": 10,
+  "heat_network": 18,
+  "oks": 11,
+  "oks_connection_point": 1,
+  "park": 3,
+  "power_cable": 12,
+  "road": 15,
+  "sewer": 11,
+  "water": 1,
+  "water_supply": 10
+ }
+}

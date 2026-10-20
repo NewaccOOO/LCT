@@ -1,0 +1,61 @@
+{
+ "id": "IN-06",
+ "family": "INPUT",
+ "title": "Полигон с самопересечением",
+ "description": "Добавлено здание с самопересечением. Москва, Хорошёво-Мнёвники, окно 300×300 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.535586,
+   55.770578,
+   37.540467,
+   55.77333
+  ],
+  "size_m": [
+   300,
+   300
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Хорошёвский район",
+  "edits": [
+   "добавлено здание oks-bowtie с самопересекающимся контуром"
+  ]
+ },
+ "rules": [
+  "ПР-9",
+  "ТП-1"
+ ],
+ "expect": {
+  "must": {
+   "diagnostic": {
+    "exit_code_nonzero": true,
+    "mentions": [
+     "oks-bowtie"
+    ]
+   }
+  },
+  "should": {},
+  "engineer": "Контур здания самопересекается («бабочка»). По протоколу 16.09 (п. 9) невалидная геометрия даёт диагностическую ошибку с указанием объекта."
+ },
+ "points": [
+  {
+   "id": "cp-r17672751-12",
+   "flow_tph": 33.14
+  }
+ ],
+ "reference": {},
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 17,
+  "heat_chamber": 5,
+  "heat_network": 12,
+  "oks": 11,
+  "oks_connection_point": 1,
+  "power_cable": 15,
+  "railway": 11,
+  "road": 16,
+  "sewer": 17,
+  "social_area": 1,
+  "water_supply": 17
+ }
+}

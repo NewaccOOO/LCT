@@ -1,0 +1,90 @@
+{
+ "id": "VAR-02",
+ "family": "VAR",
+ "title": "Три близких по цене решения",
+ "description": "Квадратный дом 16×16 м, ввод в центре, в 8 м от каждой стены. Труба на юге в 20 м от стены, на севере в 22 м, на востоке в 18 м со свободной камерой напротив ввода. синтетическое поле 300×200 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.61139,
+   55.75702,
+   37.616233,
+   55.75887
+  ],
+  "size_m": [
+   300,
+   200
+  ]
+ },
+ "rules": [
+  "ТП-6.варианты",
+  "ТП-6.S",
+  "Р29-8",
+  "Р29-9",
+  "Р29-1"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-var-02-1"
+   ],
+   "variants_ranked": true,
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-var-02-1": 71
+   }
+  },
+  "should": {
+   "variants_min": 3,
+   "variants_distinct_tie_in": true,
+   "score_max": 0.2535
+  },
+  "engineer": "Три разумных решения (длина считается от ввода, включая 8 м внутри дома): юг S ≈ 0.233, север S ≈ 0.244, восток S ≈ 0.279. Разница меньше 0,05. Инженер показал бы все три как варианты с разными местами врезки и упорядочил по S. Восточная труба — только через свободную камеру: проекция точки попадает в неё."
+ },
+ "points": [
+  {
+   "id": "cp-var-02-1",
+   "flow_tph": 10.0
+  }
+ ],
+ "reference": {
+  "cp-var-02-1": {
+   "shortest_m": 27.0,
+   "dn_by_flow": 80,
+   "path_wgs84": [
+    [
+     37.6136529,
+     55.757925
+    ],
+    [
+     37.6139097,
+     55.7579473
+    ],
+    [
+     37.6140668,
+     55.7579387
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "heat_chamber": 1,
+  "heat_network": 3,
+  "oks": 1,
+  "oks_connection_point": 1
+ }
+}

@@ -1,0 +1,119 @@
+{
+ "id": "TIE-07",
+ "family": "TIE",
+ "title": "Камер в окне нет: врезка в трубу",
+ "description": "Новый дом у трубы, все камеры в окне убраны. Москва, Хорошёво-Мнёвники, окно 360×360 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.579827,
+   55.777696,
+   37.585682,
+   55.780996
+  ],
+  "size_m": [
+   360,
+   360
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Беговой",
+  "edits": [
+   "убраны все камеры окна (15)"
+  ]
+ },
+ "rules": [
+  "ТП-2.4.новая",
+  "Р13",
+  "ТП-3.2",
+  "ТП-7"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": {
+    "tolerance_m": 1.0,
+    "except": [
+     "cp-w1309011042"
+    ]
+   },
+   "no_crash": true,
+   "connected": [
+    "cp-w1309011042"
+   ],
+   "dn_by_flow_and_length": true,
+   "tie_in": {
+    "cp-w1309011042": {
+     "kind": "new_chamber"
+    }
+   },
+   "route_length_max_m": {
+    "cp-w1309011042": 128
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-w1309011042": 95
+   },
+   "tie_in": {
+    "cp-w1309011042": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-11899"
+     ]
+    }
+   }
+  },
+  "engineer": "Камер поблизости нет. Инженер ставит новую камеру прямо на трубе в месте присоединения, её Ду — по наибольшему из примыканий, включая разрезанную трубу."
+ },
+ "points": [
+  {
+   "id": "cp-w1309011042",
+   "flow_tph": 47.7
+  }
+ ],
+ "reference": {
+  "cp-w1309011042": {
+   "shortest_m": 64.7,
+   "dn_by_flow": 150,
+   "path_wgs84": [
+    [
+     37.5831552,
+     55.7790513
+    ],
+    [
+     37.5825019,
+     55.7792713
+    ],
+    [
+     37.582297,
+     55.7793701
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 77,
+  "heat_network": 31,
+  "oks": 31,
+  "oks_connection_point": 1,
+  "park": 2,
+  "power_cable": 83,
+  "railway": 17,
+  "road": 70,
+  "sewer": 71,
+  "social_area": 1,
+  "water": 1,
+  "water_supply": 69
+ }
+}

@@ -1,0 +1,89 @@
+{
+ "id": "AREA-13",
+ "family": "AREA",
+ "title": "Новый корпус на территории школы",
+ "description": "Новый корпус целиком внутри территории. Москва, Хорошёво-Мнёвники, окно 400×400 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.560364,
+   55.816663,
+   37.566878,
+   55.82033
+  ],
+  "size_m": [
+   400,
+   400
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Тимирязевский район",
+  "edits": [
+   "сеть внутри территории убрана: убрано участков сети 2"
+  ]
+ },
+ "rules": [
+  "ТП-4.social_area",
+  "ТП-2.5",
+  "ТП-2.2",
+  "Р3",
+  "ТП-6.штраф",
+  "ПР-9"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "unconnected": {
+    "cp-area-13-1": [
+     "inside_forbidden_zone",
+     "enclosed",
+     "no_route"
+    ]
+   },
+   "no_cross": [
+    "soci-r15518043"
+   ]
+  },
+  "should": {},
+  "engineer": "Новый корпус стоит внутри территории социального объекта, а сеть снаружи. Выйти с территории нельзя: пересечение запрещено, исключение действует только для своего полигона ОКС. Инженер в жизни подвёл бы сеть по территории школы, но по правилам кейса допустимой трассы нет: точка без сети со штрафом и понятной причиной."
+ },
+ "points": [
+  {
+   "id": "cp-area-13-1",
+   "flow_tph": 19.73
+  }
+ ],
+ "reference": {
+  "cp-area-13-1": {
+   "shortest_m": null,
+   "dn_by_flow": 100
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 23,
+  "heat_chamber": 14,
+  "heat_network": 32,
+  "oks": 23,
+  "oks_connection_point": 1,
+  "park": 6,
+  "power_cable": 23,
+  "road": 38,
+  "sewer": 23,
+  "social_area": 1,
+  "tram_tracks": 4,
+  "water": 2,
+  "water_supply": 23
+ }
+}

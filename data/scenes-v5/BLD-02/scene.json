@@ -1,0 +1,83 @@
+{
+ "id": "BLD-02",
+ "family": "BLD",
+ "title": "Двор с въездом уже нормы",
+ "description": "Новый дом во дворе, образованном существующими зданиями. Москва, Хорошёво-Мнёвники, окно 360×360 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.590336,
+   55.789555,
+   37.596192,
+   55.792855
+  ],
+  "size_m": [
+   360,
+   360
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Тверской район",
+  "edits": [
+   "сеть внутри двора убрана: убрано участков сети 1"
+  ]
+ },
+ "rules": [
+  "ТП-2.2",
+  "ТП-4.oks",
+  "ТП-2.5",
+  "ТП-4.отступ",
+  "Р15"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "unconnected": {
+    "cp-bld-02-1": [
+     "enclosed",
+     "no_route"
+    ]
+   }
+  },
+  "should": {},
+  "engineer": "Во двор ведёт проезд уже 10,4 м: с отступом 5 м от каждого здания и шириной пары труб пройти нельзя. Инженер по правилам кейса трассы не найдёт, дом остаётся без сети с причиной; протаскивать трассу через проезд с нарушением отступа нельзя."
+ },
+ "points": [
+  {
+   "id": "cp-bld-02-1",
+   "flow_tph": 18.76
+  }
+ ],
+ "reference": {
+  "cp-bld-02-1": {
+   "shortest_m": null,
+   "dn_by_flow": 100
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 89,
+  "heat_chamber": 21,
+  "heat_network": 53,
+  "oks": 41,
+  "oks_connection_point": 1,
+  "park": 2,
+  "power_cable": 87,
+  "prohibited_site": 2,
+  "road": 77,
+  "sewer": 89,
+  "social_area": 1,
+  "water_supply": 83
+ }
+}

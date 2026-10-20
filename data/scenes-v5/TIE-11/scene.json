@@ -1,0 +1,130 @@
+{
+ "id": "TIE-11",
+ "family": "TIE",
+ "title": "Ближайшая точка трубы внутри парка",
+ "description": "Труба пересекает парк, новый дом за границей парка. Москва, Хорошёво-Мнёвники, окно 400×400 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.435326,
+   55.774063,
+   37.441844,
+   55.777736
+  ],
+  "size_m": [
+   400,
+   400
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Хорошёво-Мнёвники",
+  "edits": [
+   "вводы у нового дома убраны: убрано участков сети 2"
+  ]
+ },
+ "rules": [
+  "ТП-4.park",
+  "ТП-2.4.новая",
+  "Р11",
+  "ТП-2.5"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-tie-11-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "no_cross": [
+    "park-w922113336"
+   ],
+   "route_length_max_m": {
+    "cp-tie-11-1": 95
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-tie-11-1": 66
+   },
+   "tie_in": {
+    "cp-tie-11-1": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-9970"
+     ]
+    }
+   },
+   "tie_outside_zone": {
+    "restrictions": [
+     "park-w922113336"
+    ],
+    "margin_m": 1.0
+   }
+  },
+  "engineer": "Труба проходит через парк, и кратчайший путь ведёт к ней через парк. Пересекать парк нельзя, поэтому инженер врезается в трубу там, где она выходит из парка, или в другую трубу, и ведёт трассу по краю парка с отступом не меньше 1 м."
+ },
+ "points": [
+  {
+   "id": "cp-tie-11-1",
+   "flow_tph": 33.14
+  }
+ ],
+ "reference": {
+  "cp-tie-11-1": {
+   "shortest_m": 42.8,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.4384986,
+     55.7761057
+    ],
+    [
+     37.4386416,
+     55.77608
+    ],
+    [
+     37.4387053,
+     55.7760808
+    ],
+    [
+     37.4387365,
+     55.7760992
+    ],
+    [
+     37.4389277,
+     55.7761016
+    ],
+    [
+     37.4391085,
+     55.7760137
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 23,
+  "heat_chamber": 20,
+  "heat_network": 45,
+  "oks": 17,
+  "oks_connection_point": 1,
+  "park": 7,
+  "power_cable": 22,
+  "road": 26,
+  "sewer": 22,
+  "social_area": 1,
+  "water": 1,
+  "water_supply": 21
+ }
+}

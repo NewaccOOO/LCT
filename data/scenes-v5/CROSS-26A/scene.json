@@ -1,0 +1,94 @@
+{
+ "id": "CROSS-26A",
+ "family": "CROSS",
+ "title": "Обход гаражей или переход улицы (обход короткий)",
+ "description": "Своя труба в 25 м по свободной земле, чужая — за улицей шириной 20 м. синтетическое поле 300×200 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.611234,
+   55.756928,
+   37.616077,
+   55.758778
+  ],
+  "size_m": [
+   300,
+   200
+  ]
+ },
+ "rules": [
+  "ТП-4.road",
+  "ТП-4.oks",
+  "ТП-6.S",
+  "ТП-6.стоимость"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-cross-26a-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-cross-26a-1": 70
+   }
+  },
+  "should": {
+   "tie_in": {
+    "cp-cross-26a-1": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-own"
+     ]
+    }
+   },
+   "score_max": 0.2447
+  },
+  "engineer": "Обход до своей трубы ≈26 м, S ≈ 0.225; переход улицы 31 м, из них 26 м спецпроход с Kспец 1,6, S ≈ 0.286. Граница выгоды около 37 м обхода. Инженер выбирает обход."
+ },
+ "points": [
+  {
+   "id": "cp-cross-26a-1",
+   "flow_tph": 10.0
+  }
+ ],
+ "reference": {
+  "cp-cross-26a-1": {
+   "shortest_m": 26.4,
+   "dn_by_flow": 80,
+   "path_wgs84": [
+    [
+     37.6136711,
+     55.7578623
+    ],
+    [
+     37.6135267,
+     55.7578876
+    ],
+    [
+     37.6132559,
+     55.7578846
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "heat_network": 2,
+  "oks": 1,
+  "oks_connection_point": 1,
+  "road": 1
+ }
+}

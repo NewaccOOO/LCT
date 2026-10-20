@@ -1,0 +1,65 @@
+{
+ "id": "LEN-06",
+ "family": "LEN",
+ "title": "Дом дальше предела самой толстой трубы",
+ "description": "Труба Ду 500 и один дом в 11700 м от неё, между ними пусто. синтетическое поле 12000×400 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.611202,
+   55.75603,
+   37.80249,
+   55.761634
+  ],
+  "size_m": [
+   12000,
+   400
+  ]
+ },
+ "rules": [
+  "ТП-2.3.ду",
+  "ТП-2.3.длина",
+  "Р1",
+  "ТП-6.стоимость",
+  "ТП-2.5",
+  "ТП-6.штраф"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "unconnected": {
+    "cp-len-06-1": [
+     "no_route"
+    ]
+   }
+  },
+  "should": {},
+  "engineer": "До сети 11,7 км, больше предельной длины Ду 1400 (11 276 м). Расход один на всём пути, поэтому сменить Ду по дороге нельзя, и допустимой трассы нет. Дом остаётся без сети со штрафом."
+ },
+ "points": [
+  {
+   "id": "cp-len-06-1",
+   "flow_tph": 11.4
+  }
+ ],
+ "reference": {},
+ "run_args": [],
+ "objects": {
+  "heat_chamber": 1,
+  "heat_network": 1,
+  "oks": 1,
+  "oks_connection_point": 1
+ }
+}

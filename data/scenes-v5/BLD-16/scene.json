@@ -1,0 +1,117 @@
+{
+ "id": "BLD-16",
+ "family": "BLD",
+ "title": "Газопровод вдоль фасада",
+ "description": "Новый дом, вдоль ближней к сети стены в 2,5 м проложен газопровод. Москва, Хорошёво-Мнёвники, окно 333×333 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.458316,
+   55.770986,
+   37.463748,
+   55.774047
+  ],
+  "size_m": [
+   333,
+   333
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Хорошёво-Мнёвники",
+  "edits": [
+   "сеть на стороне дома от газопровода убрана: убрано участков сети 9",
+   "газопровод gas-facade проложен вдоль фасада в 2,5 м"
+  ]
+ },
+ "rules": [
+  "ТП-2.2",
+  "ТП-4.gas_pipeline",
+  "ТП-4.спецпроход",
+  "Р3",
+  "Р29-14"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-w1473353292"
+   ],
+   "dn_by_flow_and_length": true,
+   "crossings_min": {
+    "gas_pipeline": 1
+   },
+   "special_kspec": {
+    "gas_pipeline": 1.25
+   },
+   "route_length_max_m": {
+    "cp-w1473353292": 86
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-w1473353292": 59
+   },
+   "tie_in": {
+    "cp-w1473353292": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-10517"
+     ]
+    }
+   }
+  },
+  "engineer": "Вдоль фасада, к которому ближе точка подключения, в 2,5 м идёт газопровод. Финальный участок обязан его пересечь: спецпроход с Kспец 1,25 и узлами в 2 м от пересечения, без поворотов внутри. Отступ к своему зданию на финальном участке не действует, к газу — действует."
+ },
+ "points": [
+  {
+   "id": "cp-w1473353292",
+   "flow_tph": 76.27
+  }
+ ],
+ "reference": {
+  "cp-w1473353292": {
+   "shortest_m": 37.0,
+   "dn_by_flow": 200,
+   "path_wgs84": [
+    [
+     37.4609645,
+     55.7724193
+    ],
+    [
+     37.4610861,
+     55.7724746
+    ],
+    [
+     37.4615106,
+     55.7724815
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 25,
+  "heat_chamber": 3,
+  "heat_network": 11,
+  "oks": 11,
+  "oks_connection_point": 1,
+  "park": 3,
+  "power_cable": 21,
+  "road": 19,
+  "sewer": 23,
+  "social_area": 1,
+  "water": 1,
+  "water_supply": 21
+ }
+}

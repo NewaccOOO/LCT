@@ -1,0 +1,131 @@
+{
+ "id": "CROSS-11",
+ "family": "CROSS",
+ "title": "Переход трамвайных путей, Купчино",
+ "description": "Новый дом через трамвайную линию от сети. Санкт-Петербург, Купчино, окно 440×440 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   30.391767,
+   59.854971,
+   30.400549,
+   59.859389
+  ],
+  "size_m": [
+   440,
+   440
+  ],
+  "file": "data/cities/spb/input.geojson",
+  "city": "Санкт-Петербург, Николаевский округ",
+  "edits": [
+   "сеть на стороне нового дома убрана, остаётся за объектом tram-w543793528: убрано участков сети 11"
+  ]
+ },
+ "rules": [
+  "ТП-4.tram_tracks",
+  "ТП-4.угол",
+  "ТП-4.наложение",
+  "Р8",
+  "ТП-4.road",
+  "ТП-4.спецпроход",
+  "ПР-10"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-cross-11-1"
+   ],
+   "crossing_angle_min_deg": {
+    "tram_tracks": 45
+   },
+   "special_kspec": {
+    "tram_tracks": 1.75
+   },
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-cross-11-1": 120
+   }
+  },
+  "should": {
+   "crossings_max": {
+    "tram_tracks": 1
+   },
+   "max_route_length_m": {
+    "cp-cross-11-1": 88
+   }
+  },
+  "engineer": "Сеть за трамвайными путями, обычно вместе с проезжей частью. Инженер пересекает пути и дорогу одним прямым участком под углом не меньше 45°; там, где зоны дороги и трамвая накладываются, берётся наибольший коэффициент 1,75, а на границах смены набора объектов ставятся технические узлы. Расход 18.76 т/ч, до ближайшей трубы по прямой 55 м, объект tram-w543793528 средней ширины 3 м, кратчайший допустимый путь 60 м."
+ },
+ "points": [
+  {
+   "id": "cp-cross-11-1",
+   "flow_tph": 18.76
+  }
+ ],
+ "reference": {
+  "cp-cross-11-1": {
+   "shortest_m": 59.6,
+   "dn_by_flow": 100,
+   "path_wgs84": [
+    [
+     30.3961602,
+     59.8568715
+    ],
+    [
+     30.3960985,
+     59.8569952
+    ],
+    [
+     30.3961292,
+     59.8570153
+    ],
+    [
+     30.396083,
+     59.8571929
+    ],
+    [
+     30.3960767,
+     59.857355
+    ],
+    [
+     30.3961074,
+     59.8573751
+    ],
+    [
+     30.3961339,
+     59.8573613
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 81,
+  "heat_chamber": 5,
+  "heat_network": 13,
+  "oks": 23,
+  "oks_connection_point": 1,
+  "park": 3,
+  "power_cable": 78,
+  "power_line_support": 2,
+  "road": 104,
+  "sewer": 82,
+  "social_area": 1,
+  "tram_tracks": 7,
+  "water": 4,
+  "water_supply": 80
+ }
+}

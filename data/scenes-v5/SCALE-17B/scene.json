@@ -1,0 +1,103 @@
+{
+ "id": "SCALE-17B",
+ "family": "SCALE",
+ "title": "Два дома в 60 м друг от друга, труба в 150 м",
+ "description": "Два дома по 10 т/ч в 60 м друг от друга вдоль трубы Ду 150 в 150 м. синтетическое поле 400×270 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.610402,
+   55.757278,
+   37.61686,
+   55.759775
+  ],
+  "size_m": [
+   400,
+   270
+  ]
+ },
+ "rules": [
+  "ТП-2.1.дерево",
+  "ТП-2.1.камеры",
+  "ТП-6.S",
+  "ТП-3.2"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-scale-17b-1",
+    "cp-scale-17b-2"
+   ],
+   "dn_by_flow_and_length": true
+  },
+  "should": {
+   "same_tree": [
+    [
+     "cp-scale-17b-1",
+     "cp-scale-17b-2"
+    ]
+   ],
+   "score_max": 1.3675
+  },
+  "engineer": "Две отдельные врезки: S ≈ 1.780. Общий участок Ду 100 и камера ветвления: S ≈ 1.347. Инженер выбирает общий участок."
+ },
+ "points": [
+  {
+   "id": "cp-scale-17b-1",
+   "flow_tph": 10.0
+  },
+  {
+   "id": "cp-scale-17b-2",
+   "flow_tph": 10.0
+  }
+ ],
+ "reference": {
+  "cp-scale-17b-1": {
+   "shortest_m": 151.6,
+   "dn_by_flow": 80,
+   "path_wgs84": [
+    [
+     37.6131294,
+     55.7592041
+    ],
+    [
+     37.6131776,
+     55.7578478
+    ]
+   ]
+  },
+  "cp-scale-17b-2": {
+   "shortest_m": 151.6,
+   "dn_by_flow": 80,
+   "path_wgs84": [
+    [
+     37.6140852,
+     55.7592149
+    ],
+    [
+     37.6141334,
+     55.7578585
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "heat_network": 1,
+  "oks": 2,
+  "oks_connection_point": 2
+ }
+}

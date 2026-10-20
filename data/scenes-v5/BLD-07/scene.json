@@ -1,0 +1,136 @@
+{
+ "id": "BLD-07",
+ "family": "BLD",
+ "title": "П-образный дом, ввод со двора",
+ "description": "Существующее здание сложной формы заменено новым той же формы, ввод со стороны внутреннего двора. Москва, Хорошёво-Мнёвники, окно 400×400 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.501732,
+   55.81851,
+   37.508252,
+   55.82218
+  ],
+  "size_m": [
+   400,
+   400
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Войковский район",
+  "edits": [
+   "здание w30790581 заменено новым домом той же формы"
+  ]
+ },
+ "rules": [
+  "ТП-2.2",
+  "Р3",
+  "Р29-15",
+  "Р29-16",
+  "Р29-17",
+  "ТП-4.oks",
+  "ТП-2.1.повороты"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-new-w30790581"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-new-w30790581": 218
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-new-w30790581": 173
+   },
+   "tie_in": {
+    "cp-new-w30790581": {
+     "kind": "existing_chamber",
+     "chambers": [
+      "hc-2117"
+     ]
+    }
+   }
+  },
+  "engineer": "Ввод в П-образный дом стоит внутри «двора» буквы П. Финальный участок начинается у ближайшей к точке стены; если луч оттуда снова упирается в своё здание или зону отступа соседа, допустима другая ближайшая подходящая точка контура (разъяснение 29.09, п. 15). Инженер выводит трассу из двора П прямо наружу, без зигзагов."
+ },
+ "points": [
+  {
+   "id": "cp-new-w30790581",
+   "flow_tph": 31.89
+  }
+ ],
+ "reference": {
+  "cp-new-w30790581": {
+   "shortest_m": 125.3,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5049953,
+     55.8203547
+    ],
+    [
+     37.5051154,
+     55.8203862
+    ],
+    [
+     37.5051837,
+     55.8203475
+    ],
+    [
+     37.5053114,
+     55.820349
+    ],
+    [
+     37.5056699,
+     55.8201557
+    ],
+    [
+     37.5056713,
+     55.8201198
+    ],
+    [
+     37.5057379,
+     55.8200487
+    ],
+    [
+     37.506129,
+     55.8198377
+    ],
+    [
+     37.506316,
+     55.8196396
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 18,
+  "heat_chamber": 7,
+  "heat_network": 16,
+  "oks": 12,
+  "oks_connection_point": 1,
+  "park": 2,
+  "power_cable": 19,
+  "road": 24,
+  "sewer": 18,
+  "social_area": 2,
+  "tram_tracks": 10,
+  "water_supply": 18
+ }
+}

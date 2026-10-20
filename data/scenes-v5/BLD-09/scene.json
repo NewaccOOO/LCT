@@ -1,0 +1,107 @@
+{
+ "id": "BLD-09",
+ "family": "BLD",
+ "title": "Ввод у угла здания",
+ "description": "Новый дом, точка подключения у угла. Москва, Хорошёво-Мнёвники, окно 316×316 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.589224,
+   55.799276,
+   37.594373,
+   55.802176
+  ],
+  "size_m": [
+   316,
+   316
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Бутырский район",
+  "edits": [
+   "точка подключения перенесена к дальнему от сети углу дома"
+  ]
+ },
+ "rules": [
+  "ТП-2.2",
+  "Р3",
+  "ТП-2.1.повороты"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-r3884592-10"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-r3884592-10": 119
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-r3884592-10": 87
+   },
+   "tie_in": {
+    "cp-r3884592-10": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-11475"
+     ]
+    }
+   }
+  },
+  "engineer": "Точка подключения в метре от угла дома. Финальный участок идёт от ближайшей к точке границы; инженер выбирает ту стену угла, от которой путь к сети короче и без лишнего поворота, и не ведёт трассу вдоль стены в зоне отступа."
+ },
+ "points": [
+  {
+   "id": "cp-r3884592-10",
+   "flow_tph": 26.09
+  }
+ ],
+ "reference": {
+  "cp-r3884592-10": {
+   "shortest_m": 59.2,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5914467,
+     55.8004412
+    ],
+    [
+     37.5914079,
+     55.8003569
+    ],
+    [
+     37.5921739,
+     55.800371
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 35,
+  "heat_chamber": 5,
+  "heat_network": 15,
+  "oks": 10,
+  "oks_connection_point": 1,
+  "park": 1,
+  "power_cable": 25,
+  "railway": 12,
+  "road": 23,
+  "sewer": 34,
+  "water_supply": 31
+ }
+}

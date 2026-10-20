@@ -1,0 +1,116 @@
+{
+ "id": "TIE-13",
+ "family": "TIE",
+ "title": "Рядом трубы Ду 50–80 и Ду 500+",
+ "description": "Новый дом между магистралью и вводом малого диаметра. Москва, Хорошёво-Мнёвники, окно 360×360 м.",
+ "source": {
+  "kind": "osm",
+  "bbox_wgs84": [
+   37.491345,
+   55.775302,
+   37.497207,
+   55.778606
+  ],
+  "size_m": [
+   360,
+   360
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Хорошёво-Мнёвники"
+ },
+ "rules": [
+  "ТП-3.2",
+  "ТП-2.4.новая",
+  "ТП-2.4.без_реконструкции",
+  "Р11",
+  "Р14"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": {
+    "tolerance_m": 1.0,
+    "except": [
+     "cp-tie-13-1"
+    ]
+   },
+   "no_crash": true,
+   "connected": [
+    "cp-tie-13-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-tie-13-1": 90
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-tie-13-1": 62
+   },
+   "tie_in": {
+    "cp-tie-13-1": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-1346"
+     ]
+    }
+   }
+  },
+  "engineer": "Рядом с домом две трубы: магистраль Ду 600 и ввод Ду 80. Резерв существующей сети не считается, присоединиться можно к любой. Новая камера на магистрали дороже (по наибольшему Ду примыканий), поэтому при близких расстояниях инженер выберет малую трубу."
+ },
+ "points": [
+  {
+   "id": "cp-tie-13-1",
+   "flow_tph": 15.99
+  }
+ ],
+ "reference": {
+  "cp-tie-13-1": {
+   "shortest_m": 39.7,
+   "dn_by_flow": 100,
+   "path_wgs84": [
+    [
+     37.4938458,
+     55.7769435
+    ],
+    [
+     37.4939226,
+     55.7772109
+    ],
+    [
+     37.4939127,
+     55.7772734
+    ],
+    [
+     37.4939549,
+     55.777295
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 61,
+  "heat_chamber": 20,
+  "heat_network": 42,
+  "oks": 33,
+  "oks_connection_point": 1,
+  "park": 3,
+  "power_cable": 65,
+  "prohibited_site": 1,
+  "road": 64,
+  "sewer": 59,
+  "social_area": 1,
+  "water_supply": 59
+ }
+}

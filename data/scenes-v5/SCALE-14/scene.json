@@ -1,0 +1,143 @@
+{
+ "id": "SCALE-14",
+ "family": "SCALE",
+ "title": "Дома по разные стороны трубы",
+ "description": "Два новых дома по разные стороны магистрали. Москва, Хорошёво-Мнёвники, окно 360×360 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.501911,
+   55.79045,
+   37.507774,
+   55.793753
+  ],
+  "size_m": [
+   360,
+   360
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Сокол",
+  "edits": [
+   "вводы у новых домов убраны: убрано участков сети 0"
+  ]
+ },
+ "rules": [
+  "ТП-2.1.камеры",
+  "ТП-4.heat_network",
+  "Р10",
+  "ТП-2.4.новая",
+  "ТП-3.2"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-scale-14-1",
+    "cp-scale-14-2"
+   ],
+   "dn_by_flow_and_length": true
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-scale-14-1": 44,
+    "cp-scale-14-2": 34
+   },
+   "tie_in": {
+    "cp-scale-14-1": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-654"
+     ]
+    },
+    "cp-scale-14-2": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-654"
+     ]
+    }
+   },
+   "crossings_max": {
+    "heat_network": 0
+   },
+   "new_chambers_on_pipe_max": {
+    "hn-654": 1
+   }
+  },
+  "engineer": "Труба проходит между двумя новыми домами. Инженер поставит одну новую камеру на трубе между ними и выведет из неё две ветки в разные стороны (четыре примыкания, предел), либо две отдельные камеры. Пересекать трубу ради общего дерева незачем."
+ },
+ "points": [
+  {
+   "id": "cp-scale-14-1",
+   "flow_tph": 24.87
+  },
+  {
+   "id": "cp-scale-14-2",
+   "flow_tph": 24.87
+  }
+ ],
+ "reference": {
+  "cp-scale-14-1": {
+   "shortest_m": 25.8,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5044491,
+     55.7920656
+    ],
+    [
+     37.5048421,
+     55.7921036
+    ]
+   ]
+  },
+  "cp-scale-14-2": {
+   "shortest_m": 18.1,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5051102,
+     55.7921262
+    ],
+    [
+     37.5049376,
+     55.7921208
+    ],
+    [
+     37.5049064,
+     55.7921025
+    ],
+    [
+     37.5048421,
+     55.7921036
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 30,
+  "heat_chamber": 15,
+  "heat_network": 27,
+  "oks": 27,
+  "oks_connection_point": 2,
+  "power_cable": 29,
+  "prohibited_site": 2,
+  "railway": 14,
+  "road": 29,
+  "sewer": 27,
+  "social_area": 1,
+  "water_supply": 27
+ }
+}

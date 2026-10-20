@@ -1,0 +1,113 @@
+{
+ "id": "BLD-05",
+ "family": "BLD",
+ "title": "Двор со въездом, Купчино",
+ "description": "Новый дом во дворе, образованном существующими зданиями. Санкт-Петербург, Купчино, окно 360×360 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   30.413453,
+   59.828599,
+   30.420631,
+   59.832213
+  ],
+  "size_m": [
+   360,
+   360
+  ],
+  "file": "data/cities/spb/input.geojson",
+  "city": "Санкт-Петербург, Балканский округ",
+  "edits": [
+   "сеть внутри двора убрана: убрано участков сети 0"
+  ]
+ },
+ "rules": [
+  "ТП-2.2",
+  "ТП-4.oks",
+  "ТП-2.5",
+  "ТП-4.отступ",
+  "Р15"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-bld-05-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-bld-05-1": 152
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-bld-05-1": 116
+   },
+   "tie_in": {
+    "cp-bld-05-1": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-174"
+     ]
+    }
+   }
+  },
+  "engineer": "Двор открыт с одной стороны. Инженер ведёт трассу через въезд к ближайшей трубе."
+ },
+ "points": [
+  {
+   "id": "cp-bld-05-1",
+   "flow_tph": 40.0
+  }
+ ],
+ "reference": {
+  "cp-bld-05-1": {
+   "shortest_m": 81.0,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     30.4169146,
+     59.8303192
+    ],
+    [
+     30.4167566,
+     59.8302938
+    ],
+    [
+     30.4156546,
+     59.8302246
+    ],
+    [
+     30.4155052,
+     59.8301867
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 35,
+  "heat_chamber": 12,
+  "heat_network": 29,
+  "oks": 21,
+  "oks_connection_point": 1,
+  "power_cable": 32,
+  "road": 41,
+  "sewer": 32,
+  "social_area": 4,
+  "tram_tracks": 2,
+  "water_supply": 33
+ }
+}

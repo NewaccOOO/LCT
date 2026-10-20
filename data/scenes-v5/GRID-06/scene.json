@@ -1,0 +1,135 @@
+{
+ "id": "GRID-06",
+ "family": "GRID",
+ "title": "Вдоль кривой улицы",
+ "description": "Новый дом у одного конца улицы, сеть ближе 130 м убрана. Москва, Хорошёво-Мнёвники, окно 751×751 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.502553,
+   55.773916,
+   37.514777,
+   55.780805
+  ],
+  "size_m": [
+   751,
+   751
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Хорошёвский район",
+  "edits": [
+   "сеть ближе 130 м от дома убрана: убрано участков сети 28, камер 12"
+  ]
+ },
+ "rules": [
+  "ТП-2.1.повороты",
+  "Р5",
+  "Р29-18",
+  "Р29-19",
+  "ТП-4.road"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-grid-06-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-grid-06-1": 266
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-grid-06-1": 215
+   },
+   "tie_in": {
+    "cp-grid-06-1": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-103"
+     ]
+    }
+   },
+   "along_axes_share_min": 0.8,
+   "max_turn_deg": 90
+  },
+  "engineer": "Сеть есть дальше по улице. Инженер ведёт трассу вдоль улицы по её оси застройки, повороты не круче 90°, без ступенек; переходы, если нужны, под прямым углом. На изгибе — несколько прямых с плавными поворотами, не срезая изгиб через квартал."
+ },
+ "points": [
+  {
+   "id": "cp-grid-06-1",
+   "flow_tph": 24.87
+  }
+ ],
+ "reference": {
+  "cp-grid-06-1": {
+   "shortest_m": 157.2,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.51307,
+     55.7781251
+    ],
+    [
+     37.5131129,
+     55.7780488
+    ],
+    [
+     37.513115,
+     55.7779949
+    ],
+    [
+     37.5130838,
+     55.7779766
+    ],
+    [
+     37.5131301,
+     55.7775997
+    ],
+    [
+     37.5133885,
+     55.777513
+    ],
+    [
+     37.5133933,
+     55.7773872
+    ],
+    [
+     37.5141437,
+     55.7769819
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 141,
+  "heat_chamber": 59,
+  "heat_network": 115,
+  "oks": 136,
+  "oks_connection_point": 1,
+  "park": 7,
+  "power_cable": 127,
+  "power_line_support": 6,
+  "prohibited_site": 3,
+  "railway": 20,
+  "road": 116,
+  "sewer": 138,
+  "social_area": 3,
+  "water": 2,
+  "water_supply": 136
+ }
+}

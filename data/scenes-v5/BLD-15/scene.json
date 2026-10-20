@@ -1,0 +1,109 @@
+{
+ "id": "BLD-15",
+ "family": "BLD",
+ "title": "Ввод у стены внутреннего двора здания",
+ "description": "Здание с внутренним двором заменено новым домом той же формы. Москва, Хорошёво-Мнёвники, окно 400×400 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.558946,
+   55.78253,
+   37.565454,
+   55.786198
+  ],
+  "size_m": [
+   400,
+   400
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Беговой",
+  "edits": [
+   "здание r7876203 заменено новым домом той же формы"
+  ]
+ },
+ "rules": [
+  "ТП-2.2",
+  "Р3",
+  "Р29-15",
+  "ТП-4.oks"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-ring-r7876203"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-ring-r7876203": 88
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-ring-r7876203": 60
+   },
+   "tie_in": {
+    "cp-ring-r7876203": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-2713"
+     ]
+    }
+   },
+   "final_from_outer_contour": true
+  },
+  "engineer": "Полигон здания с дыркой-двором, точка подключения в 1 м от стены двора и в 17 м от наружной. По букве п. 2.2 ближайшая граница — стена двора, но двор замкнут. Принято, как у команды и по разъяснению 29.09 п. 15: финальный участок идёт от внешней границы. Трактовку стоит подтвердить у организаторов."
+ },
+ "points": [
+  {
+   "id": "cp-ring-r7876203",
+   "flow_tph": 31.89
+  }
+ ],
+ "reference": {
+  "cp-ring-r7876203": {
+   "shortest_m": 38.1,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5617051,
+     55.7843204
+    ],
+    [
+     37.5613487,
+     55.7841024
+    ],
+    [
+     37.5612591,
+     55.7840922
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 86,
+  "heat_chamber": 29,
+  "heat_network": 67,
+  "oks": 22,
+  "oks_connection_point": 1,
+  "park": 1,
+  "power_cable": 99,
+  "road": 99,
+  "sewer": 86,
+  "social_area": 4,
+  "water_supply": 83
+ }
+}

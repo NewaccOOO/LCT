@@ -1,0 +1,106 @@
+{
+ "id": "VAR-01",
+ "family": "VAR",
+ "title": "Две трубы по разные стороны дома",
+ "description": "Новый дом между двумя трубами. Москва, Хорошёво-Мнёвники, окно 327×327 м.",
+ "source": {
+  "kind": "osm",
+  "bbox_wgs84": [
+   37.506372,
+   55.767215,
+   37.511699,
+   55.770218
+  ],
+  "size_m": [
+   327,
+   327
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Хорошёво-Мнёвники"
+ },
+ "rules": [
+  "ТП-6.варианты",
+  "ТП-6.S",
+  "Р11"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-w1466047645"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-w1466047645": 74
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-w1466047645": 48
+   },
+   "tie_in": {
+    "cp-w1466047645": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-11006"
+     ]
+    }
+   },
+   "variants_min": 2,
+   "variants_distinct_tie_in": true
+  },
+  "engineer": "Две трубы на близком расстоянии по разные стороны дома. Инженер показал бы два содержательно разных варианта — врезка в одну и в другую трубу — и выбрал дешёвый по S."
+ },
+ "points": [
+  {
+   "id": "cp-w1466047645",
+   "flow_tph": 20.63
+  }
+ ],
+ "reference": {
+  "cp-w1466047645": {
+   "shortest_m": 29.2,
+   "dn_by_flow": 100,
+   "path_wgs84": [
+    [
+     37.5089182,
+     55.7687379
+    ],
+    [
+     37.508902,
+     55.7686515
+    ],
+    [
+     37.5089261,
+     55.7684793
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 25,
+  "heat_chamber": 39,
+  "heat_network": 84,
+  "oks": 31,
+  "oks_connection_point": 1,
+  "park": 1,
+  "power_cable": 26,
+  "road": 29,
+  "sewer": 23,
+  "water": 1,
+  "water_supply": 23
+ }
+}

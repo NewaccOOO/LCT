@@ -1,0 +1,110 @@
+{
+ "id": "CROSS-02",
+ "family": "CROSS",
+ "title": "Переход жилой улицы",
+ "description": "Новый дом через улицу (residential/unclassified) от сети. Москва, Хорошёво-Мнёвники, окно 440×440 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.537144,
+   55.79205,
+   37.544307,
+   55.796086
+  ],
+  "size_m": [
+   440,
+   440
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Хорошёвский район",
+  "edits": [
+   "сеть на стороне нового дома убрана, остаётся за объектом road-w27790605: убрано участков сети 27"
+  ]
+ },
+ "rules": [
+  "ТП-4.road",
+  "ТП-4.угол",
+  "ТП-4.спецпроход",
+  "ТП-4.отступ",
+  "ТП-2.1.узел",
+  "Р6",
+  "Р7",
+  "ПР-5",
+  "ТП-6.стоимость"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-cross-02-1"
+   ],
+   "crossing_angle_min_deg": {
+    "road": 45
+   },
+   "special_kspec": {
+    "road": 1.6
+   },
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-cross-02-1": 84
+   }
+  },
+  "should": {
+   "crossings_max": {
+    "road": 1
+   },
+   "max_route_length_m": {
+    "cp-cross-02-1": 57
+   }
+  },
+  "engineer": "Сеть только за улицей. Инженер пересекает улицу один раз, коротким прямым участком почти под прямым углом (не меньше 45°), с техническими узлами на границах зоны (полигон плюс 3 м), и врезается в ближайшую трубу на той стороне. Вдоль проезжей части в зоне отступа 1,5 м не идёт. Расход 20.63 т/ч, до ближайшей трубы по прямой 35 м, объект road-w27790605 (unclassified) средней ширины 7 м, кратчайший допустимый путь 36 м."
+ },
+ "points": [
+  {
+   "id": "cp-cross-02-1",
+   "flow_tph": 20.63
+  }
+ ],
+ "reference": {
+  "cp-cross-02-1": {
+   "shortest_m": 35.6,
+   "dn_by_flow": 100,
+   "path_wgs84": [
+    [
+     37.5401779,
+     55.7941029
+    ],
+    [
+     37.5405877,
+     55.7938924
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 60,
+  "heat_chamber": 17,
+  "heat_network": 32,
+  "oks": 27,
+  "oks_connection_point": 1,
+  "power_cable": 60,
+  "prohibited_site": 1,
+  "road": 54,
+  "sewer": 59,
+  "social_area": 1,
+  "water_supply": 56
+ }
+}

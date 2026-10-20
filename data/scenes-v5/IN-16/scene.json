@@ -1,0 +1,115 @@
+{
+ "id": "IN-16",
+ "family": "INPUT",
+ "title": "Существующая труба с Ду не из таблицы",
+ "description": "Ду ближайшей трубы задан 350. Москва, Хорошёво-Мнёвники, окно 300×300 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.535586,
+   55.770578,
+   37.540467,
+   55.77333
+  ],
+  "size_m": [
+   300,
+   300
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Хорошёвский район",
+  "edits": [
+   "у трубы hn-817 Ду 350"
+  ]
+ },
+ "rules": [
+  "ТП-1.1",
+  "ТП-2.4.без_реконструкции",
+  "ТП-3.2"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-r17672751-12"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-r17672751-12": 77
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-r17672751-12": 50
+   },
+   "tie_in": {
+    "cp-r17672751-12": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-817"
+     ]
+    }
+   }
+  },
+  "engineer": "У ближайшей трубы Ду 350, в таблице 1 такого нет. Существующая сеть не реконструируется и не проверяется, поэтому подключение возможно. Ду новой камеры инженер определит по ближайшему табличному не меньше 350 либо только по новым участкам."
+ },
+ "points": [
+  {
+   "id": "cp-r17672751-12",
+   "flow_tph": 33.14
+  }
+ ],
+ "reference": {
+  "cp-r17672751-12": {
+   "shortest_m": 30.7,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.537886,
+     55.7717801
+    ],
+    [
+     37.5380346,
+     55.7717864
+    ],
+    [
+     37.5381263,
+     55.7718471
+    ],
+    [
+     37.5381901,
+     55.7718478
+    ],
+    [
+     37.5382929,
+     55.7719055
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 17,
+  "heat_chamber": 5,
+  "heat_network": 12,
+  "oks": 10,
+  "oks_connection_point": 1,
+  "power_cable": 15,
+  "railway": 11,
+  "road": 16,
+  "sewer": 17,
+  "social_area": 1,
+  "water_supply": 17
+ }
+}

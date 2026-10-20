@@ -1,0 +1,107 @@
+{
+ "id": "TIE-15",
+ "family": "TIE",
+ "title": "Транзитная камера занята",
+ "description": "Новый дом у трубы, в 6 м от проекции транзитная камера с двумя отводами. Москва, Хорошёво-Мнёвники, окно 320×320 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.536742,
+   55.791604,
+   37.541951,
+   55.794539
+  ],
+  "size_m": [
+   320,
+   320
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Хорошёвский район",
+  "edits": [
+   "сеть у нового дома, кроме участков камеры, убрана: убрано участков сети 7"
+  ]
+ },
+ "rules": [
+  "ТП-2.1.камеры",
+  "ТП-2.1.транзит",
+  "Р12",
+  "ТП-2.4.новая",
+  "ТП-2.4.камера10"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-tie-15-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "not_tie_in": [
+    "hc-8006"
+   ],
+   "route_length_max_m": {
+    "cp-tie-15-1": 61
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-tie-15-1": 37
+   },
+   "tie_in": {
+    "cp-tie-15-1": {
+     "kind": "new_chamber"
+    }
+   }
+  },
+  "engineer": "Через камеру насквозь проходит труба (это два примыкания), и в ней кончаются ещё два отвода: всего четыре. Проекция дома в 6 м от камеры, но пятое примыкание запрещено, поэтому инженер ставит новую камеру на трубе."
+ },
+ "points": [
+  {
+   "id": "cp-tie-15-1",
+   "flow_tph": 27.82
+  }
+ ],
+ "reference": {
+  "cp-tie-15-1": {
+   "shortest_m": 20.2,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5391169,
+     55.7931829
+    ],
+    [
+     37.5392173,
+     55.7931343
+    ],
+    [
+     37.5393881,
+     55.793099
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 26,
+  "heat_chamber": 18,
+  "heat_network": 36,
+  "oks": 21,
+  "oks_connection_point": 1,
+  "power_cable": 28,
+  "road": 24,
+  "sewer": 27,
+  "water_supply": 25
+ }
+}

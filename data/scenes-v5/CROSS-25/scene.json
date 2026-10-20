@@ -1,0 +1,96 @@
+{
+ "id": "CROSS-25",
+ "family": "CROSS",
+ "title": "Одна дорога пересечена дважды",
+ "description": "Проезд петлёй: два параллельных полотна одного полигона, дом и труба по разные стороны. синтетическое поле 300×200 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.611234,
+   55.756928,
+   37.616077,
+   55.758778
+  ],
+  "size_m": [
+   300,
+   200
+  ]
+ },
+ "rules": [
+  "ТП-4.road",
+  "ТП-4.спецпроход",
+  "ТП-2.1.узел",
+  "ТП-4.угол"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-cross-25-1"
+   ],
+   "crossings_min": {
+    "road": 2
+   },
+   "crossing_angle_min_deg": {
+    "road": 45
+   },
+   "special_kspec": {
+    "road": 1.6
+   },
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-cross-25-1": 263
+   }
+  },
+  "should": {
+   "crossings_max": {
+    "road": 2
+   },
+   "max_route_length_m": {
+    "cp-cross-25-1": 212
+   }
+  },
+  "engineer": "Дорога — один полигон из двух параллельных проездов, соединённых далеко за пределами данных. Дом с одной стороны, труба с другой. Инженер делает два отдельных спецпрохода по одной дороге, у каждого свои технические узлы на границах зоны."
+ },
+ "points": [
+  {
+   "id": "cp-cross-25-1",
+   "flow_tph": 10.0
+  }
+ ],
+ "reference": {
+  "cp-cross-25-1": {
+   "shortest_m": 154.9,
+   "dn_by_flow": 80,
+   "path_wgs84": [
+    [
+     37.6125245,
+     55.7578404
+    ],
+    [
+     37.6149298,
+     55.7578675
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "heat_network": 1,
+  "oks": 1,
+  "oks_connection_point": 1,
+  "road": 1
+ }
+}

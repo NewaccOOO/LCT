@@ -1,0 +1,123 @@
+{
+ "id": "BLD-13",
+ "family": "BLD",
+ "title": "Сеть внутри замкнутого двора",
+ "description": "Периметральный квартал старого центра, новый дом во дворе, во двор под корпусом заходит труба. Москва, Хорошёво-Мнёвники, окно 360×360 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.563313,
+   55.761387,
+   37.569167,
+   55.764687
+  ],
+  "size_m": [
+   360,
+   360
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Пресненский район",
+  "edits": [
+   "добавлен участок сети hn-yard Ду 100 от трубы hn-14429 во двор под корпусом"
+  ]
+ },
+ "rules": [
+  "ТП-2.2",
+  "ТП-2.4.новая",
+  "ТП-4.oks",
+  "Р11",
+  "Р29-12"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": {
+    "tolerance_m": 1.0,
+    "except": [
+     "cp-bld-13-1"
+    ]
+   },
+   "no_crash": true,
+   "connected": [
+    "cp-bld-13-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-bld-13-1": 104
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-bld-13-1": 75
+   },
+   "tie_in": {
+    "cp-bld-13-1": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-14447"
+     ]
+    }
+   },
+   "tie_clear_of_buildings_m": 5.0
+  },
+  "engineer": "Двор закрыт корпусами, существующая труба заходит во двор под корпусом. Инженер подключает дом внутри двора и ставит камеру на трубе не ближе 5 м к корпусам; наружу не выходит."
+ },
+ "points": [
+  {
+   "id": "cp-bld-13-1",
+   "flow_tph": 24.87
+  }
+ ],
+ "reference": {
+  "cp-bld-13-1": {
+   "shortest_m": 49.3,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.565948,
+     55.7631241
+    ],
+    [
+     37.5657949,
+     55.7630137
+    ],
+    [
+     37.5657869,
+     55.7632293
+    ],
+    [
+     37.5657232,
+     55.7632285
+    ],
+    [
+     37.5656425,
+     55.7632543
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 93,
+  "heat_chamber": 70,
+  "heat_network": 152,
+  "oks": 65,
+  "oks_connection_point": 1,
+  "park": 2,
+  "power_cable": 112,
+  "road": 100,
+  "sewer": 90,
+  "social_area": 4,
+  "water_supply": 86
+ }
+}

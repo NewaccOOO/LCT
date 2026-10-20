@@ -1,0 +1,120 @@
+{
+ "id": "BLD-08",
+ "family": "BLD",
+ "title": "Г-образный дом, ввод во внутреннем углу",
+ "description": "Существующее здание сложной формы заменено новым той же формы, ввод со стороны внутреннего двора. Москва, Хорошёво-Мнёвники, окно 400×400 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.493774,
+   55.773792,
+   37.500286,
+   55.777462
+  ],
+  "size_m": [
+   400,
+   400
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Хорошёво-Мнёвники",
+  "edits": [
+   "здание r1284301 заменено новым домом той же формы"
+  ]
+ },
+ "rules": [
+  "ТП-2.2",
+  "Р3",
+  "Р29-15",
+  "Р29-16",
+  "Р29-17",
+  "ТП-4.oks",
+  "ТП-2.1.повороты"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-new-r1284301"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-new-r1284301": 206
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-new-r1284301": 162
+   },
+   "tie_in": {
+    "cp-new-r1284301": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-1287"
+     ]
+    }
+   }
+  },
+  "engineer": "Ввод в Г-образный дом у внутреннего угла. Инженер ведёт финальный участок от ближайшей стены, не задевая второе крыло дома, и дальше по оси застройки."
+ },
+ "points": [
+  {
+   "id": "cp-new-r1284301",
+   "flow_tph": 19.77
+  }
+ ],
+ "reference": {
+  "cp-new-r1284301": {
+   "shortest_m": 116.7,
+   "dn_by_flow": 100,
+   "path_wgs84": [
+    [
+     37.4969575,
+     55.775666
+    ],
+    [
+     37.4969151,
+     55.7761288
+    ],
+    [
+     37.496437,
+     55.776123
+    ],
+    [
+     37.4961481,
+     55.7761734
+    ],
+    [
+     37.4961435,
+     55.7763251
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 76,
+  "heat_chamber": 20,
+  "heat_network": 45,
+  "oks": 56,
+  "oks_connection_point": 1,
+  "park": 2,
+  "power_cable": 77,
+  "prohibited_site": 1,
+  "road": 68,
+  "sewer": 75,
+  "social_area": 1,
+  "water_supply": 71
+ }
+}

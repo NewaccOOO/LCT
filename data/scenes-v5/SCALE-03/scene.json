@@ -1,0 +1,114 @@
+{
+ "id": "SCALE-03",
+ "family": "SCALE",
+ "title": "Числовые id, как в датасете организаторов",
+ "description": "Все id входа заменены целыми числами. Москва, Хорошёво-Мнёвники, окно 313×313 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.55838,
+   55.804007,
+   37.563482,
+   55.806881
+  ],
+  "size_m": [
+   313,
+   313
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Тимирязевский район",
+  "edits": [
+   "гаражи r15003610 снесены, на их месте новый дом",
+   "все id заменены порядковыми числами"
+  ]
+ },
+ "rules": [
+  "ТП-1.id",
+  "ТП-1",
+  "ТП-7"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    429
+   ],
+   "dn_by_flow_and_length": true,
+   "ids_numeric_in_output": true,
+   "route_length_max_m": {
+    "429": 142
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "429": 107
+   },
+   "tie_in": {
+    "429": {
+     "kind": "new_chamber",
+     "pipes": [
+      27
+     ]
+    }
+   }
+  },
+  "engineer": "Тот же расчёт, что и со строковыми id. Ссылки в выходе (start_node_id, end_node_id, unconnected_oks_ids) сохраняют числовой тип."
+ },
+ "points": [
+  {
+   "id": 429,
+   "flow_tph": 29.42
+  }
+ ],
+ "reference": {
+  "429": {
+   "shortest_m": 74.2,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5610789,
+     55.8054545
+    ],
+    [
+     37.5612647,
+     55.805368
+    ],
+    [
+     37.5619118,
+     55.8053774
+    ],
+    [
+     37.5620999,
+     55.8055284
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 51,
+  "heat_chamber": 30,
+  "heat_network": 75,
+  "oks": 42,
+  "oks_connection_point": 1,
+  "park": 4,
+  "power_cable": 54,
+  "power_line_support": 3,
+  "railway": 2,
+  "road": 67,
+  "sewer": 50,
+  "water_supply": 50
+ }
+}

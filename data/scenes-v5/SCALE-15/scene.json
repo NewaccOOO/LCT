@@ -1,0 +1,165 @@
+{
+ "id": "SCALE-15",
+ "family": "SCALE",
+ "title": "Дома по разные стороны улицы",
+ "description": "Новые дома напротив друг друга через улицу, сеть только с одной стороны. Москва, Хорошёво-Мнёвники, окно 440×440 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.512633,
+   55.759528,
+   37.519793,
+   55.763565
+  ],
+  "size_m": [
+   440,
+   440
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Хорошёво-Мнёвники",
+  "edits": [
+   "сеть на одной стороне улицы убрана: убрано участков сети 14"
+  ]
+ },
+ "rules": [
+  "ТП-4.road",
+  "ТП-4.угол",
+  "ТП-4.спецпроход",
+  "ТП-2.1.дерево",
+  "Р6"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": {
+    "tolerance_m": 1.0,
+    "except": [
+     "cp-scale-15-1"
+    ]
+   },
+   "no_crash": true,
+   "connected": [
+    "cp-scale-15-1",
+    "cp-scale-15-2"
+   ],
+   "dn_by_flow_and_length": true,
+   "crossing_angle_min_deg": {
+    "road": 45
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-scale-15-1": 133,
+    "cp-scale-15-2": 77
+   },
+   "tie_in": {
+    "cp-scale-15-1": {
+     "kind": "existing_chamber",
+     "chambers": [
+      "hc-5619"
+     ]
+    },
+    "cp-scale-15-2": {
+     "kind": "existing_chamber",
+     "chambers": [
+      "hc-5618"
+     ]
+    }
+   },
+   "crossings_max": {
+    "road": 2
+   }
+  },
+  "engineer": "Сеть есть только на одной стороне улицы. Дом на этой стороне подключается напрямую, дом напротив — одним переходом улицы под углом, близким к прямому. Инженер не тянет общий ввод через улицу дважды."
+ },
+ "points": [
+  {
+   "id": "cp-scale-15-1",
+   "flow_tph": 47.7
+  },
+  {
+   "id": "cp-scale-15-2",
+   "flow_tph": 18.03
+  }
+ ],
+ "reference": {
+  "cp-scale-15-1": {
+   "shortest_m": 94.6,
+   "dn_by_flow": 150,
+   "path_wgs84": [
+    [
+     37.5166944,
+     55.7613062
+    ],
+    [
+     37.5163012,
+     55.761745
+    ],
+    [
+     37.5167208,
+     55.7616063
+    ],
+    [
+     37.5167846,
+     55.761607
+    ],
+    [
+     37.5168171,
+     55.7615895
+    ],
+    [
+     37.5167911,
+     55.7615715
+    ]
+   ]
+  },
+  "cp-scale-15-2": {
+   "shortest_m": 51.1,
+   "dn_by_flow": 100,
+   "path_wgs84": [
+    [
+     37.516193,
+     55.7618357
+    ],
+    [
+     37.5163629,
+     55.7617997
+    ],
+    [
+     37.5166897,
+     55.7615879
+    ],
+    [
+     37.5167911,
+     55.7615715
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 36,
+  "heat_chamber": 10,
+  "heat_network": 22,
+  "oks": 26,
+  "oks_connection_point": 2,
+  "power_cable": 34,
+  "power_line_support": 1,
+  "railway": 19,
+  "road": 38,
+  "sewer": 34,
+  "social_area": 1,
+  "water": 1,
+  "water_supply": 35
+ }
+}

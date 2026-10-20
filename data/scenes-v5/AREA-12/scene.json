@@ -1,0 +1,129 @@
+{
+ "id": "AREA-12",
+ "family": "AREA",
+ "title": "Промзона между домом и сетью",
+ "description": "Новый дом у промзоны, сеть за цехами. Москва, Хорошёво-Мнёвники, окно 520×520 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.595921,
+   55.813276,
+   37.604384,
+   55.818042
+  ],
+  "size_m": [
+   520,
+   520
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Бутырский район",
+  "edits": [
+   "сеть на стороне нового дома убрана, остаётся за объектом r12372571: убрано участков сети 11"
+  ]
+ },
+ "rules": [
+  "ТП-4.oks",
+  "ТП-2.2",
+  "ТП-4.отступ"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-area-12-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "no_cross": [
+    "r12372571"
+   ],
+   "route_length_max_m": {
+    "cp-area-12-1": 209
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-area-12-1": 166
+   },
+   "tie_in": {
+    "cp-area-12-1": {
+     "kind": "existing_chamber",
+     "chambers": [
+      "hc-2783"
+     ]
+    }
+   }
+  },
+  "engineer": "Между домом и сетью цеха и склады промзоны. Сама промзона не запретна, но корпуса — препятствия с отступом 5 м. Инженер ведёт трассу по проездам промзоны или вокруг неё."
+ },
+ "points": [
+  {
+   "id": "cp-area-12-1",
+   "flow_tph": 24.87
+  }
+ ],
+ "reference": {
+  "cp-area-12-1": {
+   "shortest_m": 119.3,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.6005895,
+     55.816101
+    ],
+    [
+     37.6003601,
+     55.8161109
+    ],
+    [
+     37.6003276,
+     55.8161285
+    ],
+    [
+     37.6001681,
+     55.8161267
+    ],
+    [
+     37.5999076,
+     55.8162675
+    ],
+    [
+     37.5996843,
+     55.8162649
+    ],
+    [
+     37.5991216,
+     55.815935
+    ],
+    [
+     37.5990467,
+     55.8159119
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 74,
+  "heat_chamber": 22,
+  "heat_network": 48,
+  "oks": 32,
+  "oks_connection_point": 1,
+  "power_cable": 75,
+  "road": 73,
+  "sewer": 74,
+  "social_area": 1,
+  "water_supply": 70
+ }
+}

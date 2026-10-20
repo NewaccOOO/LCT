@@ -1,0 +1,117 @@
+{
+ "id": "SCALE-02",
+ "family": "SCALE",
+ "title": "Один новый дом, Купчино",
+ "description": "Новый дом у существующей сети. Санкт-Петербург, Купчино, окно 353×353 м.",
+ "source": {
+  "kind": "osm",
+  "bbox_wgs84": [
+   30.414272,
+   59.830533,
+   30.421317,
+   59.83408
+  ],
+  "size_m": [
+   353,
+   353
+  ],
+  "file": "data/cities/spb/input.geojson",
+  "city": "Санкт-Петербург, Балканский округ"
+ },
+ "rules": [
+  "ТП-1",
+  "ТП-1.2",
+  "ТП-2.2",
+  "ТП-7"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-r21239126-4"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-r21239126-4": 117
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-r21239126-4": 85
+   },
+   "tie_in": {
+    "cp-r21239126-4": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-59"
+     ]
+    }
+   }
+  },
+  "engineer": "Один дом у сети. Инженер ведёт короткий ввод от ближней к сети стены к ближайшей трубе или камере, без лишних поворотов, по оси застройки."
+ },
+ "points": [
+  {
+   "id": "cp-r21239126-4",
+   "flow_tph": 4.08
+  }
+ ],
+ "reference": {
+  "cp-r21239126-4": {
+   "shortest_m": 57.4,
+   "dn_by_flow": 65,
+   "path_wgs84": [
+    [
+     30.4178569,
+     59.8321052
+    ],
+    [
+     30.4177773,
+     59.8321773
+    ],
+    [
+     30.4177305,
+     59.8323686
+    ],
+    [
+     30.4176906,
+     59.832384
+    ],
+    [
+     30.4176446,
+     59.8325616
+    ],
+    [
+     30.4176081,
+     59.832589
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 46,
+  "heat_chamber": 12,
+  "heat_network": 27,
+  "oks": 23,
+  "oks_connection_point": 1,
+  "park": 1,
+  "power_cable": 52,
+  "road": 51,
+  "sewer": 45,
+  "tram_tracks": 2,
+  "water_supply": 44
+ }
+}

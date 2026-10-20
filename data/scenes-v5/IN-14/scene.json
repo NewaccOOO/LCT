@@ -1,0 +1,117 @@
+{
+ "id": "IN-14",
+ "family": "INPUT",
+ "title": "Дом за пределами охвата данных",
+ "description": "Дом вынесен за пределы окна данных. Москва, Хорошёво-Мнёвники, окно 300×300 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.535586,
+   55.770578,
+   37.540467,
+   55.77333
+  ],
+  "size_m": [
+   300,
+   300
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Хорошёвский район",
+  "edits": [
+   "новый дом сдвинут на 120 м за восточный край данных"
+  ]
+ },
+ "rules": [
+  "ТП-2.1.граница",
+  "ТП-2.5"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-r17672751-12"
+   ],
+   "route_length_max_m": {
+    "cp-r17672751-12": 393
+   }
+  },
+  "should": {},
+  "engineer": "Новый дом в 120 м за краем всех остальных объектов, на пустом месте. Граница поиска не задана, поэтому инженер подключит его прямой трассой к ближайшей трубе; это не «избыточный уход», ведь дом сам стоит за краем."
+ },
+ "points": [
+  {
+   "id": "cp-r17672751-12",
+   "flow_tph": 33.14
+  }
+ ],
+ "reference": {
+  "cp-r17672751-12": {
+   "shortest_m": 241.6,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5433888,
+     55.7718454
+    ],
+    [
+     37.5434878,
+     55.7717449
+    ],
+    [
+     37.5434878,
+     55.771713
+    ],
+    [
+     37.5433942,
+     55.771658
+    ],
+    [
+     37.5430437,
+     55.7716539
+    ],
+    [
+     37.542881,
+     55.7717418
+    ],
+    [
+     37.5428756,
+     55.7718855
+    ],
+    [
+     37.5410208,
+     55.772888
+    ],
+    [
+     37.5410149,
+     55.7729115
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 17,
+  "heat_chamber": 5,
+  "heat_network": 12,
+  "oks": 10,
+  "oks_connection_point": 1,
+  "power_cable": 15,
+  "railway": 11,
+  "road": 16,
+  "sewer": 17,
+  "social_area": 1,
+  "water_supply": 17
+ }
+}

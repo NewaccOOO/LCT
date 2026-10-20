@@ -1,0 +1,109 @@
+{
+ "id": "TIE-16B",
+ "family": "TIE",
+ "title": "Проекция в 10.3 м от камеры",
+ "description": "Новый дом у трубы Ду 50–100, проекция точки в 10.3 м от камеры. Москва, Хорошёво-Мнёвники, окно 320×320 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.45411,
+   55.765983,
+   37.459322,
+   55.768921
+  ],
+  "size_m": [
+   320,
+   320
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Крылатское",
+  "edits": [
+   "сеть у нового дома, кроме участков камеры, убрана: убрано участков сети 12"
+  ]
+ },
+ "rules": [
+  "ТП-2.4.камера10",
+  "Р11",
+  "Р29-9",
+  "ТП-3.2",
+  "ТП-2.4.новая"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-tie-16b-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-tie-16b-1": 70
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-tie-16b-1": 45
+   },
+   "tie_in": {
+    "cp-tie-16b-1": {
+     "kind": "new_chamber"
+    }
+   }
+  },
+  "engineer": "Проекция в 10,3 м от камеры, правило 10 м не действует. Новая камера на трубе напротив дома дешевле врезки в существующую на 2 млн, инженер ставит её."
+ },
+ "points": [
+  {
+   "id": "cp-tie-16b-1",
+   "flow_tph": 33.14
+  }
+ ],
+ "reference": {
+  "cp-tie-16b-1": {
+   "shortest_m": 26.4,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.4569915,
+     55.7676146
+    ],
+    [
+     37.456951,
+     55.767533
+    ],
+    [
+     37.4569045,
+     55.7675265
+    ],
+    [
+     37.4567588,
+     55.7674293
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 12,
+  "heat_chamber": 31,
+  "heat_network": 59,
+  "oks": 30,
+  "oks_connection_point": 1,
+  "power_cable": 11,
+  "road": 7,
+  "sewer": 12,
+  "water": 1,
+  "water_supply": 12
+ }
+}

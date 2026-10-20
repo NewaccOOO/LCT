@@ -1,0 +1,129 @@
+{
+ "id": "SCALE-04",
+ "family": "SCALE",
+ "title": "Пара соседних домов",
+ "description": "Два новых дома в 10–40 м друг от друга. Москва, Хорошёво-Мнёвники, окно 400×400 м.",
+ "source": {
+  "kind": "osm",
+  "bbox_wgs84": [
+   37.500313,
+   55.763604,
+   37.506823,
+   55.767275
+  ],
+  "size_m": [
+   400,
+   400
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Хорошёво-Мнёвники"
+ },
+ "rules": [
+  "ТП-2.1.дерево",
+  "ТП-2.1.камеры",
+  "ТП-2.3.расход",
+  "ТП-3.2"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-r10364571-10",
+    "cp-r10364571-11"
+   ],
+   "dn_by_flow_and_length": true
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-r10364571-10": 27,
+    "cp-r10364571-11": 57
+   },
+   "tie_in": {
+    "cp-r10364571-10": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-10928"
+     ]
+    },
+    "cp-r10364571-11": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-10928"
+     ]
+    }
+   }
+  },
+  "engineer": "Два дома рядом. Инженер сравнит общий ввод с камерой ветвления у домов и два отдельных ввода и выберет дешёвый; при близкой сети разумны оба. Ветвление только в новой камере, расход общего участка равен сумме двух домов."
+ },
+ "points": [
+  {
+   "id": "cp-r10364571-10",
+   "flow_tph": 26.09
+  },
+  {
+   "id": "cp-r10364571-11",
+   "flow_tph": 76.27
+  }
+ ],
+ "reference": {
+  "cp-r10364571-10": {
+   "shortest_m": 12.4,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5039757,
+     55.7655406
+    ],
+    [
+     37.5039769,
+     55.7656434
+    ]
+   ]
+  },
+  "cp-r10364571-11": {
+   "shortest_m": 35.4,
+   "dn_by_flow": 200,
+   "path_wgs84": [
+    [
+     37.5031662,
+     55.7655939
+    ],
+    [
+     37.5033058,
+     55.7656343
+    ],
+    [
+     37.5035933,
+     55.7658042
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 10,
+  "heat_chamber": 9,
+  "heat_network": 22,
+  "oks": 14,
+  "oks_connection_point": 2,
+  "park": 1,
+  "power_cable": 10,
+  "road": 10,
+  "sewer": 10,
+  "social_area": 1,
+  "water": 1,
+  "water_supply": 9
+ }
+}

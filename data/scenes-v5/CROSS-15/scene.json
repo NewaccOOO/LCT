@@ -1,0 +1,112 @@
+{
+ "id": "CROSS-15",
+ "family": "CROSS",
+ "title": "Пересечение силового кабеля",
+ "description": "Новый дом, между ним и трубой подземная линия. Москва, Хорошёво-Мнёвники, окно 317×317 м.",
+ "source": {
+  "kind": "osm",
+  "bbox_wgs84": [
+   37.504119,
+   55.789034,
+   37.509276,
+   55.791939
+  ],
+  "size_m": [
+   317,
+   317
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Хорошёвский район"
+ },
+ "rules": [
+  "ТП-4.power_cable",
+  "ТП-4.спецпроход",
+  "ТП-3.1",
+  "Р7",
+  "ТП-5"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-r11035255-6"
+   ],
+   "dn_by_flow_and_length": true,
+   "special_kspec": {
+    "power_cable": 1.15
+   },
+   "route_length_max_m": {
+    "cp-r11035255-6": 60
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-r11035255-6": 36
+   },
+   "tie_in": {
+    "cp-r11035255-6": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-398"
+     ]
+    }
+   },
+   "crossings_max": {
+    "power_cable": 1
+   }
+  },
+  "engineer": "Между домом и трубой силовой кабель (габарит 0,2 м, Kспец 1,15). Инженер пересекает линию один раз прямым участком (спецпроход по 2 м в обе стороны от точки пересечения, без поворотов внутри), а рядом с линией держит отступ от внешних границ габаритов. Вдоль линии ближе нормы не идёт. В режиме глубины: в режиме глубины выше или ниже кабеля (верх на 2,7 м, габарит 0,2 м), просвет не меньше 0,5 м."
+ },
+ "points": [
+  {
+   "id": "cp-r11035255-6",
+   "flow_tph": 15.99
+  }
+ ],
+ "reference": {
+  "cp-r11035255-6": {
+   "shortest_m": 19.7,
+   "dn_by_flow": 100,
+   "path_wgs84": [
+    [
+     37.506588,
+     55.7906002
+    ],
+    [
+     37.5067357,
+     55.7905893
+    ],
+    [
+     37.5068819,
+     55.7906026
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 17,
+  "heat_chamber": 16,
+  "heat_network": 36,
+  "oks": 12,
+  "oks_connection_point": 1,
+  "park": 2,
+  "power_cable": 17,
+  "railway": 11,
+  "road": 16,
+  "sewer": 17,
+  "water_supply": 17
+ }
+}

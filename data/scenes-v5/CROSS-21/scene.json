@@ -1,0 +1,141 @@
+{
+ "id": "CROSS-21",
+ "family": "CROSS",
+ "title": "Две проезжие части с узким разделителем",
+ "description": "Новый дом через улицу с двумя проезжими частями от сети. Москва, Хорошёво-Мнёвники, окно 440×440 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.538967,
+   55.786198,
+   37.546128,
+   55.790233
+  ],
+  "size_m": [
+   440,
+   440
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Хорошёвский район",
+  "edits": [
+   "сеть на стороне нового дома убрана, остаётся за объектом road-w569731656: убрано участков сети 2"
+  ]
+ },
+ "rules": [
+  "ТП-4.road",
+  "ТП-4.наложение",
+  "Р8",
+  "ТП-4.спецпроход",
+  "ТП-2.1.узел"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-cross-21-1"
+   ],
+   "crossing_angle_min_deg": {
+    "road": 45
+   },
+   "special_kspec": {
+    "road": 1.6
+   },
+   "dn_by_flow_and_length": true,
+   "continuous_special_over": [
+    "road-w569731656",
+    "road-w1557732293"
+   ],
+   "route_length_max_m": {
+    "cp-cross-21-1": 340
+   }
+  },
+  "should": {
+   "crossings_min": {
+    "road": 1
+   },
+   "crossings_max": {
+    "road": 2
+   },
+   "max_route_length_m": {
+    "cp-cross-21-1": 279
+   }
+  },
+  "engineer": "Две проезжие части с разделителем в несколько метров: зоны дорог (полигон плюс 3 м) накладываются. Инженер переходит обе одним прямым участком, на общем фрагменте коэффициент 1,60 один раз, не сумма; поворот на разделителе не делает. Расход 19.77 т/ч, до ближайшей трубы по прямой 166 м, объект road-w569731656 (tertiary) средней ширины 10 м, кратчайший допустимый путь 206 м. Разделитель на прямой 5.2 м, зоны по 3 м перекрываются."
+ },
+ "points": [
+  {
+   "id": "cp-cross-21-1",
+   "flow_tph": 19.77
+  }
+ ],
+ "reference": {
+  "cp-cross-21-1": {
+   "shortest_m": 206.2,
+   "dn_by_flow": 100,
+   "path_wgs84": [
+    [
+     37.5416193,
+     55.7879285
+    ],
+    [
+     37.5418849,
+     55.7880278
+    ],
+    [
+     37.5418815,
+     55.7881176
+    ],
+    [
+     37.5414583,
+     55.7883462
+    ],
+    [
+     37.5414237,
+     55.7884177
+    ],
+    [
+     37.5409354,
+     55.7886815
+    ],
+    [
+     37.5411425,
+     55.7891153
+    ],
+    [
+     37.5409797,
+     55.7892032
+    ],
+    [
+     37.5407495,
+     55.7894058
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 81,
+  "heat_chamber": 8,
+  "heat_network": 20,
+  "oks": 27,
+  "oks_connection_point": 1,
+  "power_cable": 81,
+  "prohibited_site": 2,
+  "road": 87,
+  "sewer": 82,
+  "social_area": 1,
+  "water_supply": 80
+ }
+}

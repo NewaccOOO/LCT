@@ -1,0 +1,112 @@
+{
+ "id": "CROSS-24B",
+ "family": "CROSS",
+ "title": "Улица между парком и школой, у забора полоса 6 м",
+ "description": "Улица шириной 20 м между парком и территорией школы, все три тянутся на 7 км в обе стороны. Дом и труба стоят в карманах, вырезанных в парке у длинной стороны дороги, в 350 м друг от друга. синтетическое поле 400×200 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.610438,
+   55.756919,
+   37.616873,
+   55.758787
+  ],
+  "size_m": [
+   400,
+   200
+  ]
+ },
+ "rules": [
+  "ТП-4.road",
+  "ТП-4.спецпроход",
+  "Р6",
+  "ТП-4.park",
+  "ТП-4.social_area",
+  "ТП-2.5",
+  "ТП-2.3.длина"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-cross-24b-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-cross-24b-1": 563
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-cross-24b-1": 472
+   },
+   "crossings_max": {
+    "road": 0
+   }
+  },
+  "engineer": "У забора парка свободная полоса 6 м: ось пары встаёт в 1,5 м плюс полуширина от дороги и в 1 м плюс полуширина от парка. Инженер ведёт трассу по полосе без спецпроходов."
+ },
+ "points": [
+  {
+   "id": "cp-cross-24b-1",
+   "flow_tph": 8.0
+  }
+ ],
+ "reference": {
+  "cp-cross-24b-1": {
+   "shortest_m": 355.3,
+   "dn_by_flow": 65,
+   "path_wgs84": [
+    [
+     37.6108617,
+     55.7579923
+    ],
+    [
+     37.6111035,
+     55.7579142
+    ],
+    [
+     37.6112309,
+     55.7579156
+    ],
+    [
+     37.6112634,
+     55.757898
+    ],
+    [
+     37.6162973,
+     55.7579548
+    ],
+    [
+     37.6163909,
+     55.7580098
+    ],
+    [
+     37.6164387,
+     55.7580103
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "heat_network": 1,
+  "oks": 1,
+  "oks_connection_point": 1,
+  "park": 1,
+  "road": 1,
+  "social_area": 1
+ }
+}

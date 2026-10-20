@@ -1,0 +1,83 @@
+{
+ "id": "BLD-01",
+ "family": "BLD",
+ "title": "Двор, замкнутый зданиями, без въезда",
+ "description": "Новый дом во дворе, образованном существующими зданиями. Москва, Хорошёво-Мнёвники, окно 360×360 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.495379,
+   55.805476,
+   37.501245,
+   55.80878
+  ],
+  "size_m": [
+   360,
+   360
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Сокол",
+  "edits": [
+   "сеть внутри двора убрана: убрано участков сети 0"
+  ]
+ },
+ "rules": [
+  "ТП-2.2",
+  "ТП-4.oks",
+  "ТП-2.5",
+  "ТП-4.отступ",
+  "Р15"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "unconnected": {
+    "cp-bld-01-1": [
+     "enclosed",
+     "no_route"
+    ]
+   }
+  },
+  "should": {},
+  "engineer": "Двор со всех сторон закрыт зданиями (в OSM арки нет — здание сплошное). Здания непроходимы, а сети во дворе нет. В жизни инженер прошёл бы аркой, но по правилам кейса допустимой трассы нет: дом без сети со штрафом и причиной «окружён препятствиями»."
+ },
+ "points": [
+  {
+   "id": "cp-bld-01-1",
+   "flow_tph": 15.99
+  }
+ ],
+ "reference": {
+  "cp-bld-01-1": {
+   "shortest_m": null,
+   "dn_by_flow": 100
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 59,
+  "heat_chamber": 40,
+  "heat_network": 75,
+  "oks": 24,
+  "oks_connection_point": 1,
+  "park": 2,
+  "power_cable": 64,
+  "road": 49,
+  "sewer": 59,
+  "social_area": 1,
+  "tram_tracks": 2,
+  "water_supply": 57
+ }
+}

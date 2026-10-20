@@ -1,0 +1,122 @@
+{
+ "id": "IN-18",
+ "family": "INPUT",
+ "title": "Ограничения линиями",
+ "description": "Синтетика 300×300 м: дом на западе, труба на востоке, между ними линии. синтетическое поле 300×300 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.611218,
+   55.756479,
+   37.616093,
+   55.759227
+  ],
+  "size_m": [
+   300,
+   300
+  ]
+ },
+ "rules": [
+  "ТП-1.1",
+  "ТП-4.road",
+  "ТП-4.tram_tracks",
+  "ТП-4.railway",
+  "ТП-4.water",
+  "ТП-4.gas_pipeline",
+  "ТП-4.угол",
+  "Р6",
+  "ПР-5"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-in-18-1"
+   ],
+   "crossing_angle_min_deg": {
+    "road": 45,
+    "tram_tracks": 45
+   },
+   "no_cross": [
+    "rail-line",
+    "stream-line"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-in-18-1": 430
+   }
+  },
+  "should": {
+   "road_line_zone_m": 3.0,
+   "max_route_length_m": {
+    "cp-in-18-1": 357
+   }
+  },
+  "engineer": "Дорога и трамвай заданы осевыми LineString, ж/д и ручей — LineString, газопровод — MultiLineString из двух кусков. Для дороги-линии принята трактовка «нулевой полигон плюс 3 м»: зона спецпрохода — 3 м в обе стороны от линии, угол — к самой линии. Ж/д и ручей кончаются в окне, инженер их обходит; дорогу и трамвай пересекает под углом не меньше 45°."
+ },
+ "points": [
+  {
+   "id": "cp-in-18-1",
+   "flow_tph": 10.0
+  }
+ ],
+ "reference": {
+  "cp-in-18-1": {
+   "shortest_m": 266.4,
+   "dn_by_flow": 80,
+   "path_wgs84": [
+    [
+     37.6118873,
+     55.7578332
+    ],
+    [
+     37.6120338,
+     55.757745
+    ],
+    [
+     37.6127984,
+     55.7577536
+    ],
+    [
+     37.6135459,
+     55.7573487
+    ],
+    [
+     37.6135777,
+     55.757349
+    ],
+    [
+     37.6136752,
+     55.7572962
+    ],
+    [
+     37.6157461,
+     55.7573196
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 1,
+  "heat_network": 1,
+  "oks": 1,
+  "oks_connection_point": 1,
+  "railway": 1,
+  "road": 1,
+  "tram_tracks": 1,
+  "water": 1
+ }
+}

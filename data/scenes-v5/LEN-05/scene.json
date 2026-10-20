@@ -1,0 +1,90 @@
+{
+ "id": "LEN-05",
+ "family": "LEN",
+ "title": "10,8 км и расход под Ду 1400",
+ "description": "Труба Ду 500 и один дом в 10800 м от неё, между ними пусто. синтетическое поле 11100×400 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.611202,
+   55.75603,
+   37.788152,
+   55.761494
+  ],
+  "size_m": [
+   11100,
+   400
+  ]
+ },
+ "rules": [
+  "ТП-2.3.ду",
+  "ТП-2.3.длина",
+  "Р1",
+  "ТП-6.стоимость",
+  "Р15"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-len-05-1"
+   ],
+   "final_dn_range": {
+    "cp-len-05-1": [
+     1400,
+     1400
+    ]
+   },
+   "route_length_max_m": {
+    "cp-len-05-1": 16233
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-len-05-1": 11036
+   }
+  },
+  "engineer": "Расход 20 000 т/ч требует Ду 1400 (пропускная способность 22 501,9 т/ч), путь 10,8 км укладывается в его предельную длину 11 276 м. Трасса прямая, без лишних изломов, иначе выйдет за предел."
+ },
+ "points": [
+  {
+   "id": "cp-len-05-1",
+   "flow_tph": 20000.0
+  }
+ ],
+ "reference": {
+  "cp-len-05-1": {
+   "shortest_m": 10801.6,
+   "dn_by_flow": 1400,
+   "path_wgs84": [
+    [
+     37.7857229,
+     55.7596738
+    ],
+    [
+     37.6136555,
+     55.7578532
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "heat_chamber": 1,
+  "heat_network": 1,
+  "oks": 1,
+  "oks_connection_point": 1
+ }
+}

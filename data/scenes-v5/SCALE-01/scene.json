@@ -1,0 +1,107 @@
+{
+ "id": "SCALE-01",
+ "family": "SCALE",
+ "title": "Один новый дом",
+ "description": "Новый дом на реальной стройке у существующей сети. Москва, Хорошёво-Мнёвники, окно 324×324 м.",
+ "source": {
+  "kind": "osm",
+  "bbox_wgs84": [
+   37.454913,
+   55.807051,
+   37.460189,
+   55.810022
+  ],
+  "size_m": [
+   324,
+   324
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Щукино"
+ },
+ "rules": [
+  "ТП-1",
+  "ТП-1.1",
+  "ТП-1.2",
+  "ТП-2.1.пара",
+  "ТП-2.2",
+  "ТП-2.3.ду",
+  "ТП-6.стоимость",
+  "ТП-6.S",
+  "ТП-7"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-w1396835705"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-w1396835705": 134
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-w1396835705": 100
+   },
+   "tie_in": {
+    "cp-w1396835705": {
+     "kind": "existing_chamber",
+     "chambers": [
+      "hc-1202"
+     ]
+    }
+   }
+  },
+  "engineer": "Один дом у сети. Инженер ведёт короткий ввод от ближней к сети стены к ближайшей трубе или камере, без лишних поворотов, по оси застройки."
+ },
+ "points": [
+  {
+   "id": "cp-w1396835705",
+   "flow_tph": 33.14
+  }
+ ],
+ "reference": {
+  "cp-w1396835705": {
+   "shortest_m": 68.9,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.4578082,
+     55.8081919
+    ],
+    [
+     37.4578429,
+     55.8075727
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 52,
+  "heat_chamber": 14,
+  "heat_network": 32,
+  "oks": 21,
+  "oks_connection_point": 1,
+  "park": 1,
+  "power_cable": 52,
+  "road": 59,
+  "sewer": 53,
+  "social_area": 2,
+  "tram_tracks": 4,
+  "water_supply": 53
+ }
+}

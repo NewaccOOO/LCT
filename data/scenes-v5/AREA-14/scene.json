@@ -1,0 +1,88 @@
+{
+ "id": "AREA-14",
+ "family": "AREA",
+ "title": "Павильон внутри парка",
+ "description": "Новый корпус целиком внутри территории. Москва, Хорошёво-Мнёвники, окно 400×400 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.523792,
+   55.804741,
+   37.530307,
+   55.808411
+  ],
+  "size_m": [
+   400,
+   400
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Аэропорт",
+  "edits": [
+   "сеть внутри территории убрана: убрано участков сети 4"
+  ]
+ },
+ "rules": [
+  "ТП-4.park",
+  "ТП-2.5",
+  "ТП-2.2",
+  "Р3",
+  "ТП-6.штраф",
+  "ПР-9"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "unconnected": {
+    "cp-area-14-1": [
+     "inside_forbidden_zone",
+     "enclosed",
+     "no_route"
+    ]
+   },
+   "no_cross": [
+    "park-r16421390"
+   ]
+  },
+  "should": {},
+  "engineer": "Новое здание внутри парка, сеть снаружи. Пересекать парк нельзя, поэтому по правилам кейса точку подключить нельзя: без сети со штрафом и причиной."
+ },
+ "points": [
+  {
+   "id": "cp-area-14-1",
+   "flow_tph": 34.53
+  }
+ ],
+ "reference": {
+  "cp-area-14-1": {
+   "shortest_m": null,
+   "dn_by_flow": 125
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 105,
+  "heat_chamber": 37,
+  "heat_network": 70,
+  "oks": 49,
+  "oks_connection_point": 1,
+  "park": 7,
+  "power_cable": 122,
+  "road": 128,
+  "sewer": 106,
+  "social_area": 3,
+  "water": 1,
+  "water_supply": 98
+ }
+}

@@ -1,0 +1,153 @@
+{
+ "id": "FLOW-02",
+ "family": "FLOW",
+ "title": "Ду 1000: щель 18,7 м уже нормы 9 м",
+ "description": "Новый дом с расходом 8000 т/ч, на пути к трубе щель 18.7 м между двумя зданиями. Москва, Хорошёво-Мнёвники, окно 365×365 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.505299,
+   55.77006,
+   37.511241,
+   55.773409
+  ],
+  "size_m": [
+   365,
+   365
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Хорошёво-Мнёвники",
+  "edits": [
+   "расход дома задан 8000 т/ч; на пути поставлены два здания со щелью 18.7 м"
+  ]
+ },
+ "rules": [
+  "ТП-2.3.ду",
+  "ТП-4.oks",
+  "ТП-3.1",
+  "ТП-3.2"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-r17287641-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "final_dn_range": {
+    "cp-r17287641-1": [
+     1000,
+     1000
+    ]
+   },
+   "no_cross": [
+    "garages-flow-02-1",
+    "garages-flow-02-2"
+   ],
+   "route_length_max_m": {
+    "cp-r17287641-1": 190
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-r17287641-1": 149
+   },
+   "tie_in": {
+    "cp-r17287641-1": {
+     "kind": "existing_chamber",
+     "chambers": [
+      "hc-7928"
+     ]
+    }
+   }
+  },
+  "engineer": "Расход 8 000 т/ч требует Ду 1000: отступ 9 м, ширина пары 2,65 м, нужна щель не меньше 2 × 9 + 2,65 = 20,65 м. Щель 18,7 м уже, поэтому инженер обходит здания."
+ },
+ "points": [
+  {
+   "id": "cp-r17287641-1",
+   "flow_tph": 8000.0
+  }
+ ],
+ "reference": {
+  "cp-r17287641-1": {
+   "shortest_m": 106.6,
+   "dn_by_flow": 1000,
+   "path_wgs84": [
+    [
+     37.5076356,
+     55.7715397
+    ],
+    [
+     37.5075731,
+     55.7714157
+    ],
+    [
+     37.5075868,
+     55.7710564
+    ],
+    [
+     37.5074953,
+     55.7709475
+    ],
+    [
+     37.5074974,
+     55.7708936
+    ],
+    [
+     37.5074662,
+     55.7708752
+    ],
+    [
+     37.5074682,
+     55.7708213
+    ],
+    [
+     37.5074371,
+     55.770803
+    ],
+    [
+     37.5074405,
+     55.7707132
+    ],
+    [
+     37.5073781,
+     55.7706765
+    ],
+    [
+     37.5074089,
+     55.7706519
+    ]
+   ]
+  },
+  "gap_m": 18.7
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 16,
+  "heat_chamber": 26,
+  "heat_network": 59,
+  "oks": 24,
+  "oks_connection_point": 1,
+  "park": 1,
+  "power_cable": 15,
+  "prohibited_site": 1,
+  "railway": 11,
+  "road": 15,
+  "sewer": 17,
+  "water": 2,
+  "water_supply": 17
+ }
+}

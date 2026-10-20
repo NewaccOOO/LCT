@@ -1,0 +1,124 @@
+{
+ "id": "CROSS-19",
+ "family": "CROSS",
+ "title": "Полный профиль улицы: дорога и четыре линии",
+ "description": "Новый дом, между ним и трубой подземная линия. Москва, Хорошёво-Мнёвники, окно 318×318 м.",
+ "source": {
+  "kind": "osm",
+  "bbox_wgs84": [
+   37.596392,
+   55.798616,
+   37.60157,
+   55.801533
+  ],
+  "size_m": [
+   318,
+   318
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Марьина Роща"
+ },
+ "rules": [
+  "ТП-4.road",
+  "ТП-4.gas_pipeline",
+  "ТП-4.power_cable",
+  "ТП-4.наложение",
+  "Р8",
+  "ТП-4.спецпроход",
+  "ТП-2.1.узел"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-w1389015836"
+   ],
+   "dn_by_flow_and_length": true,
+   "special_kspec": {
+    "gas_pipeline": 1.25,
+    "power_cable": 1.15,
+    "road": 1.6
+   },
+   "route_length_max_m": {
+    "cp-w1389015836": 75
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-w1389015836": 49
+   },
+   "tie_in": {
+    "cp-w1389015836": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-11500"
+     ]
+    }
+   },
+   "special_kspec": {
+    "sewer": 1.1,
+    "water_supply": 1.1
+   },
+   "crossings_max": {
+    "gas_pipeline": 1,
+    "power_cable": 1,
+    "road": 1,
+    "sewer": 1,
+    "water_supply": 1
+   }
+  },
+  "engineer": "Переход улицы со всеми коммуникациями: кабель, водопровод, канализация, газ и дорога. Зоны частично накладываются. Инженер делает один прямой переход под углом не меньше 45°, на каждом общем фрагменте берёт наибольший Kспец, участки делит на границах смены набора объектов. В режиме глубины: в режиме глубины выше или ниже газопровода (верх на 2,8 м, габарит 0,4 м), просвет не меньше 0,2 м; в режиме глубины выше или ниже кабеля (верх на 2,7 м, габарит 0,2 м), просвет не меньше 0,5 м."
+ },
+ "points": [
+  {
+   "id": "cp-w1389015836",
+   "flow_tph": 34.53
+  }
+ ],
+ "reference": {
+  "cp-w1389015836": {
+   "shortest_m": 29.7,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5991919,
+     55.8001021
+    ],
+    [
+     37.599344,
+     55.8001227
+    ],
+    [
+     37.5992184,
+     55.8002809
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 27,
+  "heat_chamber": 7,
+  "heat_network": 17,
+  "oks": 20,
+  "oks_connection_point": 1,
+  "power_cable": 19,
+  "railway": 2,
+  "road": 30,
+  "sewer": 27,
+  "social_area": 2,
+  "water_supply": 27
+ }
+}

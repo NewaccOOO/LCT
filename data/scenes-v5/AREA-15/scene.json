@@ -1,0 +1,89 @@
+{
+ "id": "AREA-15",
+ "family": "AREA",
+ "title": "Здание внутри запретной территории",
+ "description": "Новый корпус целиком внутри территории. Москва, Хорошёво-Мнёвники, окно 400×400 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.469496,
+   55.792628,
+   37.476014,
+   55.796301
+  ],
+  "size_m": [
+   400,
+   400
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Щукино",
+  "edits": [
+   "сеть внутри территории убрана: убрано участков сети 0"
+  ]
+ },
+ "rules": [
+  "ТП-4.prohibited_site",
+  "ТП-2.5",
+  "ТП-2.2",
+  "Р3",
+  "ТП-6.штраф",
+  "ПР-9"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "unconnected": {
+    "cp-area-15-1": [
+     "inside_forbidden_zone",
+     "enclosed",
+     "no_route"
+    ]
+   },
+   "no_cross": [
+    "proh-w107432655"
+   ]
+  },
+  "should": {},
+  "engineer": "Здание внутри запретной территории. Трасса не может её пересечь, точка остаётся без сети с причиной «внутри запретной зоны»."
+ },
+ "points": [
+  {
+   "id": "cp-area-15-1",
+   "flow_tph": 18.03
+  }
+ ],
+ "reference": {
+  "cp-area-15-1": {
+   "shortest_m": null,
+   "dn_by_flow": 100
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 19,
+  "heat_chamber": 15,
+  "heat_network": 38,
+  "oks": 31,
+  "oks_connection_point": 1,
+  "park": 1,
+  "power_cable": 19,
+  "prohibited_site": 1,
+  "railway": 1,
+  "road": 22,
+  "sewer": 19,
+  "water": 2,
+  "water_supply": 19
+ }
+}

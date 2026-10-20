@@ -1,0 +1,103 @@
+{
+ "id": "IN-07",
+ "family": "INPUT",
+ "title": "Новый дом прямо на трубе",
+ "description": "Новый дом сдвинут на трубу, точка подключения на оси трубы. Москва, Хорошёво-Мнёвники, окно 300×300 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.535586,
+   55.770578,
+   37.540467,
+   55.77333
+  ],
+  "size_m": [
+   300,
+   300
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Хорошёвский район",
+  "edits": [
+   "дом сдвинут на трубу hn-817, точка подключения на её оси"
+  ]
+ },
+ "rules": [
+  "ТП-2.2",
+  "Р3",
+  "ТП-2.4.новая",
+  "Р11"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-r17672751-12"
+   ],
+   "route_length_max_m": {
+    "cp-r17672751-12": 75
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-r17672751-12": 30
+   }
+  },
+  "engineer": "Существующая труба проходит под новым домом, точка подключения лежит на трубе. Инженер врежется в трубу прямо у точки или в ближайшем месте у стены; при реальном проекте трубу вынесли бы из-под дома, но реконструкция не рассчитывается."
+ },
+ "points": [
+  {
+   "id": "cp-r17672751-12",
+   "flow_tph": 33.14
+  }
+ ],
+ "reference": {
+  "cp-r17672751-12": {
+   "shortest_m": 29.6,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5382846,
+     55.7719412
+    ],
+    [
+     37.5385732,
+     55.7718344
+    ],
+    [
+     37.5385738,
+     55.7718165
+    ],
+    [
+     37.5385166,
+     55.7717774
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 17,
+  "heat_chamber": 5,
+  "heat_network": 12,
+  "oks": 10,
+  "oks_connection_point": 1,
+  "power_cable": 15,
+  "railway": 11,
+  "road": 16,
+  "sewer": 17,
+  "social_area": 1,
+  "water_supply": 17
+ }
+}

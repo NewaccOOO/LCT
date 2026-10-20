@@ -1,0 +1,138 @@
+{
+ "id": "AREA-03",
+ "family": "AREA",
+ "title": "Парк, Купчино",
+ "description": "Новый дом, между ним и сетью парк, купчино. Санкт-Петербург, Купчино, окно 520×520 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   30.402932,
+   59.821351,
+   30.4133,
+   59.826571
+  ],
+  "size_m": [
+   520,
+   520
+  ],
+  "file": "data/cities/spb/input.geojson",
+  "city": "Санкт-Петербург, Балканский округ",
+  "edits": [
+   "сеть на стороне нового дома убрана, остаётся за объектом park-w488886377: убрано участков сети 1"
+  ]
+ },
+ "rules": [
+  "ТП-4.park"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "no_cross": [
+    "park-w488886377",
+    "park-r12611540",
+    "park-r7182557",
+    "park-w488834096"
+   ],
+   "connected": [
+    "cp-area-03-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-area-03-1": 548
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-area-03-1": 459
+   }
+  },
+  "engineer": "Между домом и сетью парк, пересекать её нельзя (таблица 2, отступ 1 м). Инженер обходит её по проездам вокруг или врезается в другую трубу со своей стороны, не срезая угол через территорию. Расход 47.7 т/ч, до ближайшей трубы по прямой 80 м, кратчайший допустимый путь 345 м."
+ },
+ "points": [
+  {
+   "id": "cp-area-03-1",
+   "flow_tph": 47.7
+  }
+ ],
+ "reference": {
+  "cp-area-03-1": {
+   "shortest_m": 345.1,
+   "dn_by_flow": 150,
+   "path_wgs84": [
+    [
+     30.4080212,
+     59.8234904
+    ],
+    [
+     30.4079455,
+     59.8233713
+    ],
+    [
+     30.4080659,
+     59.8233256
+    ],
+    [
+     30.4083128,
+     59.8233418
+    ],
+    [
+     30.4103705,
+     59.8235674
+    ],
+    [
+     30.4108289,
+     59.8235976
+    ],
+    [
+     30.4116921,
+     59.824142
+    ],
+    [
+     30.4126796,
+     59.8242069
+    ],
+    [
+     30.4127103,
+     59.8242269
+    ],
+    [
+     30.4131641,
+     59.8242748
+    ],
+    [
+     30.4132078,
+     59.8243039
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 84,
+  "heat_chamber": 10,
+  "heat_network": 22,
+  "oks": 32,
+  "oks_connection_point": 1,
+  "park": 4,
+  "power_cable": 92,
+  "power_line_support": 4,
+  "railway": 12,
+  "road": 99,
+  "sewer": 83,
+  "social_area": 2,
+  "water": 7,
+  "water_supply": 79
+ }
+}

@@ -1,0 +1,96 @@
+{
+ "id": "AREA-18",
+ "family": "AREA",
+ "title": "Москва-река на всю ширину данных",
+ "description": "Новый дом на берегу Москвы-реки, сеть на другом берегу. Москва, Хорошёво-Мнёвники, окно 700×700 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.440483,
+   55.768992,
+   37.451887,
+   55.77542
+  ],
+  "size_m": [
+   700,
+   700
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Крылатское",
+  "edits": [
+   "сеть на берегу нового дома убрана: убрано участков сети 118",
+   "water: 8 продолжений прямыми полосами на 7 км за охват, чтобы обход превышал предельную длину Ду 1400"
+  ]
+ },
+ "rules": [
+  "ТП-4.water",
+  "ТП-2.5",
+  "ТП-2.1.граница",
+  "ТП-6.штраф"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "unconnected": {
+    "cp-area-18-1": [
+     "no_route",
+     "enclosed"
+    ]
+   },
+   "no_cross": [
+    "water-r1307816",
+    "water-r71894",
+    "water-w40533210",
+    "water-w50848440",
+    "water-ext-area-18-1",
+    "water-ext-area-18-2",
+    "water-ext-area-18-3",
+    "water-ext-area-18-4",
+    "water-ext-area-18-5",
+    "water-ext-area-18-6",
+    "water-ext-area-18-7",
+    "water-ext-area-18-8"
+   ]
+  },
+  "should": {},
+  "engineer": "Сеть только на другом берегу, река продлена прямыми полосами на 7 км за окно. Пересекать водный объект нельзя, а обход длиннее 14 км и больше предельной длины Ду 1400 (11 276 м). Дом остаётся без сети со штрафом."
+ },
+ "points": [
+  {
+   "id": "cp-area-18-1",
+   "flow_tph": 33.14
+  }
+ ],
+ "reference": {
+  "cp-area-18-1": {
+   "shortest_m": null,
+   "dn_by_flow": 125
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 38,
+  "heat_chamber": 1,
+  "heat_network": 1,
+  "oks": 79,
+  "oks_connection_point": 1,
+  "park": 3,
+  "power_cable": 34,
+  "road": 24,
+  "sewer": 37,
+  "water": 12,
+  "water_supply": 34
+ }
+}

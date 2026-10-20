@@ -1,0 +1,92 @@
+{
+ "id": "LEN-03",
+ "family": "LEN",
+ "title": "Дом в 2 км: стройка дороже штрафа",
+ "description": "Труба Ду 500 и один дом в 2000 м от неё, между ними пусто. синтетическое поле 2300×400 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.611202,
+   55.75603,
+   37.647967,
+   55.760031
+  ],
+  "size_m": [
+   2300,
+   400
+  ]
+ },
+ "rules": [
+  "ТП-2.3.ду",
+  "ТП-2.3.длина",
+  "Р1",
+  "ТП-6.стоимость",
+  "ТП-2.5",
+  "Р15",
+  "ТП-6.штраф"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-len-03-1"
+   ],
+   "final_dn_range": {
+    "cp-len-03-1": [
+     400,
+     400
+    ]
+   },
+   "route_length_max_m": {
+    "cp-len-03-1": 3031
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-len-03-1": 2060
+   }
+  },
+  "engineer": "До сети 2 км: Ду по длине около 400, стройка дороже штрафа за неподключение (100 млн + 0,5 млн × G). Но маршрут допустим, поэтому инженер обязан подключить дом: отказ ради лучшего S запрещён."
+ },
+ "points": [
+  {
+   "id": "cp-len-03-1",
+   "flow_tph": 11.4
+  }
+ ],
+ "reference": {
+  "cp-len-03-1": {
+   "shortest_m": 2000.5,
+   "dn_by_flow": 80,
+   "path_wgs84": [
+    [
+     37.6455313,
+     55.7582086
+    ],
+    [
+     37.6136555,
+     55.7578532
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "heat_chamber": 1,
+  "heat_network": 1,
+  "oks": 1,
+  "oks_connection_point": 1
+ }
+}

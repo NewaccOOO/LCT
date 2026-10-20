@@ -1,0 +1,135 @@
+{
+ "id": "CROSS-14",
+ "family": "CROSS",
+ "title": "Газопровод поперёк пути к сети",
+ "description": "Новый дом, поперёк пути к сети проложен газопровод, сеть на стороне дома убрана. Москва, Хорошёво-Мнёвники, окно 337×337 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.528173,
+   55.787608,
+   37.533653,
+   55.790696
+  ],
+  "size_m": [
+   337,
+   337
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, Хорошёвский район",
+  "edits": [
+   "сеть на стороне дома от газопровода убрана: убрано участков сети 0",
+   "газопровод gas-cross-14 проложен поперёк пути от дома к трубе, длиной 4 км"
+  ]
+ },
+ "rules": [
+  "ТП-4.gas_pipeline",
+  "ТП-4.спецпроход",
+  "ТП-3.1",
+  "Р7",
+  "ТП-2.1.узел",
+  "Р29-14"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-w1458258900-1"
+   ],
+   "dn_by_flow_and_length": true,
+   "crossings_min": {
+    "gas_pipeline": 1
+   },
+   "special_kspec": {
+    "gas_pipeline": 1.25
+   },
+   "route_length_max_m": {
+    "cp-w1458258900-1": 123
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-w1458258900-1": 91
+   },
+   "tie_in": {
+    "cp-w1458258900-1": {
+     "kind": "existing_chamber",
+     "chambers": [
+      "hc-4080"
+     ]
+    }
+   },
+   "crossings_max": {
+    "gas_pipeline": 1
+   }
+  },
+  "engineer": "Между домом и сетью газопровод, обойти его в пределах данных нельзя. Инженер пересекает газ одним прямым участком, спецпроход по 2 м в обе стороны от точки пересечения вдоль оси новой сети, без поворотов внутри, Kспец 1,25."
+ },
+ "points": [
+  {
+   "id": "cp-w1458258900-1",
+   "flow_tph": 34.53
+  }
+ ],
+ "reference": {
+  "cp-w1458258900-1": {
+   "shortest_m": 61.8,
+   "dn_by_flow": 125,
+   "path_wgs84": [
+    [
+     37.5312528,
+     55.7894339
+    ],
+    [
+     37.5313497,
+     55.7892804
+    ],
+    [
+     37.531353,
+     55.7891905
+    ],
+    [
+     37.531292,
+     55.7891179
+    ],
+    [
+     37.5312981,
+     55.7889562
+    ],
+    [
+     37.5312357,
+     55.7889196
+    ],
+    [
+     37.5312388,
+     55.7888888
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 20,
+  "heat_chamber": 5,
+  "heat_network": 11,
+  "oks": 7,
+  "oks_connection_point": 1,
+  "park": 1,
+  "power_cable": 18,
+  "road": 19,
+  "sewer": 18,
+  "water_supply": 17
+ }
+}

@@ -1,0 +1,115 @@
+{
+ "id": "CROSS-28",
+ "family": "CROSS",
+ "title": "Перейти магистраль Ду 600+ к малой трубе",
+ "description": "Новый дом, между ним и трубой малого Ду — магистраль. Москва, Хорошёво-Мнёвники, окно 308×308 м.",
+ "source": {
+  "kind": "osm+edit",
+  "bbox_wgs84": [
+   37.546004,
+   55.788223,
+   37.551016,
+   55.791048
+  ],
+  "size_m": [
+   308,
+   308
+  ],
+  "file": "data/cities/moscow/input.geojson",
+  "city": "Москва, район Беговой",
+  "edits": [
+   "гаражи w683864329 снесены, на их месте новый дом",
+   "оставлены только магистраль и малая труба у дома: убрано участков сети 4"
+  ]
+ },
+ "rules": [
+  "ТП-4.heat_network",
+  "Р10",
+  "ТП-3.2",
+  "ТП-2.4.новая",
+  "Р29-14"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-g-w683864329"
+   ],
+   "dn_by_flow_and_length": true,
+   "special_kspec": {
+    "heat_network": 1.05
+   },
+   "route_length_max_m": {
+    "cp-g-w683864329": 50
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-g-w683864329": 28
+   },
+   "tie_in": {
+    "cp-g-w683864329": {
+     "kind": "new_chamber",
+     "pipes": [
+      "hn-6162"
+     ]
+    }
+   },
+   "crossings_min": {
+    "heat_network": 1
+   }
+  },
+  "engineer": "Ближе всего магистраль Ду 600, за ней в 17 м труба Ду 65. Новая камера на магистрали стоит 8 млн (по трактовке команды), на малой трубе 3 млн. Инженер переходит магистраль спецпроходом с Kспец 1,05 и врезается в малую трубу. Если трасса всё же пересекает магистраль, участок прямой, с узлами в 2 м от пересечения."
+ },
+ "points": [
+  {
+   "id": "cp-g-w683864329",
+   "flow_tph": 19.77
+  }
+ ],
+ "reference": {
+  "cp-g-w683864329": {
+   "shortest_m": 13.2,
+   "dn_by_flow": 100,
+   "path_wgs84": [
+    [
+     37.5484534,
+     55.7896747
+    ],
+    [
+     37.5484503,
+     55.7897594
+    ],
+    [
+     37.5484153,
+     55.7897791
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "gas_pipeline": 46,
+  "heat_chamber": 13,
+  "heat_network": 24,
+  "oks": 26,
+  "oks_connection_point": 1,
+  "power_cable": 45,
+  "road": 58,
+  "sewer": 42,
+  "social_area": 1,
+  "water_supply": 40
+ }
+}

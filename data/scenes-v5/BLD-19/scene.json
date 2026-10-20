@@ -1,0 +1,91 @@
+{
+ "id": "BLD-19",
+ "family": "BLD",
+ "title": "Двор, выезд только по проезду",
+ "description": "Синтетика: двор из корпусов, проезд через щель к улице, труба за улицей. синтетическое поле 300×200 м.",
+ "source": {
+  "kind": "synthetic",
+  "bbox_wgs84": [
+   37.611236,
+   55.756883,
+   37.616078,
+   55.758733
+  ],
+  "size_m": [
+   300,
+   200
+  ]
+ },
+ "rules": [
+  "ТП-4.road",
+  "ТП-4.спецпроход",
+  "Р6",
+  "ТП-4.oks",
+  "ТП-2.5"
+ ],
+ "expect": {
+  "must": {
+   "max_turn_deg": 90,
+   "max_segments_any": 4,
+   "no_cycles": true,
+   "no_self_cross": true,
+   "flow_is_sum": true,
+   "no_turn_in_special": true,
+   "dn_valid": true,
+   "summary_consistent": true,
+   "no_short_reversal_m": 5.0,
+   "no_step_m": 10.0,
+   "variants": true,
+   "final_from_nearest_boundary_m": 1.0,
+   "no_crash": true,
+   "connected": [
+    "cp-bld-19-1"
+   ],
+   "special_kspec": {
+    "road": 1.6
+   },
+   "crossing_angle_min_deg": {
+    "road": 45
+   },
+   "dn_by_flow_and_length": true,
+   "route_length_max_m": {
+    "cp-bld-19-1": 133
+   }
+  },
+  "should": {
+   "max_route_length_m": {
+    "cp-bld-19-1": 100
+   }
+  },
+  "engineer": "Двор замкнут корпусами, единственная щель 17,4 м занята проездом 5,5 м. Обычный участок в щели не помещается: нужно 5,3 м от корпусов и 1,8 м от проезда. По принятой трактовке продольный спецпроход по полигону проезда допустим, если он входит и выходит через границу полигона под углом не меньше 45° — здесь через торец проезда во дворе и через дальний край улицы. Это одна прямая, Kспец 1,60."
+ },
+ "points": [
+  {
+   "id": "cp-bld-19-1",
+   "flow_tph": 10.0
+  }
+ ],
+ "reference": {
+  "cp-bld-19-1": {
+   "shortest_m": 68.5,
+   "dn_by_flow": 80,
+   "path_wgs84": [
+    [
+     37.6136494,
+     55.7580238
+    ],
+    [
+     37.6136714,
+     55.757404
+    ]
+   ]
+  }
+ },
+ "run_args": [],
+ "objects": {
+  "heat_network": 1,
+  "oks": 6,
+  "oks_connection_point": 1,
+  "road": 2
+ }
+}
