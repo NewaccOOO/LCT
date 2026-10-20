@@ -62,6 +62,7 @@ final class NetworkAssembler {
     private static final double CHECK_SLACK_M = ZONE_GROW_M;
     private static final double CHECK_REACH_M = 0.17;
     private static final double MIN_SPECIAL_M = 0.105;
+    private static final double WIDE_SPECIAL_M = 0.12;
     private static final double MIN_SPLIT_DEG = 30.5;
     private static final double TIE_BAND_M = TieInFinder.TOUCH_M + 1e-6;
     private static final double GAP_EPS_M = 1e-6;
@@ -814,6 +815,7 @@ final class NetworkAssembler {
                     high = Math.min(high, inLeft ? edge + CHECK_REACH_M : edge + CHECK_SLACK_M);
                 }
                 if (low > high) {
+                    widen(a, s, b, left, mid, right);
                     continue;
                 }
                 double at = Math.max(low, Math.min(high, (s[0] + s[1]) / 2));
@@ -829,6 +831,42 @@ final class NetworkAssembler {
                 j--;
             }
         }
+    }
+
+    private static void widen(double[] a, double[] s, double[] b, Set<SpecialObjects.Special> left,
+            Set<SpecialObjects.Special> mid, Set<SpecialObjects.Special> right) {
+        double need = WIDE_SPECIAL_M - (s[1] - s[0]);
+        if (need <= 0) {
+            return;
+        }
+        double[] start = shift(s[0], left, mid);
+        double[] end = shift(s[1], mid, right);
+        double back = Math.min(s[0] - start[0], Math.max(need / 2, need - (end[1] - s[1])));
+        double ahead = need - back;
+        if (back < 0 || ahead > end[1] - s[1] + 1e-9 || s[0] - back - a[0] <= WIDE_SPECIAL_M
+                || b[1] - s[1] - ahead <= WIDE_SPECIAL_M) {
+            return;
+        }
+        s[0] -= back;
+        a[1] = s[0];
+        s[1] += ahead;
+        b[0] = s[1];
+    }
+
+    private static double[] shift(double at, Set<SpecialObjects.Special> before, Set<SpecialObjects.Special> after) {
+        double low = Double.NEGATIVE_INFINITY;
+        double high = Double.POSITIVE_INFINITY;
+        Set<SpecialObjects.Special> all = new HashSet<>(before);
+        all.addAll(after);
+        for (SpecialObjects.Special special : all) {
+            boolean inBefore = before.contains(special);
+            if (inBefore == after.contains(special)) {
+                continue;
+            }
+            low = Math.max(low, inBefore ? at - CHECK_SLACK_M : at - CHECK_REACH_M);
+            high = Math.min(high, inBefore ? at + CHECK_REACH_M : at + CHECK_SLACK_M);
+        }
+        return new double[] {low, high};
     }
 
     private static final class Crossing {

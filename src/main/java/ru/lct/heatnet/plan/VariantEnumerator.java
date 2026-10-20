@@ -2581,6 +2581,9 @@ public final class VariantEnumerator {
                 options.addAll(options(region, blockDn, wide, subset, false, candidates(points, flow, blockDn), false,
                         slide, true));
             }
+            if (SCAN && !district && incomplete(options)) {
+                options.addAll(farther(region, subset.get(0), blockDn, slide));
+            }
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
         List<Option> plain = plain(options);
@@ -2596,11 +2599,31 @@ public final class VariantEnumerator {
         return options;
     }
 
+    private List<Option> farther(Region region, ConnectionPoint connection, int dn, boolean slide) {
+        Coordinate at = connection.getGeometry().getCoordinate();
+        Envelope wide = region.wideArea;
+        double reach = Math.hypot(Math.max(at.x - wide.getMinX(), wide.getMaxX() - at.x),
+                Math.max(at.y - wide.getMinY(), wide.getMaxY() - at.y));
+        double radius = Math.max(SCAN_RADIUS_M, rules.diameter(dn).getMaxLengthM());
+        Set<String> seen = new HashSet<>();
+        List<Option> options = new ArrayList<>();
+        for (Diameter next = rules.nextDiameter(dn); next != null && radius < reach && incomplete(options);
+                next = rules.nextDiameter(next.getDn())) {
+            radius = next.getMaxLengthM();
+            List<TieCandidate> scanned = new ArrayList<>(scanned(region, next.getDn(), wide, connection, radius));
+            scanned.removeIf(candidate -> !seen.add(candidate.nodeKey()));
+            if (!scanned.isEmpty()) {
+                options.addAll(options(region, next.getDn(), wide, List.of(connection), false, scanned, false, slide));
+            }
+        }
+        return options;
+    }
+
     private List<TieCandidate> scanned(Region region, int dn, Envelope area, ConnectionPoint connection, double radius) {
         Router router = region.router(dn, area);
         List<TieCandidate> left = new ArrayList<>();
         Set<String> ignored = new HashSet<>();
-        for (TieCandidate candidate : finder.around(connection.getGeometry(), dn, radius, SCAN_STEP_M)) {
+        for (TieCandidate candidate : finder.around(connection.getGeometry(), dn, radius, SCAN_STEP_M, !district)) {
             Coordinate at = candidate.getPoint().getCoordinate();
             if (area.contains(at) && (region.corridor() == null || region.corridor().covers(candidate.getPoint()))
                     && !router.obstacles().insideForbid(at)) {

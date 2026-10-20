@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.locationtech.jts.algorithm.Angle;
+import org.locationtech.jts.algorithm.Orientation;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.GeometryFactory;
@@ -410,6 +411,7 @@ public final class Router {
             straighten(coords, ignored);
             if (cut) {
                 cutCorners(coords, ignored);
+                unflatten(coords, ignored);
             }
             Coordinate[] line = coords.toArray(new Coordinate[0]);
             return new Shape(line, obstacles.spans(factory.createLineString(line), ignored));
@@ -748,6 +750,12 @@ public final class Router {
                     result.add(new Stub(d, weight));
                 }
             }
+            for (Coordinate d : obstacles.crossingDepartures(c, ignored)) {
+                double weight = obstacles.edgeWeight(c, d, ignored, false, false);
+                if (!Double.isNaN(weight)) {
+                    result.add(new Stub(d, weight));
+                }
+            }
             return result.toArray(new Stub[0]);
         });
     }
@@ -858,6 +866,52 @@ public final class Router {
                 at += after;
             }
         }
+    }
+
+    private void unflatten(List<Coordinate> coords, Set<String> ignored) {
+        int pushes = 0;
+        for (int i = 1; i + 1 < coords.size(); ) {
+            if (deflectionDeg(coords.get(i - 1), coords.get(i), coords.get(i + 1)) >= MIN_TURN_DEG) {
+                i++;
+            } else if (!Double.isNaN(obstacles.edgeWeight(coords.get(i - 1), coords.get(i + 1), ignored))) {
+                coords.remove(i);
+                i = Math.max(1, i - 1);
+            } else if (merged(coords, i, ignored)) {
+                i = Math.max(1, i - 1);
+            } else if (pushes < MAX_PUSHES && !inSpan(coords, i, ignored) && pushOut(coords, i, ignored)) {
+                pushes++;
+                i = Math.max(1, i - 1);
+            } else {
+                i++;
+            }
+        }
+    }
+
+    private boolean merged(List<Coordinate> coords, int i, Set<String> ignored) {
+        if (i + 2 >= coords.size() || deflectionDeg(coords.get(i), coords.get(i + 1), coords.get(i + 2)) >= MIN_TURN_DEG
+                || Orientation.index(coords.get(i - 1), coords.get(i), coords.get(i + 1))
+                        != Orientation.index(coords.get(i), coords.get(i + 1), coords.get(i + 2))
+                || inSpan(coords, i, ignored) || inSpan(coords, i + 1, ignored)) {
+            return false;
+        }
+        Coordinate meet = new LineSegment(coords.get(i - 1), coords.get(i))
+                .lineIntersection(new LineSegment(coords.get(i + 1), coords.get(i + 2)));
+        if (meet == null || deflectionDeg(coords.get(i - 1), meet, coords.get(i + 2)) < MIN_TURN_DEG
+                || Double.isNaN(obstacles.edgeWeight(coords.get(i - 1), meet, ignored))
+                || Double.isNaN(obstacles.edgeWeight(meet, coords.get(i + 2), ignored))) {
+            return false;
+        }
+        coords.set(i, meet);
+        coords.remove(i + 1);
+        return true;
+    }
+
+    private boolean inSpan(List<Coordinate> coords, int i, Set<String> ignored) {
+        double at = 0;
+        for (int k = 0; k < i; k++) {
+            at += coords.get(k).distance(coords.get(k + 1));
+        }
+        return overlapsSpan(obstacles.spans(factory.createLineString(coords.toArray(new Coordinate[0])), ignored), at, at);
     }
 
     private void cutCorners(List<Coordinate> coords, Set<String> ignored) {
