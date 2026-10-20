@@ -2,6 +2,8 @@ package ru.lct.heatnet.api;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.ArraySchema;
@@ -94,17 +96,121 @@ public class JobController {
         @Schema(description = "Ошибка при статусе FAILED, иначе null", implementation = ApiError.class, nullable = true)
         JsonNode error;
         @ArraySchema(arraySchema = @Schema(
-                description = "Сводки вариантов (variant_summary из выходного файла) при статусе DONE, иначе null. "
-                        + "В поле criteria каждой сводки — дополнительные критерии варианта, в выходном файле их нет",
-                nullable = true))
+                description = "Сводки всех вариантов при статусе DONE, лучший первым; иначе null. "
+                        + "Это объекты variant_summary из выходного файла и поле criteria, которого в файле нет",
+                nullable = true), schema = @Schema(implementation = VariantSummaryDoc.class))
         JsonNode summary;
+    }
+
+    @lombok.Value
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    @Schema(name = "VariantSummary", description = "Сводка варианта: стоимость, длина и показатель S. Деньги в рублях, длины в метрах")
+    public static class VariantSummaryDoc {
+        @Schema(description = "Идентификатор сводки", example = "summary_1")
+        String id;
+        @Schema(description = "Тип объекта в выходном файле, всегда variant_summary", example = "variant_summary")
+        String objectType;
+        @Schema(description = "Номер варианта. Участки и камеры варианта в выходном файле несут тот же variant_id", example = "1")
+        String variantId;
+        @Schema(description = "Место варианта по S: 1 — лучший. При равном S выше вариант дешевле", example = "1")
+        int rank;
+        @Schema(description = "Стоимость строительства: трубы с учётом способа прокладки, новые камеры и врезки в существующие камеры",
+                example = "20914190.0")
+        double constructionCost;
+        @Schema(description = "Стоимость новых камер, входит в construction_cost", example = "0.0")
+        double chamberConstructionCost;
+        @Schema(description = "Сколько врезок в существующие камеры", example = "1")
+        int existingChamberTieInCount;
+        @Schema(description = "Стоимость врезок в существующие камеры, входит в construction_cost", example = "5000000.0")
+        double existingChamberTieInCost;
+        @Schema(description = "Штраф за неподключённые здания", example = "0.0")
+        double unconnectedPenalty;
+        @Schema(description = "Полная стоимость: construction_cost и штраф. По ней считается S", example = "20914190.0")
+        double calculatedCost;
+        @Schema(description = "Длина новой сети", example = "163.6")
+        double newNetworkLength;
+        @Schema(description = "Показатель S = 0,7 × calculated_cost / 25 млн ₽ + 0,3 × new_network_length / 100 м. Чем меньше, тем лучше",
+                example = "1.0764")
+        double score;
+        @ArraySchema(arraySchema = @Schema(description = "id зданий, которые вариант не подключил"))
+        List<String> unconnectedOksIds;
+        @Schema(description = "Дополнительные критерии варианта. Их отдаёт только API, в выходном файле их нет")
+        VariantCriteriaDoc criteria;
+    }
+
+    @lombok.Value
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    @Schema(name = "VariantCriteria", description = "Дополнительные критерии варианта")
+    public static class VariantCriteriaDoc {
+        @Schema(description = "Сколько зданий подключено", example = "1")
+        int connectedOks;
+        @Schema(description = "Суммарный расход подключённых зданий, т/ч", example = "25.0")
+        double connectedFlowTph;
+        @ArraySchema(arraySchema = @Schema(description = "Почему здания не подключены, не больше 1000 записей"))
+        List<UnconnectedReasonDoc> unconnectedReasons;
+        @Schema(description = "Сколько зданий дальше от существующей сети, чем допустимая длина трубы наибольшего диаметра. "
+                + "Причин для них нет в unconnected_reasons. Поле есть, только если такие здания нашлись", example = "0")
+        Integer beyondReachOks;
+        @Schema(description = "Сколько неподключённых зданий не вошло в unconnected_reasons сверх 1000 записей. "
+                + "Поле есть, только если лимит превышен", example = "0")
+        Integer unconnectedWithoutReason;
+        @Schema(description = "Сколько врезок в существующие камеры", example = "1")
+        int existingChamberTieIns;
+        @Schema(description = "Сколько новых камер", example = "0")
+        int newChambers;
+        @Schema(description = "Сколько технических узлов в новой сети", example = "0")
+        int technicalNodes;
+        @Schema(description = "Сколько участков проложено спецпереходом", example = "0")
+        int specialSegments;
+        @Schema(description = "Длина спецпереходов, м", example = "0.0")
+        double specialLengthM;
+        @Schema(description = "Сколько объектов каждого типа пересекают спецпереходы: тип ограничения или heat_network и число объектов")
+        java.util.Map<String, Integer> crossedObjects;
+        @Schema(description = "Сколько поворотов в новой сети: изломы больше 3° внутри участков и на стыках в технических узлах. "
+                + "В камерах и точках подключения повороты не считаются", example = "0")
+        int turns;
+        @Schema(description = "Самый крутой поворот, градусы", example = "0.0")
+        double maxTurnDeg;
+        @Schema(description = "На сколько стоимость участков отличается от цены тех же труб по базовой ставке за метр, ₽: "
+                + "коэффициенты спецпереходов и, в режиме depth, глубины. В режиме depth бывает отрицательной", example = "0.0")
+        double surchargeCost;
+        @Schema(description = "Стоимость без штрафа на одно подключённое здание, ₽; null, если подключённых нет",
+                example = "20914190.0", nullable = true)
+        Double costPerOks;
+        @Schema(description = "Стоимость без штрафа на 1 т/ч подключённого расхода, ₽; null, если расход нулевой",
+                example = "836567.6", nullable = true)
+        Double costPerTph;
+    }
+
+    @lombok.Value
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    @Schema(name = "UnconnectedReason", description = "Почему здание не подключено")
+    public static class UnconnectedReasonDoc {
+        @Schema(description = "id здания", example = "oks-7")
+        String oksId;
+        @Schema(description = "Код причины: coincident_point — точка подключения совпадает с точкой уже подключённого здания; "
+                + "no_connection_point — у здания нет точки подключения; flow_exceeds_capacity — расход больше пропускной "
+                + "способности наибольшего диаметра; inside_forbidden_zone — точка внутри запретной зоны с учётом отступа; "
+                + "enclosed — точка окружена запретными зонами; no_route — допустимая трасса не найдена",
+                allowableValues = {"coincident_point", "no_connection_point", "flow_exceeds_capacity", "inside_forbidden_zone",
+                        "enclosed", "no_route"},
+                example = "inside_forbidden_zone")
+        String reason;
+        @Schema(description = "Причина словами", example = "точка подключения внутри запретной зоны с учётом отступа: финальный прямой участок из своего здания упирается в чужую зону")
+        String message;
+        @ArraySchema(arraySchema = @Schema(description = "id объектов, из-за которых здание не подключено: ограничений или подключённых зданий с той же точкой"))
+        List<String> objectIds;
     }
 
     @Operation(
             summary = "Загрузить входной GeoJSON и поставить задачу в очередь",
-            description = "Тело запроса это сам файл GeoJSON FeatureCollection, не multipart. Файл пишется на диск потоком, "
-                    + "поэтому размер не ограничен памятью сервиса. Проверка атрибутов идёт уже в задаче: "
-                    + "ошибки входных данных видны в поле error при статусе FAILED.",
+            description = "Тело запроса — сам файл GeoJSON FeatureCollection, не multipart. В Swagger UI выберите тип "
+                    + "application/octet-stream, чтобы загрузить файл с диска. Файл пишется на диск потоком, поэтому его размер "
+                    + "не ограничен памятью сервиса. Атрибуты объектов проверяются уже в задаче: ошибки входных данных придут "
+                    + "в поле error при статусе FAILED.\n\n"
+                    + "Тип объекта задаёт атрибут object_type в properties: source, heat_chamber и heat_network с diameter — "
+                    + "существующая сеть; oks_connection_point с расходом flow_tph — точки подключения зданий; "
+                    + "oks_future, oks_existing и restriction с restriction_type — здания и ограничения.",
             requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
                     required = true,
                     description = "Входной GeoJSON FeatureCollection в EPSG:4326",
@@ -112,11 +218,18 @@ public class JobController {
                             // первым, чтобы Swagger UI по умолчанию показывал кнопку выбора файла
                             @Content(mediaType = MediaType.APPLICATION_OCTET_STREAM_VALUE, schema = @Schema(type = "string", format = "binary")),
                             @Content(mediaType = GEO_JSON, schema = @Schema(type = "object"), examples = @ExampleObject(
-                                    name = "Источник",
-                                    summary = "Файл из одного источника",
-                                    value = "{\"type\": \"FeatureCollection\", \"features\": [{\"type\": \"Feature\", "
-                                            + "\"geometry\": {\"type\": \"Point\", \"coordinates\": [37.578354495, 55.767196407]}, "
-                                            + "\"properties\": {\"id\": \"src-1\", \"object_type\": \"source\"}}]}")),
+                                    name = "Одно здание",
+                                    summary = "Источник, камера на существующей сети и точка подключения здания",
+                                    value = "{\"type\": \"FeatureCollection\", \"features\": [\n"
+                                            + "{\"type\": \"Feature\", \"geometry\": {\"type\": \"Point\", \"coordinates\": [37.64103, 55.702354]}, "
+                                            + "\"properties\": {\"id\": \"src-1\", \"object_type\": \"source\"}},\n"
+                                            + "{\"type\": \"Feature\", \"geometry\": {\"type\": \"Point\", \"coordinates\": [37.64003, 55.699945]}, "
+                                            + "\"properties\": {\"id\": \"ch-1\", \"object_type\": \"heat_chamber\"}},\n"
+                                            + "{\"type\": \"Feature\", \"geometry\": {\"type\": \"LineString\", "
+                                            + "\"coordinates\": [[37.64103, 55.702354], [37.64003, 55.699945]]}, "
+                                            + "\"properties\": {\"id\": \"hn-1\", \"object_type\": \"heat_network\", \"diameter\": 500}},\n"
+                                            + "{\"type\": \"Feature\", \"geometry\": {\"type\": \"Point\", \"coordinates\": [37.6375, 55.6996]}, "
+                                            + "\"properties\": {\"id\": \"cp-1\", \"object_type\": \"oks_connection_point\", \"flow_tph\": 25}}\n]}")),
                             @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(type = "object"))
                     }),
             responses = {
@@ -128,13 +241,16 @@ public class JobController {
                                     value = "{\"message\": \"Тело запроса должно быть JSON-объектом GeoJSON FeatureCollection\", "
                                             + "\"errors\": []}"))),
                     @ApiResponse(responseCode = "415", description = "Content-Type не application/json, application/geo+json или application/octet-stream",
-                            content = @Content(schema = @Schema(implementation = ApiError.class)))
+                            content = @Content(schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(
+                                    value = "{\"message\": \"Тело запроса принимается только с Content-Type application/json, "
+                                            + "application/geo+json или application/octet-stream\", \"errors\": []}")))
             })
     @PostMapping(consumes = {MediaType.APPLICATION_JSON_VALUE, GEO_JSON, MediaType.APPLICATION_OCTET_STREAM_VALUE}, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<JobCreated> create(
             HttpServletRequest request,
-            @Parameter(description = "Режим с учётом глубины (§5 приложения 18.09): глубины участков, Kгл, свои варианты; "
-                    + "как --depth у CLI. По умолчанию 2D", example = "false")
+            @Parameter(description = "Расчёт с учётом глубины: сервис подбирает глубину заложения каждого участка, учитывает её "
+                    + "в стоимости и обходит коммуникации по высоте. Считается дольше. По умолчанию false — расчёт в плане, "
+                    + "без глубины. То же, что ключ --depth в командной строке", example = "false")
             @RequestParam(name = "depth", defaultValue = "false") boolean depth) throws IOException {
         UUID id = UUID.randomUUID();
         Path dir = dataDir.resolve("jobs").resolve(id.toString());
@@ -186,24 +302,25 @@ public class JobController {
 
     @Operation(
             summary = "Статус и итоги задачи",
-            description = "После DONE в summary лежат сводки всех вариантов, после FAILED в error причина и список проблем "
-                    + "во входном файле.",
+            description = "Пока задача в статусе QUEUED или RUNNING, повторяйте запрос. После DONE в summary лежат сводки "
+                    + "всех вариантов, лучший первым. После FAILED в error причина и список проблем во входном файле.",
             responses = {
                     @ApiResponse(responseCode = "200", description = "Задача найдена",
                             content = @Content(schema = @Schema(implementation = JobDetails.class), examples = {
-                                    @ExampleObject(name = "Готово", value = "{\"id\": \"" + JOB_ID_EXAMPLE + "\", \"status\": \"DONE\", "
+                                    @ExampleObject(name = "Готово", summary = "Готово: расчёт примера «Одно здание», показан лучший из двух вариантов",
+                                            value = "{\"id\": \"" + JOB_ID_EXAMPLE + "\", \"status\": \"DONE\", "
                                             + "\"createdAt\": \"2026-09-15T10:00:00Z\", \"startedAt\": \"2026-09-15T10:00:01Z\", "
-                                            + "\"finishedAt\": \"2026-09-15T10:00:42Z\", \"error\": null, \"summary\": [{"
+                                            + "\"finishedAt\": \"2026-09-15T10:00:02Z\", \"error\": null, \"summary\": [{"
                                             + "\"id\": \"summary_1\", \"object_type\": \"variant_summary\", \"variant_id\": \"1\", "
-                                            + "\"rank\": 1, \"construction_cost\": 33000000.00, \"chamber_construction_cost\": 3000000.00, "
-                                            + "\"existing_chamber_tie_in_count\": 1, \"existing_chamber_tie_in_cost\": 5000000.00, "
-                                            + "\"unconnected_penalty\": 0.00, \"calculated_cost\": 33000000.00, "
-                                            + "\"new_network_length\": 340.50, \"score\": 1.946, "
+                                            + "\"rank\": 1, \"construction_cost\": 20914190.0, \"chamber_construction_cost\": 0.0, "
+                                            + "\"existing_chamber_tie_in_count\": 1, \"existing_chamber_tie_in_cost\": 5000000.0, "
+                                            + "\"unconnected_penalty\": 0.0, \"calculated_cost\": 20914190.0, "
+                                            + "\"new_network_length\": 163.6, \"score\": 1.0764, "
                                             + "\"unconnected_oks_ids\": [], \"criteria\": {\"connected_oks\": 1, "
-                                            + "\"connected_flow_tph\": 5.000, \"unconnected_reasons\": [], \"existing_chamber_tie_ins\": 1, "
-                                            + "\"new_chambers\": 1, \"technical_nodes\": 0, \"special_segments\": 0, "
-                                            + "\"special_length_m\": 0.00, \"crossed_objects\": {}, \"turns\": 1, \"max_turn_deg\": 45.0, "
-                                            + "\"surcharge_cost\": 0.00, \"cost_per_oks\": 33000000.00, \"cost_per_tph\": 6600000.00}}]}"),
+                                            + "\"connected_flow_tph\": 25.0, \"unconnected_reasons\": [], \"existing_chamber_tie_ins\": 1, "
+                                            + "\"new_chambers\": 0, \"technical_nodes\": 0, \"special_segments\": 0, "
+                                            + "\"special_length_m\": 0.0, \"crossed_objects\": {}, \"turns\": 0, \"max_turn_deg\": 0.0, "
+                                            + "\"surcharge_cost\": 0.0, \"cost_per_oks\": 20914190.0, \"cost_per_tph\": 836567.6}}]}"),
                                     @ExampleObject(name = "Ошибка входа", value = "{\"id\": \"" + JOB_ID_EXAMPLE + "\", "
                                             + "\"status\": \"FAILED\", \"createdAt\": \"2026-09-15T10:00:00Z\", "
                                             + "\"startedAt\": \"2026-09-15T10:00:01Z\", \"finishedAt\": \"2026-09-15T10:00:02Z\", "
@@ -223,7 +340,8 @@ public class JobController {
 
     @Operation(
             summary = "Скачать результат",
-            description = "Выходной GeoJSON со всеми вариантами. Доступен только при статусе DONE, отдаётся потоком.",
+            description = "Выходной GeoJSON со всеми вариантами в WGS84: участки новой сети и камеры с номером варианта "
+                    + "в variant_id и сводка каждого варианта (variant_summary). Доступен только при статусе DONE, отдаётся потоком.",
             responses = {
                     @ApiResponse(responseCode = "200", description = "Файл результата",
                             content = @Content(mediaType = GEO_JSON, schema = @Schema(type = "string", format = "binary"))),
