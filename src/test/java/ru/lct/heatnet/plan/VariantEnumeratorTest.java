@@ -168,15 +168,35 @@ class VariantEnumeratorTest {
 
     @Test
     void secondVariantWhenAlternativeTieInsOnlySwapChambers() {
-        PlanFixture fixture = new PlanFixture().pipe("hn-1", 0, 0, 400, 0, 200, 60, "src")
-                .chamber("hc-1", 400, 0, 200, "hn-1").pipe("hn-2", 400, 0, 1000, 0, 150, 30, "hc-1")
-                .chamber("hc-2", 1000, 0, 150, "hn-2").oks("o-1", 405, 60, 8).oks("o-2", 1000, -90, 6);
-
-        List<Variant> variants = new VariantEnumerator(fixture.input(), rules).run().getVariants();
+        List<Variant> variants;
+        try {
+            System.setProperty(VariantEnumerator.BALLAST_PROPERTY, "100");
+            variants = new VariantEnumerator(swappedChambers().input(), rules).run().getVariants();
+        } finally {
+            System.clearProperty(VariantEnumerator.BALLAST_PROPERTY);
+        }
 
         assertTrue(variants.size() >= 2, "вариантов " + variants.size());
         assertTrue(differ(variants.get(0), variants.get(1)), "варианты 1 и 2 не различаются");
         assertTrue(variants.stream().allMatch(v -> v.getSummary().getUnconnectedOksIds().isEmpty()));
+    }
+
+    @Test
+    void variantsMuchCostlierThanBestAreNotShown() {
+        List<Variant> variants = new VariantEnumerator(swappedChambers().input(), rules).run().getVariants();
+
+        assertFalse(variants.isEmpty());
+        double best = variants.get(0).getSummary().getScore();
+        for (Variant variant : variants) {
+            assertTrue(variant.getSummary().getScore() <= 1.3 * best, "вариант " + variant.getId() + ": S "
+                    + variant.getSummary().getScore() + " при лучшем " + best);
+        }
+    }
+
+    private static PlanFixture swappedChambers() {
+        return new PlanFixture().pipe("hn-1", 0, 0, 400, 0, 200, 60, "src")
+                .chamber("hc-1", 400, 0, 200, "hn-1").pipe("hn-2", 400, 0, 1000, 0, 150, 30, "hc-1")
+                .chamber("hc-2", 1000, 0, 150, "hn-2").oks("o-1", 405, 60, 8).oks("o-2", 1000, -90, 6);
     }
 
     @Test
