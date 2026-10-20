@@ -431,7 +431,7 @@ public class GeoJsonStreamReader {
                     break;
                 }
                 case CONNECTION_POINT: {
-                    if (!present(props, "oks_id") && present(props, "flow_tph")) {
+                    if (!present(props, "oks_id")) {
                         Double flow = flow(props, featureId);
                         Geometry geometry = geometry(node, featureId, POINT);
                         if (diagnostics.size() == before) {

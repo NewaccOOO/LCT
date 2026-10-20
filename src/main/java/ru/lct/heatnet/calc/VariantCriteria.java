@@ -5,11 +5,13 @@ import java.math.RoundingMode;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
@@ -51,6 +53,8 @@ public final class VariantCriteria {
     private static final String OKS_EXISTING = "oks_existing";
     private static final double ENCLOSURE_RADIUS_M = 2000;
     private static final int MAX_REASONS = 1000;
+    private static final int NEAREST_ZONES = 5;
+    private static final Locale RUSSIAN = Locale.forLanguageTag("ru");
     private static final double TOUCH_EPS_M = 1e-3;
 
     private final InputData input;
@@ -161,11 +165,15 @@ public final class VariantCriteria {
         result.put("connected_oks", connected);
         result.put("connected_flow_tph", scaled(connectedFlow, 3));
         List<String> explained = new ArrayList<>();
+        List<String> far = new ArrayList<>();
         int beyondReach = 0;
         int withoutReason = 0;
         for (String oksId : summary.getUnconnectedOksIds()) {
             if (beyondReach(oksId)) {
                 beyondReach++;
+                if (far.size() < MAX_REASONS) {
+                    far.add(oksId);
+                }
             } else if (explained.size() < MAX_REASONS) {
                 explained.add(oksId);
             } else {
@@ -192,6 +200,12 @@ public final class VariantCriteria {
         for (String oksId : explained) {
             Map<String, Object> twin = coincident(oksId, unconnected);
             unconnectedReasons.add(twin != null ? twin : reasons.get(oksId));
+        }
+        Diameter largest = rules.diameters().get(rules.diameters().size() - 1);
+        for (String oksId : far) {
+            unconnectedReasons.add(reason(oksId, "no_route", String.format(RUSSIAN,
+                    "до существующей сети по прямой %.0f м, это больше предельной длины %.0f м для наибольшего диаметра Ду %d",
+                    networkDistance(connectionByOks.get(oksId).getGeometry()), reachM, largest.getDn()), List.of()));
         }
         log.info("criteria: variant {} beyond={} reasons={} new={} elapsed={}s", variant.getId(), beyondReach, explained.size(),
                 wanted.size(), (System.nanoTime() - reasoning) / 1_000_000_000L);
@@ -330,11 +344,17 @@ public final class VariantCriteria {
         around.expandBy(ENCLOSURE_RADIUS_M);
         Map<String, Geometry> zones = new LinkedHashMap<>();
         double halfWidth = diameter.getWidthM() / 2;
+        String ownId = null;
+        List<String> overlapping = new ArrayList<>();
         for (Object item : forbidIndex().query(around)) {
             if (item instanceof ExistingOks) {
                 ExistingOks oks = (ExistingOks) item;
                 if (oks.getGeometry() == own) {
+                    ownId = oks.getId();
                     continue;
+                }
+                if (oks.getGeometry().covers(point)) {
+                    overlapping.add(oks.getId());
                 }
                 double distance = rules.restriction(OKS_EXISTING).clearanceM(diameter.getDn()) + halfWidth;
                 addZone(zones, oks.getId(), oks.getGeometry(), distance, around);
@@ -356,6 +376,11 @@ public final class VariantCriteria {
                 inside.add(id);
             }
         });
+        if (!inside.isEmpty() && overlapping.containsAll(inside)) {
+            return reason(oksId, "inside_forbidden_zone", "точка подключения лежит сразу в нескольких наложенных зданиях: "
+                    + "своим считается " + (ownId != null ? ownId : "полигон точки") + ", а " + String.join(", ", inside)
+                    + " — другое здание с той же точкой, его отступ закрывает финальный прямой участок", inside);
+        }
         if (!inside.isEmpty()) {
             return reason(oksId, "inside_forbidden_zone", "точка подключения внутри запретной зоны с учётом отступа: "
                     + "финальный прямой участок из своего здания упирается в чужую зону", inside);
@@ -377,8 +402,25 @@ public final class VariantCriteria {
                 return reason(oksId, "enclosed", "точка подключения окружена запретными зонами, обхода нет", ring);
             }
         }
-        return reason(oksId, "no_route", "запретные зоны точку не замыкают, но допустимая трасса не найдена: "
-                + "мешают предельная длина, правило поворотов, углы пересечения или соседние трассы", List.of());
+        List<String> nearest = zones.entrySet().stream()
+                .sorted(Comparator.comparingDouble(zone -> zone.getValue().getEnvelopeInternal().distance(point.getEnvelopeInternal())))
+                .limit(NEAREST_ZONES * 4L)
+                .sorted(Comparator.comparingDouble(zone -> zone.getValue().distance(point)))
+                .limit(NEAREST_ZONES).map(Map.Entry::getKey).collect(Collectors.toList());
+        StringBuilder message = new StringBuilder("запретные зоны точку не замыкают, но допустимая трасса не найдена");
+        if (!network.isEmpty()) {
+            double straight = networkDistance(point);
+            message.append(String.format(RUSSIAN, ". До сети по прямой %.0f м", straight));
+            message.append(straight > diameter.getMaxLengthM()
+                    ? String.format(RUSSIAN, ", это больше предельной длины %.0f м для Ду %d", diameter.getMaxLengthM(), diameter.getDn())
+                    : String.format(RUSSIAN, " при предельной длине %.0f м для Ду %d", diameter.getMaxLengthM(), diameter.getDn()));
+        }
+        if (!nearest.isEmpty()) {
+            message.append(". Ближе всего к точке зоны с отступом: ").append(nearest.stream()
+                    .map(id -> String.format(RUSSIAN, "%s (%.1f м)", id, zones.get(id).distance(point)))
+                    .collect(Collectors.joining(", ")));
+        }
+        return reason(oksId, "no_route", message.toString(), nearest);
     }
 
     static boolean open(Point point, Collection<Geometry> zones) {

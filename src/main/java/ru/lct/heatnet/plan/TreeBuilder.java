@@ -118,15 +118,17 @@ final class TreeBuilder {
         final Coordinate point;
         final Router router;
         final int anchor;
+        final boolean far;
 
-        Exit(Coordinate point, Router router, int anchor) {
+        Exit(Coordinate point, Router router, int anchor, boolean far) {
             this.point = point;
             this.router = router;
             this.anchor = anchor;
+            this.far = far;
         }
     }
 
-    private static final Exit NO_EXIT = new Exit(null, null, Integer.MAX_VALUE);
+    private static final Exit NO_EXIT = new Exit(null, null, Integer.MAX_VALUE, false);
 
     interface Graphs {
         int dn(List<ConnectionPoint> connections);
@@ -308,7 +310,8 @@ final class TreeBuilder {
                 pieces++;
             }
         }
-        return pieces == 1 && leavesZoneOnce(building, cp, exit, clearance)
+        boolean onWall = pieces == 0 && building.getBoundary().distance(GEOMETRY.createPoint(cp)) <= TOUCH_M;
+        return (pieces == 1 || onWall) && leavesZoneOnce(building, cp, exit, clearance)
                 && recedes(building, cp, exit, clearance);
     }
 
@@ -670,6 +673,23 @@ final class TreeBuilder {
         return out.length > 0 && out[0] > nearest + ENTRY_TOL_M ? out[0] : Double.NaN;
     }
 
+    static double[] outward(Geometry polygon, Coordinate cp, Coordinate anchor) {
+        for (Coordinate[] ring : rings(polygon)) {
+            for (int k = 0; k + 1 < ring.length; k++) {
+                LineSegment side = new LineSegment(ring[k], ring[k + 1]);
+                double length = side.getLength();
+                if (length < 1e-9 || side.distance(anchor) > 1e-6) {
+                    continue;
+                }
+                double nx = -(ring[k + 1].y - ring[k].y) / length;
+                double ny = (ring[k + 1].x - ring[k].x) / length;
+                Coordinate probe = new Coordinate(anchor.x + nx * TOUCH_M, anchor.y + ny * TOUCH_M);
+                return polygon.covers(GEOMETRY.createPoint(probe)) ? new double[] {-nx, -ny} : new double[] {nx, ny};
+            }
+        }
+        return null;
+    }
+
     static double nearestWall(Geometry polygon, Coordinate cp) {
         double nearest = Double.POSITIVE_INFINITY;
         for (int g = 0; g < polygon.getNumGeometries(); g++) {
@@ -804,7 +824,7 @@ final class TreeBuilder {
                 }
                 log.debug("portal: {} anchor {} by DN{} instead of {} by DN{}", id, tight.anchor, leaf,
                         wide == NO_EXIT ? "none" : wide.anchor, dn);
-                return new Exit(tight.point, graphs.router(leaf), tight.anchor);
+                return new Exit(tight.point, graphs.router(leaf), tight.anchor, tight.far);
             });
         }
 
@@ -816,77 +836,119 @@ final class TreeBuilder {
             Coordinate cp = connection.getGeometry().getCoordinate();
             List<Coordinate> anchors = anchors(building.getGeometry(), cp);
             Set<String> own = new HashSet<>(Set.of(building.getId()));
-            Coordinate centroid = building.getGeometry().getCentroid().getCoordinate();
-            int tries = 0;
-            Coordinate last = null;
-            for (Coordinate anchor : anchors) {
-                if (last != null && anchor.distance(last) < MIN_PIECE_M) {
-                    continue;
-                }
-                last = anchor;
-                if (tries++ >= PORTAL_TRIES) {
-                    break;
-                }
-                if (tries <= after) {
-                    continue;
-                }
-                double dx = anchor.x - cp.x;
-                double dy = anchor.y - cp.y;
-                double length = Math.hypot(dx, dy);
-                if (length < 1e-6) {
-                    dx = cp.x - centroid.x;
-                    dy = cp.y - centroid.y;
-                    length = Math.hypot(dx, dy);
-                    if (length < 1e-6) {
+            double near = nearestWall(building.getGeometry(), cp) + CORNER_M;
+            Exit far = null;
+            for (boolean step : new boolean[] {false, true}) {
+                int tries = 0;
+                Coordinate last = null;
+                for (Coordinate anchor : anchors) {
+                    if (last != null && anchor.distance(last) < MIN_PIECE_M) {
                         continue;
                     }
-                }
-                dx /= length;
-                dy /= length;
-                double along = beyondSpecial(zones, cp, dx, dy, cp.distance(anchor) + zones.oksClearance() + PORTAL_EXTRA_M, own);
-                Coordinate exit = new Coordinate(cp.x + dx * along, cp.y + dy * along);
-                for (double extra = 0; zones.insideForbid(exit) && extra < PORTAL_MAX_M; extra += PORTAL_STEP_M) {
-                    exit = new Coordinate(cp.x + dx * (along + extra), cp.y + dy * (along + extra));
-                }
-                boolean inForbid = zones.insideForbid(exit);
-                boolean inArea = area.contains(exit);
-                boolean once = !inForbid && inArea && leavesOnce(building, cp, exit, zones.oksClearance());
-                double weight = !once ? Double.NaN : zones.edgeWeight(cp, exit, own);
-                if (!Double.isNaN(weight)) {
+                    last = anchor;
+                    if (tries++ >= PORTAL_TRIES || far != null && tries >= far.anchor) {
+                        break;
+                    }
+                    if (tries <= after) {
+                        continue;
+                    }
+                    Coordinate exit = anchorExit(connection, building, zones, cp, anchor, own, tries, step);
+                    if (exit == null) {
+                        continue;
+                    }
                     if (tries > 1) {
                         log.debug("portal: {} anchor {} of {}", connection.getId(), tries, anchors.size());
                     }
-                    return new Exit(exit, branchRouter, tries);
+                    Exit found = new Exit(exit, branchRouter, tries, cp.distance(anchor) > near);
+                    if (step || !found.far) {
+                        return found;
+                    }
+                    far = found;
+                    break;
                 }
-                log.debug("portal: {} anchor {} rejected: forbid={} area={} once={} along={}", connection.getId(),
-                        tries, inForbid, inArea, once, along);
+            }
+            if (far != null) {
+                return far;
             }
             List<Coordinate> entries = entriesByConnection.computeIfAbsent(connection.getId(),
                     id -> entries(building.getGeometry(), cp, Double.POSITIVE_INFINITY));
             List<Coordinate[]> rings = rings(building.getGeometry());
             for (int i = 0; i < entries.size(); i++) {
-                if (PORTAL_TRIES + 1 + i <= after) {
-                    continue;
-                }
-                double[] window = window(zones, building, rings, cp, entries.get(i));
-                if (window.length == 0) {
-                    continue;
-                }
-                double r = cp.distance(entries.get(i));
-                double ux = (entries.get(i).x - cp.x) / r;
-                double uy = (entries.get(i).y - cp.y) / r;
-                Coordinate exit = new Coordinate(cp.x + ux * window[0], cp.y + uy * window[0]);
-                if (!area.contains(exit) || Double.isNaN(zones.edgeWeight(cp, exit, own))) {
-                    continue;
-                }
-                double along = beyondSpecial(zones, cp, ux, uy, window[0], own);
-                exit = new Coordinate(cp.x + ux * along, cp.y + uy * along);
-                if (along <= window[1] && area.contains(exit) && !Double.isNaN(zones.edgeWeight(cp, exit, own))) {
-                    log.debug("portal: {} entry {} at {} m", connection.getId(), i + 1, r);
-                    return new Exit(exit, branchRouter, PORTAL_TRIES + 1 + i);
+                Coordinate exit = PORTAL_TRIES + 1 + i <= after ? null : entryExit(zones, building, rings, cp, entries.get(i), own);
+                if (exit != null) {
+                    log.debug("portal: {} entry {} at {} m", connection.getId(), i + 1, cp.distance(entries.get(i)));
+                    return new Exit(exit, branchRouter, PORTAL_TRIES + 1 + i, cp.distance(entries.get(i)) > near);
                 }
             }
             return NO_EXIT;
+        }
+
+        private Coordinate anchorExit(ConnectionPoint connection, ExistingOks building, ObstacleSet zones, Coordinate cp,
+                Coordinate anchor, Set<String> own, int tries, boolean stepped) {
+            double dx = anchor.x - cp.x;
+            double dy = anchor.y - cp.y;
+            double length = Math.hypot(dx, dy);
+            if (length < TOUCH_M) {
+                double[] normal = outward(building.getGeometry(), cp, anchor);
+                if (normal == null) {
+                    return null;
+                }
+                dx = normal[0];
+                dy = normal[1];
+                length = 1;
+            }
+            dx /= length;
+            dy /= length;
+            double start = cp.distance(anchor) + zones.oksClearance() + PORTAL_EXTRA_M;
+            double along = beyondSpecial(zones, cp, dx, dy, start, own);
+            Coordinate exit = new Coordinate(cp.x + dx * along, cp.y + dy * along);
+            for (double extra = 0; zones.insideForbid(exit) && extra < PORTAL_MAX_M; extra += PORTAL_STEP_M) {
+                exit = new Coordinate(cp.x + dx * (along + extra), cp.y + dy * (along + extra));
+            }
+            boolean inForbid = zones.insideForbid(exit);
+            boolean inArea = area.contains(exit);
+            boolean once = !inForbid && inArea && leavesOnce(building, cp, exit, zones.oksClearance());
+            double weight = !once ? Double.NaN : zones.edgeWeight(cp, exit, own);
+            double limit = start - PORTAL_EXTRA_M + PORTAL_MAX_M;
+            boolean step = stepped && once && Double.isNaN(weight) && clearOfSpecials(zones, cp, exit, own);
+            for (double t = cp.distance(exit); step && Double.isNaN(weight); ) {
+                t = beyondSpecial(zones, cp, dx, dy, t + PORTAL_STEP_M, own);
+                Coordinate further = new Coordinate(cp.x + dx * t, cp.y + dy * t);
+                if (t > limit || zones.insideForbid(further) || !area.contains(further)
+                        || !leavesOnce(building, cp, further, zones.oksClearance())) {
+                    break;
+                }
+                weight = zones.edgeWeight(cp, further, own);
+                exit = further;
+            }
+            if (Double.isNaN(weight)) {
+                log.debug("portal: {} anchor {} rejected: forbid={} area={} once={} along={}", connection.getId(),
+                        tries, inForbid, inArea, once, along);
+                return null;
+            }
+            return exit;
+        }
+
+        private Coordinate entryExit(ObstacleSet zones, ExistingOks building, List<Coordinate[]> rings, Coordinate cp,
+                Coordinate entry, Set<String> own) {
+            double[] window = window(zones, building, rings, cp, entry);
+            if (window.length == 0) {
+                return null;
+            }
+            double r = cp.distance(entry);
+            double ux = (entry.x - cp.x) / r;
+            double uy = (entry.y - cp.y) / r;
+            Coordinate exit = new Coordinate(cp.x + ux * window[0], cp.y + uy * window[0]);
+            if (!area.contains(exit) || Double.isNaN(zones.edgeWeight(cp, exit, own))) {
+                return null;
+            }
+            double along = beyondSpecial(zones, cp, ux, uy, window[0], own);
+            exit = new Coordinate(cp.x + ux * along, cp.y + uy * along);
+            return along <= window[1] && area.contains(exit) && !Double.isNaN(zones.edgeWeight(cp, exit, own)) ? exit : null;
+        }
+
+        boolean clearOfSpecials(ObstacleSet zones, Coordinate cp, Coordinate exit, Set<String> own) {
+            return zones.spans(factory.createLineString(new Coordinate[] {cp, exit}), own).isEmpty();
         }
 
         double beyondSpecial(ObstacleSet zones, Coordinate cp, double ux, double uy, double along, Set<String> own) {
@@ -942,8 +1004,13 @@ final class TreeBuilder {
                 return null;
             }
             Exit portal = portal(connection);
+            boolean far = portal != null && portal.far;
+            Attach straight = far ? direct(connection, targets) : null;
+            if (straight != null) {
+                return straight;
+            }
             Attach attach = portal == NO_EXIT ? null : portalAttach(connection, targets, fromPortalDirection, portal);
-            return attach != null ? attach : direct(connection, targets);
+            return attach != null || far ? attach : direct(connection, targets);
         }
 
         Attach direct(ConnectionPoint connection, List<Point> targets) {

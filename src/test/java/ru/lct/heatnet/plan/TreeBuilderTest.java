@@ -193,6 +193,18 @@ class TreeBuilderTest {
     }
 
     @Test
+    void pointOnWallLeavesAlongOutwardNormal() {
+        Geometry building = PlanFixture.rect(0, 0, 30, 10);
+        Coordinate cp = new Coordinate(10, 10);
+
+        double[] normal = TreeBuilder.outward(building, cp, cp);
+
+        assertEquals(0, normal[0], 1e-9);
+        assertEquals(1, normal[1], 1e-9);
+        assertTrue(TreeBuilder.leavesOnce(building, cp, new Coordinate(10, 20), 5.3));
+    }
+
+    @Test
     void finalPieceDoesNotApproachAnotherWallInsideClearanceZone() {
         Geometry building = PlanFixture.rect(0, 0, 30, 10).union(PlanFixture.rect(20, 10, 30, 30));
         Coordinate cp = new Coordinate(10, 8);

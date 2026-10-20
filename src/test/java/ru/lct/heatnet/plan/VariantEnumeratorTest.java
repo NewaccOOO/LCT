@@ -70,6 +70,16 @@ class VariantEnumeratorTest {
     }
 
     @Test
+    void groupOverLargestCapacityIsSplitInsteadOfFailing() {
+        PlanFixture fixture = PlanFixture.trunk().oks("o-1", 100, 150, 9000).oks("o-2", 160, 150, 9000).oks("o-3", 220, 150, 9000);
+
+        List<Variant> variants = new VariantEnumerator(fixture.input(), rules).run().getVariants();
+
+        assertFalse(variants.isEmpty());
+        assertTrue(variants.get(0).getSummary().getUnconnectedOksIds().isEmpty());
+    }
+
+    @Test
     void tieShiftedAlongSamePipeIsNotSecondVariant() {
         PlanFixture fixture = new PlanFixture().pipe("hn-1", 0, 0, 400, 0, 200, 100, "src").oks("o-1", 200, 60, 30);
 

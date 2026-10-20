@@ -1133,6 +1133,8 @@ public final class VariantEnumerator {
         ExactSteiner.Skeleton skeleton = steiner.tree(root, tie.getCapacity(), extra);
         if (Double.isFinite(trial) && (skeleton == null || skeleton.cost > trial)) {
             log.info("exact: дерево {} сетка {} м: оптимум выше границы {}, счёт заново без отсечения", label, placeStep, trial);
+            steiner = null;
+            skeleton = null;
             steiner = new ExactSteiner(weights, leaf, leafCost, flows, rate, chamber, root, bound, bound, false);
             skeleton = steiner.tree(root, tie.getCapacity(), extra);
         }
@@ -2384,6 +2386,10 @@ public final class VariantEnumerator {
         Set<String> unconnectedIds = new HashSet<>();
         for (int next = 0; next < queue.size(); next++) {
             List<ConnectionPoint> subset = queue.get(next);
+            if (subset.size() > 1 && flow(subset) > rules.maxCapacityTph()) {
+                subset.forEach(connection -> queue.add(List.of(connection)));
+                continue;
+            }
             List<Option> options = options(subset, slide);
             int rank = alternative.applyAsInt(subset);
             int start = rank > 0 ? alternativeIndex(options, rank) : 0;
@@ -2508,6 +2514,9 @@ public final class VariantEnumerator {
     private List<Option> computeOptions(Region region, List<ConnectionPoint> subset, boolean slide) {
         List<Point> points = points(subset);
         double flow = flow(subset);
+        if (flow > rules.maxCapacityTph()) {
+            return new ArrayList<>();
+        }
         Diameter byFlow = rules.diameterFor(flow);
         Diameter step = rules.nextDiameter(byFlow.getDn());
         int blockDn = district ? region.dn : Math.min(region.dn, step != null ? step.getDn() : byFlow.getDn());
