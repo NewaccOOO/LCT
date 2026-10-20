@@ -21,6 +21,7 @@ import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.LinearRing;
+import org.locationtech.jts.geom.MultiPolygon;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.Polygon;
 import org.locationtech.jts.operation.union.UnaryUnionOp;
@@ -29,6 +30,8 @@ import org.locationtech.jts.geom.prep.PreparedGeometryFactory;
 import org.locationtech.jts.index.strtree.STRtree;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import ru.lct.heatnet.graph.ObstacleIndex;
+import ru.lct.heatnet.graph.ObstacleSet;
 import ru.lct.heatnet.model.ConnectionPoint;
 import ru.lct.heatnet.model.ExistingOks;
 import ru.lct.heatnet.model.FutureOks;
@@ -39,6 +42,7 @@ import ru.lct.heatnet.model.Restriction;
 import ru.lct.heatnet.model.TechnicalNode;
 import ru.lct.heatnet.model.Variant;
 import ru.lct.heatnet.model.VariantSummary;
+import ru.lct.heatnet.plan.ExitProbe;
 import ru.lct.heatnet.rules.Diameter;
 import ru.lct.heatnet.rules.RestrictionRule;
 import ru.lct.heatnet.rules.Rules;
@@ -51,6 +55,8 @@ public final class VariantCriteria {
     private static final String OKS_EXISTING = "oks_existing";
     private static final double ENCLOSURE_RADIUS_M = 2000;
     private static final int MAX_REASONS = 1000;
+    private static final double EXIT_AREA_M = 80;
+    private static final double EXIT_NETWORK_M = 40;
     private static final double TOUCH_EPS_M = 1e-3;
 
     private final InputData input;
@@ -65,6 +71,7 @@ public final class VariantCriteria {
     private Map<String, ConnectionPoint> connectionByOks;
     private Map<String, List<ConnectionPoint>> byPlace;
     private STRtree forbidIndex;
+    private ObstacleIndex obstacleIndex;
     private final Map<Touch, Boolean> touches = new ConcurrentHashMap<>();
 
     private static final class Touch {
@@ -377,8 +384,51 @@ public final class VariantCriteria {
                 return reason(oksId, "enclosed", "точка подключения окружена запретными зонами, обхода нет", ring);
             }
         }
+        List<String> blockers = exitBlockers(own, point, diameter.getDn());
+        if (blockers != null) {
+            return reason(oksId, "no_route", "нет допустимого выхода из своего здания: финальный прямой участок через "
+                    + "любую сторону упирается в зоны соседних объектов с учётом отступов или пересекает их под "
+                    + "недопустимым углом (п. 2.2 приложения 18.09: отступ не действует только к своему зданию)", blockers);
+        }
         return reason(oksId, "no_route", "запретные зоны точку не замыкают, но допустимая трасса не найдена: "
                 + "мешают предельная длина, правило поворотов, углы пересечения или соседние трассы", List.of());
+    }
+
+    private List<String> exitBlockers(Geometry own, Point point, int dn) {
+        String ownId = null;
+        for (ExistingOks oks : input.getExistingOks()) {
+            if (oks.getGeometry() == own) {
+                ownId = oks.getId();
+                break;
+            }
+        }
+        if (ownId == null || !(own instanceof Polygon || own instanceof MultiPolygon)) {
+            return null;
+        }
+        Envelope area = new Envelope(point.getCoordinate());
+        area.expandBy(EXIT_AREA_M);
+        ObstacleSet zones = new ObstacleSet(obstacleIndex(), rules, area, dn, null, null, false);
+        Map<String, Geometry> near = new LinkedHashMap<>();
+        Envelope reach = new Envelope(point.getCoordinate());
+        reach.expandBy(EXIT_NETWORK_M);
+        for (NetworkSegment segment : input.getSegments()) {
+            if (segment.getGeometry().getEnvelopeInternal().intersects(reach)) {
+                near.put(segment.getId(), segment.getGeometry());
+            }
+        }
+        input.getChambers().forEach(chamber -> {
+            if (reach.contains(chamber.getGeometry().getCoordinate())) {
+                near.put(chamber.getId(), chamber.getGeometry());
+            }
+        });
+        return ExitProbe.blockers(zones, obstacleIndex(), rules, dn, own, ownId, point.getCoordinate(), near);
+    }
+
+    private synchronized ObstacleIndex obstacleIndex() {
+        if (obstacleIndex == null) {
+            obstacleIndex = new ObstacleIndex(input, rules);
+        }
+        return obstacleIndex;
     }
 
     static boolean open(Point point, Collection<Geometry> zones) {

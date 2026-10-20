@@ -1087,6 +1087,19 @@ public final class ObstacleSet {
         return weight(length, merge(raw)) + beforeA + beforeB;
     }
 
+    public String blocker(Coordinate a, Coordinate b, Set<String> ignored) {
+        int zone = forbidGrid.zoneHit(a, b, ignored, false, hint().marks);
+        if (zone >= 0) {
+            return forbidGrid.zones[zone].id;
+        }
+        for (Special special : specialOrder) {
+            if (blocks(special, a, b, ignored, false)) {
+                return special.id;
+            }
+        }
+        return null;
+    }
+
     private boolean blocks(Special special, Coordinate a, Coordinate b, Set<String> ignored, boolean outside) {
         if (!special.zone.hitsBox(a, b)) {
             return false;
