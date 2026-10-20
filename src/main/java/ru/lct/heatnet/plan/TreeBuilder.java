@@ -1023,6 +1023,9 @@ final class TreeBuilder {
                 }
             }
             Set<String> firstIgnored = firstIgnored(connection);
+            if (portal != null) {
+                coords = unkinkedExit(connection, coords, branchRouter.obstacles(), firstIgnored);
+            }
             List<Piece> pieces = pieces();
             Attach attach = attach(connection, coords, route.getWeight(), firstIgnored, pieces, branchRouter);
             if (attach != null || portal == null || !EXIT_LINK
@@ -1046,6 +1049,22 @@ final class TreeBuilder {
                 }
             }
             return null;
+        }
+
+        Coordinate[] unkinkedExit(ConnectionPoint connection, Coordinate[] coords, ObstacleSet zones, Set<String> firstIgnored) {
+            if (coords.length < 3 || deflectionDeg(coords[0], coords[1], coords[2]) >= MIN_TURN_DEG) {
+                return coords;
+            }
+            Geometry building = buildingByConnection.get(connection.getId()).getGeometry();
+            if (Double.isNaN(zones.edgeWeight(coords[0], coords[2], firstIgnored))
+                    || !leavesOnce(building, coords[0], coords[2], zones.oksClearance())
+                    || !Double.isNaN(farEntry(building, new Coordinate[] {coords[2], coords[0]}))) {
+                return coords;
+            }
+            Coordinate[] straight = new Coordinate[coords.length - 1];
+            straight[0] = coords[0];
+            System.arraycopy(coords, 2, straight, 1, coords.length - 2);
+            return straight;
         }
 
         Attach attach(ConnectionPoint connection, Coordinate[] coords, double weight, Set<String> firstIgnored,

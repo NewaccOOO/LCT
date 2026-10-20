@@ -2563,6 +2563,9 @@ public final class VariantEnumerator {
                 options.addAll(options(region, blockDn, wide, subset, false, candidates(points, flow, blockDn), false,
                         slide, true));
             }
+            if (SCAN && !district && incomplete(options)) {
+                options.addAll(farther(region, subset.get(0), blockDn, slide));
+            }
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
         List<Option> plain = plain(options);
@@ -2573,6 +2576,26 @@ public final class VariantEnumerator {
             if (alternativeIndex(plain(options)) == 0) {
                 options.addAll(options(region, blockDn, region.area, subset, false, along, false, false));
                 options.sort(Comparator.comparingDouble(option -> option.score));
+            }
+        }
+        return options;
+    }
+
+    private List<Option> farther(Region region, ConnectionPoint connection, int dn, boolean slide) {
+        Coordinate at = connection.getGeometry().getCoordinate();
+        Envelope wide = region.wideArea;
+        double reach = Math.hypot(Math.max(at.x - wide.getMinX(), wide.getMaxX() - at.x),
+                Math.max(at.y - wide.getMinY(), wide.getMaxY() - at.y));
+        double radius = Math.max(SCAN_RADIUS_M, rules.diameter(dn).getMaxLengthM());
+        Set<String> seen = new HashSet<>();
+        List<Option> options = new ArrayList<>();
+        for (Diameter next = rules.nextDiameter(dn); next != null && radius < reach && incomplete(options);
+                next = rules.nextDiameter(next.getDn())) {
+            radius = next.getMaxLengthM();
+            List<TieCandidate> scanned = new ArrayList<>(scanned(region, next.getDn(), wide, connection, radius));
+            scanned.removeIf(candidate -> !seen.add(candidate.nodeKey()));
+            if (!scanned.isEmpty()) {
+                options.addAll(options(region, next.getDn(), wide, List.of(connection), false, scanned, false, slide));
             }
         }
         return options;
