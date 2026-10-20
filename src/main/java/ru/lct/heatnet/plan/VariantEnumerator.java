@@ -2566,9 +2566,9 @@ public final class VariantEnumerator {
         }
         options.sort(Comparator.comparingDouble(option -> option.score));
         List<Option> plain = plain(options);
-        if (!plain.isEmpty() && !plain.get(0).tree.tie.isChamber() && alternativeIndex(plain, 1, otherTieM()) == 0) {
+        if (!plain.isEmpty() && alternativeIndex(plain, 1, otherTieM()) == 0) {
             List<TieCandidate> along = new ArrayList<>();
-            for (int times = 1; times <= ALONG_STEPS; times++) {
+            for (int times = plain.get(0).tree.tie.isChamber() ? ALONG_STEPS : 1; times <= ALONG_STEPS; times++) {
                 along.addAll(finder.along(plain.get(0).tree.tie, blockDn, times * otherTieM()));
             }
             options.addAll(options(region, blockDn, region.area, subset, false, along, false, slide));
