@@ -2,11 +2,14 @@ package ru.lct.heatnet.plan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Envelope;
@@ -21,8 +24,16 @@ import ru.lct.heatnet.rules.Rules;
 
 class ExitProbeTest {
     private static final Rules RULES = Rules.load();
-    private static final InputData INPUT = GeoJsonStreamReader.read(Path.of("data/scenes-v5/SCALE-12/input.geojson"));
-    private static final ObstacleIndex INDEX = new ObstacleIndex(INPUT, RULES);
+    private static final Path SCENE = Path.of("data/scenes-v5/SCALE-12/input.geojson");
+    private static InputData input;
+    private static ObstacleIndex index;
+
+    @BeforeAll
+    static void load() {
+        assumeTrue(Files.isRegularFile(SCENE));
+        input = GeoJsonStreamReader.read(SCENE);
+        index = new ObstacleIndex(input, RULES);
+    }
 
     @Test
     void oldInletPipeAlongTheOnlyExitBlocksTheBuilding() {
@@ -35,18 +46,18 @@ class ExitProbeTest {
     }
 
     private List<String> blockers(String id, int dn) {
-        ConnectionPoint cp = INPUT.getConnectionPoints().stream().filter(c -> c.getId().equals(id)).findFirst().orElseThrow();
-        ExistingOks own = INPUT.getExistingOks().stream()
+        ConnectionPoint cp = input.getConnectionPoints().stream().filter(c -> c.getId().equals(id)).findFirst().orElseThrow();
+        ExistingOks own = input.getExistingOks().stream()
                 .filter(o -> o.getGeometry().distance(cp.getGeometry()) < 0.05).findFirst().orElseThrow();
         Coordinate c = cp.getGeometry().getCoordinate();
         Envelope area = new Envelope(c);
         area.expandBy(80);
-        ObstacleSet zones = new ObstacleSet(INDEX, RULES, area, dn, null, null, false);
+        ObstacleSet zones = new ObstacleSet(index, RULES, area, dn, null, null, false);
         Map<String, Geometry> network = new LinkedHashMap<>();
-        INPUT.getSegments().stream().filter(s -> s.getGeometry().distance(cp.getGeometry()) < 40)
+        input.getSegments().stream().filter(s -> s.getGeometry().distance(cp.getGeometry()) < 40)
                 .forEach(s -> network.put(s.getId(), s.getGeometry()));
-        INPUT.getChambers().stream().filter(s -> s.getGeometry().distance(cp.getGeometry()) < 40)
+        input.getChambers().stream().filter(s -> s.getGeometry().distance(cp.getGeometry()) < 40)
                 .forEach(s -> network.put(s.getId(), s.getGeometry()));
-        return ExitProbe.blockers(zones, INDEX, RULES, dn, own.getGeometry(), own.getId(), c, network);
+        return ExitProbe.blockers(zones, index, RULES, dn, own.getGeometry(), own.getId(), c, network);
     }
 }
